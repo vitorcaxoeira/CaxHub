@@ -39,8 +39,6 @@ model RolePermission {
 }
 
 // Registra cada execução do job de sincronização SOAP -> Postgres.
-// As tabelas de dados de negócio (resultado das queries reais) serão
-// adicionadas quando as primeiras queries forem definidas.
 model SyncLog {
   id        Int      @id @default(autoincrement())
   jobName   String
@@ -48,4 +46,49 @@ model SyncLog {
   status    String
   message   String?
   runAt     DateTime @default(now())
+}
+
+// Espelho local da tabela E070EMP do Senior ERP (empresas cadastradas).
+model Empresa {
+  codemp Int    @id
+  nomemp String
+  filiais Filial[]
+
+  @@map("empresa")
+}
+
+// Espelho local da tabela E070FIL do Senior ERP (filiais de cada empresa).
+model Filial {
+  codemp Int
+  codfil Int
+  nomfil String
+  sigfil String
+
+  empresa Empresa @relation(fields: [codemp], references: [codemp])
+
+  @@id([codemp, codfil])
+  @@map("filial")
+}
+
+// Espelho local da tabela E085CLI do Senior ERP (clientes cadastrados).
+model Cliente {
+  codcli Int    @id
+  nomcli String
+  apecli String
+  sencli String
+  tipcli String
+  tipmer String
+  tipemc Int
+  codram String
+  insest String
+  cgccpf BigInt
+  endcli String
+  cplend String
+  cepcli Int
+  baicli String
+  cidcli String
+  sigufs String
+  codpai String
+
+  @@map("clientes")
 }
