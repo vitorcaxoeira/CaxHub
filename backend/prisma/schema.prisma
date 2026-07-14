@@ -11,6 +11,8 @@ model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
   passwordHash String
+  nome         String
+  fotoUrl      String?
   roleId       Int
   role         Role     @relation(fields: [roleId], references: [id])
   createdAt    DateTime @default(now())
@@ -90,5 +92,189 @@ model Cliente {
   sigufs String
   codpai String
 
+  titulosReceber TituloReceber[]
+
   @@map("clientes")
+}
+
+// Espelho local da tabela E002TPT do Senior ERP (Tabelas - Tipos de Título).
+model TipoTitulo {
+  codtpt String @id @db.VarChar(3)
+  destpt String @db.VarChar(40)
+  abrtpt String @db.VarChar(5)
+  /// Domínio "LSomTit": D=Soma Duplicatas, O=Soma Outros Títulos, C=Soma Créditos/Pgto. Indevidos
+  recsom String @db.VarChar(1)
+  /// Domínio "LSomTit": D=Soma Duplicatas, O=Soma Outros Títulos, C=Soma Créditos/Pgto. Indevidos
+  pagsom String @db.VarChar(1)
+  /// Domínio "LAplGrp": A=Ambos, R=Contas a Receber, P=Contas a Pagar
+  apltpt String? @db.VarChar(1)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sittpt String? @db.VarChar(1)
+
+  titulosReceber TituloReceber[]
+
+  @@map("tipos_titulo")
+}
+
+// Espelho local da tabela E301TCR do Senior ERP (C. Receber - Títulos - Dados Gerais).
+model TituloReceber {
+  codemp Int
+  codfil Int
+  numtit String @db.VarChar(15)
+  codtpt String @db.VarChar(3)
+  codcli Int
+  /// Domínio "LSitTit": AO=Aberto ao Órgão de Proteção ao Crédito, AN=Aberto Negociação, AA=Aberto Advogado, AB=Aberto Normal, AC=Aberto Cartório, AE=Aberto Encontro de Contas, AI=Aberto Impostos, AJ=Aberto Retorno Jurídico, AP=Aberto Protestado, AR=Aberto Representante, AS=Aberto Suspenso, AV=Aberto Gestão de Pessoas, AX=Aberto Externo, CA=Cancelado, CE=Aberto CE (Preparação Cobrança Escritural), CO=Aberto Cobrança, LQ=Liquidado Normal, LC=Liquidado Cartório, LI=Liquidado Impostos, LM=Liquidado Compensado, LO=Liquidado Cobrança, LP=Liquidado Protestado, LS=Liquidado Substituído, LV=Liquidado Gestão de Pessoas, LX=Liquidado Externo, PE=Aberto PE (Pagamento Eletrônico)
+  sittit String @db.VarChar(2)
+  datemi DateTime @db.Date
+  vctori DateTime @db.Date
+  vctpro DateTime @db.Date
+  vlrori Decimal @db.Decimal(15, 2)
+  vlrabe Decimal? @db.Decimal(15, 2)
+
+  cliente    Cliente    @relation(fields: [codcli], references: [codcli])
+  tipoTitulo TipoTitulo @relation(fields: [codtpt], references: [codtpt])
+  movimentos MovimentoTituloReceber[]
+
+  @@id([codemp, codfil, numtit, codtpt])
+  @@map("titulos_receber")
+}
+
+// Espelho local da tabela E301MCR do Senior ERP (C. Receber - Títulos - Movimentos).
+model MovimentoTituloReceber {
+  codemp Int
+  codfil Int
+  numtit String @db.VarChar(15)
+  codtpt String @db.VarChar(3)
+  seqmov Int
+  codtns String @db.VarChar(5)
+  datmov DateTime @db.Date
+  datpgt DateTime? @db.Date
+  codfpg Int?
+  vlrmov Decimal @db.Decimal(15, 2)
+  vlrliq Decimal? @db.Decimal(15, 2)
+  vlrjrs Decimal? @db.Decimal(15, 2)
+  vlrmul Decimal? @db.Decimal(15, 2)
+  vlrdsc Decimal? @db.Decimal(15, 2)
+  diaatr Int?
+  codpor String? @db.VarChar(4)
+  codcrt String? @db.VarChar(2)
+  codccu String? @db.VarChar(9)
+
+  tituloReceber TituloReceber @relation(fields: [codemp, codfil, numtit, codtpt], references: [codemp, codfil, numtit, codtpt])
+  transacao     Transacao     @relation(fields: [codemp, codtns], references: [codemp, codtns])
+
+  @@id([codemp, codfil, numtit, codtpt, seqmov])
+  @@map("movimentos_receber")
+}
+
+// Espelho local da tabela E090REP do Senior ERP (Cadastros - Representantes).
+model Representante {
+  codrep Int @id
+  nomrep String @db.VarChar(100)
+  aperep String @db.VarChar(50)
+  /// Domínio "LJurFis": J=Pessoa Jurídica, F=Pessoa Física
+  tiprep String @db.VarChar(1)
+  cgccpf BigInt?
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitrep String @db.VarChar(1)
+  cidrep String? @db.VarChar(60)
+  sigufs String? @db.VarChar(2)
+
+  @@map("representantes")
+}
+
+// Espelho local da tabela E044CCU do Senior ERP (Cadastros - Centros de Custos).
+model CentroCusto {
+  codemp Int
+  codccu String @db.VarChar(9)
+  desccu String @db.VarChar(80)
+  abrccu String @db.VarChar(20)
+  /// Domínio "LTipCtc": 1=Produtivo/Operacional Indireto, 2=Produtivo/Operacional Direto, 3=Administrativo, 4=Comercial, 5=Financeiro
+  tipccu Int
+  ccupai String? @db.VarChar(9)
+  /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
+  anasin String? @db.VarChar(1)
+  @@id([codemp, codccu])
+
+  @@map("centros_custo")
+}
+
+// Espelho local da tabela E600MCC do Senior ERP (Tesouraria - Movimento - Movimentações das Contas).
+model MovimentoConta {
+  codemp Int
+  numcco String @db.VarChar(14)
+  datmov DateTime @db.Date
+  seqmov Int
+  codfil Int?
+  vlrmov Decimal @db.Decimal(15, 2)
+  debcre String @db.VarChar(1)
+  hismov String? @db.VarChar(100)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitmcc String? @db.VarChar(1)
+  filmcr Int?
+  nummcr String? @db.VarChar(15)
+  tptmcr String? @db.VarChar(3)
+  seqmcr Int?
+  codpor String? @db.VarChar(4)
+  @@id([codemp, numcco, datmov, seqmov])
+
+  @@map("movimentos_conta")
+}
+
+// Espelho local da tabela E091PLF do Senior ERP (Tabelas - Plano Financeiro - Contas).
+model NaturezaFinanceira {
+  codemp Int
+  ctafin Int
+  descta String @db.VarChar(80)
+  abrcta String @db.VarChar(20)
+  /// Domínio "LGruCta": A=Ativo (Contábil - Devedora), P=Passivo (Contábil - Credora), D=Despesas (Contábil - Devedora), R=Receitas (Contábil - Credora), X=Ambas (Contábil - Desp./Rec.), M=Receitas Financeiras, N=Despesas Financeiras, U=Conta Auxiliar, L=Patrimônio Líquido, V=Custo de Venda, C=Custo de Produção, S=Custo de Ordem Dedutora, E=Custo de Ordem Credora, O=Outros, T=Contas de Compensação
+  defgru String @db.VarChar(1)
+  /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
+  anasin String @db.VarChar(1)
+  /// Domínio "LNatCtb": D=Devedora, C=Credora
+  natfin String @db.VarChar(1)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitfin String @db.VarChar(1)
+  @@id([codemp, ctafin])
+
+  @@map("naturezas_financeiras")
+}
+
+// Espelho local da tabela E039POR do Senior ERP (Cadastros - Portadores).
+model Portador {
+  codemp Int
+  codpor String @db.VarChar(4)
+  despor String @db.VarChar(30)
+  abrpor String @db.VarChar(10)
+  codban String? @db.VarChar(3)
+  codage String? @db.VarChar(7)
+  numcco String? @db.VarChar(14)
+  @@id([codemp, codpor])
+
+  @@map("portadores")
+}
+
+// Espelho local da tabela E031MOE do Senior ERP (Tabelas - Moedas).
+model Moeda {
+  codmoe String @id @db.VarChar(3)
+  desmoe String @db.VarChar(30)
+  sigmoe String @db.VarChar(5)
+  /// Domínio "LTipMoe": V=Valor, D=Índice, P=Percentual, E=Especial, H=Hora
+  tipmoe String @db.VarChar(1)
+
+  @@map("moedas")
+}
+
+// Espelho local da tabela E001TNS do Senior ERP (Tabelas - Transações).
+model Transacao {
+  codemp Int
+  codtns String @db.VarChar(5)
+  destns String @db.VarChar(60)
+  /// Domínio "LTipBai": PG=Pagamento, DV=Devolução, AB=Abatimento, CA=Cancelamento, CR=Baixa Crédito, CP=Compensação, LP=Lucros e Perdas, SU=Substituição, NA=NÃO É BAIXA
+  rectpb String? @db.VarChar(2)
+
+  movimentos MovimentoTituloReceber[]
+
+  @@id([codemp, codtns])
+  @@map("transacoes")
 }

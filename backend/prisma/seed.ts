@@ -16,6 +16,7 @@ async function main() {
     create: {
       email: "admin@caxhub.local",
       passwordHash,
+      nome: "Administrador",
       roleId: adminRole.id,
     },
   });

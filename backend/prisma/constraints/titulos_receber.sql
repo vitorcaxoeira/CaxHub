@@ -1,0 +1,1 @@
+ALTER TABLE "titulos_receber" ADD CONSTRAINT "chk_titulos_receber_sittit" CHECK ("sittit" IN ('AO', 'AN', 'AA', 'AB', 'AC', 'AE', 'AI', 'AJ', 'AP', 'AR', 'AS', 'AV', 'AX', 'CA', 'CE', 'CO', 'LQ', 'LC', 'LI', 'LM', 'LO', 'LP', 'LS', 'LV', 'LX', 'PE'));

@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CaxHub</title>
+    <script>
+      (function () {
+        var stored = localStorage.getItem("caxhub-theme");
+        var isDark = stored !== "light";
+        document.documentElement.classList.toggle("dark", isDark);
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

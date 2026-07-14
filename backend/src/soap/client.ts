@@ -60,6 +60,7 @@ export async function runSqlViaSoap(query: string, options: RunSqlOptions = {}):
       "Content-Type": "text/xml; charset=utf-8",
       SOAPAction: '""',
     },
+    timeout: 20000,
   });
 
   const parsed = parser.parse(response.data);
@@ -81,4 +82,34 @@ export async function runSqlViaSoap(query: string, options: RunSqlOptions = {}):
   // decodificar como utf-8 corrompe acentos (ex.: "Aliança" virava "Alian�a").
   const json = Buffer.from(result.pmJsonResponse, "base64").toString("latin1");
   return JSON.parse(json);
+}
+
+const PAGE_SIZE = 10000;
+
+/**
+ * Para tabelas grandes, o serviço "Consulta Genérica" retorna uma resposta
+ * vazia/truncada quando o resultado é grande demais (testado: quebra entre
+ * 30.000 e 40.000 linhas). Esta função pagina automaticamente com
+ * limit/offSet até não haver mais linhas.
+ *
+ * A query precisa ser determinística entre chamadas — por isso um ORDER BY
+ * (idealmente pelas colunas de chave primária) é obrigatório.
+ */
+export async function runSqlViaSoapPaginated(
+  query: string,
+  orderByColumns: string[],
+  pageSize: number = PAGE_SIZE
+): Promise<unknown[]> {
+  const orderedQuery = `${query} ORDER BY ${orderByColumns.join(", ")}`;
+  const allRows: unknown[] = [];
+  let offSet = 0;
+
+  while (true) {
+    const page = await runSqlViaSoap(orderedQuery, { limit: pageSize, offSet });
+    allRows.push(...page);
+    if (page.length < pageSize) break;
+    offSet += pageSize;
+  }
+
+  return allRows;
 }
