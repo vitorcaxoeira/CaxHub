@@ -112,7 +112,7 @@ export function TitulosTable({
                 </td>
                 <td className="px-5 py-3.5 text-right">
                   <span
-                    className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
+                    className={`inline-block whitespace-nowrap rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
                       toneTag[row.situacaoTone]
                     }`}
                   >
