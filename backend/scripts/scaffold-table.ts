@@ -50,14 +50,19 @@ async function main() {
 
   const fieldByName = new Map(fields.map((f) => [f.fldnam.toLowerCase(), f]));
 
+  // Mapeia o nome de origem do campo (ex.: "USU_CodEmp") para o alias escolhido
+  // na query (ex.: "codemp") — os dois podem divergir, sobretudo em tabelas
+  // customizadas (USU_*), onde o prefixo é removido do alias por convenção.
+  const aliasBySource = new Map(columns.map((c) => [c.source.toLowerCase(), c.alias.toLowerCase()]));
+
   const tableInfo = await getTableInfo(tableName);
-  const selectedAliases = new Set(columns.map((c) => c.alias.toLowerCase()));
-  const missingPkFields = tableInfo.pkFields.filter((pk) => !selectedAliases.has(pk.toLowerCase()));
+  const missingPkFields = tableInfo.pkFields.filter((pk) => !aliasBySource.has(pk.toLowerCase()));
   if (missingPkFields.length > 0) {
     console.warn(
       `AVISO: a chave primária real de "${tableName}" inclui ${tableInfo.pkFields.join(", ")}, mas a query não selecionou: ${missingPkFields.join(", ")}. O upsert do job de sync pode ficar incorreto.`
     );
   }
+  const pkAliases = tableInfo.pkFields.map((pk) => aliasBySource.get(pk.toLowerCase()) ?? pk.toLowerCase());
 
   interface ResolvedColumn {
     alias: string;
@@ -80,7 +85,7 @@ async function main() {
   }
 
   // ---------- Model Prisma ----------
-  const pkFieldsLower = tableInfo.pkFields.map((f) => f.toLowerCase());
+  const pkFieldsLower = pkAliases;
   const isComposite = pkFieldsLower.length > 1;
 
   const checkConstraints: { column: string; values: string[] }[] = [];
@@ -113,7 +118,7 @@ async function main() {
     ? `// Espelho local da tabela ${tableName.toUpperCase()} do Senior ERP (${tableInfo.destbl}).`
     : `// Espelho local da tabela ${tableName.toUpperCase()} do Senior ERP.`;
 
-  const idLine = isComposite ? `\n  @@id([${tableInfo.pkFields.map((f) => f.toLowerCase()).join(", ")}])` : "";
+  const idLine = isComposite ? `\n  @@id([${pkAliases.join(", ")}])` : "";
 
   const modelBlock = `
 ${modelHeaderComment}
@@ -154,17 +159,14 @@ ${modelLines.join("\n")}${idLine}
     .join("\n");
 
   const resolvedByAlias = new Map(resolved.map((r) => [r.alias.toLowerCase(), r]));
-  const pkValueExpr = (fieldName: string) => {
-    const pkAlias = fieldName.toLowerCase();
+  const pkValueExpr = (pkAlias: string) => {
     const pkMapped = resolvedByAlias.get(pkAlias)?.mapped.prismaType ?? "String";
     return upsertValueExpr(pkMapped, `row.${pkAlias}`, false);
   };
 
   const pkWhere = isComposite
-    ? `${pkFieldsLower.join("_")}: { ${tableInfo.pkFields
-        .map((f) => `${f.toLowerCase()}: ${pkValueExpr(f)}`)
-        .join(", ")} }`
-    : `${pkFieldsLower[0]}: ${pkValueExpr(tableInfo.pkFields[0])}`;
+    ? `${pkAliases.join("_")}: { ${pkAliases.map((a) => `${a}: ${pkValueExpr(a)}`).join(", ")} }`
+    : `${pkAliases[0]}: ${pkValueExpr(pkAliases[0])}`;
 
   const dataAssignments = resolved
     .map(({ alias, field, mapped }) => {
@@ -175,7 +177,7 @@ ${modelLines.join("\n")}${idLine}
 
   const modelAccessor = `${modelName.charAt(0).toLowerCase()}${modelName.slice(1)}`;
 
-  const orderByColumns = tableInfo.pkFields.map((f) => `"${f.toLowerCase()}"`).join(", ");
+  const orderByColumns = pkAliases.map((a) => `"${a}"`).join(", ");
 
   const syncFileContent = `import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";

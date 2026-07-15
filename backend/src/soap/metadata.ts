@@ -1,5 +1,14 @@
 import { runSqlViaSoap } from "./client";
 
+/**
+ * Objetos customizados pelo cliente no Senior (tabelas, campos e domínios com
+ * prefixo "USU_") têm seus metadados no dicionário de dados r998* em vez do
+ * r996* padrão. Detectamos isso pelo prefixo do nome para rotear a query certa.
+ */
+function metadataPrefix(name: string): "996" | "998" {
+  return name.toUpperCase().startsWith("USU_") ? "998" : "996";
+}
+
 export interface SeniorField {
   fldnam: string;
   fldord: number;
@@ -28,7 +37,7 @@ export async function getTableFields(tblnam: string): Promise<SeniorField[]> {
   const rows = await runSqlViaSoap(
     `SELECT fldnam AS fldnam, fldord AS fldord, dattyp AS dattyp, lenfld AS lenfld,
             prefld AS prefld, cannul AS cannul, reqfld AS reqfld, enunam AS enunam, desfld AS desfld
-     FROM r996fld
+     FROM r${metadataPrefix(tblnam)}fld
      WHERE tblnam = '${tblnam.toUpperCase()}'
      ORDER BY fldord`
   );
@@ -38,12 +47,12 @@ export async function getTableFields(tblnam: string): Promise<SeniorField[]> {
 /** Busca a descrição e os campos de chave primária de uma tabela (r996tbl). `pkflds` é separado por ";". */
 export async function getTableInfo(tblnam: string): Promise<SeniorTableInfo> {
   const rows = (await runSqlViaSoap(
-    `SELECT destbl AS destbl, pkflds AS pkflds FROM r996tbl WHERE tblnam = '${tblnam.toUpperCase()}'`
+    `SELECT destbl AS destbl, pkflds AS pkflds FROM r${metadataPrefix(tblnam)}tbl WHERE tblnam = '${tblnam.toUpperCase()}'`
   )) as { destbl: string | null; pkflds: string | null }[];
 
   const row = rows[0];
   if (!row) {
-    throw new Error(`Tabela "${tblnam}" não encontrada em r996tbl`);
+    throw new Error(`Tabela "${tblnam}" não encontrada em r${metadataPrefix(tblnam)}tbl`);
   }
 
   return {
@@ -55,7 +64,7 @@ export async function getTableInfo(tblnam: string): Promise<SeniorTableInfo> {
 /** Busca os valores válidos (domínio) de um campo, ex. lstnam="LJurFis" -> [{keynam:"J",...}, {keynam:"F",...}]. */
 export async function getFieldDomainValues(lstnam: string): Promise<SeniorDomainValue[]> {
   const rows = await runSqlViaSoap(
-    `SELECT keynam AS keynam, valkey AS valkey, keyord AS keyord FROM r996lsf WHERE lstnam = '${lstnam}' ORDER BY keyord`
+    `SELECT keynam AS keynam, valkey AS valkey, keyord AS keyord FROM r${metadataPrefix(lstnam)}lsf WHERE lstnam = '${lstnam}' ORDER BY keyord`
   );
   return rows as SeniorDomainValue[];
 }

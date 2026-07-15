@@ -38,16 +38,18 @@ export async function validateQuery(query: string): Promise<ValidatedQuery> {
     return { source, alias };
   });
 
+  const dictSuffix = tableName.toUpperCase().startsWith("USU_") ? "r998fld" : "r996fld";
+
   const fields = await getTableFields(tableName);
   if (fields.length === 0) {
-    throw new Error(`Tabela "${tableName}" não encontrada (ou sem campos) em r996fld.`);
+    throw new Error(`Tabela "${tableName}" não encontrada (ou sem campos) em ${dictSuffix}.`);
   }
 
   const realFieldNames = new Set(fields.map((f) => f.fldnam.toLowerCase()));
   for (const column of columns) {
     if (!realFieldNames.has(column.source.toLowerCase())) {
       throw new Error(
-        `Coluna "${column.source}" não existe em "${tableName}" (conferido contra r996fld). Verifique se não é um typo.`
+        `Coluna "${column.source}" não existe em "${tableName}" (conferido contra ${dictSuffix}). Verifique se não é um typo.`
       );
     }
   }

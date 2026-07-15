@@ -1,55 +1,38 @@
-export interface TituloRow {
+export interface PropostaRow {
   codemp: number;
-  codfil: number;
-  numtit: string;
-  codtpt: string;
-  abrtpt: string;
+  codpro: number;
   codcli: number;
   nomcli: string;
-  nomemp: string;
-  nomfil: string;
-  datemi: string;
-  vctpro: string;
-  vlrori: number;
-  vlrabe: number;
-  sittit: string;
-  dias_atraso: number;
+  datpro: string | null;
+  sitpro: number | null;
+  numprj: number | null;
+  valor: number;
+  pripro: number | null;
+  gerente: string;
   situacaoLabel: string;
-  situacaoTone: "success" | "warning" | "destructive";
+  situacaoTone: "success" | "warning" | "destructive" | "neutral";
 }
 
-interface TitulosTableProps {
-  rows: TituloRow[];
+interface PropostasTableProps {
+  rows: PropostaRow[];
   page: number;
   pageSize: number;
   total: number;
-  totalVencido: number;
-  totalAVencer: number;
-  totalPago: number;
   loading: boolean;
   onPageChange: (page: number) => void;
 }
 
-const currencyFormatter = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
+const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const toneTag: Record<string, string> = {
   success: "bg-success/15 text-success",
   warning: "bg-warning/15 text-warning",
   destructive: "bg-destructive/15 text-destructive",
+  neutral: "bg-muted/15 text-muted",
 };
 
-export function TitulosTable({
-  rows,
-  page,
-  pageSize,
-  total,
-  totalVencido,
-  totalAVencer,
-  totalPago,
-  loading,
-  onPageChange,
-}: TitulosTableProps) {
+export function PropostasTable({ rows, page, pageSize, total, loading, onPageChange }: PropostasTableProps) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -59,25 +42,19 @@ export function TitulosTable({
           <thead>
             <tr>
               <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Emp./Fil.
-              </th>
-              <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                Título
+                Proposta
               </th>
               <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                 Cliente
               </th>
               <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                Emissão
+                Data
               </th>
-              <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                Vencimento
-              </th>
-              <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Valor Original
+              <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
+                Gerente
               </th>
               <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Valor em Aberto
+                Valor
               </th>
               <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                 Situação
@@ -86,29 +63,24 @@ export function TitulosTable({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={`${row.codemp}-${row.codfil}-${row.numtit}-${row.codtpt}`} className="border-t border-border/60 transition hover:bg-surface-2">
-                <td className="px-5 py-3.5 font-mono text-sm text-muted">
-                  {row.codemp}/{row.codfil}
-                </td>
-                <td className="hidden px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                  {row.numtit} · {row.abrtpt}
+              <tr key={`${row.codemp}-${row.codpro}`} className="border-t border-border/60 transition hover:bg-surface-2">
+                <td className="px-5 py-3.5">
+                  <div className="text-sm font-semibold text-foreground">{row.codpro}</div>
+                  {row.numprj != null && (
+                    <div className="mt-0.5 font-mono text-[11px] text-muted">Projeto {row.numprj}</div>
+                  )}
                 </td>
                 <td className="px-5 py-3.5">
-                  <div className="text-sm font-semibold text-foreground">
+                  <div className="text-sm text-foreground">
                     {row.codcli} - {row.nomcli}
                   </div>
                 </td>
                 <td className="hidden px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                  {dateFormatter.format(new Date(row.datemi))}
+                  {row.datpro ? dateFormatter.format(new Date(row.datpro)) : "—"}
                 </td>
-                <td className="hidden px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                  {dateFormatter.format(new Date(row.vctpro))}
-                </td>
-                <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
-                  {currencyFormatter.format(row.vlrori)}
-                </td>
+                <td className="hidden px-5 py-3.5 text-sm text-muted md:table-cell">{row.gerente}</td>
                 <td className="px-5 py-3.5 text-right font-mono text-sm font-semibold tabular-nums text-foreground">
-                  {currencyFormatter.format(row.vlrabe)}
+                  R$ {currency.format(row.valor)}
                 </td>
                 <td className="px-5 py-3.5 text-right">
                   <span
@@ -123,8 +95,8 @@ export function TitulosTable({
             ))}
             {rows.length === 0 && !loading && (
               <tr>
-                <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
-                  Nenhum título encontrado com os filtros atuais.
+                <td colSpan={6} className="px-5 py-8 text-center text-sm text-muted">
+                  Nenhuma proposta encontrada com os filtros atuais.
                 </td>
               </tr>
             )}
@@ -132,30 +104,9 @@ export function TitulosTable({
         </table>
       </div>
 
-      <div className="grid grid-cols-1 gap-px border-t border-border bg-border sm:grid-cols-3">
-        <div className="bg-surface px-5 py-3">
-          <p className="text-[10.5px] text-muted">Total Vencido (filtro atual)</p>
-          <p className="font-mono text-sm font-semibold tabular-nums text-destructive">
-            R$ {currencyFormatter.format(totalVencido)}
-          </p>
-        </div>
-        <div className="bg-surface px-5 py-3">
-          <p className="text-[10.5px] text-muted">Total A Vencer (filtro atual)</p>
-          <p className="font-mono text-sm font-semibold tabular-nums text-success">
-            R$ {currencyFormatter.format(totalAVencer)}
-          </p>
-        </div>
-        <div className="bg-surface px-5 py-3">
-          <p className="text-[10.5px] text-muted">Total Pago (filtro atual)</p>
-          <p className="font-mono text-sm font-semibold tabular-nums text-foreground">
-            R$ {currencyFormatter.format(totalPago)}
-          </p>
-        </div>
-      </div>
-
       <div className="flex items-center justify-between border-t border-border px-5 py-3">
         <p className="text-[11.5px] text-muted">
-          {total.toLocaleString("pt-BR")} títulos · página {page} de {totalPages}
+          {total.toLocaleString("pt-BR")} propostas · página {page} de {totalPages}
         </p>
         <div className="flex gap-2">
           <button

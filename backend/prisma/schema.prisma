@@ -94,6 +94,7 @@ model Cliente {
   codpai String
 
   titulosReceber TituloReceber[]
+  propostas      Proposta[]
 
   @@map("clientes")
 }
@@ -282,4 +283,145 @@ model Transacao {
 
   @@id([codemp, codtns])
   @@map("transacoes")
+}
+
+// Espelho local da tabela USU_TE077PRO do Senior ERP (Propostas de Consultoria/Upgrade).
+model Proposta {
+  codemp Int
+  codpro Int
+  codcli Int
+  qtdhor Int?
+  datpro DateTime? @db.Date
+  usuger Int?
+  /// Domínio "USU_ForAte": P=Presencial, R=Remoto
+  forate String? @db.VarChar(1)
+  /// Domínio "USU_SitPro": 1=Abertura, 2=Comercial, 3=Enviada p/ Cliente, 4=Aprovada, 5=Rejeitada, 6=Cancelada, 7=Em Execução, 8=Executada, 9=Levantamento Interno
+  sitpro Int?
+  horpro Int?
+  /// Domínio "USU_TipPro": 1=Projeto Novo, 2=Mólulo Adicional, 3=Serviços, 4=Desenvolvimento, 5=Terceiros
+  tippro Int?
+  dessol String? @db.VarChar(200)
+  consol String? @db.VarChar(400)
+  prarea String? @db.VarChar(100)
+  datenv DateTime? @db.Date
+  datret DateTime? @db.Date
+  numprj Int
+  datval DateTime? @db.Date
+  codfpj Int
+  /// Domínio "USU_TipProd": 1=Gestão Empresarial | ERP, 2=Gestão de Pessoas | HCM, 3=Gestão de Acesso e Segurança, 4=Implantação, 9=Outros, 5=SoelX
+  sispro Int?
+  despro String? @db.VarChar(100)
+  numero BigInt?
+  /// Domínio "LSimNao": S=Sim, N=Não
+  obrfas String? @db.VarChar(1)
+  /// Domínio "USU_LProExecut": 0=Ambos, 1=Suporte, 2=Consultoria, 3=Dev. SoelX
+  executor Int?
+  obssit String? @db.VarChar(200)
+  /// Domínio "LSimNao": S=Sim, N=Não
+  liqbru String? @db.VarChar(1)
+  codccu String? @db.VarChar(9)
+  ctafin Int?
+  /// Domínio "USU_ClaPro": 1=Projetos Grandes > 300H, 2=Projetos Médios 100h a 299H, 3=Projetos Pequenos 25H a 99H, 4=Projetos Rápidos até 24H
+  clapro Int?
+  /// Domínio "USU_AreExu": 1=Consultoria ERP, 2=Consultoria HCM, 3=Suporte ERP, 4=Suporte HCM, 5=Fábrica Software
+  areexe Int?
+  idcom Int
+  codrep Int
+  /// Domínio "USU_TRatForFat": 00=Mediante RAT, 01=Finalização, 02=Antecipado, 03=Sem Faturamento, 04=Misto (Parte Antecipada e com RAT), 05=Faturamento Via Contrato, 06=Antecipado Saldo Finalização
+  forfat Int?
+  dscfpg String? @db.VarChar(200)
+  hispro String? @db.VarChar(999)
+  obspro String? @db.VarChar(999)
+  preent DateTime? @db.Date
+  /// Domínio "USU_PriPro": 1=Alta, 2=Media, 3=Baixa
+  pripro Int?
+  /// Domínio "USU_StaPro": 1=Novo, 2=Agendado, 3=Iniciada, 4=Em Homologação, 5=Parado, 6=Comercial
+  stapro Int?
+  /// Domínio "USU_TipVen": 1=Venda Serviços Cliente Novo, 2=Venda Consultiva Serviços Base, 3=Venda Serviços Reativa Base Clientes, 4=Outros Tipos de Propostas
+  tipven Int?
+  ordemcns Int?
+  /// Domínio "USU_SitMot": 1=Atividades Proposta dentro do previsto, 2=Atividades Proposta Estouradas, 3=Atividades Proposta Horas Consumidas sem Saldo, 4=Propostas ADM e Comercial, 5=Proposta de Levantamento Comercial, 6=Proposta Estourada Projeto Aberto
+  sitmot Int?
+  /// Domínio "USU_LTipPrj": 01=Serviço, 02=Comercial, 03=Administrativo, 04=Levantamento
+  tipprj Int?
+  /// Domínio "USU_LFrmPrj": 01=Fechado, 02=Aberto
+  frmprj Int?
+  codlev2 Int?
+  clifat Int?
+  /// Domínio "LSimNao": S=Sim, N=Não
+  exipedcli String? @db.VarChar(1)
+  pedcli String? @db.VarChar(40)
+  /// Domínio "USU_TRatForFat": 00=Mediante RAT, 01=Finalização, 02=Antecipado, 03=Sem Faturamento, 04=Misto (Parte Antecipada e com RAT), 05=Faturamento Via Contrato, 06=Antecipado Saldo Finalização
+  forfatrdv Int?
+  /// Domínio "USU_ModPro": 0=Serviço, 1=Levantamento, 2=DRM
+  modpro Int?
+  /// Domínio "USU_TRatForFat": 00=Mediante RAT, 01=Finalização, 02=Antecipado, 03=Sem Faturamento, 04=Misto (Parte Antecipada e com RAT), 05=Faturamento Via Contrato, 06=Antecipado Saldo Finalização
+  forfatlev Int?
+  numped Int
+  idbpm Int?
+  /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
+  depexe Int?
+  /// Domínio "LSimNao": S=Sim, N=Não
+  fathrsdes String? @db.VarChar(1)
+
+  cliente Cliente        @relation(fields: [codcli], references: [codcli])
+  itens   PropostaItem[]
+
+  @@id([codemp, codpro])
+
+  @@map("propostas")
+}
+
+// Espelho local da tabela USU_TE077ITE do Senior ERP (Itens de Serviço da Proposta).
+model PropostaItem {
+  codemp Int
+  codpro Int
+  seqite Int
+  numprj Int
+  codser String @db.VarChar(14)
+  qtdhor Int?
+  valhor Decimal? @db.Decimal(11, 2)
+  despro String? @db.VarChar(2000)
+  entpro String? @db.VarChar(2000)
+  codfpj Int
+  /// Domínio "USU_LFatSer": S=Faturamento Normal, N=Sem Faturamento, A=Faturamento Antecipado, C=Atividades Comercial, H=Atividade Suporte, I=Investimento
+  fatser String? @db.VarChar(1)
+  /// Domínio "USU_SitMot": 1=Atividades Proposta dentro do previsto, 2=Atividades Proposta Estouradas, 3=Atividades Proposta Horas Consumidas sem Saldo, 4=Propostas ADM e Comercial, 5=Proposta de Levantamento Comercial, 6=Proposta Estourada Projeto Aberto
+  sitmot Int?
+  /// Domínio "USU_TRatForFat": 00=Mediante RAT, 01=Finalização, 02=Antecipado, 03=Sem Faturamento, 04=Misto (Parte Antecipada e com RAT), 05=Faturamento Via Contrato, 06=Antecipado Saldo Finalização
+  forfat Int?
+  /// Domínio "USU_LTipPrj": 01=Serviço, 02=Comercial, 03=Administrativo, 04=Levantamento
+  tipprj Int?
+  /// Domínio "USU_LFrmPrj": 01=Fechado, 02=Aberto
+  frmprj Int?
+  /// Domínio "USU_LSitPrz": 0=Não Iniciado, 1=Prazo Estourado, 2=Dentro do Prazo
+  sitprz Int?
+  atvpso BigInt?
+  /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
+  depexe Int?
+
+  proposta Proposta @relation(fields: [codemp, codpro], references: [codemp, codpro])
+
+  @@id([codemp, codpro, seqite])
+
+  @@map("propostas_itens")
+}
+
+// Espelho local da view USU_VBI00Cons do Senior ERP (consultores/usuários internos
+// vinculados a fornecedor — usada para resolver USU_UsuGer em nome real).
+model Consultor {
+  codemp    Int
+  codusu    Int
+  codfor    Int?
+  nomfor    String? @db.VarChar(100)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitfor    String? @db.VarChar(1)
+  nomcom    String? @db.VarChar(127)
+  conhab    Int?
+  tipusurat Int?
+  depexe    Int?
+  depexedes String? @db.VarChar(250)
+
+  @@id([codemp, codusu])
+  @@map("consultores")
 }

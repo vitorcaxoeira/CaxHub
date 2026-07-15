@@ -19,7 +19,7 @@ interface AgingDashboardProps {
   eyebrow?: string;
   title?: string;
   subtitle?: string;
-  dataLabel: string;
+  dataLabel?: string;
   kpis: Kpi[];
   buckets: Bucket[];
   activeBucket?: string | null;
@@ -75,53 +75,55 @@ export function AgingDashboard({
         ))}
       </div>
 
-      <section className="mb-6 rounded-lg border border-border bg-surface p-6 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{dataLabel}</p>
-          {activeBucket && (
-            <button
-              onClick={() => onBucketClick?.(activeBucket)}
-              className="font-mono text-[10.5px] uppercase tracking-wide text-muted underline hover:text-foreground"
-            >
-              limpar filtro
-            </button>
-          )}
-        </div>
-        <div className="mb-4 flex h-8 gap-0.5 overflow-hidden rounded-md" role="img" aria-label={dataLabel}>
-          {buckets.map((bucket) => (
-            <button
-              key={bucket.key}
-              onClick={() => onBucketClick?.(bucket.key)}
-              className={`${toneBg[bucket.tone]} transition-transform hover:scale-y-105 ${
-                activeBucket && activeBucket !== bucket.key ? "opacity-40" : ""
-              }`}
-              style={{ width: `${bucket.pct}%` }}
-              title={`${bucket.label} — R$ ${bucket.valor} (clique para filtrar a lista)`}
-            />
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-6">
-          {buckets.map((bucket) => (
-            <button
-              key={bucket.key}
-              onClick={() => onBucketClick?.(bucket.key)}
-              className={`flex items-baseline gap-2 text-left ${
-                activeBucket && activeBucket !== bucket.key ? "opacity-40" : ""
-              }`}
-            >
-              <span className={`h-6 w-[3px] flex-none self-center rounded-sm ${toneBg[bucket.tone]}`} />
-              <span>
-                <span className="block font-mono text-sm font-semibold tabular-nums text-foreground">
-                  R$ {bucket.valor}
+      {buckets.length > 0 && (
+        <section className="mb-6 rounded-lg border border-border bg-surface p-6 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{dataLabel}</p>
+            {activeBucket && (
+              <button
+                onClick={() => onBucketClick?.(activeBucket)}
+                className="font-mono text-[10.5px] uppercase tracking-wide text-muted underline hover:text-foreground"
+              >
+                limpar filtro
+              </button>
+            )}
+          </div>
+          <div className="mb-4 flex h-8 gap-0.5 overflow-hidden rounded-md" role="img" aria-label={dataLabel}>
+            {buckets.map((bucket) => (
+              <button
+                key={bucket.key}
+                onClick={() => onBucketClick?.(bucket.key)}
+                className={`${toneBg[bucket.tone]} transition-transform hover:scale-y-105 ${
+                  activeBucket && activeBucket !== bucket.key ? "opacity-40" : ""
+                }`}
+                style={{ width: `${bucket.pct}%` }}
+                title={`${bucket.label} — R$ ${bucket.valor} (clique para filtrar a lista)`}
+              />
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-6">
+            {buckets.map((bucket) => (
+              <button
+                key={bucket.key}
+                onClick={() => onBucketClick?.(bucket.key)}
+                className={`flex items-baseline gap-2 text-left ${
+                  activeBucket && activeBucket !== bucket.key ? "opacity-40" : ""
+                }`}
+              >
+                <span className={`h-6 w-[3px] flex-none self-center rounded-sm ${toneBg[bucket.tone]}`} />
+                <span>
+                  <span className="block font-mono text-sm font-semibold tabular-nums text-foreground">
+                    R$ {bucket.valor}
+                  </span>
+                  <span className="mt-0.5 block text-[10.5px] text-muted">
+                    {bucket.label} · {bucket.pct}%
+                  </span>
                 </span>
-                <span className="mt-0.5 block text-[10.5px] text-muted">
-                  {bucket.label} · {bucket.pct}%
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </section>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

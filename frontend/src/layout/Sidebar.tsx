@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 
 interface NavLeaf {
   to: string;
@@ -21,7 +22,16 @@ const groups: NavGroup[] = [
       { to: "/financeiro/contas-a-pagar", label: "Contas a Pagar" },
     ],
   },
+  {
+    label: "Gestão de Projetos",
+    items: [{ to: "/projetos/propostas", label: "Propostas" }],
+  },
 ];
+
+const adminGroup: NavGroup = {
+  label: "Administração",
+  items: [{ to: "/admin/usuarios", label: "Usuários" }],
+};
 
 function ChevronIcon({ open }: { open: boolean }) {
   return (
@@ -51,7 +61,9 @@ interface SidebarProps {
 }
 
 export function Sidebar({ open }: SidebarProps) {
+  const { user } = useAuth();
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro"]));
+  const visibleGroups = user?.role === "admin" ? [...groups, adminGroup] : groups;
 
   function toggleGroup(label: string) {
     setOpenGroups((prev) => {
@@ -78,7 +90,7 @@ export function Sidebar({ open }: SidebarProps) {
           </NavLink>
         ))}
 
-        {groups.map((group) => {
+        {visibleGroups.map((group) => {
           const isOpen = openGroups.has(group.label);
           return (
             <div key={group.label}>
