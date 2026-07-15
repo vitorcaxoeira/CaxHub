@@ -16,9 +16,9 @@ interface Bucket {
 }
 
 interface AgingDashboardProps {
-  eyebrow: string;
-  title: string;
-  subtitle: string;
+  eyebrow?: string;
+  title?: string;
+  subtitle?: string;
   dataLabel: string;
   kpis: Kpi[];
   buckets: Bucket[];
@@ -52,11 +52,13 @@ export function AgingDashboard({
 }: AgingDashboardProps) {
   return (
     <div>
-      <header className="mb-6 border-b border-border pb-5">
-        <p className="font-mono text-[10px] font-medium uppercase tracking-widest text-muted">{eyebrow}</p>
-        <h1 className="mt-1 font-display text-2xl font-bold text-foreground">{title}</h1>
-        <p className="mt-2 max-w-[60ch] text-sm text-muted">{subtitle}</p>
-      </header>
+      {title && (
+        <header className="mb-6 border-b border-border pb-5">
+          {eyebrow && <p className="font-mono text-[10px] font-medium uppercase tracking-widest text-muted">{eyebrow}</p>}
+          <h1 className="mt-1 font-display text-2xl font-bold text-foreground">{title}</h1>
+          {subtitle && <p className="mt-2 max-w-[60ch] text-sm text-muted">{subtitle}</p>}
+        </header>
+      )}
 
       <div className="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
         {kpis.map((kpi) => (

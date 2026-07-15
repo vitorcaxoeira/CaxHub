@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { AgingDashboard } from "../../components/financeiro/AgingDashboard";
 import { FiltrosBar, Filtros, FiltroOpcoes } from "../../components/financeiro/FiltrosBar";
+import { SituacaoFilter } from "../../components/financeiro/SituacaoFilter";
 import { TitulosTable, TituloRow } from "../../components/financeiro/TitulosTable";
 
 const API_BASE = "/api/financeiro/contas-a-receber";
@@ -67,8 +68,16 @@ export function ContasReceber() {
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [opcoes, setOpcoes] = useState<FiltroOpcoes | null>(null);
-  const [filtros, setFiltros] = useState<Filtros>({ clientes: [], codemp: null, codfil: null, situacao: null });
-  const [vencimento, setVencimento] = useState<"vencido" | "a_vencer" | null>(null);
+  const [filtros, setFiltros] = useState<Filtros>({
+    clientes: [],
+    empresasFiliais: [],
+    situacao: [],
+    portadores: [],
+    vctproInicio: null,
+    vctproFim: null,
+    datemiInicio: null,
+    datemiFim: null,
+  });
   const [faixa, setFaixa] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [titulos, setTitulos] = useState<TitulosResponse>(TITULOS_VAZIO);
@@ -77,6 +86,9 @@ export function ContasReceber() {
   const [erro, setErro] = useState<string | null>(null);
 
   const clienteIds = filtros.clientes.map((c) => c.codcli).join(",") || undefined;
+  const situacaoIds = filtros.situacao.join(",") || undefined;
+  const portadorIds = filtros.portadores.join(",") || undefined;
+  const empFilIds = filtros.empresasFiliais.join(",") || undefined;
 
   useEffect(() => {
     axios
@@ -87,7 +99,15 @@ export function ContasReceber() {
 
   useEffect(() => {
     setLoadingResumo(true);
-    const params = { codemp: filtros.codemp ?? undefined, codfil: filtros.codfil ?? undefined, clientes: clienteIds };
+    const params = {
+      empFil: empFilIds,
+      clientes: clienteIds,
+      portadores: portadorIds,
+      vctproInicio: filtros.vctproInicio ?? undefined,
+      vctproFim: filtros.vctproFim ?? undefined,
+      datemiInicio: filtros.datemiInicio ?? undefined,
+      datemiFim: filtros.datemiFim ?? undefined,
+    };
     Promise.all([
       axios.get(`${API_BASE}/kpis`, { params }),
       axios.get(`${API_BASE}/aging-buckets`, { params }),
@@ -99,18 +119,29 @@ export function ContasReceber() {
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os indicadores"))
       .finally(() => setLoadingResumo(false));
-  }, [filtros.codemp, filtros.codfil, clienteIds]);
+  }, [
+    empFilIds,
+    clienteIds,
+    portadorIds,
+    filtros.vctproInicio,
+    filtros.vctproFim,
+    filtros.datemiInicio,
+    filtros.datemiFim,
+  ]);
 
   useEffect(() => {
     setLoadingTabela(true);
     axios
       .get(`${API_BASE}/titulos`, {
         params: {
-          codemp: filtros.codemp ?? undefined,
-          codfil: filtros.codfil ?? undefined,
-          situacao: filtros.situacao ?? undefined,
+          empFil: empFilIds,
+          situacao: situacaoIds,
           clientes: clienteIds,
-          vencimento: vencimento ?? undefined,
+          portadores: portadorIds,
+          vctproInicio: filtros.vctproInicio ?? undefined,
+          vctproFim: filtros.vctproFim ?? undefined,
+          datemiInicio: filtros.datemiInicio ?? undefined,
+          datemiFim: filtros.datemiFim ?? undefined,
           faixa: faixa ?? undefined,
           page,
           pageSize: 50,
@@ -119,15 +150,10 @@ export function ContasReceber() {
       .then(({ data }) => setTitulos(data))
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a lista de títulos"))
       .finally(() => setLoadingTabela(false));
-  }, [filtros, clienteIds, vencimento, faixa, page]);
+  }, [filtros, clienteIds, situacaoIds, portadorIds, faixa, page]);
 
   function handleFiltrosChange(novos: Filtros) {
     setFiltros(novos);
-    setPage(1);
-  }
-
-  function handleVencimentoChange(valor: "vencido" | "a_vencer" | null) {
-    setVencimento(valor);
     setPage(1);
   }
 
@@ -189,6 +215,10 @@ export function ContasReceber() {
 
   return (
     <div>
+      <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
+        Financeiro · Contas a Receber
+      </p>
+
       <FiltrosBar opcoes={opcoes} filtros={filtros} onChange={handleFiltrosChange} />
 
       {erro && (
@@ -202,9 +232,6 @@ export function ContasReceber() {
       ) : (
         kpis && (
           <AgingDashboard
-            eyebrow="Financeiro · Contas a Receber"
-            title="Carteira em aberto"
-            subtitle="Dados reais sincronizados do Senior ERP (E301TCR/E301MCR). DSO é uma aproximação baseada em títulos emitidos, não em faturamento fiscal."
             dataLabel="Aging da carteira (clique numa faixa para filtrar a lista abaixo)"
             kpis={kpiCards}
             buckets={bucketCards}
@@ -214,16 +241,11 @@ export function ContasReceber() {
         )
       )}
 
-      <div className="mt-6 flex items-center justify-end">
-        <select
-          className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          value={vencimento ?? ""}
-          onChange={(e) => handleVencimentoChange((e.target.value || null) as typeof vencimento)}
-        >
-          <option value="">Vencido e a vencer</option>
-          <option value="vencido">Somente vencidos</option>
-          <option value="a_vencer">Somente a vencer</option>
-        </select>
+      <div className="mt-6">
+        <SituacaoFilter
+          selecionados={filtros.situacao}
+          onChange={(situacao) => handleFiltrosChange({ ...filtros, situacao })}
+        />
       </div>
 
       <div className="mt-3">

@@ -54,6 +54,7 @@ model SyncLog {
 model Empresa {
   codemp Int    @id
   nomemp String
+  sigemp String @db.VarChar(30)
   filiais Filial[]
 
   @@map("empresa")
@@ -130,9 +131,11 @@ model TituloReceber {
   vctpro DateTime @db.Date
   vlrori Decimal @db.Decimal(15, 2)
   vlrabe Decimal? @db.Decimal(15, 2)
+  codpor String? @db.VarChar(4)
 
   cliente    Cliente    @relation(fields: [codcli], references: [codcli])
   tipoTitulo TipoTitulo @relation(fields: [codtpt], references: [codtpt])
+  portador   Portador?  @relation(fields: [codemp, codpor], references: [codemp, codpor])
   movimentos MovimentoTituloReceber[]
 
   @@id([codemp, codfil, numtit, codtpt])
@@ -249,8 +252,10 @@ model Portador {
   codban String? @db.VarChar(3)
   codage String? @db.VarChar(7)
   numcco String? @db.VarChar(14)
-  @@id([codemp, codpor])
 
+  titulosReceber TituloReceber[]
+
+  @@id([codemp, codpor])
   @@map("portadores")
 }
 

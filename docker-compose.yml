@@ -4,12 +4,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: caxhub
-      POSTGRES_PASSWORD: caxhub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: caxhub
     volumes:
       - db_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
 
   backend:
     build:
@@ -19,8 +17,6 @@ services:
       - ./backend/.env
     depends_on:
       - db
-    ports:
-      - "3001:3001"
 
   frontend:
     build:
@@ -30,7 +26,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "80:80"
+      - "8080:80"
 
 volumes:
   db_data:

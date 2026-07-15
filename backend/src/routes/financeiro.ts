@@ -20,6 +20,17 @@ function parseIdsParam(value: unknown): number[] | null {
   return ids.length > 0 ? ids : null;
 }
 
+function parseStringListParam(value: unknown): string[] | null {
+  if (typeof value !== "string" || value === "") return null;
+  const items = value.split(",").filter((v) => v !== "");
+  return items.length > 0 ? items : null;
+}
+
+function parseDateParam(value: unknown): string | null {
+  if (typeof value !== "string" || value === "") return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+}
+
 function handleError(res: import("express").Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[financeiro:${label}]`, message);
@@ -29,11 +40,19 @@ function handleError(res: import("express").Response, error: unknown, label: str
 // ---------- Opções de filtro (empresa/filial) ----------
 financeiroRouter.get("/contas-a-receber/opcoes-filtro", async (_req, res) => {
   try {
-    const [empresas, filiais] = await Promise.all([
-      prisma.empresa.findMany({ select: { codemp: true, nomemp: true }, orderBy: { codemp: "asc" } }),
-      prisma.filial.findMany({ select: { codemp: true, codfil: true, nomfil: true }, orderBy: [{ codemp: "asc" }, { codfil: "asc" }] }),
+    const [empresas, filiais, portadores] = await Promise.all([
+      prisma.empresa.findMany({ select: { codemp: true, nomemp: true, sigemp: true }, orderBy: { codemp: "asc" } }),
+      prisma.filial.findMany({ select: { codemp: true, codfil: true, nomfil: true, sigfil: true }, orderBy: [{ codemp: "asc" }, { codfil: "asc" }] }),
+      prisma.$queryRaw<{ codemp: number; codpor: string; despor: string }[]>`
+        SELECT DISTINCT p.codemp, p.codpor, p.despor
+        FROM portadores p
+        WHERE EXISTS (
+          SELECT 1 FROM titulos_receber t WHERE t.codemp = p.codemp AND t.codpor = p.codpor
+        )
+        ORDER BY p.despor
+      `,
     ]);
-    res.json({ empresas, filiais });
+    res.json({ empresas, filiais, portadores });
   } catch (error) {
     handleError(res, error, "opcoes-filtro");
   }
@@ -63,9 +82,13 @@ financeiroRouter.get("/contas-a-receber/clientes-busca", async (req, res) => {
 // ---------- KPIs ----------
 financeiroRouter.get("/contas-a-receber/kpis", async (req, res) => {
   try {
-    const codemp = parseIntParam(req.query.codemp);
-    const codfil = parseIntParam(req.query.codfil);
+    const empFil = parseStringListParam(req.query.empFil);
     const clientes = parseIdsParam(req.query.clientes);
+    const portadores = parseStringListParam(req.query.portadores);
+    const vctproInicio = parseDateParam(req.query.vctproInicio);
+    const vctproFim = parseDateParam(req.query.vctproFim);
+    const datemiInicio = parseDateParam(req.query.datemiInicio);
+    const datemiFim = parseDateParam(req.query.datemiFim);
 
     const [abertoRows, recebidoRows, prazoRows] = await Promise.all([
       prisma.$queryRaw<
@@ -89,9 +112,13 @@ financeiroRouter.get("/contas-a-receber/kpis", async (req, res) => {
           , 0)::float8 AS aging_medio_dias,
           COALESCE(SUM(CASE WHEN datemi >= CURRENT_DATE - INTERVAL '90 days' THEN vlrori END), 0)::float8 AS vendas_90d
         FROM titulos_receber
-        WHERE (${codemp}::int IS NULL OR codemp = ${codemp})
-          AND (${codfil}::int IS NULL OR codfil = ${codfil})
+        WHERE (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
           AND (${clientes}::int[] IS NULL OR codcli = ANY(${clientes}::int[]))
+          AND (${portadores}::text[] IS NULL OR codpor = ANY(${portadores}::text[]))
+          AND (${vctproInicio}::date IS NULL OR vctpro >= ${vctproInicio}::date)
+          AND (${vctproFim}::date IS NULL OR vctpro <= ${vctproFim}::date)
+          AND (${datemiInicio}::date IS NULL OR datemi >= ${datemiInicio}::date)
+          AND (${datemiFim}::date IS NULL OR datemi <= ${datemiFim}::date)
       `,
       prisma.$queryRaw<
         {
@@ -104,7 +131,8 @@ financeiroRouter.get("/contas-a-receber/kpis", async (req, res) => {
       >`
         SELECT
           COALESCE(SUM(CASE WHEN m.datpgt = CURRENT_DATE THEN m.vlrliq END), 0)::float8 AS recebido_hoje,
-          COALESCE(SUM(CASE WHEN m.datpgt >= date_trunc('week', CURRENT_DATE)::date THEN m.vlrliq END), 0)::float8 AS recebido_semana,
+          COALESCE(SUM(CASE WHEN m.datpgt >= date_trunc('week', CURRENT_DATE)::date
+                              AND m.datpgt < (date_trunc('week', CURRENT_DATE) + INTERVAL '7 days')::date THEN m.vlrliq END), 0)::float8 AS recebido_semana,
           COALESCE(SUM(CASE WHEN m.datpgt >= date_trunc('month', CURRENT_DATE)::date THEN m.vlrliq END), 0)::float8 AS recebido_mes,
           COALESCE(SUM(CASE WHEN m.datpgt >= date_trunc('year', CURRENT_DATE)::date THEN m.vlrliq END), 0)::float8 AS recebido_ano,
           COALESCE(SUM(CASE WHEN m.datpgt >= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date
@@ -114,9 +142,13 @@ financeiroRouter.get("/contas-a-receber/kpis", async (req, res) => {
         JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
         WHERE m.datpgt IS NOT NULL
           AND tr.rectpb = 'PG'
-          AND (${codemp}::int IS NULL OR m.codemp = ${codemp})
-          AND (${codfil}::int IS NULL OR m.codfil = ${codfil})
+          AND (${empFil}::text[] IS NULL OR (m.codemp::text || ':' || m.codfil::text) = ANY(${empFil}::text[]))
           AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))
+          AND (${portadores}::text[] IS NULL OR t.codpor = ANY(${portadores}::text[]))
+          AND (${vctproInicio}::date IS NULL OR t.vctpro >= ${vctproInicio}::date)
+          AND (${vctproFim}::date IS NULL OR t.vctpro <= ${vctproFim}::date)
+          AND (${datemiInicio}::date IS NULL OR t.datemi >= ${datemiInicio}::date)
+          AND (${datemiFim}::date IS NULL OR t.datemi <= ${datemiFim}::date)
       `,
       prisma.$queryRaw<{ prazo_medio_dias: number }[]>`
         SELECT COALESCE(
@@ -127,9 +159,13 @@ financeiroRouter.get("/contas-a-receber/kpis", async (req, res) => {
         JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
         WHERE m.datpgt IS NOT NULL AND m.datpgt >= CURRENT_DATE - INTERVAL '90 days'
           AND tr.rectpb = 'PG'
-          AND (${codemp}::int IS NULL OR m.codemp = ${codemp})
-          AND (${codfil}::int IS NULL OR m.codfil = ${codfil})
+          AND (${empFil}::text[] IS NULL OR (m.codemp::text || ':' || m.codfil::text) = ANY(${empFil}::text[]))
           AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))
+          AND (${portadores}::text[] IS NULL OR t.codpor = ANY(${portadores}::text[]))
+          AND (${vctproInicio}::date IS NULL OR t.vctpro >= ${vctproInicio}::date)
+          AND (${vctproFim}::date IS NULL OR t.vctpro <= ${vctproFim}::date)
+          AND (${datemiInicio}::date IS NULL OR t.datemi >= ${datemiInicio}::date)
+          AND (${datemiFim}::date IS NULL OR t.datemi <= ${datemiFim}::date)
       `,
     ]);
 
@@ -179,9 +215,13 @@ const BUCKET_LABELS: Record<(typeof BUCKET_ORDER)[number], string> = {
 
 financeiroRouter.get("/contas-a-receber/aging-buckets", async (req, res) => {
   try {
-    const codemp = parseIntParam(req.query.codemp);
-    const codfil = parseIntParam(req.query.codfil);
+    const empFil = parseStringListParam(req.query.empFil);
     const clientes = parseIdsParam(req.query.clientes);
+    const portadores = parseStringListParam(req.query.portadores);
+    const vctproInicio = parseDateParam(req.query.vctproInicio);
+    const vctproFim = parseDateParam(req.query.vctproFim);
+    const datemiInicio = parseDateParam(req.query.datemiInicio);
+    const datemiFim = parseDateParam(req.query.datemiFim);
 
     const rows = await prisma.$queryRaw<{ bucket: string; valor: number; quantidade: number }[]>`
       SELECT
@@ -197,9 +237,13 @@ financeiroRouter.get("/contas-a-receber/aging-buckets", async (req, res) => {
         COUNT(*)::int AS quantidade
       FROM titulos_receber
       WHERE vlrabe > 0
-        AND (${codemp}::int IS NULL OR codemp = ${codemp})
-        AND (${codfil}::int IS NULL OR codfil = ${codfil})
+        AND (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
         AND (${clientes}::int[] IS NULL OR codcli = ANY(${clientes}::int[]))
+        AND (${portadores}::text[] IS NULL OR codpor = ANY(${portadores}::text[]))
+        AND (${vctproInicio}::date IS NULL OR vctpro >= ${vctproInicio}::date)
+        AND (${vctproFim}::date IS NULL OR vctpro <= ${vctproFim}::date)
+        AND (${datemiInicio}::date IS NULL OR datemi >= ${datemiInicio}::date)
+        AND (${datemiFim}::date IS NULL OR datemi <= ${datemiFim}::date)
       GROUP BY 1
     `;
 
@@ -270,13 +314,15 @@ function situacaoTone(sittit: string, diasAtraso: number): "success" | "warning"
 // ---------- Lista paginada (Aging List) ----------
 financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
   try {
-    const codemp = parseIntParam(req.query.codemp);
-    const codfil = parseIntParam(req.query.codfil);
-    const situacao = typeof req.query.situacao === "string" && req.query.situacao !== "" ? req.query.situacao : null;
+    const empFil = parseStringListParam(req.query.empFil);
+    const situacao = parseStringListParam(req.query.situacao);
     const faixa = typeof req.query.faixa === "string" && req.query.faixa !== "" ? req.query.faixa : null;
-    const vencimento =
-      typeof req.query.vencimento === "string" && req.query.vencimento !== "" ? req.query.vencimento : null;
     const clientes = parseIdsParam(req.query.clientes);
+    const portadores = parseStringListParam(req.query.portadores);
+    const vctproInicio = parseDateParam(req.query.vctproInicio);
+    const vctproFim = parseDateParam(req.query.vctproFim);
+    const datemiInicio = parseDateParam(req.query.datemiInicio);
+    const datemiFim = parseDateParam(req.query.datemiFim);
     const page = Math.max(1, parseIntParam(req.query.page) ?? 1);
     const pageSize = Math.min(200, Math.max(1, parseIntParam(req.query.pageSize) ?? 50));
     const offset = (page - 1) * pageSize;
@@ -310,11 +356,19 @@ financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
         JOIN tipos_titulo tt ON tt.codtpt = t.codtpt
         JOIN empresa e ON e.codemp = t.codemp
         JOIN filial f ON f.codemp = t.codemp AND f.codfil = t.codfil
-        WHERE t.vlrabe > 0
-          AND (${codemp}::int IS NULL OR t.codemp = ${codemp})
-          AND (${codfil}::int IS NULL OR t.codfil = ${codfil})
-          AND (${situacao}::text IS NULL OR t.sittit = ${situacao})
+        WHERE (${situacao}::text[] IS NOT NULL OR t.vlrabe > 0)
+          AND (${empFil}::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY(${empFil}::text[]))
+          AND (${situacao}::text[] IS NULL OR (
+            t.sittit = ANY(${situacao}::text[]) OR
+            ('AB_VENCER' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND t.vctpro >= CURRENT_DATE) OR
+            ('AB_VENCIDO' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND t.vctpro < CURRENT_DATE)
+          ))
           AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))
+          AND (${portadores}::text[] IS NULL OR t.codpor = ANY(${portadores}::text[]))
+          AND (${vctproInicio}::date IS NULL OR t.vctpro >= ${vctproInicio}::date)
+          AND (${vctproFim}::date IS NULL OR t.vctpro <= ${vctproFim}::date)
+          AND (${datemiInicio}::date IS NULL OR t.datemi >= ${datemiInicio}::date)
+          AND (${datemiFim}::date IS NULL OR t.datemi <= ${datemiFim}::date)
           AND (${faixa}::text IS NULL OR (
             (${faixa} = 'a_vencer' AND t.vctpro >= CURRENT_DATE) OR
             (${faixa} = 'd1_30' AND CURRENT_DATE - t.vctpro BETWEEN 1 AND 30) OR
@@ -322,12 +376,6 @@ financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
             (${faixa} = 'd61_90' AND CURRENT_DATE - t.vctpro BETWEEN 61 AND 90) OR
             (${faixa} = 'd91_180' AND CURRENT_DATE - t.vctpro BETWEEN 91 AND 180) OR
             (${faixa} = 'd180_mais' AND CURRENT_DATE - t.vctpro > 180)
-          ))
-          AND (${vencimento}::text IS NULL OR (
-            t.sittit = 'AB' AND (
-              (${vencimento} = 'vencido' AND t.vctpro < CURRENT_DATE) OR
-              (${vencimento} = 'a_vencer' AND t.vctpro >= CURRENT_DATE)
-            )
           ))
         ORDER BY dias_atraso DESC
         LIMIT ${pageSize} OFFSET ${offset}
@@ -338,11 +386,19 @@ financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
         WITH titulos_filtrados AS (
           SELECT t.codemp, t.codfil, t.numtit, t.codtpt, t.sittit, t.vctpro, t.vlrabe
           FROM titulos_receber t
-          WHERE t.vlrabe > 0
-            AND (${codemp}::int IS NULL OR t.codemp = ${codemp})
-            AND (${codfil}::int IS NULL OR t.codfil = ${codfil})
-            AND (${situacao}::text IS NULL OR t.sittit = ${situacao})
+          WHERE (${situacao}::text[] IS NOT NULL OR t.vlrabe > 0)
+            AND (${empFil}::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY(${empFil}::text[]))
+            AND (${situacao}::text[] IS NULL OR (
+              t.sittit = ANY(${situacao}::text[]) OR
+              ('AB_VENCER' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND t.vctpro >= CURRENT_DATE) OR
+              ('AB_VENCIDO' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND t.vctpro < CURRENT_DATE)
+            ))
             AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))
+            AND (${portadores}::text[] IS NULL OR t.codpor = ANY(${portadores}::text[]))
+            AND (${vctproInicio}::date IS NULL OR t.vctpro >= ${vctproInicio}::date)
+            AND (${vctproFim}::date IS NULL OR t.vctpro <= ${vctproFim}::date)
+            AND (${datemiInicio}::date IS NULL OR t.datemi >= ${datemiInicio}::date)
+            AND (${datemiFim}::date IS NULL OR t.datemi <= ${datemiFim}::date)
             AND (${faixa}::text IS NULL OR (
               (${faixa} = 'a_vencer' AND t.vctpro >= CURRENT_DATE) OR
               (${faixa} = 'd1_30' AND CURRENT_DATE - t.vctpro BETWEEN 1 AND 30) OR
@@ -350,12 +406,6 @@ financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
               (${faixa} = 'd61_90' AND CURRENT_DATE - t.vctpro BETWEEN 61 AND 90) OR
               (${faixa} = 'd91_180' AND CURRENT_DATE - t.vctpro BETWEEN 91 AND 180) OR
               (${faixa} = 'd180_mais' AND CURRENT_DATE - t.vctpro > 180)
-            ))
-            AND (${vencimento}::text IS NULL OR (
-              t.sittit = 'AB' AND (
-                (${vencimento} = 'vencido' AND t.vctpro < CURRENT_DATE) OR
-                (${vencimento} = 'a_vencer' AND t.vctpro >= CURRENT_DATE)
-              )
             ))
         )
         SELECT

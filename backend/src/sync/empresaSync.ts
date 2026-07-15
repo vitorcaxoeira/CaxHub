@@ -3,11 +3,12 @@ import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
 
 const JOB_NAME = "empresa-sync";
-const QUERY = "SELECT codemp AS codemp, nomemp AS nomemp FROM e070emp";
+const QUERY = "SELECT codemp AS codemp, nomemp AS nomemp, sigemp AS sigemp FROM e070emp";
 
 interface EmpresaRow {
   codemp: number;
   nomemp: string;
+  sigemp: string;
 }
 
 export async function runEmpresaSync(): Promise<void> {
@@ -17,8 +18,8 @@ export async function runEmpresaSync(): Promise<void> {
     for (const row of rows) {
       await prisma.empresa.upsert({
         where: { codemp: row.codemp },
-        update: { nomemp: row.nomemp },
-        create: { codemp: row.codemp, nomemp: row.nomemp },
+        update: { nomemp: row.nomemp, sigemp: row.sigemp },
+        create: { codemp: row.codemp, nomemp: row.nomemp, sigemp: row.sigemp },
       });
     }
 
