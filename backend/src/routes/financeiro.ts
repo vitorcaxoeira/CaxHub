@@ -1,6 +1,21 @@
 import { Router } from "express";
-import { requireAuth } from "../auth/middleware";
+import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import {
+  runSincronizacaoContasReceber,
+  sincronizacaoContasReceberEmAndamento,
+} from "../sync/contasReceberSyncOrchestrator";
+
+const JOBS_CONTAS_RECEBER = [
+  "empresa-sync",
+  "filial-sync",
+  "cliente-sync",
+  "tipos_titulo-sync",
+  "transacoes-sync",
+  "titulos_receber-sync",
+  "movimentos_receber-sync",
+  "portadores-sync",
+];
 
 export const financeiroRouter = Router();
 financeiroRouter.use(requireAuth);
@@ -444,4 +459,35 @@ financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
   } catch (error) {
     handleError(res, error, "titulos");
   }
+});
+
+// ---------- Sincronização manual (status + disparo) ----------
+financeiroRouter.get("/contas-a-receber/sincronizacao", async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ ultima: Date | null }[]>`
+      SELECT MIN(latest) AS ultima FROM (
+        SELECT "jobName", MAX("runAt") AS latest
+        FROM "SyncLog"
+        WHERE status = 'success' AND "jobName" = ANY(${JOBS_CONTAS_RECEBER}::text[])
+        GROUP BY "jobName"
+      ) t
+    `;
+    res.json({
+      emAndamento: sincronizacaoContasReceberEmAndamento(),
+      ultimaAtualizacao: rows[0]?.ultima ?? null,
+    });
+  } catch (error) {
+    handleError(res, error, "sincronizacao-status");
+  }
+});
+
+financeiroRouter.post("/contas-a-receber/sincronizacao", requireRole("admin"), async (_req, res) => {
+  if (sincronizacaoContasReceberEmAndamento()) {
+    res.status(409).json({ error: "Sincronização já em andamento" });
+    return;
+  }
+  runSincronizacaoContasReceber().catch((error) => {
+    console.error("[sincronizacao-contas-receber] falhou:", error instanceof Error ? error.message : error);
+  });
+  res.status(202).json({ status: "iniciado" });
 });

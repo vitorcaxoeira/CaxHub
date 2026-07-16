@@ -4,6 +4,7 @@ import { AgingDashboard } from "../../components/financeiro/AgingDashboard";
 import { FiltrosBar, Filtros, FiltroOpcoes } from "../../components/financeiro/FiltrosBar";
 import { SituacaoFilter } from "../../components/financeiro/SituacaoFilter";
 import { TitulosTable, TituloRow } from "../../components/financeiro/TitulosTable";
+import { SincronizacaoStatus } from "../../components/financeiro/SincronizacaoStatus";
 
 const API_BASE = "/api/financeiro/contas-a-receber";
 
@@ -80,6 +81,7 @@ export function ContasReceber() {
   });
   const [faixa, setFaixa] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [titulos, setTitulos] = useState<TitulosResponse>(TITULOS_VAZIO);
   const [loadingResumo, setLoadingResumo] = useState(true);
   const [loadingTabela, setLoadingTabela] = useState(true);
@@ -127,6 +129,7 @@ export function ContasReceber() {
     filtros.vctproFim,
     filtros.datemiInicio,
     filtros.datemiFim,
+    refreshKey,
   ]);
 
   useEffect(() => {
@@ -150,11 +153,15 @@ export function ContasReceber() {
       .then(({ data }) => setTitulos(data))
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a lista de títulos"))
       .finally(() => setLoadingTabela(false));
-  }, [filtros, clienteIds, situacaoIds, portadorIds, faixa, page]);
+  }, [filtros, clienteIds, situacaoIds, portadorIds, faixa, page, refreshKey]);
 
   function handleFiltrosChange(novos: Filtros) {
     setFiltros(novos);
     setPage(1);
+  }
+
+  function handleSincronizado() {
+    setRefreshKey((k) => k + 1);
   }
 
   function handleBucketClick(key: string) {
@@ -215,9 +222,12 @@ export function ContasReceber() {
 
   return (
     <div>
-      <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
-        Financeiro · Contas a Receber
-      </p>
+      <div className="mb-4 flex items-center justify-between">
+        <p className="font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
+          Financeiro · Contas a Receber
+        </p>
+        <SincronizacaoStatus onAtualizado={handleSincronizado} />
+      </div>
 
       <FiltrosBar opcoes={opcoes} filtros={filtros} onChange={handleFiltrosChange} />
 

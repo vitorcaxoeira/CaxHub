@@ -58,7 +58,7 @@ export function TitulosTable({
         <table className="w-full border-collapse">
           <thead>
             <tr>
-              <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+              <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                 Emp./Fil.
               </th>
               <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
@@ -87,11 +87,11 @@ export function TitulosTable({
           <tbody>
             {rows.map((row) => (
               <tr key={`${row.codemp}-${row.codfil}-${row.numtit}-${row.codtpt}`} className="border-t border-border/60 transition hover:bg-surface-2">
-                <td className="px-5 py-3.5 font-mono text-sm text-muted">
+                <td className="whitespace-nowrap px-3 py-3.5 font-mono text-sm text-muted">
                   {row.codemp}/{row.codfil}
                 </td>
-                <td className="hidden px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                  {row.numtit} · {row.abrtpt}
+                <td className="hidden whitespace-nowrap px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">
+                  {row.numtit}·{row.abrtpt}
                 </td>
                 <td className="px-5 py-3.5">
                   <div className="text-sm font-semibold text-foreground">
