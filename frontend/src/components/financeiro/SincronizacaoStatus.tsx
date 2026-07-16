@@ -13,6 +13,7 @@ interface StatusResponse {
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" });
 const timeFormatter = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const DUAS_HORAS_MS = 2 * 60 * 60 * 1000;
 
 function formatarLabel(iso: string | null): string {
   if (!iso) return "sem sincronização registrada";
@@ -22,6 +23,11 @@ function formatarLabel(iso: string | null): string {
   return mesmoDia
     ? `atualizado às ${timeFormatter.format(data)}`
     : `atualizado em ${dateFormatter.format(data)} às ${timeFormatter.format(data)}`;
+}
+
+function estaDesatualizado(iso: string | null): boolean {
+  if (!iso) return false;
+  return Date.now() - new Date(iso).getTime() > DUAS_HORAS_MS;
 }
 
 interface SincronizacaoStatusProps {
@@ -86,11 +92,17 @@ export function SincronizacaoStatus({ onAtualizado }: SincronizacaoStatusProps) 
 
   const emAndamento = status?.emAndamento ?? false;
   const isAdmin = user?.role === "admin";
+  const desatualizado = status ? estaDesatualizado(status.ultimaAtualizacao) : false;
 
   return (
     <div className="flex items-center gap-3">
       {erro && <span className="text-[11px] text-destructive">{erro}</span>}
-      <span className="text-[11px] text-muted">
+      {desatualizado && !emAndamento && (
+        <span className="flex items-center gap-1 text-[11px] text-warning" title="Última sincronização com o agente há mais de 2 horas">
+          <span className="h-1.5 w-1.5 rounded-full bg-warning" /> desatualizado
+        </span>
+      )}
+      <span className={`text-[11px] ${desatualizado && !emAndamento ? "text-warning" : "text-muted"}`}>
         {status ? formatarLabel(status.ultimaAtualizacao) : "carregando..."}
       </span>
       {isAdmin && (
