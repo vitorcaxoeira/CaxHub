@@ -144,7 +144,13 @@ export function Clientes() {
 
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <RankingBarra titulo="Clientes novos (no período)" itens={novos} formatarValor={fmtMoney} unidade="títulos" />
-              <RankingBarra titulo="Clientes perdidos" itens={perdidos} formatarValor={fmtMoney} unidade="títulos" />
+              <RankingBarra
+                titulo="Clientes perdidos"
+                itens={perdidos}
+                formatarValor={fmtMoney}
+                unidade="títulos"
+                descricao="Tinham título emitido nos últimos 12 meses, mas nenhum nos últimos 3"
+              />
             </div>
           </>
         )

@@ -10,6 +10,7 @@ interface RankingBarraProps {
   itens: RankingItem[];
   formatarValor?: (valor: number) => string;
   unidade?: string;
+  descricao?: string;
 }
 
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -17,12 +18,15 @@ const formatarValorPadrao = (valor: number) => `R$ ${currency.format(valor)}`;
 
 // Ranking de uma única métrica — comparação de magnitude, não de identidade,
 // então usa uma cor só (a marca), não uma cor por barra.
-export function RankingBarra({ titulo, itens, formatarValor = formatarValorPadrao, unidade = "registros" }: RankingBarraProps) {
+export function RankingBarra({ titulo, itens, formatarValor = formatarValorPadrao, unidade = "registros", descricao }: RankingBarraProps) {
   const maiorValor = Math.max(1, ...itens.map((i) => i.valor));
 
   return (
     <section className="rounded-lg border border-border bg-surface p-6 shadow-sm">
-      <p className="mb-4 font-mono text-[10px] uppercase tracking-widest text-muted">{titulo}</p>
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{titulo}</p>
+        {descricao && <p className="text-[11px] text-muted">{descricao}</p>}
+      </div>
 
       <div className="space-y-3">
         {itens.map((item) => (

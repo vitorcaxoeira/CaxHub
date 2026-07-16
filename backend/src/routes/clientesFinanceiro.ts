@@ -73,7 +73,8 @@ clientesFinanceiroRouter.get("/kpis", async (req, res) => {
         WITH primeiro AS (
           SELECT codcli, MIN(datemi) AS primeira_datemi
           FROM titulos_receber
-          WHERE (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
+          WHERE sittit NOT IN ('CA', 'LS')
+            AND (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
           GROUP BY codcli
         )
         SELECT COUNT(*)::int AS qtd FROM primeiro
@@ -83,7 +84,8 @@ clientesFinanceiroRouter.get("/kpis", async (req, res) => {
         WITH atividade AS (
           SELECT codcli, MAX(datemi) AS ultima_datemi
           FROM titulos_receber
-          WHERE (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
+          WHERE sittit NOT IN ('CA', 'LS')
+            AND (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
           GROUP BY codcli
         )
         SELECT COUNT(*)::int AS qtd FROM atividade
@@ -132,7 +134,8 @@ clientesFinanceiroRouter.get("/novos", async (req, res) => {
       WITH primeiro AS (
         SELECT codcli, MIN(datemi) AS primeira_datemi
         FROM titulos_receber
-        WHERE (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
+        WHERE sittit NOT IN ('CA', 'LS')
+          AND (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
         GROUP BY codcli
         HAVING MIN(datemi) >= ${periodoInicio}::date AND MIN(datemi) <= ${periodoFim}::date
       )
@@ -140,6 +143,7 @@ clientesFinanceiroRouter.get("/novos", async (req, res) => {
       FROM titulos_receber t
       JOIN primeiro pr ON pr.codcli = t.codcli
       JOIN clientes c ON c.codcli = t.codcli
+      WHERE t.sittit NOT IN ('CA', 'LS')
       GROUP BY t.codcli, c.nomcli
       ORDER BY MAX(pr.primeira_datemi) DESC
       LIMIT 20
@@ -159,7 +163,8 @@ clientesFinanceiroRouter.get("/perdidos", async (req, res) => {
       WITH atividade AS (
         SELECT codcli, MAX(datemi) AS ultima_datemi
         FROM titulos_receber
-        WHERE (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
+        WHERE sittit NOT IN ('CA', 'LS')
+          AND (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
         GROUP BY codcli
         HAVING MAX(datemi) >= CURRENT_DATE - INTERVAL '12 months'
            AND MAX(datemi) < CURRENT_DATE - INTERVAL '3 months'
@@ -168,6 +173,7 @@ clientesFinanceiroRouter.get("/perdidos", async (req, res) => {
       FROM titulos_receber t
       JOIN atividade a ON a.codcli = t.codcli
       JOIN clientes c ON c.codcli = t.codcli
+      WHERE t.sittit NOT IN ('CA', 'LS')
       GROUP BY t.codcli, c.nomcli
       ORDER BY MAX(a.ultima_datemi) DESC
       LIMIT 20
