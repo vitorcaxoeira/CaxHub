@@ -28,7 +28,13 @@ function parseIdsParam(value: unknown): number[] | null {
 
 function parseDateParam(value: unknown): string | null {
   if (typeof value !== "string" || value === "") return null;
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const ano = Number(value.slice(0, 4));
+  // Datas com ano fora desse intervalo geralmente vêm de estados intermediários
+  // de digitação no <input type="date"> nativo (ex.: "0002-01-01" ao digitar
+  // "2026" dígito a dígito) — sem isso, um generate_series com séculos de
+  // diferença trava o /por-dia.
+  return ano >= 1900 && ano <= 2100 ? value : null;
 }
 
 function handleError(res: import("express").Response, error: unknown, label: string) {
@@ -125,9 +131,21 @@ recebimentosRouter.get("/por-dia", async (req, res) => {
   try {
     const { empFil, portadores, contas, clientes, datpgtInicio, datpgtFim } = lerFiltros(req);
 
+    // Segunda camada de proteção: mesmo com parseDateParam validando o ano,
+    // um intervalo absurdo aqui geraria um generate_series gigante e travaria
+    // a resposta (e o navegador, tentando renderizar o gráfico inteiro).
+    const MAX_DIAS = 731;
+    const inicioMs = new Date(datpgtInicio).getTime();
+    const fimMs = new Date(datpgtFim).getTime();
+    const diasNoIntervalo = Math.round((fimMs - inicioMs) / (24 * 60 * 60 * 1000));
+    const inicioEfetivo =
+      diasNoIntervalo > MAX_DIAS
+        ? new Date(fimMs - MAX_DIAS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        : datpgtInicio;
+
     const rows = await prisma.$queryRaw<{ dia: string; valor: number }[]>`
       WITH dias AS (
-        SELECT generate_series(${datpgtInicio}::date, ${datpgtFim}::date, INTERVAL '1 day') AS dia
+        SELECT generate_series(${inicioEfetivo}::date, ${datpgtFim}::date, INTERVAL '1 day') AS dia
       ),
       pagos AS (
         SELECT m.datpgt, m.vlrliq
@@ -135,7 +153,7 @@ recebimentosRouter.get("/por-dia", async (req, res) => {
         JOIN titulos_receber t ON t.codemp = m.codemp AND t.codfil = m.codfil AND t.numtit = m.numtit AND t.codtpt = m.codtpt
         JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
         WHERE tr.rectpb = 'PG'
-          AND m.datpgt >= ${datpgtInicio}::date
+          AND m.datpgt >= ${inicioEfetivo}::date
           AND m.datpgt <= ${datpgtFim}::date
           AND (${empFil}::text[] IS NULL OR (m.codemp::text || ':' || m.codfil::text) = ANY(${empFil}::text[]))
           AND (${portadores}::text[] IS NULL OR m.codpor = ANY(${portadores}::text[]))

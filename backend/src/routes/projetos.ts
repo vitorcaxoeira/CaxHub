@@ -22,7 +22,12 @@ function parseIdsParam(value: unknown): number[] | null {
 
 function parseDateParam(value: unknown): string | null {
   if (typeof value !== "string" || value === "") return null;
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const ano = Number(value.slice(0, 4));
+  // Ano fora desse intervalo costuma vir de um estado intermediário de
+  // digitação no <input type="date"> nativo (ex.: "0002-01-01" ao digitar
+  // "2026" dígito a dígito).
+  return ano >= 1900 && ano <= 2100 ? value : null;
 }
 
 function handleError(res: import("express").Response, error: unknown, label: string) {
