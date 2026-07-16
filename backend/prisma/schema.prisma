@@ -163,6 +163,7 @@ model MovimentoTituloReceber {
   codpor String? @db.VarChar(4)
   codcrt String? @db.VarChar(2)
   codccu String? @db.VarChar(9)
+  numcco String? @db.VarChar(14)
 
   tituloReceber TituloReceber @relation(fields: [codemp, codfil, numtit, codtpt], references: [codemp, codfil, numtit, codtpt])
   transacao     Transacao     @relation(fields: [codemp, codtns], references: [codemp, codtns])
@@ -424,4 +425,18 @@ model Consultor {
 
   @@id([codemp, codusu])
   @@map("consultores")
+}
+
+// Espelho local da tabela E600CCO do Senior ERP (Tesouraria - Conta - Cadastro).
+model ContaCorrente {
+  codemp Int
+  numcco String @db.VarChar(14)
+  descco String @db.VarChar(30)
+  abrcco String @db.VarChar(10)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitcco String @db.VarChar(1)
+
+  @@id([codemp, numcco])
+
+  @@map("contas_correntes")
 }

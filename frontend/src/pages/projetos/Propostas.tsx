@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { ClienteFilter, ClienteOption } from "../../components/financeiro/ClienteFilter";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { FunilSituacao, FunilItem } from "../../components/projetos/FunilSituacao";
-import { RankingBarra, RankingItem } from "../../components/projetos/RankingBarra";
+import { RankingBarra, RankingItem } from "../../components/ui/RankingBarra";
 import { SerieTemporalPropostas, SeriePonto } from "../../components/projetos/SerieTemporalPropostas";
 import { PropostasTable, PropostaRow } from "../../components/projetos/PropostasTable";
 import { formatHoras } from "../../utils/horas";
@@ -281,8 +281,8 @@ export function Propostas() {
             </div>
 
             <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <RankingBarra titulo="Top 10 clientes por valor" itens={topClientes} />
-              <RankingBarra titulo="Top 10 clientes por horas" itens={topClientesHoras} formatarValor={formatHoras} />
+              <RankingBarra titulo="Top 10 clientes por valor" itens={topClientes} unidade="propostas" />
+              <RankingBarra titulo="Top 10 clientes por horas" itens={topClientesHoras} formatarValor={formatHoras} unidade="propostas" />
             </div>
 
             <div className="mb-6">

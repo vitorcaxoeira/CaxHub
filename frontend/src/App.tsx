@@ -8,6 +8,11 @@ import { Login } from "./pages/Login";
 import { Home } from "./pages/Home";
 import { ContasReceber } from "./pages/financeiro/ContasReceber";
 import { ContasPagar } from "./pages/financeiro/ContasPagar";
+import { Recebimentos } from "./pages/financeiro/Recebimentos";
+import { Inadimplencia } from "./pages/financeiro/Inadimplencia";
+import { Clientes } from "./pages/financeiro/Clientes";
+import { FluxoCaixa } from "./pages/financeiro/FluxoCaixa";
+import { Historico } from "./pages/financeiro/Historico";
 import { Propostas } from "./pages/projetos/Propostas";
 import { Usuarios } from "./pages/admin/Usuarios";
 
@@ -28,6 +33,11 @@ export default function App() {
               <Route path="/" element={<Home />} />
               <Route path="/financeiro/contas-a-receber" element={<ContasReceber />} />
               <Route path="/financeiro/contas-a-pagar" element={<ContasPagar />} />
+              <Route path="/financeiro/recebimentos" element={<Recebimentos />} />
+              <Route path="/financeiro/inadimplencia" element={<Inadimplencia />} />
+              <Route path="/financeiro/clientes" element={<Clientes />} />
+              <Route path="/financeiro/fluxo-caixa" element={<FluxoCaixa />} />
+              <Route path="/financeiro/historico" element={<Historico />} />
               <Route path="/projetos/propostas" element={<Propostas />} />
               <Route element={<RequireRole roles={["admin"]} />}>
                 <Route path="/admin/usuarios" element={<Usuarios />} />

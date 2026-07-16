@@ -15,6 +15,7 @@ const JOBS_CONTAS_RECEBER = [
   "titulos_receber-sync",
   "movimentos_receber-sync",
   "portadores-sync",
+  "contas_correntes-sync",
 ];
 
 export const financeiroRouter = Router();

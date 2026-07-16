@@ -16,11 +16,19 @@ const topLevel: NavLeaf[] = [{ to: "/", label: "Início" }];
 
 const groups: NavGroup[] = [
   {
-    label: "Financeiro",
+    label: "Financeiro a Receber",
     items: [
       { to: "/financeiro/contas-a-receber", label: "Contas a Receber" },
-      { to: "/financeiro/contas-a-pagar", label: "Contas a Pagar" },
+      { to: "/financeiro/recebimentos", label: "Recebimentos" },
+      { to: "/financeiro/inadimplencia", label: "Inadimplência" },
+      { to: "/financeiro/clientes", label: "Clientes" },
+      { to: "/financeiro/fluxo-caixa", label: "Fluxo de Caixa" },
+      { to: "/financeiro/historico", label: "Histórico" },
     ],
+  },
+  {
+    label: "Financeiro a Pagar",
+    items: [{ to: "/financeiro/contas-a-pagar", label: "Contas a Pagar" }],
   },
   {
     label: "Gestão de Projetos",
@@ -62,7 +70,7 @@ interface SidebarProps {
 
 export function Sidebar({ open }: SidebarProps) {
   const { user } = useAuth();
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro"]));
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro a Receber"]));
   const visibleGroups = user?.role === "admin" ? [...groups, adminGroup] : groups;
 
   function toggleGroup(label: string) {

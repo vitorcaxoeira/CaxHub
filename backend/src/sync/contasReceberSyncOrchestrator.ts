@@ -6,12 +6,14 @@ import { runTipoTituloSync } from "./tipoTituloSync";
 import { runTransacaoSync } from "./transacaoSync";
 import { runTituloReceberSync } from "./tituloReceberSync";
 import { runMovimentoTituloReceberSync } from "./movimentoTituloReceberSync";
+import { runContaCorrenteSync } from "./contaCorrenteSync";
 
 // Ordem respeita as FKs entre as tabelas (mesma logica de backend/scripts/run-all-syncs.ts).
 const JOBS: [string, () => Promise<void>][] = [
   ["empresa", runEmpresaSync],
   ["filial", runFilialSync],
   ["portador", runPortadorSync],
+  ["contaCorrente", runContaCorrenteSync],
   ["cliente", runClienteSync],
   ["tipoTitulo", runTipoTituloSync],
   ["transacao", runTransacaoSync],

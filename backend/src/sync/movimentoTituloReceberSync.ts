@@ -3,7 +3,7 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
 const JOB_NAME = "movimentos_receber-sync";
-const QUERY = `SELECT codemp AS codemp, codfil AS codfil, numtit AS numtit, codtpt AS codtpt, seqmov AS seqmov, codtns AS codtns, datmov AS datmov, datpgt AS datpgt, codfpg AS codfpg, vlrmov AS vlrmov, vlrliq AS vlrliq, vlrjrs AS vlrjrs, vlrmul AS vlrmul, vlrdsc AS vlrdsc, diaatr AS diaatr, codpor AS codpor, codcrt AS codcrt, codccu AS codccu FROM e301mcr`;
+const QUERY = `SELECT codemp AS codemp, codfil AS codfil, numtit AS numtit, codtpt AS codtpt, seqmov AS seqmov, codtns AS codtns, datmov AS datmov, datpgt AS datpgt, codfpg AS codfpg, vlrmov AS vlrmov, vlrliq AS vlrliq, vlrjrs AS vlrjrs, vlrmul AS vlrmul, vlrdsc AS vlrdsc, diaatr AS diaatr, codpor AS codpor, codcrt AS codcrt, codccu AS codccu, numcco AS numcco FROM e301mcr`;
 
 interface MovimentoTituloReceberRow {
   codemp: number;
@@ -24,6 +24,7 @@ interface MovimentoTituloReceberRow {
   codpor?: string;
   codcrt?: string;
   codccu?: string;
+  numcco?: string;
 }
 
 export async function runMovimentoTituloReceberSync(): Promise<void> {
@@ -37,7 +38,7 @@ export async function runMovimentoTituloReceberSync(): Promise<void> {
     ])) as MovimentoTituloReceberRow[];
 
     for (const row of rows) {
-      const data = { codemp: row.codemp, codfil: row.codfil, numtit: row.numtit, codtpt: row.codtpt, seqmov: row.seqmov, codtns: row.codtns, datmov: new Date(row.datmov), datpgt: row.datpgt != null ? new Date(row.datpgt) : null, codfpg: row.codfpg, vlrmov: row.vlrmov, vlrliq: row.vlrliq, vlrjrs: row.vlrjrs, vlrmul: row.vlrmul, vlrdsc: row.vlrdsc, diaatr: row.diaatr, codpor: row.codpor, codcrt: row.codcrt, codccu: row.codccu };
+      const data = { codemp: row.codemp, codfil: row.codfil, numtit: row.numtit, codtpt: row.codtpt, seqmov: row.seqmov, codtns: row.codtns, datmov: new Date(row.datmov), datpgt: row.datpgt != null ? new Date(row.datpgt) : null, codfpg: row.codfpg, vlrmov: row.vlrmov, vlrliq: row.vlrliq, vlrjrs: row.vlrjrs, vlrmul: row.vlrmul, vlrdsc: row.vlrdsc, diaatr: row.diaatr, codpor: row.codpor, codcrt: row.codcrt, codccu: row.codccu, numcco: row.numcco };
       await prisma.movimentoTituloReceber.upsert({
         where: { codemp_codfil_numtit_codtpt_seqmov: { codemp: row.codemp, codfil: row.codfil, numtit: row.numtit, codtpt: row.codtpt, seqmov: row.seqmov } },
         update: data,
