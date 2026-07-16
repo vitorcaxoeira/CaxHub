@@ -9,14 +9,15 @@ interface RankingBarraProps {
   titulo: string;
   itens: RankingItem[];
   formatarValor?: (valor: number) => string;
+  unidade?: string;
 }
 
-const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const formatarValorPadrao = (valor: number) => `R$ ${currency.format(valor)}`;
 
 // Ranking de uma única métrica — comparação de magnitude, não de identidade,
 // então usa uma cor só (a marca), não uma cor por barra.
-export function RankingBarra({ titulo, itens, formatarValor = formatarValorPadrao }: RankingBarraProps) {
+export function RankingBarra({ titulo, itens, formatarValor = formatarValorPadrao, unidade = "registros" }: RankingBarraProps) {
   const maiorValor = Math.max(1, ...itens.map((i) => i.valor));
 
   return (
@@ -25,7 +26,7 @@ export function RankingBarra({ titulo, itens, formatarValor = formatarValorPadra
 
       <div className="space-y-3">
         {itens.map((item) => (
-          <div key={item.chave} title={`${item.nome} — ${item.quantidade} propostas — ${formatarValor(item.valor)}`}>
+          <div key={item.chave} title={`${item.nome} — ${item.quantidade} ${unidade} — ${formatarValor(item.valor)}`}>
             <div className="mb-1 flex items-baseline justify-between gap-2">
               <span className="truncate text-sm text-foreground">{item.nome}</span>
               <span className="flex-none font-mono text-sm font-semibold tabular-nums text-foreground">
