@@ -5,6 +5,7 @@ import { RequireRole } from "./auth/RequireRole";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { AppShell } from "./layout/AppShell";
 import { Login } from "./pages/Login";
+import { AceitarConvite } from "./pages/AceitarConvite";
 import { Home } from "./pages/Home";
 import { ContasReceber } from "./pages/financeiro/ContasReceber";
 import { ContasPagar } from "./pages/financeiro/ContasPagar";
@@ -23,6 +24,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/aceitar-convite" element={<AceitarConvite />} />
             <Route
               element={
                 <ProtectedRoute>

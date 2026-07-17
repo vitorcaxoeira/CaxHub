@@ -1,12 +1,29 @@
 import bcrypt from "bcrypt";
 import { prisma } from "../src/db/prisma";
 
+const PAPEIS_NOVOS = [
+  "administrativo",
+  "comercial",
+  "gerente_comercial",
+  "consultoria",
+  "gerente_consultoria",
+  "suporte",
+  "gerente_suporte",
+  "desenvolvimento",
+  "gerente_desenvolvimento",
+  "system",
+];
+
 async function main() {
   const adminRole = await prisma.role.upsert({
     where: { name: "admin" },
     update: {},
     create: { name: "admin" },
   });
+
+  for (const nome of PAPEIS_NOVOS) {
+    await prisma.role.upsert({ where: { name: nome }, update: {}, create: { name: nome } });
+  }
 
   const passwordHash = await bcrypt.hash("admin123", 10);
 

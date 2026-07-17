@@ -10,12 +10,23 @@ datasource db {
 model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
-  passwordHash String
+  passwordHash String?
   nome         String
   fotoUrl      String?
   roleId       Int
   role         Role     @relation(fields: [roleId], references: [id])
   createdAt    DateTime @default(now())
+
+  /// "pendente" (convite ainda não aceito, sem senha) | "ativo"
+  status          String    @default("ativo")
+  inviteToken     String?   @unique
+  inviteExpiresAt DateTime?
+
+  // Vínculo opcional com o registro de origem em Consultor (view USU_VBI00Cons do Senior),
+  // usado só para sugerir nome/papel ao criar um convite — não é uma FK obrigatória.
+  consultorCodemp Int?
+  consultorCodusu Int?
+  consultor       Consultor? @relation(fields: [consultorCodemp, consultorCodusu], references: [codemp, codusu])
 
   preferenciaFluxoCaixa PreferenciaFluxoCaixa?
 }
@@ -437,9 +448,15 @@ model Consultor {
   sitfor    String? @db.VarChar(1)
   nomcom    String? @db.VarChar(127)
   conhab    Int?
+  /// Domínio "USU_TipUsuRat": 1=Adm. Pleno, 2=Comercial, 3=Consultor de Serviços,
+  /// 4=Gerente de Serviços, 5=Consultor Suporte, 6=Gerente Suporte, 7=Gerente Comercial,
+  /// 8=Gerente Dev. SoelX, 9=Desenvolvedor SoelX (0 = não classificado, fora do domínio oficial)
   tipusurat Int?
   depexe    Int?
   depexedes String? @db.VarChar(250)
+  email     String? @db.VarChar(200)
+
+  usuariosCaxHub User[]
 
   @@id([codemp, codusu])
   @@map("consultores")

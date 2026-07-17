@@ -3,7 +3,7 @@ import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
 
 const JOB_NAME = "consultores-sync";
-const QUERY = `SELECT codemp AS codemp, codusu AS codusu, codfor AS codfor, nomfor AS nomfor, sitfor AS sitfor, nomcom AS nomcom, conhab AS conhab, tipusurat AS tipusurat, depexe AS depexe, depexedes AS depexedes FROM USU_VBI00Cons`;
+const QUERY = `SELECT codemp AS codemp, codusu AS codusu, codfor AS codfor, nomfor AS nomfor, sitfor AS sitfor, nomcom AS nomcom, conhab AS conhab, tipusurat AS tipusurat, depexe AS depexe, depexedes AS depexedes, email AS email FROM USU_VBI00Cons`;
 
 interface ConsultorRow {
   codemp: number;
@@ -16,6 +16,7 @@ interface ConsultorRow {
   tipusurat?: number;
   depexe?: number;
   depexedes?: string;
+  email?: string;
 }
 
 // A view USU_VBI00Cons não tem registro em r998tbl (sem PK/descrição cadastrada),
@@ -37,6 +38,7 @@ export async function runConsultorSync(): Promise<void> {
         tipusurat: row.tipusurat,
         depexe: row.depexe,
         depexedes: row.depexedes,
+        email: row.email,
       };
       await prisma.consultor.upsert({
         where: { codemp_codusu: { codemp: row.codemp, codusu: row.codusu } },
