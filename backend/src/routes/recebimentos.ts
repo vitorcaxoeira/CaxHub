@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { requireAuth } from "../auth/middleware";
+import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 
 export const recebimentosRouter = Router();
-recebimentosRouter.use(requireAuth);
+recebimentosRouter.use(requireAuth, requireRole("admin"));
 
 function parseIntParam(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;

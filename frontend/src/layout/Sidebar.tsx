@@ -14,7 +14,17 @@ interface NavGroup {
 
 const topLevel: NavLeaf[] = [{ to: "/", label: "Início" }];
 
-const groups: NavGroup[] = [
+// Grupos visíveis pra qualquer papel autenticado.
+const groupsParaTodos: NavGroup[] = [
+  {
+    label: "Gestão de Projetos",
+    items: [{ to: "/projetos/propostas", label: "Propostas" }],
+  },
+];
+
+// Grupos restritos ao papel "admin" — mantidos em sincronia com o `RequireRole`
+// dessas mesmas rotas em `App.tsx` e com o `requireRole("admin")` dos routers do backend.
+const groupsAdmin: NavGroup[] = [
   {
     label: "Financeiro a Receber",
     items: [
@@ -31,15 +41,10 @@ const groups: NavGroup[] = [
     items: [{ to: "/financeiro/contas-a-pagar", label: "Contas a Pagar" }],
   },
   {
-    label: "Gestão de Projetos",
-    items: [{ to: "/projetos/propostas", label: "Propostas" }],
+    label: "Administração",
+    items: [{ to: "/admin/usuarios", label: "Usuários" }],
   },
 ];
-
-const adminGroup: NavGroup = {
-  label: "Administração",
-  items: [{ to: "/admin/usuarios", label: "Usuários" }],
-};
 
 function ChevronIcon({ open }: { open: boolean }) {
   return (
@@ -71,7 +76,7 @@ interface SidebarProps {
 export function Sidebar({ open }: SidebarProps) {
   const { user } = useAuth();
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro a Receber"]));
-  const visibleGroups = user?.role === "admin" ? [...groups, adminGroup] : groups;
+  const visibleGroups = user?.role === "admin" ? [...groupsParaTodos, ...groupsAdmin] : groupsParaTodos;
 
   function toggleGroup(label: string) {
     setOpenGroups((prev) => {

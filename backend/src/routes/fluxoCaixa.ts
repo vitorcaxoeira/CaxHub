@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
+import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 
 export const fluxoCaixaRouter = Router();
-fluxoCaixaRouter.use(requireAuth);
+fluxoCaixaRouter.use(requireAuth, requireRole("admin"));
 
 function parseIntParam(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;

@@ -17,17 +17,18 @@ export function tipusuratLabel(tipusurat: number | null): string {
 }
 
 // Sugestão de papel (Role.name) do CaxHub a partir do tipusurat do Consultor vinculado.
-// Lista provisória — pendente de revisão quando a estrutura de gestores por
-// departamento for definida (ver plano "Papéis de usuário baseados em tipusurat").
+// Agrupado só por área funcional (sem separar gerente/colaborador) — quem gerencia o quê
+// já é derivado dinamicamente de DepartamentoGestor/DepartamentoTime (ver GET
+// /dashboard/meu-perfil), então o papel não precisa mais carregar essa distinção.
 export const TIPUSURAT_ROLE_SUGERIDO: Record<number, string> = {
   1: "administrativo",
   2: "comercial",
   3: "consultoria",
-  4: "gerente_consultoria",
+  4: "consultoria",
   5: "suporte",
-  6: "gerente_suporte",
-  7: "gerente_comercial",
-  8: "gerente_desenvolvimento",
+  6: "suporte",
+  7: "comercial",
+  8: "desenvolvimento",
   9: "desenvolvimento",
 };
 

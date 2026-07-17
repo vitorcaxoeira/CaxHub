@@ -33,15 +33,15 @@ export default function App() {
               }
             >
               <Route path="/" element={<Home />} />
-              <Route path="/financeiro/contas-a-receber" element={<ContasReceber />} />
-              <Route path="/financeiro/contas-a-pagar" element={<ContasPagar />} />
-              <Route path="/financeiro/recebimentos" element={<Recebimentos />} />
-              <Route path="/financeiro/inadimplencia" element={<Inadimplencia />} />
-              <Route path="/financeiro/clientes" element={<Clientes />} />
-              <Route path="/financeiro/fluxo-caixa" element={<FluxoCaixa />} />
-              <Route path="/financeiro/historico" element={<Historico />} />
               <Route path="/projetos/propostas" element={<Propostas />} />
               <Route element={<RequireRole roles={["admin"]} />}>
+                <Route path="/financeiro/contas-a-receber" element={<ContasReceber />} />
+                <Route path="/financeiro/contas-a-pagar" element={<ContasPagar />} />
+                <Route path="/financeiro/recebimentos" element={<Recebimentos />} />
+                <Route path="/financeiro/inadimplencia" element={<Inadimplencia />} />
+                <Route path="/financeiro/clientes" element={<Clientes />} />
+                <Route path="/financeiro/fluxo-caixa" element={<FluxoCaixa />} />
+                <Route path="/financeiro/historico" element={<Historico />} />
                 <Route path="/admin/usuarios" element={<Usuarios />} />
               </Route>
             </Route>

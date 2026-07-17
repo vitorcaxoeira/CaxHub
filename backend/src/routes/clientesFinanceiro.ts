@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { requireAuth } from "../auth/middleware";
+import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 
 export const clientesFinanceiroRouter = Router();
-clientesFinanceiroRouter.use(requireAuth);
+clientesFinanceiroRouter.use(requireAuth, requireRole("admin"));
 
 function parseStringListParam(value: unknown): string[] | null {
   if (typeof value !== "string" || value === "") return null;

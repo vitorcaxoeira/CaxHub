@@ -19,7 +19,7 @@ const JOBS_CONTAS_RECEBER = [
 ];
 
 export const financeiroRouter = Router();
-financeiroRouter.use(requireAuth);
+financeiroRouter.use(requireAuth, requireRole("admin"));
 
 function parseIntParam(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;
@@ -487,7 +487,7 @@ financeiroRouter.get("/contas-a-receber/sincronizacao", async (_req, res) => {
   }
 });
 
-financeiroRouter.post("/contas-a-receber/sincronizacao", requireRole("admin"), async (_req, res) => {
+financeiroRouter.post("/contas-a-receber/sincronizacao", async (_req, res) => {
   if (sincronizacaoContasReceberEmAndamento()) {
     res.status(409).json({ error: "Sincronização já em andamento" });
     return;

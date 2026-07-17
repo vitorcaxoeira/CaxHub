@@ -475,3 +475,30 @@ model ContaCorrente {
 
   @@map("contas_correntes")
 }
+
+// Espelho local da tabela USU_TDEPEXECFG do Senior ERP (Config. do departamento executor).
+model DepartamentoGestor {
+  /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
+  depexe Int
+  codemp Int
+  usuges BigInt
+  @@id([codemp, depexe])
+
+  @@map("departamentos_gestores")
+}
+
+// Espelho local da tabela USU_TDEPEXETIM do Senior ERP (Time de consultores do Departamento).
+model DepartamentoTime {
+  /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
+  depexe Int
+  codemp Int
+  codusu BigInt
+  usuger BigInt?
+  datger DateTime? @db.Date
+  horger Int?
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitreg String @db.VarChar(1)
+  @@id([codemp, depexe, codusu])
+
+  @@map("departamento_time")
+}

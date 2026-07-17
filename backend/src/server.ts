@@ -27,6 +27,8 @@ import { scheduleTransacaoSync } from "./sync/transacaoSync";
 import { schedulePropostaSync } from "./sync/propostaSync";
 import { schedulePropostaItemSync } from "./sync/propostaItemSync";
 import { scheduleConsultorSync } from "./sync/consultorSync";
+import { scheduleDepartamentoGestorSync } from "./sync/departamentoGestorSync";
+import { scheduleDepartamentoTimeSync } from "./sync/departamentoTimeSync";
 
 const app = express();
 app.use(express.json());
@@ -63,4 +65,6 @@ app.listen(port, () => {
   schedulePropostaSync();
   schedulePropostaItemSync();
   scheduleConsultorSync();
+  scheduleDepartamentoGestorSync();
+  scheduleDepartamentoTimeSync();
 });
