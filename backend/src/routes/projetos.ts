@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth } from "../auth/middleware";
+import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import {
   SITPRO_LABELS,
@@ -22,7 +22,7 @@ import {
 } from "../domain/propostasDominio";
 
 export const projetosRouter = Router();
-projetosRouter.use(requireAuth);
+projetosRouter.use(requireAuth, requireRole("admin", "comercial"));
 
 function parseIntParam(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;

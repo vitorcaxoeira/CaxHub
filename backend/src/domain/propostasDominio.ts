@@ -63,6 +63,17 @@ export const CLAPRO_LABELS: Record<number, string> = {
 };
 export const CLAPRO_ORDER = [1, 2, 3, 4];
 
+// Domínio "USU_PriPro" do Senior (prioridade da proposta/projeto).
+export const PRIPRO_LABELS: Record<number, string> = {
+  1: "Alta",
+  2: "Média",
+  3: "Baixa",
+};
+export function priproLabel(pripro: number | null): string {
+  if (pripro === null) return "—";
+  return PRIPRO_LABELS[pripro] ?? `Prioridade ${pripro}`;
+}
+
 // Domínio "USU_LDepExe" do Senior (departamento executor) — presente tanto em
 // Proposta quanto em PropostaItem (mesmo domínio, granularidades diferentes).
 export const DEPEXE_LABELS: Record<number, string> = {

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel } from "../domain/propostasDominio";
+import { resolverContextoConsultor } from "../domain/contextoProjeto";
 
 export const dashboardRouter = Router();
 
@@ -20,41 +21,38 @@ dashboardRouter.get("/meu-perfil", requireAuth, async (req: AuthenticatedRequest
       return;
     }
 
-    const consultor = await prisma.consultor.findFirst({
-      where: { email: { equals: user.email, mode: "insensitive" } },
-    });
+    const contexto = await resolverContextoConsultor(user.email);
+    const { consultor } = contexto;
 
     if (!consultor) {
       res.json({ consultor: null, departamentosGerenciados: [] });
       return;
     }
 
-    const departamentosGestor = await prisma.departamentoGestor.findMany({
-      where: { codemp: consultor.codemp, usuges: BigInt(consultor.codusu) },
-      orderBy: { depexe: "asc" },
-    });
-
     const departamentosGerenciados = await Promise.all(
-      departamentosGestor.map(async (dep) => {
-        const integrantes = await prisma.departamentoTime.findMany({
-          where: { codemp: dep.codemp, depexe: dep.depexe, sitreg: "A" },
-        });
-        const codusuList = integrantes.map((i) => Number(i.codusu));
-        const consultoresDoTime = await prisma.consultor.findMany({
-          where: { codemp: dep.codemp, codusu: { in: codusuList } },
-        });
-        const nomeParaCodusu = new Map(
-          consultoresDoTime.map((c) => [c.codusu, c.nomcom ?? c.nomfor ?? `Usuário ${c.codusu}`])
-        );
+      contexto.departamentosGerenciados
+        .slice()
+        .sort((a, b) => a - b)
+        .map(async (depexe) => {
+          const integrantes = await prisma.departamentoTime.findMany({
+            where: { codemp: consultor.codemp, depexe, sitreg: "A" },
+          });
+          const codusuList = integrantes.map((i) => Number(i.codusu));
+          const consultoresDoTime = await prisma.consultor.findMany({
+            where: { codemp: consultor.codemp, codusu: { in: codusuList } },
+          });
+          const nomeParaCodusu = new Map(
+            consultoresDoTime.map((c) => [c.codusu, c.nomcom ?? c.nomfor ?? `Usuário ${c.codusu}`])
+          );
 
-        return {
-          depexe: dep.depexe,
-          depexeLabel: depexeLabel(dep.depexe),
-          integrantes: codusuList
-            .map((codusu) => ({ codusu, nome: nomeParaCodusu.get(codusu) ?? `Usuário ${codusu}` }))
-            .sort((a, b) => a.nome.localeCompare(b.nome)),
-        };
-      })
+          return {
+            depexe,
+            depexeLabel: depexeLabel(depexe),
+            integrantes: codusuList
+              .map((codusu) => ({ codusu, nome: nomeParaCodusu.get(codusu) ?? `Usuário ${codusu}` }))
+              .sort((a, b) => a.nome.localeCompare(b.nome)),
+          };
+        })
     );
 
     res.json({

@@ -15,6 +15,7 @@ import { Clientes } from "./pages/financeiro/Clientes";
 import { FluxoCaixa } from "./pages/financeiro/FluxoCaixa";
 import { Historico } from "./pages/financeiro/Historico";
 import { Propostas } from "./pages/projetos/Propostas";
+import { Atividades } from "./pages/projetos/Atividades";
 import { Usuarios } from "./pages/admin/Usuarios";
 
 export default function App() {
@@ -33,7 +34,10 @@ export default function App() {
               }
             >
               <Route path="/" element={<Home />} />
-              <Route path="/projetos/propostas" element={<Propostas />} />
+              <Route path="/projetos/atividades" element={<Atividades />} />
+              <Route element={<RequireRole roles={["admin", "comercial"]} />}>
+                <Route path="/projetos/propostas" element={<Propostas />} />
+              </Route>
               <Route element={<RequireRole roles={["admin"]} />}>
                 <Route path="/financeiro/contas-a-receber" element={<ContasReceber />} />
                 <Route path="/financeiro/contas-a-pagar" element={<ContasPagar />} />

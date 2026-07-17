@@ -9,6 +9,7 @@ import { clientesFinanceiroRouter } from "./routes/clientesFinanceiro";
 import { fluxoCaixaRouter } from "./routes/fluxoCaixa";
 import { historicoFinanceiroRouter } from "./routes/historicoFinanceiro";
 import { projetosRouter } from "./routes/projetos";
+import { atividadesRouter } from "./routes/atividades";
 import { usersRouter } from "./routes/users";
 import { scheduleEmpresaSync } from "./sync/empresaSync";
 import { scheduleFilialSync } from "./sync/filialSync";
@@ -29,6 +30,7 @@ import { schedulePropostaItemSync } from "./sync/propostaItemSync";
 import { scheduleConsultorSync } from "./sync/consultorSync";
 import { scheduleDepartamentoGestorSync } from "./sync/departamentoGestorSync";
 import { scheduleDepartamentoTimeSync } from "./sync/departamentoTimeSync";
+import { scheduleAtividadeConsultorSync } from "./sync/atividadeConsultorSync";
 
 const app = express();
 app.use(express.json());
@@ -42,6 +44,7 @@ app.use("/financeiro/clientes", clientesFinanceiroRouter);
 app.use("/financeiro/fluxo-caixa", fluxoCaixaRouter);
 app.use("/financeiro/historico", historicoFinanceiroRouter);
 app.use("/projetos", projetosRouter);
+app.use("/atividades", atividadesRouter);
 app.use("/users", usersRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
@@ -67,4 +70,5 @@ app.listen(port, () => {
   scheduleConsultorSync();
   scheduleDepartamentoGestorSync();
   scheduleDepartamentoTimeSync();
+  scheduleAtividadeConsultorSync();
 });

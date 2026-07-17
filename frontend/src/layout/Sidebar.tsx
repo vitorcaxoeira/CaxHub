@@ -10,21 +10,26 @@ interface NavLeaf {
 interface NavGroup {
   label: string;
   items: NavLeaf[];
+  // Papéis que podem ver este grupo — mantido em sincronia com o `RequireRole` das
+  // mesmas rotas em `App.tsx` e com o `requireRole(...)` do router correspondente no
+  // backend. "*" = qualquer papel autenticado. Ao criar um menu novo, sempre
+  // perguntar ao Vitor quais papéis acessam.
+  roles: string[] | "*";
 }
 
 const topLevel: NavLeaf[] = [{ to: "/", label: "Início" }];
 
-// Grupos visíveis pra qualquer papel autenticado.
-const groupsParaTodos: NavGroup[] = [
+const groups: NavGroup[] = [
+  {
+    label: "Comercial",
+    items: [{ to: "/projetos/propostas", label: "Propostas" }],
+    roles: ["admin", "comercial"],
+  },
   {
     label: "Gestão de Projetos",
-    items: [{ to: "/projetos/propostas", label: "Propostas" }],
+    items: [{ to: "/projetos/atividades", label: "Atividades" }],
+    roles: "*",
   },
-];
-
-// Grupos restritos ao papel "admin" — mantidos em sincronia com o `RequireRole`
-// dessas mesmas rotas em `App.tsx` e com o `requireRole("admin")` dos routers do backend.
-const groupsAdmin: NavGroup[] = [
   {
     label: "Financeiro a Receber",
     items: [
@@ -35,14 +40,17 @@ const groupsAdmin: NavGroup[] = [
       { to: "/financeiro/fluxo-caixa", label: "Fluxo de Caixa" },
       { to: "/financeiro/historico", label: "Histórico" },
     ],
+    roles: ["admin"],
   },
   {
     label: "Financeiro a Pagar",
     items: [{ to: "/financeiro/contas-a-pagar", label: "Contas a Pagar" }],
+    roles: ["admin"],
   },
   {
     label: "Administração",
     items: [{ to: "/admin/usuarios", label: "Usuários" }],
+    roles: ["admin"],
   },
 ];
 
@@ -76,7 +84,9 @@ interface SidebarProps {
 export function Sidebar({ open }: SidebarProps) {
   const { user } = useAuth();
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro a Receber"]));
-  const visibleGroups = user?.role === "admin" ? [...groupsParaTodos, ...groupsAdmin] : groupsParaTodos;
+  const visibleGroups = groups.filter(
+    (group) => user && (group.roles === "*" || group.roles.includes(user.role))
+  );
 
   function toggleGroup(label: string) {
     setOpenGroups((prev) => {
@@ -122,6 +132,7 @@ export function Sidebar({ open }: SidebarProps) {
                       {item.label}
                     </NavLink>
                   ))}
+                  {group.items.length === 0 && <p className="px-3 py-2 text-xs text-muted">Em breve</p>}
                 </div>
               )}
             </div>

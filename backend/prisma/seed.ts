@@ -34,6 +34,19 @@ async function main() {
     console.log(`Papel "${nomeAntigo}" consolidado em "${nomeNovo}"`);
   }
 
+  const colunasExistentes = await prisma.quadroColuna.count();
+  if (colunasExistentes === 0) {
+    await prisma.quadroColuna.createMany({
+      data: [
+        { nome: "A Fazer", ordem: 1, corBadge: "neutral", ehFinal: false },
+        { nome: "Em Andamento", ordem: 2, corBadge: "warning", ehFinal: false },
+        { nome: "Bloqueado", ordem: 3, corBadge: "destructive", ehFinal: false },
+        { nome: "Concluído", ordem: 4, corBadge: "success", ehFinal: true },
+      ],
+    });
+    console.log("Colunas iniciais do quadro Kanban criadas");
+  }
+
   const passwordHash = await bcrypt.hash("admin123", 10);
 
   await prisma.user.upsert({
