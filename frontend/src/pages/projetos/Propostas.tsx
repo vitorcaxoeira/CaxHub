@@ -4,9 +4,14 @@ import { ClienteFilter, ClienteOption } from "../../components/financeiro/Client
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { FunilSituacao, FunilItem } from "../../components/projetos/FunilSituacao";
 import { RankingBarra, RankingItem } from "../../components/ui/RankingBarra";
-import { SerieTemporalPropostas, SeriePonto } from "../../components/projetos/SerieTemporalPropostas";
 import { PropostasTable, PropostaRow } from "../../components/projetos/PropostasTable";
 import { formatHoras } from "../../utils/horas";
+import { EficienciaComercialCards, EficienciaComercial } from "../../components/projetos/EficienciaComercialCards";
+import { AlertasComerciais, AlertasComerciaisDados } from "../../components/projetos/AlertasComerciais";
+import { ComposicaoPipeline, ComposicaoTipoVenda, ComposicaoProduto, ComposicaoClassificacao } from "../../components/projetos/ComposicaoPipeline";
+import { RankingRepresentantes, RepresentanteRow } from "../../components/projetos/RankingRepresentantes";
+import { TendenciaMensalPropostas, PontoTendenciaMensal } from "../../components/projetos/TendenciaMensalPropostas";
+import { AgingPipelineChart, AgingBucketPropostas } from "../../components/projetos/AgingPipelineChart";
 
 const API_BASE = "/api/projetos/propostas";
 
@@ -72,12 +77,47 @@ export function Propostas() {
   const [funil, setFunil] = useState<FunilItem[]>([]);
   const [topClientes, setTopClientes] = useState<RankingItem[]>([]);
   const [topClientesHoras, setTopClientesHoras] = useState<RankingItem[]>([]);
-  const [serieTemporal, setSerieTemporal] = useState<SeriePonto[]>([]);
   const [propostas, setPropostas] = useState<PropostasResponse>(PROPOSTAS_VAZIO);
 
   const [loadingResumo, setLoadingResumo] = useState(true);
   const [loadingTabela, setLoadingTabela] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+
+  // ---------- Indicadores Comerciais (Seções 1-4) ----------
+  const [alerta, setAlerta] = useState<string | null>(null);
+  const [estagnadaDias, setEstagnadaDias] = useState(15);
+
+  const [eficiencia, setEficiencia] = useState<EficienciaComercial | null>(null);
+  const [loadingEficiencia, setLoadingEficiencia] = useState(true);
+  const [erroEficiencia, setErroEficiencia] = useState<string | null>(null);
+
+  const [alertasDados, setAlertasDados] = useState<AlertasComerciaisDados | null>(null);
+  const [loadingAlertas, setLoadingAlertas] = useState(true);
+  const [erroAlertas, setErroAlertas] = useState<string | null>(null);
+
+  const [composicao, setComposicao] = useState<{
+    porTipoVenda: ComposicaoTipoVenda[];
+    porProduto: ComposicaoProduto[];
+    porClassificacao: ComposicaoClassificacao[];
+  } | null>(null);
+  const [loadingComposicao, setLoadingComposicao] = useState(true);
+  const [erroComposicao, setErroComposicao] = useState<string | null>(null);
+
+  const [repRows, setRepRows] = useState<RepresentanteRow[]>([]);
+  const [repTotal, setRepTotal] = useState(0);
+  const [repPage, setRepPage] = useState(1);
+  const [repSort, setRepSort] = useState("propostasAbertas");
+  const [repDir, setRepDir] = useState<"asc" | "desc">("desc");
+  const [loadingRep, setLoadingRep] = useState(true);
+  const [erroRep, setErroRep] = useState<string | null>(null);
+
+  const [tendenciaMensal, setTendenciaMensal] = useState<PontoTendenciaMensal[]>([]);
+  const [loadingTendencia, setLoadingTendencia] = useState(true);
+  const [erroTendencia, setErroTendencia] = useState<string | null>(null);
+
+  const [agingBuckets, setAgingBuckets] = useState<AgingBucketPropostas[]>([]);
+  const [loadingAging, setLoadingAging] = useState(true);
+  const [erroAging, setErroAging] = useState<string | null>(null);
 
   const clienteIds = filtros.clientes.map((c) => c.codcli).join(",") || undefined;
   const situacaoIds = filtros.situacao.join(",") || undefined;
@@ -107,9 +147,8 @@ export function Propostas() {
       axios.get(`${API_BASE}/funil`, { params }),
       axios.get(`${API_BASE}/por-cliente`, { params }),
       axios.get(`${API_BASE}/por-cliente-horas`, { params }),
-      axios.get(`${API_BASE}/serie-temporal`, { params }),
     ])
-      .then(([kpisRes, funilRes, clientesRes, clientesHorasRes, serieRes]) => {
+      .then(([kpisRes, funilRes, clientesRes, clientesHorasRes]) => {
         setKpis(kpisRes.data);
         setFunil(funilRes.data.funil);
         setTopClientes(
@@ -128,7 +167,6 @@ export function Propostas() {
             valor: r.horas,
           }))
         );
-        setSerieTemporal(serieRes.data.serie);
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os indicadores"))
@@ -149,16 +187,119 @@ export function Propostas() {
           datproFim: filtros.datproFim ?? undefined,
           page,
           pageSize: 50,
+          alerta: alerta ?? undefined,
+          estagnadaDias: alerta === "estagnadas" ? estagnadaDias : undefined,
         },
       })
       .then(({ data }) => setPropostas(data))
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a lista de propostas"))
       .finally(() => setLoadingTabela(false));
-  }, [situacaoIds, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, page]);
+  }, [situacaoIds, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, page, alerta, estagnadaDias]);
+
+  // Params comuns (sem representantes) usados pelo drill-down do ranking de representantes.
+  const paramsComunsResumo = {
+    clientes: clienteIds,
+    tipven: tipvenIds,
+    modpro: modproIds,
+    datproInicio: filtros.datproInicio ?? undefined,
+    datproFim: filtros.datproFim ?? undefined,
+  };
+
+  useEffect(() => {
+    setLoadingEficiencia(true);
+    axios
+      .get(`${API_BASE}/eficiencia`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
+      .then(({ data }) => {
+        setEficiencia(data);
+        setErroEficiencia(null);
+      })
+      .catch((err) => setErroEficiencia(err.response?.data?.error ?? "Falha ao carregar a eficiência comercial"))
+      .finally(() => setLoadingEficiencia(false));
+  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
+
+  useEffect(() => {
+    setLoadingAlertas(true);
+    axios
+      .get(`${API_BASE}/alertas`, { params: { ...paramsComunsResumo, representantes: representanteIds, estagnadaDias } })
+      .then(({ data }) => {
+        setAlertasDados(data);
+        setErroAlertas(null);
+      })
+      .catch((err) => setErroAlertas(err.response?.data?.error ?? "Falha ao carregar os alertas"))
+      .finally(() => setLoadingAlertas(false));
+  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, estagnadaDias]);
+
+  useEffect(() => {
+    setLoadingComposicao(true);
+    axios
+      .get(`${API_BASE}/composicao`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
+      .then(({ data }) => {
+        setComposicao(data);
+        setErroComposicao(null);
+      })
+      .catch((err) => setErroComposicao(err.response?.data?.error ?? "Falha ao carregar a composição do pipeline"))
+      .finally(() => setLoadingComposicao(false));
+  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
+
+  useEffect(() => {
+    setLoadingRep(true);
+    axios
+      .get(`${API_BASE}/representantes-ranking`, {
+        params: { ...paramsComunsResumo, representantes: representanteIds, sort: repSort, dir: repDir, page: repPage, pageSize: 20 },
+      })
+      .then(({ data }) => {
+        setRepRows(data.rows);
+        setRepTotal(data.total);
+        setErroRep(null);
+      })
+      .catch((err) => setErroRep(err.response?.data?.error ?? "Falha ao carregar o ranking de representantes"))
+      .finally(() => setLoadingRep(false));
+  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, repSort, repDir, repPage]);
+
+  useEffect(() => {
+    setLoadingTendencia(true);
+    axios
+      .get(`${API_BASE}/tendencia-mensal`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
+      .then(({ data }) => {
+        setTendenciaMensal(data.serie);
+        setErroTendencia(null);
+      })
+      .catch((err) => setErroTendencia(err.response?.data?.error ?? "Falha ao carregar a evolução mensal"))
+      .finally(() => setLoadingTendencia(false));
+  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
+
+  useEffect(() => {
+    setLoadingAging(true);
+    axios
+      .get(`${API_BASE}/aging`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
+      .then(({ data }) => {
+        setAgingBuckets(data.buckets);
+        setErroAging(null);
+      })
+      .catch((err) => setErroAging(err.response?.data?.error ?? "Falha ao carregar o aging do pipeline"))
+      .finally(() => setLoadingAging(false));
+  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
 
   function atualizarFiltros(parcial: Partial<Filtros>) {
     setFiltros((atual) => ({ ...atual, ...parcial }));
     setPage(1);
+    if (parcial.situacao !== undefined) {
+      setAlerta(null);
+    }
+  }
+
+  function handleSelectAlerta(novoAlerta: string | null) {
+    setAlerta(novoAlerta);
+    setPage(1);
+    if (novoAlerta !== null && filtros.situacao.length > 0) {
+      setFiltros((atual) => ({ ...atual, situacao: [] }));
+    }
+  }
+
+  function handleSortRepChange(sort: string, dir: "asc" | "desc") {
+    setRepSort(sort);
+    setRepDir(dir);
+    setRepPage(1);
   }
 
   const kpiCards = kpis
@@ -284,12 +425,92 @@ export function Propostas() {
               <RankingBarra titulo="Top 10 clientes por valor" itens={topClientes} unidade="propostas" />
               <RankingBarra titulo="Top 10 clientes por horas" itens={topClientesHoras} formatarValor={formatHoras} unidade="propostas" />
             </div>
-
-            <div className="mb-6">
-              <SerieTemporalPropostas serie={serieTemporal} />
-            </div>
           </>
         )
+      )}
+
+      {erroEficiencia ? (
+        <div className="mb-6 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroEficiencia}</div>
+      ) : loadingEficiencia && !eficiencia ? (
+        <p className="mb-6 text-sm text-muted">Carregando eficiência comercial...</p>
+      ) : (
+        eficiencia && <EficienciaComercialCards dados={eficiencia} />
+      )}
+
+      {erroAlertas ? (
+        <div className="mb-6 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroAlertas}</div>
+      ) : loadingAlertas && !alertasDados ? (
+        <p className="mb-6 text-sm text-muted">Carregando alertas...</p>
+      ) : (
+        alertasDados && (
+          <AlertasComerciais
+            dados={alertasDados}
+            alertaAtivo={alerta}
+            onSelectAlerta={handleSelectAlerta}
+            estagnadaDias={estagnadaDias}
+            onEstagnadaDiasChange={setEstagnadaDias}
+          />
+        )
+      )}
+
+      {erroComposicao ? (
+        <div className="mb-6 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroComposicao}</div>
+      ) : loadingComposicao && !composicao ? (
+        <p className="mb-6 text-sm text-muted">Carregando composição do pipeline...</p>
+      ) : (
+        composicao && (
+          <ComposicaoPipeline
+            porTipoVenda={composicao.porTipoVenda}
+            porProduto={composicao.porProduto}
+            porClassificacao={composicao.porClassificacao}
+          />
+        )
+      )}
+
+      <section className="mb-6">
+        <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">Ranking de Representantes</p>
+        {erroRep && (
+          <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroRep}</div>
+        )}
+        <RankingRepresentantes
+          rows={repRows}
+          page={repPage}
+          pageSize={20}
+          total={repTotal}
+          loading={loadingRep}
+          onPageChange={setRepPage}
+          sort={repSort}
+          dir={repDir}
+          onSortChange={handleSortRepChange}
+          empFiltroParams={paramsComunsResumo}
+        />
+      </section>
+
+      <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {erroTendencia ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroTendencia}</div>
+        ) : loadingTendencia && tendenciaMensal.length === 0 ? (
+          <p className="text-sm text-muted">Carregando evolução mensal...</p>
+        ) : (
+          <TendenciaMensalPropostas serie={tendenciaMensal} />
+        )}
+
+        {erroAging ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroAging}</div>
+        ) : loadingAging && agingBuckets.length === 0 ? (
+          <p className="text-sm text-muted">Carregando aging do pipeline...</p>
+        ) : (
+          <AgingPipelineChart buckets={agingBuckets} />
+        )}
+      </div>
+
+      {alerta && (
+        <p className="mb-3 flex items-center gap-2 text-[11.5px] text-muted">
+          Alerta ativo: <span className="text-foreground">{alerta}</span>
+          <button onClick={() => handleSelectAlerta(null)} className="text-muted hover:text-destructive">
+            ✕
+          </button>
+        </p>
       )}
 
       <div className="mt-6">

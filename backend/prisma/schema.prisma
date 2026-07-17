@@ -382,6 +382,11 @@ model Proposta {
   itens   PropostaItem[]
 
   @@id([codemp, codpro])
+  @@index([sitpro])
+  @@index([datpro])
+  @@index([codrep])
+  @@index([datenv, datret])
+  @@index([datval])
 
   @@map("propostas")
 }
