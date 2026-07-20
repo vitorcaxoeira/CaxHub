@@ -1,7 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { Pagination } from "../ui/Pagination";
-import { ColunaKanban } from "./KanbanBoard";
+import { ColunaKanban, DetalheInfo } from "./KanbanBoard";
 
 interface AtividadeRow {
   id: number;
@@ -17,7 +17,10 @@ interface AtividadeRow {
   qtdhorPrevisto: number | null;
   colunaId: number | null;
   atrasada: boolean;
+  dataPrevistaInicio: string | null;
+  dataPrevistaFim: string | null;
   podeMover: boolean;
+  podeEditar: boolean;
 }
 
 interface OpcaoFiltro {
@@ -46,7 +49,7 @@ const PAGE_SIZE = 25;
 
 interface AtividadesTableProps {
   onMovido?: () => void;
-  onAbrirDetalhe: (atividadeId: number, titulo: string, podeEditar: boolean) => void;
+  onAbrirDetalhe: (atividadeId: number, info: DetalheInfo) => void;
 }
 
 export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTableProps) {
@@ -253,7 +256,14 @@ export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTablePro
                   </td>
                   <td className="px-5 py-3.5 text-right">
                     <button
-                      onClick={() => onAbrirDetalhe(row.id, `Proposta ${row.codpro} · Projeto ${row.numprj}`, row.podeMover)}
+                      onClick={() =>
+                        onAbrirDetalhe(row.id, {
+                          titulo: `Proposta ${row.codpro} · Projeto ${row.numprj}`,
+                          podeEditar: row.podeEditar,
+                          dataPrevistaInicio: row.dataPrevistaInicio,
+                          dataPrevistaFim: row.dataPrevistaFim,
+                        })
+                      }
                       className="text-sm text-primary hover:underline"
                     >
                       Detalhes

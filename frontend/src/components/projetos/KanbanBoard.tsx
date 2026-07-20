@@ -22,14 +22,24 @@ export interface AtividadeKanban {
   qtdhorPrevisto: number | null;
   colunaId: number | null;
   atrasada: boolean;
+  dataPrevistaInicio: string | null;
+  dataPrevistaFim: string | null;
   podeMover: boolean;
+  podeEditar: boolean;
+}
+
+export interface DetalheInfo {
+  titulo: string;
+  podeEditar: boolean;
+  dataPrevistaInicio: string | null;
+  dataPrevistaFim: string | null;
 }
 
 interface KanbanBoardProps {
   colunas: ColunaKanban[];
   atividades: AtividadeKanban[];
   onMover: (atividadeId: number, novaColunaId: number) => void;
-  onAbrirDetalhe: (atividadeId: number, titulo: string, podeEditar: boolean) => void;
+  onAbrirDetalhe: (atividadeId: number, info: DetalheInfo) => void;
 }
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
@@ -52,7 +62,7 @@ function DraggableCard({
   onAbrirDetalhe,
 }: {
   atividade: AtividadeKanban;
-  onAbrirDetalhe: (id: number, titulo: string, podeEditar: boolean) => void;
+  onAbrirDetalhe: (id: number, info: DetalheInfo) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `atividade-${atividade.id}`,
@@ -102,7 +112,12 @@ function DraggableCard({
       <button
         onClick={(e) => {
           e.stopPropagation();
-          onAbrirDetalhe(atividade.id, `Proposta ${atividade.codpro} · Projeto ${atividade.numprj}`, atividade.podeMover);
+          onAbrirDetalhe(atividade.id, {
+            titulo: `Proposta ${atividade.codpro} · Projeto ${atividade.numprj}`,
+            podeEditar: atividade.podeEditar,
+            dataPrevistaInicio: atividade.dataPrevistaInicio,
+            dataPrevistaFim: atividade.dataPrevistaFim,
+          });
         }}
         onPointerDown={(e) => e.stopPropagation()}
         className="mt-2 w-full rounded border border-border/60 py-1 text-[10.5px] text-muted hover:bg-surface-2 hover:text-foreground"
@@ -120,7 +135,7 @@ function DroppableColuna({
 }: {
   coluna: ColunaKanban;
   atividades: AtividadeKanban[];
-  onAbrirDetalhe: (id: number, titulo: string, podeEditar: boolean) => void;
+  onAbrirDetalhe: (id: number, info: DetalheInfo) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `coluna-${coluna.id}` });
 

@@ -127,11 +127,15 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
         depexe,
         depexeLabel: depexeLabel(depexe),
         consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${a.codfor}`,
+        codfor: a.codfor,
         qtdhorPrevisto: a.qtdhor,
         colunaId: a.colunaId ?? primeiraColuna?.id ?? null,
         coluna,
         atrasada,
+        dataPrevistaInicio: a.dataPrevistaInicio,
+        dataPrevistaFim: a.dataPrevistaFim,
         podeMover: podeExecutarAcao(role, contexto, "mover", { depexe, codfor: a.codfor }),
+        podeEditar: podeExecutarAcao(role, contexto, "editar", { depexe, codfor: a.codfor }),
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -207,6 +211,20 @@ atividadesRouter.get("/indicadores", async (req: AuthenticatedRequest, res) => {
       if (v.atrasada) bucket.atrasadas += 1;
     }
 
+    // Workload: carga de backlog (não concluído) por consultor — só o que ainda está
+    // pendente, não o histórico todo (senão não representaria capacidade atual).
+    const porConsultorMap = new Map<string, { codfor: number; nome: string; qtd: number; horas: number; atrasadas: number }>();
+    for (const v of backlog) {
+      const chave = String(v.codfor);
+      if (!porConsultorMap.has(chave)) {
+        porConsultorMap.set(chave, { codfor: v.codfor, nome: v.consultorNome, qtd: 0, horas: 0, atrasadas: 0 });
+      }
+      const bucket = porConsultorMap.get(chave)!;
+      bucket.qtd += 1;
+      bucket.horas += (v.qtdhorPrevisto ?? 0) / 60;
+      if (v.atrasada) bucket.atrasadas += 1;
+    }
+
     res.json({
       totalBacklog,
       horasBacklog,
@@ -216,6 +234,7 @@ atividadesRouter.get("/indicadores", async (req: AuthenticatedRequest, res) => {
       slaAmostra,
       porSituacao: [...porSituacaoMap.values()],
       porDepartamento: [...porDepartamentoMap.values()].sort((a, b) => b.qtd - a.qtd),
+      porConsultor: [...porConsultorMap.values()].sort((a, b) => b.horas - a.horas),
     });
   } catch (error) {
     handleError(res, error, "indicadores");
@@ -351,6 +370,52 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     res.json({ id: atividadeAtualizada.id, colunaId: atividadeAtualizada.colunaId });
   } catch (error) {
     handleError(res, error, "mover");
+  }
+});
+
+// ---------- Planejamento (datas previstas de início/fim, pra Timeline/Gantt) ----------
+atividadesRouter.patch("/:id/planejamento", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "editar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para editar o planejamento desta atividade" });
+      return;
+    }
+
+    const dataPrevistaInicio = req.body?.dataPrevistaInicio ? new Date(req.body.dataPrevistaInicio) : null;
+    const dataPrevistaFim = req.body?.dataPrevistaFim ? new Date(req.body.dataPrevistaFim) : null;
+    if (dataPrevistaInicio && dataPrevistaFim && dataPrevistaInicio > dataPrevistaFim) {
+      res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
+      return;
+    }
+
+    const atualizada = await prisma.atividadeConsultor.update({
+      where: { id },
+      data: { dataPrevistaInicio, dataPrevistaFim },
+    });
+
+    res.json({
+      id: atualizada.id,
+      dataPrevistaInicio: atualizada.dataPrevistaInicio,
+      dataPrevistaFim: atualizada.dataPrevistaFim,
+    });
+  } catch (error) {
+    handleError(res, error, "planejamento");
   }
 });
 

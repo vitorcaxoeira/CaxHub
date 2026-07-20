@@ -1,16 +1,17 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
-import { AtividadeKanban, ColunaKanban, KanbanBoard } from "../../components/projetos/KanbanBoard";
+import { AtividadeKanban, ColunaKanban, DetalheInfo, KanbanBoard } from "../../components/projetos/KanbanBoard";
 import { AtividadesTable } from "../../components/projetos/AtividadesTable";
 import { IndicadoresProjetos, IndicadoresProjetosData } from "../../components/projetos/IndicadoresProjetos";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
+import { CalendarioAtividades } from "../../components/projetos/CalendarioAtividades";
+import { TimelineAtividades } from "../../components/projetos/TimelineAtividades";
+import { WorkloadConsultores } from "../../components/projetos/WorkloadConsultores";
 
-type Visao = "quadro" | "lista";
+type Visao = "quadro" | "lista" | "calendario" | "timeline" | "workload";
 
-interface DetalheSelecionado {
+interface DetalheSelecionado extends DetalheInfo {
   id: number;
-  titulo: string;
-  podeEditar: boolean;
 }
 
 export function Atividades() {
@@ -43,7 +44,7 @@ export function Atividades() {
   }, []);
 
   useEffect(() => {
-    if (visao === "quadro") carregar();
+    if (visao !== "lista") carregar();
   }, [visao]);
 
   async function moverAtividade(atividadeId: number, novaColunaId: number) {
@@ -58,8 +59,8 @@ export function Atividades() {
     }
   }
 
-  function abrirDetalhe(atividadeId: number, titulo: string, podeEditar: boolean) {
-    setDetalhe({ id: atividadeId, titulo, podeEditar });
+  function abrirDetalhe(atividadeId: number, info: DetalheInfo) {
+    setDetalhe({ id: atividadeId, ...info });
   }
 
   const tabClass = (ativa: boolean) =>
@@ -75,32 +76,45 @@ export function Atividades() {
 
       <div className="mb-6 flex items-center justify-between">
         <h1 className="font-display text-2xl font-bold text-foreground">Atividades</h1>
-        <div className="flex gap-2 rounded-md border border-border p-1">
+        <div className="flex flex-wrap gap-2 rounded-md border border-border p-1">
           <button onClick={() => setVisao("quadro")} className={tabClass(visao === "quadro")}>
             Quadro
           </button>
           <button onClick={() => setVisao("lista")} className={tabClass(visao === "lista")}>
             Lista
           </button>
+          <button onClick={() => setVisao("calendario")} className={tabClass(visao === "calendario")}>
+            Calendário
+          </button>
+          <button onClick={() => setVisao("timeline")} className={tabClass(visao === "timeline")}>
+            Timeline
+          </button>
+          <button onClick={() => setVisao("workload")} className={tabClass(visao === "workload")}>
+            Workload
+          </button>
         </div>
       </div>
 
       {indicadores && <IndicadoresProjetos dados={indicadores} />}
 
-      {erro && visao === "quadro" && (
+      {erro && visao !== "lista" && (
         <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {erro}
         </p>
       )}
 
-      {visao === "quadro" ? (
-        loading ? (
-          <p className="text-sm text-muted">Carregando...</p>
-        ) : (
-          <KanbanBoard colunas={colunas} atividades={atividades} onMover={moverAtividade} onAbrirDetalhe={abrirDetalhe} />
-        )
-      ) : (
+      {visao === "lista" ? (
         <AtividadesTable onMovido={carregarIndicadores} onAbrirDetalhe={abrirDetalhe} />
+      ) : loading ? (
+        <p className="text-sm text-muted">Carregando...</p>
+      ) : visao === "quadro" ? (
+        <KanbanBoard colunas={colunas} atividades={atividades} onMover={moverAtividade} onAbrirDetalhe={abrirDetalhe} />
+      ) : visao === "calendario" ? (
+        <CalendarioAtividades atividades={atividades} onAbrirDetalhe={abrirDetalhe} />
+      ) : visao === "timeline" ? (
+        <TimelineAtividades atividades={atividades} onAbrirDetalhe={abrirDetalhe} />
+      ) : (
+        <WorkloadConsultores itens={indicadores?.porConsultor ?? []} />
       )}
 
       {detalhe && (
@@ -108,6 +122,8 @@ export function Atividades() {
           atividadeId={detalhe.id}
           titulo={detalhe.titulo}
           podeEditar={detalhe.podeEditar}
+          dataPrevistaInicio={detalhe.dataPrevistaInicio}
+          dataPrevistaFim={detalhe.dataPrevistaFim}
           onClose={() => setDetalhe(null)}
         />
       )}

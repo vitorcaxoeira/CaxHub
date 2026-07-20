@@ -531,6 +531,12 @@ model AtividadeConsultor {
   fasid  Int
   selsol String?   @db.VarChar(1)
 
+  // Planejamento de datas — conceito só do CaxHub (sem equivalente no Senior),
+  // definido manualmente pelo Líder Técnico/Consultor pra alimentar a Timeline
+  // (Gantt simplificado). Diferente de `datval` (prazo da proposta, vem do ERP).
+  dataPrevistaInicio DateTime? @db.Date
+  dataPrevistaFim    DateTime? @db.Date
+
   // Status do quadro Kanban — conceito só do CaxHub, sem equivalente no Senior
   // (não confundir com `sitreg`, que é Ativo/Inativo do ERP). Nulo até o primeiro
   // sync/movimentação atribuir a coluna inicial.

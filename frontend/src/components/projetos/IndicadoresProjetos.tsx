@@ -11,6 +11,7 @@ export interface IndicadoresProjetosData {
   slaAmostra: number;
   porSituacao: { colunaId: number | null; nome: string; corBadge: string | null; qtd: number; horas: number }[];
   porDepartamento: { depexe: number; depexeLabel: string; qtd: number; horas: number; atrasadas: number }[];
+  porConsultor: { codfor: number; nome: string; qtd: number; horas: number; atrasadas: number }[];
 }
 
 interface IndicadoresProjetosProps {

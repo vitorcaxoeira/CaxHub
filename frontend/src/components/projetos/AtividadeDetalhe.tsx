@@ -34,6 +34,8 @@ interface AtividadeDetalheProps {
   atividadeId: number;
   titulo: string;
   podeEditar: boolean;
+  dataPrevistaInicio: string | null;
+  dataPrevistaFim: string | null;
   onClose: () => void;
 }
 
@@ -45,7 +47,19 @@ function formatTamanho(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function AtividadeDetalhe({ atividadeId, titulo, podeEditar, onClose }: AtividadeDetalheProps) {
+function paraInputDate(valor: string | null): string {
+  if (!valor) return "";
+  return valor.slice(0, 10);
+}
+
+export function AtividadeDetalhe({
+  atividadeId,
+  titulo,
+  podeEditar,
+  dataPrevistaInicio,
+  dataPrevistaFim,
+  onClose,
+}: AtividadeDetalheProps) {
   const [comentarios, setComentarios] = useState<Comentario[]>([]);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [anexos, setAnexos] = useState<Anexo[]>([]);
@@ -57,6 +71,11 @@ export function AtividadeDetalhe({ atividadeId, titulo, podeEditar, onClose }: A
   const [novoItemChecklist, setNovoItemChecklist] = useState("");
   const [enviandoAnexo, setEnviandoAnexo] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [inicioPlanejado, setInicioPlanejado] = useState(paraInputDate(dataPrevistaInicio));
+  const [fimPlanejado, setFimPlanejado] = useState(paraInputDate(dataPrevistaFim));
+  const [salvandoPlanejamento, setSalvandoPlanejamento] = useState(false);
+  const [planejamentoSalvo, setPlanejamentoSalvo] = useState(false);
 
   function carregar() {
     setLoading(true);
@@ -158,6 +177,23 @@ export function AtividadeDetalhe({ atividadeId, titulo, podeEditar, onClose }: A
     window.URL.revokeObjectURL(url);
   }
 
+  async function salvarPlanejamento() {
+    setSalvandoPlanejamento(true);
+    setPlanejamentoSalvo(false);
+    try {
+      await axios.patch(`/api/atividades/${atividadeId}/planejamento`, {
+        dataPrevistaInicio: inicioPlanejado || null,
+        dataPrevistaFim: fimPlanejado || null,
+      });
+      setErro(null);
+      setPlanejamentoSalvo(true);
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao salvar planejamento");
+    } finally {
+      setSalvandoPlanejamento(false);
+    }
+  }
+
   const checklistConcluidos = checklist.filter((i) => i.concluido).length;
 
   return (
@@ -181,6 +217,48 @@ export function AtividadeDetalhe({ atividadeId, titulo, podeEditar, onClose }: A
             <p className="text-sm text-muted">Carregando...</p>
           ) : (
             <div className="space-y-6">
+              <section>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Planejamento (Timeline)</p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] text-muted">Início previsto</span>
+                    <input
+                      type="date"
+                      value={inicioPlanejado}
+                      disabled={!podeEditar}
+                      onChange={(e) => {
+                        setInicioPlanejado(e.target.value);
+                        setPlanejamentoSalvo(false);
+                      }}
+                      className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] text-muted">Fim previsto</span>
+                    <input
+                      type="date"
+                      value={fimPlanejado}
+                      disabled={!podeEditar}
+                      onChange={(e) => {
+                        setFimPlanejado(e.target.value);
+                        setPlanejamentoSalvo(false);
+                      }}
+                      className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    />
+                  </label>
+                  {podeEditar && (
+                    <button
+                      onClick={salvarPlanejamento}
+                      disabled={salvandoPlanejamento}
+                      className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+                    >
+                      {salvandoPlanejamento ? "Salvando..." : "Salvar"}
+                    </button>
+                  )}
+                  {planejamentoSalvo && <span className="text-[11.5px] text-success">Salvo.</span>}
+                </div>
+              </section>
+
               <section>
                 <div className="mb-2 flex items-center justify-between">
                   <p className="font-mono text-[10px] uppercase tracking-widest text-muted">
