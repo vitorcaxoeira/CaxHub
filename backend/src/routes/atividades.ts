@@ -9,6 +9,7 @@ import { depexeLabel, priproLabel, DEPEXE_LABELS, PRIPRO_LABELS } from "../domai
 import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
 import { criarNotificacao, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
+import { enfileirar } from "../sync/outboxSenior";
 
 // Router à parte de `projetosRouter` (que hoje é admin+comercial só, por causa de
 // Propostas) — aqui a tela é aberta a qualquer usuário autenticado; quem pode ver/mover
@@ -365,6 +366,17 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     if (colunaNova.notificarGestor) {
       const mensagem = `${user.nome} moveu a atividade da proposta ${atividade.codpro} para "${colunaNova.nome}"`;
       await notificarGestoresDoDepartamento(atividade.codemp, item.depexe, "atividade_movida", mensagem, id, user.id);
+    }
+
+    // Só enfileira pra sincronizar de volta pro Senior se a atividade já veio do ERP
+    // (tem seqati) — sem isso não existe registro lá pra atualizar.
+    if (atividade.seqati != null) {
+      await enfileirar(id, "mover_coluna", {
+        seqati: atividade.seqati.toString(),
+        colunaAnteriorId: atividade.colunaId,
+        colunaNovaId: colunaIdNovo,
+        colunaNovaNome: colunaNova.nome,
+      });
     }
 
     res.json({ id: atividadeAtualizada.id, colunaId: atividadeAtualizada.colunaId });

@@ -13,6 +13,7 @@ import { projetosRouter } from "./routes/projetos";
 import { atividadesRouter } from "./routes/atividades";
 import { notificacoesRouter } from "./routes/notificacoes";
 import { usersRouter } from "./routes/users";
+import { sincronizacaoRouter } from "./routes/sincronizacao";
 import { scheduleEmpresaSync } from "./sync/empresaSync";
 import { scheduleFilialSync } from "./sync/filialSync";
 import { scheduleClienteSync } from "./sync/clienteSync";
@@ -33,6 +34,7 @@ import { scheduleConsultorSync } from "./sync/consultorSync";
 import { scheduleDepartamentoGestorSync } from "./sync/departamentoGestorSync";
 import { scheduleDepartamentoTimeSync } from "./sync/departamentoTimeSync";
 import { scheduleAtividadeConsultorSync } from "./sync/atividadeConsultorSync";
+import { scheduleOutboxSeniorSync } from "./sync/outboxSenior";
 
 garantirDiretorioUploads();
 
@@ -51,6 +53,7 @@ app.use("/projetos", projetosRouter);
 app.use("/atividades", atividadesRouter);
 app.use("/notificacoes", notificacoesRouter);
 app.use("/users", usersRouter);
+app.use("/sincronizacao", sincronizacaoRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 
@@ -76,4 +79,5 @@ app.listen(port, () => {
   scheduleDepartamentoGestorSync();
   scheduleDepartamentoTimeSync();
   scheduleAtividadeConsultorSync();
+  scheduleOutboxSeniorSync();
 });

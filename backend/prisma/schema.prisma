@@ -540,15 +540,40 @@ model AtividadeConsultor {
   // Status do quadro Kanban — conceito só do CaxHub, sem equivalente no Senior
   // (não confundir com `sitreg`, que é Ativo/Inativo do ERP). Nulo até o primeiro
   // sync/movimentação atribuir a coluna inicial.
-  colunaId       Int?
-  coluna         QuadroColuna?                    @relation(fields: [colunaId], references: [id])
-  historico      AtividadeHistoricoMovimentacao[]
-  comentarios    AtividadeComentario[]
-  checklistItens AtividadeChecklistItem[]
-  anexos         AtividadeAnexo[]
-  notificacoes   Notificacao[]
+  colunaId                Int?
+  coluna                  QuadroColuna?                    @relation(fields: [colunaId], references: [id])
+  historico               AtividadeHistoricoMovimentacao[]
+  comentarios             AtividadeComentario[]
+  checklistItens          AtividadeChecklistItem[]
+  anexos                  AtividadeAnexo[]
+  notificacoes            Notificacao[]
+  sincronizacoesPendentes SincronizacaoPendente[]
 
   @@map("atividades_consultor")
+}
+
+// Fila (outbox) de mudanças feitas no CaxHub que precisam ser propagadas de volta pro
+// Senior (ex: mover um card de coluna). Existe porque hoje a integração com o Senior só
+// tem canal de LEITURA confirmado (SOAP "Consulta Genérica", só SELECT — ver
+// backend/src/soap/client.ts); não há ainda um endpoint de escrita mapeado do lado do
+// Senior. `enviarParaSenior()` (backend/src/sync/outboxSenior.ts) por enquanto é um stub
+// que sempre falha, propositalmente — o objetivo desta fase é ter fila/reprocessamento/
+// auditoria prontos pra plugar o envio real assim que esse canal for confirmado.
+model SincronizacaoPendente {
+  id           Int                @id @default(autoincrement())
+  atividadeId  Int
+  atividade    AtividadeConsultor @relation(fields: [atividadeId], references: [id])
+  tipo         String             @db.VarChar(40)
+  payload      Json
+  // pendente | enviado | bloqueado (bloqueado = excedeu o número máximo de tentativas,
+  // precisa de intervenção manual — ver reprocessar() em outboxSenior.ts)
+  status       String             @default("pendente") @db.VarChar(20)
+  tentativas   Int                @default(0)
+  ultimoErro   String?
+  criadoEm     DateTime           @default(now())
+  processadoEm DateTime?
+
+  @@map("sincronizacao_pendente")
 }
 
 // Colunas configuráveis do quadro Kanban do módulo de Gestão de Projetos — dado 100%

@@ -17,6 +17,7 @@ import { Historico } from "./pages/financeiro/Historico";
 import { Propostas } from "./pages/projetos/Propostas";
 import { Atividades } from "./pages/projetos/Atividades";
 import { Usuarios } from "./pages/admin/Usuarios";
+import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 
 export default function App() {
   return (
@@ -47,6 +48,7 @@ export default function App() {
                 <Route path="/financeiro/fluxo-caixa" element={<FluxoCaixa />} />
                 <Route path="/financeiro/historico" element={<Historico />} />
                 <Route path="/admin/usuarios" element={<Usuarios />} />
+                <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
