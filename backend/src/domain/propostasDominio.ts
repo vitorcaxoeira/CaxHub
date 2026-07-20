@@ -28,6 +28,22 @@ export const SITPRO_GANHAS = [4, 7, 8];
 export const SITPRO_PERDIDAS = [5, 6];
 export const SITPRO_DECIDIDAS = [4, 5, 6, 7, 8];
 
+// Só propostas Aprovada ou Em Execução podem ter horas alocadas pra consultores —
+// usado pela área de Alocação (backend/src/routes/alocacao.ts).
+export const SITPRO_ALOCAVEL = [4, 7];
+
+// Domínio "USU_LSitPrz" do Senior (situação de prazo do item de proposta).
+export const SITPRZ_LABELS: Record<number, string> = {
+  0: "Não Iniciado",
+  1: "Prazo Estourado",
+  2: "Dentro do Prazo",
+};
+
+export function sitprzLabel(sitprz: number | null): string {
+  if (sitprz === null) return "—";
+  return SITPRZ_LABELS[sitprz] ?? `Situação ${sitprz}`;
+}
+
 // Domínio "USU_TipVen" do Senior (tipo de venda de serviços).
 export const TIPVEN_LABELS: Record<number, string> = {
   1: "Venda Serviços Cliente Novo",

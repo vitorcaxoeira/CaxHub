@@ -49,6 +49,15 @@ async function main() {
     await prisma.quadroColuna.updateMany({ where: { nome: { in: ["Bloqueado", "Concluído"] } }, data: { notificarGestor: true } });
   }
 
+  // fasid=0 aparece em AtividadeConsultor sincronizadas do Senior mas não existe em
+  // USU_TFasesPro (mesma convenção de "sem vínculo" já usada em seqite=0) — sem essa
+  // linha, a FK AtividadeConsultor.fasid -> FaseProposta rejeita essas linhas antigas.
+  await prisma.faseProposta.upsert({
+    where: { fasid: 0 },
+    update: {},
+    create: { fasid: 0, fasdes: "Não definida" },
+  });
+
   const passwordHash = await bcrypt.hash("admin123", 10);
 
   await prisma.user.upsert({

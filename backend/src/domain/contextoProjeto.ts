@@ -53,7 +53,9 @@ interface AtividadeParaPermissao {
   codfor: number;
 }
 
-const ACOES_LIDER_TECNICO: AcaoProjeto[] = ["visualizar", "editar", "mover", "aprovar", "excluir"];
+// "criar" habilitado nesta fase pra área de Alocação (Líder Técnico distribui horas de
+// um item de proposta entre os consultores do próprio time).
+const ACOES_LIDER_TECNICO: AcaoProjeto[] = ["visualizar", "criar", "editar", "mover", "aprovar", "excluir"];
 
 // role vem do JWT (req.user.role) — o mesmo papel usado pelo requireRole() das rotas.
 export function podeExecutarAcao(

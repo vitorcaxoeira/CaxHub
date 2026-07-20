@@ -16,6 +16,8 @@ import { FluxoCaixa } from "./pages/financeiro/FluxoCaixa";
 import { Historico } from "./pages/financeiro/Historico";
 import { Propostas } from "./pages/projetos/Propostas";
 import { Atividades } from "./pages/projetos/Atividades";
+import { Alocacao } from "./pages/projetos/Alocacao";
+import { AlocacaoPropostaDetalhe } from "./pages/projetos/AlocacaoPropostaDetalhe";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 
@@ -36,6 +38,8 @@ export default function App() {
             >
               <Route path="/" element={<Home />} />
               <Route path="/projetos/atividades" element={<Atividades />} />
+              <Route path="/projetos/alocacao" element={<Alocacao />} />
+              <Route path="/projetos/alocacao/:codemp/:codpro" element={<AlocacaoPropostaDetalhe />} />
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
               </Route>

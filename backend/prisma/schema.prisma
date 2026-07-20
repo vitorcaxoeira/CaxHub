@@ -523,13 +523,14 @@ model AtividadeConsultor {
   codfor Int
   qtdhor Int?
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitreg String?   @db.VarChar(1)
-  datger DateTime? @db.Date
+  sitreg String?      @db.VarChar(1)
+  datger DateTime?    @db.Date
   horger Int?
   usuger Int?
   perlib Int?
   fasid  Int
-  selsol String?   @db.VarChar(1)
+  fase   FaseProposta @relation(fields: [fasid], references: [fasid])
+  selsol String?      @db.VarChar(1)
 
   // Planejamento de datas — conceito só do CaxHub (sem equivalente no Senior),
   // definido manualmente pelo Líder Técnico/Consultor pra alimentar a Timeline
@@ -686,4 +687,14 @@ model Notificacao {
   atividade AtividadeConsultor? @relation(fields: [atividadeId], references: [id], onDelete: SetNull)
 
   @@map("notificacoes")
+}
+
+// Espelho local da tabela USU_TFASESPRO do Senior ERP (Fases de acompanhamento das propostas).
+model FaseProposta {
+  fasid  Int    @id
+  fasdes String @db.VarChar(50)
+
+  atividades AtividadeConsultor[]
+
+  @@map("fases_proposta")
 }

@@ -1,10 +1,14 @@
-import { useState } from "react";
+import axios from "axios";
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 interface NavLeaf {
   to: string;
   label: string;
+  // Só aparece pra quem é admin ou gestor de algum departamento (dinâmico, via
+  // DepartamentoGestor — não dá pra expressar isso com `roles`, que é estático).
+  gestorOuAdmin?: boolean;
 }
 
 interface NavGroup {
@@ -27,7 +31,10 @@ const groups: NavGroup[] = [
   },
   {
     label: "Gestão de Projetos",
-    items: [{ to: "/projetos/atividades", label: "Atividades" }],
+    items: [
+      { to: "/projetos/atividades", label: "Atividades" },
+      { to: "/projetos/alocacao", label: "Alocação", gestorOuAdmin: true },
+    ],
     roles: "*",
   },
   {
@@ -87,9 +94,26 @@ interface SidebarProps {
 export function Sidebar({ open }: SidebarProps) {
   const { user } = useAuth();
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro a Receber"]));
-  const visibleGroups = groups.filter(
-    (group) => user && (group.roles === "*" || group.roles.includes(user.role))
-  );
+  const [ehGestorOuAdmin, setEhGestorOuAdmin] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    if (user.role === "admin") {
+      setEhGestorOuAdmin(true);
+      return;
+    }
+    axios
+      .get("/api/dashboard/meu-perfil")
+      .then(({ data }) => setEhGestorOuAdmin((data.departamentosGerenciados ?? []).length > 0))
+      .catch(() => setEhGestorOuAdmin(false));
+  }, [user]);
+
+  const visibleGroups = groups
+    .filter((group) => user && (group.roles === "*" || group.roles.includes(user.role)))
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !item.gestorOuAdmin || ehGestorOuAdmin),
+    }));
 
   function toggleGroup(label: string) {
     setOpenGroups((prev) => {
