@@ -21,6 +21,7 @@ export interface AtividadeKanban {
   consultorNome: string;
   qtdhorPrevisto: number | null;
   colunaId: number | null;
+  atrasada: boolean;
   podeMover: boolean;
 }
 
@@ -45,19 +46,14 @@ const corBadgePrioridade: Record<number, string> = {
   3: "bg-muted/15 text-muted",
 };
 
-function estaAtrasada(datval: string | null, ehFinal: boolean): boolean {
-  if (!datval || ehFinal) return false;
-  return new Date(datval) < new Date(new Date().toDateString());
-}
-
-function DraggableCard({ atividade, ehFinal }: { atividade: AtividadeKanban; ehFinal: boolean }) {
+function DraggableCard({ atividade }: { atividade: AtividadeKanban }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `atividade-${atividade.id}`,
     disabled: !atividade.podeMover,
   });
 
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: 20 } : undefined;
-  const atrasada = estaAtrasada(atividade.datval, ehFinal);
+  const atrasada = atividade.atrasada;
 
   return (
     <div
@@ -122,7 +118,7 @@ function DroppableColuna({
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto px-2 pb-3">
         {atividades.map((a) => (
-          <DraggableCard key={a.id} atividade={a} ehFinal={coluna.ehFinal} />
+          <DraggableCard key={a.id} atividade={a} />
         ))}
         {atividades.length === 0 && <p className="px-2 py-4 text-center text-[11.5px] text-muted">Sem atividades</p>}
       </div>

@@ -9,9 +9,13 @@ export interface FunilItem {
 
 interface FunilSituacaoProps {
   itens: FunilItem[];
+  titulo?: string;
+  formatarValor?: (valor: number) => string;
+  unidade?: string;
 }
 
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const formatarValorPadrao = (valor: number) => `R$ ${currency.format(valor)}`;
 
 const toneBg: Record<string, string> = {
   success: "bg-success",
@@ -20,20 +24,23 @@ const toneBg: Record<string, string> = {
   neutral: "bg-muted",
 };
 
-export function FunilSituacao({ itens }: FunilSituacaoProps) {
+export function FunilSituacao({
+  itens,
+  titulo = "Funil por situação (quantidade)",
+  formatarValor = formatarValorPadrao,
+  unidade = "propostas",
+}: FunilSituacaoProps) {
   return (
     <section className="rounded-lg border border-border bg-surface p-6 shadow-sm">
-      <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">
-        Funil por situação (quantidade)
-      </p>
+      <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">{titulo}</p>
 
-      <div className="mb-4 flex h-8 gap-0.5 overflow-hidden rounded-md" role="img" aria-label="Funil por situação">
+      <div className="mb-4 flex h-8 gap-0.5 overflow-hidden rounded-md" role="img" aria-label={titulo}>
         {itens.map((item) => (
           <div
             key={item.key}
             className={`${toneBg[item.tone]} transition-transform hover:scale-y-105`}
             style={{ width: `${item.pct}%` }}
-            title={`${item.label} — ${item.quantidade} propostas — R$ ${currency.format(item.valor)} (${item.pct}%)`}
+            title={`${item.label} — ${item.quantidade} ${unidade} — ${formatarValor(item.valor)} (${item.pct}%)`}
           />
         ))}
       </div>
@@ -44,7 +51,7 @@ export function FunilSituacao({ itens }: FunilSituacaoProps) {
             <span className={`h-6 w-[3px] flex-none self-center rounded-sm ${toneBg[item.tone]}`} />
             <span>
               <span className="block font-mono text-sm font-semibold tabular-nums text-foreground">
-                {item.quantidade} · R$ {currency.format(item.valor)}
+                {item.quantidade} · {formatarValor(item.valor)}
               </span>
               <span className="mt-0.5 block text-[10.5px] text-muted">
                 {item.label} · {item.pct}%
