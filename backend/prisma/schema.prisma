@@ -30,6 +30,9 @@ model User {
 
   preferenciaFluxoCaixa  PreferenciaFluxoCaixa?
   movimentacoesAtividade AtividadeHistoricoMovimentacao[]
+  comentariosAtividade   AtividadeComentario[]
+  anexosAtividade        AtividadeAnexo[]
+  notificacoes           Notificacao[]
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -531,9 +534,13 @@ model AtividadeConsultor {
   // Status do quadro Kanban — conceito só do CaxHub, sem equivalente no Senior
   // (não confundir com `sitreg`, que é Ativo/Inativo do ERP). Nulo até o primeiro
   // sync/movimentação atribuir a coluna inicial.
-  colunaId  Int?
-  coluna    QuadroColuna?                    @relation(fields: [colunaId], references: [id])
-  historico AtividadeHistoricoMovimentacao[]
+  colunaId       Int?
+  coluna         QuadroColuna?                    @relation(fields: [colunaId], references: [id])
+  historico      AtividadeHistoricoMovimentacao[]
+  comentarios    AtividadeComentario[]
+  checklistItens AtividadeChecklistItem[]
+  anexos         AtividadeAnexo[]
+  notificacoes   Notificacao[]
 
   @@map("atividades_consultor")
 }
@@ -543,11 +550,14 @@ model AtividadeConsultor {
 // campo `depexe` fica de fora de propósito, pra não migrar dado se isso virar por
 // departamento no futuro (adicionaria a coluna nula = "todos os departamentos" nesse caso).
 model QuadroColuna {
-  id       Int     @id @default(autoincrement())
-  nome     String  @db.VarChar(60)
-  ordem    Int
-  corBadge String? @db.VarChar(30)
-  ehFinal  Boolean @default(false)
+  id              Int     @id @default(autoincrement())
+  nome            String  @db.VarChar(60)
+  ordem           Int
+  corBadge        String? @db.VarChar(30)
+  ehFinal         Boolean @default(false)
+  // Ao entrar nessa coluna, notifica automaticamente o(s) Líder(es) Técnico(s)
+  // (gestor do departamento da atividade) — ver PATCH /atividades/:id/mover.
+  notificarGestor Boolean @default(false)
 
   atividades        AtividadeConsultor[]
   historicoAnterior AtividadeHistoricoMovimentacao[] @relation("colunaAnterior")
@@ -576,4 +586,73 @@ model AtividadeHistoricoMovimentacao {
   user           User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@map("atividade_historico_movimentacao")
+}
+
+// Comentários de colaboração numa atividade — dado 100% do CaxHub.
+model AtividadeComentario {
+  id          Int      @id @default(autoincrement())
+  atividadeId Int
+  userId      Int?
+  texto       String   @db.VarChar(2000)
+  criadoEm    DateTime @default(now())
+
+  atividade AtividadeConsultor @relation(fields: [atividadeId], references: [id], onDelete: Cascade)
+  // SetNull: comentário é histórico de colaboração, continua existindo mesmo se o
+  // autor for excluído depois (mesmo padrão do histórico de movimentação).
+  user      User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("atividade_comentarios")
+}
+
+// Itens de checklist de uma atividade — dado 100% do CaxHub.
+model AtividadeChecklistItem {
+  id          Int       @id @default(autoincrement())
+  atividadeId Int
+  texto       String    @db.VarChar(300)
+  concluido   Boolean   @default(false)
+  ordem       Int       @default(0)
+  criadoEm    DateTime  @default(now())
+  concluidoEm DateTime?
+
+  atividade AtividadeConsultor @relation(fields: [atividadeId], references: [id], onDelete: Cascade)
+
+  @@map("atividade_checklist_itens")
+}
+
+// Anexos de uma atividade — arquivo guardado em disco local (volume Docker), só o
+// metadado fica no Postgres. Ver backend/src/routes/atividades.ts pro upload/download.
+model AtividadeAnexo {
+  id             Int      @id @default(autoincrement())
+  atividadeId    Int
+  userId         Int?
+  nomeArquivo    String   @db.VarChar(255)
+  caminhoArquivo String   @db.VarChar(500)
+  tamanhoBytes   Int
+  mimeType       String   @db.VarChar(100)
+  criadoEm       DateTime @default(now())
+
+  atividade AtividadeConsultor @relation(fields: [atividadeId], references: [id], onDelete: Cascade)
+  user      User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("atividade_anexos")
+}
+
+// Notificações in-app do usuário — dado 100% do CaxHub. Geradas manualmente (ex.: em
+// resposta a uma ação) ou por automação (ex.: mudança de status numa coluna marcada
+// com `notificarGestor`, ver QuadroColuna).
+model Notificacao {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  tipo        String   @db.VarChar(40)
+  mensagem    String   @db.VarChar(500)
+  atividadeId Int?
+  lida        Boolean  @default(false)
+  criadoEm    DateTime @default(now())
+
+  // Cascade aqui (diferente de comentário/histórico) porque uma notificação sem
+  // destinatário não tem propósito nenhum — não é registro de auditoria.
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  atividade AtividadeConsultor? @relation(fields: [atividadeId], references: [id], onDelete: SetNull)
+
+  @@map("notificacoes")
 }

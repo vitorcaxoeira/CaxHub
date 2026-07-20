@@ -29,6 +29,7 @@ interface KanbanBoardProps {
   colunas: ColunaKanban[];
   atividades: AtividadeKanban[];
   onMover: (atividadeId: number, novaColunaId: number) => void;
+  onAbrirDetalhe: (atividadeId: number, titulo: string, podeEditar: boolean) => void;
 }
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
@@ -46,7 +47,13 @@ const corBadgePrioridade: Record<number, string> = {
   3: "bg-muted/15 text-muted",
 };
 
-function DraggableCard({ atividade }: { atividade: AtividadeKanban }) {
+function DraggableCard({
+  atividade,
+  onAbrirDetalhe,
+}: {
+  atividade: AtividadeKanban;
+  onAbrirDetalhe: (id: number, titulo: string, podeEditar: boolean) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `atividade-${atividade.id}`,
     disabled: !atividade.podeMover,
@@ -92,6 +99,16 @@ function DraggableCard({ atividade }: { atividade: AtividadeKanban }) {
           </span>
         )}
       </div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onAbrirDetalhe(atividade.id, `Proposta ${atividade.codpro} · Projeto ${atividade.numprj}`, atividade.podeMover);
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="mt-2 w-full rounded border border-border/60 py-1 text-[10.5px] text-muted hover:bg-surface-2 hover:text-foreground"
+      >
+        Detalhes
+      </button>
     </div>
   );
 }
@@ -99,9 +116,11 @@ function DraggableCard({ atividade }: { atividade: AtividadeKanban }) {
 function DroppableColuna({
   coluna,
   atividades,
+  onAbrirDetalhe,
 }: {
   coluna: ColunaKanban;
   atividades: AtividadeKanban[];
+  onAbrirDetalhe: (id: number, titulo: string, podeEditar: boolean) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `coluna-${coluna.id}` });
 
@@ -118,7 +137,7 @@ function DroppableColuna({
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto px-2 pb-3">
         {atividades.map((a) => (
-          <DraggableCard key={a.id} atividade={a} />
+          <DraggableCard key={a.id} atividade={a} onAbrirDetalhe={onAbrirDetalhe} />
         ))}
         {atividades.length === 0 && <p className="px-2 py-4 text-center text-[11.5px] text-muted">Sem atividades</p>}
       </div>
@@ -126,7 +145,7 @@ function DroppableColuna({
   );
 }
 
-export function KanbanBoard({ colunas, atividades, onMover }: KanbanBoardProps) {
+export function KanbanBoard({ colunas, atividades, onMover, onAbrirDetalhe }: KanbanBoardProps) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   function handleDragEnd(event: DragEndEvent) {
@@ -154,7 +173,12 @@ export function KanbanBoard({ colunas, atividades, onMover }: KanbanBoardProps) 
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
       <div className="flex gap-3 overflow-x-auto pb-2">
         {colunas.map((coluna) => (
-          <DroppableColuna key={coluna.id} coluna={coluna} atividades={atividadesPorColuna.get(coluna.id) ?? []} />
+          <DroppableColuna
+            key={coluna.id}
+            coluna={coluna}
+            atividades={atividadesPorColuna.get(coluna.id) ?? []}
+            onAbrirDetalhe={onAbrirDetalhe}
+          />
         ))}
       </div>
     </DndContext>

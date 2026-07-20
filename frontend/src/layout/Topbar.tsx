@@ -1,5 +1,6 @@
 import { useTheme } from "../theme/ThemeContext";
 import { UserMenu } from "./UserMenu";
+import { NotificacoesSino } from "./NotificacoesSino";
 
 interface TopbarProps {
   sidebarOpen: boolean;
@@ -33,6 +34,7 @@ export function Topbar({ sidebarOpen, onToggleSidebar }: TopbarProps) {
         >
           {theme === "dark" ? "Escuro" : "Claro"}
         </button>
+        <NotificacoesSino />
         <UserMenu />
       </div>
     </header>

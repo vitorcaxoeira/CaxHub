@@ -1,8 +1,14 @@
 import { Router } from "express";
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+import multer from "multer";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel, priproLabel, DEPEXE_LABELS, PRIPRO_LABELS } from "../domain/propostasDominio";
 import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
+import { criarNotificacao, notificarGestoresDoDepartamento } from "../domain/notificacoes";
+import { UPLOADS_DIR } from "../config/uploads";
 
 // Router à parte de `projetosRouter` (que hoje é admin+comercial só, por causa de
 // Propostas) — aqui a tela é aberta a qualquer usuário autenticado; quem pode ver/mover
@@ -28,6 +34,29 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
   const contexto = await resolverContextoConsultor(user.email);
   return { user, contexto, role: req.user!.role };
 }
+
+// Resolve a atividade + o departamento dela (via PropostaItem) — usado por todos os
+// sub-recursos (comentário/checklist/anexo) pra checar permissão antes de agir.
+async function carregarAtividadeComDepexe(id: number) {
+  const atividade = await prisma.atividadeConsultor.findUnique({ where: { id } });
+  if (!atividade) return null;
+  const item = await prisma.propostaItem.findUnique({
+    where: { codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite } },
+  });
+  if (!item || item.depexe == null) return null;
+  return { atividade, depexe: item.depexe };
+}
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
+    filename: (_req, file, cb) => {
+      const nomeUnico = `${crypto.randomUUID()}${path.extname(file.originalname)}`;
+      cb(null, nomeUnico);
+    },
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+});
 
 // Busca todas as atividades ativas, decoradas com dado de proposta/cliente/consultor/
 // coluna, já filtradas pelo que o usuário pode visualizar (usado tanto pela listagem
@@ -313,8 +342,486 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       }),
     ]);
 
+    // Automação: coluna marcada pra notificar o(s) Líder(es) Técnico(s) do departamento.
+    if (colunaNova.notificarGestor) {
+      const mensagem = `${user.nome} moveu a atividade da proposta ${atividade.codpro} para "${colunaNova.nome}"`;
+      await notificarGestoresDoDepartamento(atividade.codemp, item.depexe, "atividade_movida", mensagem, id, user.id);
+    }
+
     res.json({ id: atividadeAtualizada.id, colunaId: atividadeAtualizada.colunaId });
   } catch (error) {
     handleError(res, error, "mover");
+  }
+});
+
+// ---------- Histórico de movimentação ----------
+atividadesRouter.get("/:id/historico", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "visualizar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para ver esta atividade" });
+      return;
+    }
+
+    const historico = await prisma.atividadeHistoricoMovimentacao.findMany({
+      where: { atividadeId: id },
+      orderBy: { movidoEm: "asc" },
+      include: { colunaAnterior: true, colunaNova: true, user: { select: { nome: true } } },
+    });
+
+    res.json({
+      historico: historico.map((h) => ({
+        id: h.id,
+        colunaAnteriorNome: h.colunaAnterior?.nome ?? null,
+        colunaNovaNome: h.colunaNova.nome,
+        userNome: h.user?.nome ?? "Usuário removido",
+        movidoEm: h.movidoEm,
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "historico");
+  }
+});
+
+// ---------- Comentários ----------
+atividadesRouter.get("/:id/comentarios", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "visualizar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para ver esta atividade" });
+      return;
+    }
+
+    const comentarios = await prisma.atividadeComentario.findMany({
+      where: { atividadeId: id },
+      orderBy: { criadoEm: "asc" },
+      include: { user: { select: { nome: true } } },
+    });
+
+    res.json({
+      comentarios: comentarios.map((c) => ({
+        id: c.id,
+        texto: c.texto,
+        autorNome: c.user?.nome ?? "Usuário removido",
+        criadoEm: c.criadoEm,
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "comentarios-listar");
+  }
+});
+
+atividadesRouter.post("/:id/comentarios", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const texto = typeof req.body?.texto === "string" ? req.body.texto.trim() : "";
+    if (!texto) {
+      res.status(400).json({ error: "Texto do comentário é obrigatório" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "editar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para comentar nesta atividade" });
+      return;
+    }
+
+    const comentario = await prisma.atividadeComentario.create({
+      data: { atividadeId: id, userId: ctx.user.id, texto },
+      include: { user: { select: { nome: true } } },
+    });
+
+    // Notifica o consultor responsável pela atividade, se alguém além dele comentou.
+    const consultorResponsavel = await prisma.consultor.findFirst({
+      where: { codemp: resolvido.atividade.codemp, codfor: resolvido.atividade.codfor },
+    });
+    if (consultorResponsavel?.email) {
+      const usuarioResponsavel = await prisma.user.findFirst({
+        where: { email: { equals: consultorResponsavel.email, mode: "insensitive" } },
+      });
+      if (usuarioResponsavel && usuarioResponsavel.id !== ctx.user.id) {
+        await criarNotificacao(
+          usuarioResponsavel.id,
+          "novo_comentario",
+          `${ctx.user.nome} comentou na atividade da proposta ${resolvido.atividade.codpro}`,
+          id
+        );
+      }
+    }
+
+    res.status(201).json({
+      comentario: {
+        id: comentario.id,
+        texto: comentario.texto,
+        autorNome: comentario.user?.nome ?? "Usuário removido",
+        criadoEm: comentario.criadoEm,
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "comentarios-criar");
+  }
+});
+
+// ---------- Checklist ----------
+atividadesRouter.get("/:id/checklist", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "visualizar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para ver esta atividade" });
+      return;
+    }
+
+    const itens = await prisma.atividadeChecklistItem.findMany({
+      where: { atividadeId: id },
+      orderBy: [{ ordem: "asc" }, { id: "asc" }],
+    });
+
+    res.json({ itens });
+  } catch (error) {
+    handleError(res, error, "checklist-listar");
+  }
+});
+
+atividadesRouter.post("/:id/checklist", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const texto = typeof req.body?.texto === "string" ? req.body.texto.trim() : "";
+    if (!texto) {
+      res.status(400).json({ error: "Texto do item é obrigatório" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "editar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para editar o checklist desta atividade" });
+      return;
+    }
+
+    const maiorOrdem = await prisma.atividadeChecklistItem.aggregate({
+      where: { atividadeId: id },
+      _max: { ordem: true },
+    });
+
+    const item = await prisma.atividadeChecklistItem.create({
+      data: { atividadeId: id, texto, ordem: (maiorOrdem._max.ordem ?? 0) + 1 },
+    });
+
+    res.status(201).json({ item });
+  } catch (error) {
+    handleError(res, error, "checklist-criar");
+  }
+});
+
+atividadesRouter.patch("/:id/checklist/:itemId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    const itemId = Number(req.params.itemId);
+    if (!Number.isFinite(id) || !Number.isFinite(itemId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "editar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para editar o checklist desta atividade" });
+      return;
+    }
+
+    const concluido = Boolean(req.body?.concluido);
+    const item = await prisma.atividadeChecklistItem.update({
+      where: { id: itemId },
+      data: { concluido, concluidoEm: concluido ? new Date() : null },
+    });
+
+    res.json({ item });
+  } catch (error) {
+    handleError(res, error, "checklist-atualizar");
+  }
+});
+
+atividadesRouter.delete("/:id/checklist/:itemId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    const itemId = Number(req.params.itemId);
+    if (!Number.isFinite(id) || !Number.isFinite(itemId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "editar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para editar o checklist desta atividade" });
+      return;
+    }
+
+    await prisma.atividadeChecklistItem.delete({ where: { id: itemId } });
+    res.status(204).send();
+  } catch (error) {
+    handleError(res, error, "checklist-excluir");
+  }
+});
+
+// ---------- Anexos ----------
+atividadesRouter.get("/:id/anexos", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "visualizar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para ver esta atividade" });
+      return;
+    }
+
+    const anexos = await prisma.atividadeAnexo.findMany({
+      where: { atividadeId: id },
+      orderBy: { criadoEm: "asc" },
+      include: { user: { select: { nome: true } } },
+    });
+
+    res.json({
+      anexos: anexos.map((a) => ({
+        id: a.id,
+        nomeArquivo: a.nomeArquivo,
+        tamanhoBytes: a.tamanhoBytes,
+        mimeType: a.mimeType,
+        autorNome: a.user?.nome ?? "Usuário removido",
+        criadoEm: a.criadoEm,
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "anexos-listar");
+  }
+});
+
+atividadesRouter.post("/:id/anexos", upload.single("arquivo"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: "Arquivo é obrigatório" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      fs.unlink(req.file.path, () => {});
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      fs.unlink(req.file.path, () => {});
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "editar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      fs.unlink(req.file.path, () => {});
+      res.status(403).json({ error: "Sem permissão para anexar arquivos nesta atividade" });
+      return;
+    }
+
+    const anexo = await prisma.atividadeAnexo.create({
+      data: {
+        atividadeId: id,
+        userId: ctx.user.id,
+        nomeArquivo: req.file.originalname,
+        caminhoArquivo: req.file.filename,
+        tamanhoBytes: req.file.size,
+        mimeType: req.file.mimetype,
+      },
+    });
+
+    res.status(201).json({
+      anexo: {
+        id: anexo.id,
+        nomeArquivo: anexo.nomeArquivo,
+        tamanhoBytes: anexo.tamanhoBytes,
+        mimeType: anexo.mimeType,
+        autorNome: ctx.user.nome,
+        criadoEm: anexo.criadoEm,
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "anexos-criar");
+  }
+});
+
+atividadesRouter.get("/:id/anexos/:anexoId/download", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    const anexoId = Number(req.params.anexoId);
+    if (!Number.isFinite(id) || !Number.isFinite(anexoId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "visualizar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para ver esta atividade" });
+      return;
+    }
+
+    const anexo = await prisma.atividadeAnexo.findUnique({ where: { id: anexoId } });
+    if (!anexo || anexo.atividadeId !== id) {
+      res.status(404).json({ error: "Anexo não encontrado" });
+      return;
+    }
+
+    const caminhoAbsoluto = path.join(UPLOADS_DIR, anexo.caminhoArquivo);
+    res.download(caminhoAbsoluto, anexo.nomeArquivo);
+  } catch (error) {
+    handleError(res, error, "anexos-download");
+  }
+});
+
+atividadesRouter.delete("/:id/anexos/:anexoId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    const anexoId = Number(req.params.anexoId);
+    if (!Number.isFinite(id) || !Number.isFinite(anexoId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeExecutarAcao(ctx.role, ctx.contexto, "editar", { depexe: resolvido.depexe, codfor: resolvido.atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para excluir anexos desta atividade" });
+      return;
+    }
+
+    const anexo = await prisma.atividadeAnexo.findUnique({ where: { id: anexoId } });
+    if (!anexo || anexo.atividadeId !== id) {
+      res.status(404).json({ error: "Anexo não encontrado" });
+      return;
+    }
+
+    await prisma.atividadeAnexo.delete({ where: { id: anexoId } });
+    fs.unlink(path.join(UPLOADS_DIR, anexo.caminhoArquivo), () => {});
+    res.status(204).send();
+  } catch (error) {
+    handleError(res, error, "anexos-excluir");
   }
 });

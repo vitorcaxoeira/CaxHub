@@ -17,6 +17,8 @@ services:
       - ./backend/.env
     depends_on:
       - db
+    volumes:
+      - uploads_data:/app/uploads
 
   frontend:
     build:
@@ -30,3 +32,4 @@ services:
 
 volumes:
   db_data:
+  uploads_data:

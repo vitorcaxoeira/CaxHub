@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import { garantirDiretorioUploads } from "./config/uploads";
 import { authRouter } from "./auth/routes";
 import { dashboardRouter } from "./routes/dashboard";
 import { financeiroRouter } from "./routes/financeiro";
@@ -10,6 +11,7 @@ import { fluxoCaixaRouter } from "./routes/fluxoCaixa";
 import { historicoFinanceiroRouter } from "./routes/historicoFinanceiro";
 import { projetosRouter } from "./routes/projetos";
 import { atividadesRouter } from "./routes/atividades";
+import { notificacoesRouter } from "./routes/notificacoes";
 import { usersRouter } from "./routes/users";
 import { scheduleEmpresaSync } from "./sync/empresaSync";
 import { scheduleFilialSync } from "./sync/filialSync";
@@ -32,6 +34,8 @@ import { scheduleDepartamentoGestorSync } from "./sync/departamentoGestorSync";
 import { scheduleDepartamentoTimeSync } from "./sync/departamentoTimeSync";
 import { scheduleAtividadeConsultorSync } from "./sync/atividadeConsultorSync";
 
+garantirDiretorioUploads();
+
 const app = express();
 app.use(express.json());
 
@@ -45,6 +49,7 @@ app.use("/financeiro/fluxo-caixa", fluxoCaixaRouter);
 app.use("/financeiro/historico", historicoFinanceiroRouter);
 app.use("/projetos", projetosRouter);
 app.use("/atividades", atividadesRouter);
+app.use("/notificacoes", notificacoesRouter);
 app.use("/users", usersRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;

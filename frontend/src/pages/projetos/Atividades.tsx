@@ -3,8 +3,15 @@ import { useEffect, useState } from "react";
 import { AtividadeKanban, ColunaKanban, KanbanBoard } from "../../components/projetos/KanbanBoard";
 import { AtividadesTable } from "../../components/projetos/AtividadesTable";
 import { IndicadoresProjetos, IndicadoresProjetosData } from "../../components/projetos/IndicadoresProjetos";
+import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 
 type Visao = "quadro" | "lista";
+
+interface DetalheSelecionado {
+  id: number;
+  titulo: string;
+  podeEditar: boolean;
+}
 
 export function Atividades() {
   const [visao, setVisao] = useState<Visao>("quadro");
@@ -13,6 +20,7 @@ export function Atividades() {
   const [indicadores, setIndicadores] = useState<IndicadoresProjetosData | null>(null);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [detalhe, setDetalhe] = useState<DetalheSelecionado | null>(null);
 
   function carregar() {
     setLoading(true);
@@ -50,6 +58,10 @@ export function Atividades() {
     }
   }
 
+  function abrirDetalhe(atividadeId: number, titulo: string, podeEditar: boolean) {
+    setDetalhe({ id: atividadeId, titulo, podeEditar });
+  }
+
   const tabClass = (ativa: boolean) =>
     `rounded-md px-3 py-1.5 text-sm font-medium transition ${
       ativa ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground"
@@ -85,10 +97,19 @@ export function Atividades() {
         loading ? (
           <p className="text-sm text-muted">Carregando...</p>
         ) : (
-          <KanbanBoard colunas={colunas} atividades={atividades} onMover={moverAtividade} />
+          <KanbanBoard colunas={colunas} atividades={atividades} onMover={moverAtividade} onAbrirDetalhe={abrirDetalhe} />
         )
       ) : (
-        <AtividadesTable onMovido={carregarIndicadores} />
+        <AtividadesTable onMovido={carregarIndicadores} onAbrirDetalhe={abrirDetalhe} />
+      )}
+
+      {detalhe && (
+        <AtividadeDetalhe
+          atividadeId={detalhe.id}
+          titulo={detalhe.titulo}
+          podeEditar={detalhe.podeEditar}
+          onClose={() => setDetalhe(null)}
+        />
       )}
     </div>
   );

@@ -38,13 +38,15 @@ async function main() {
   if (colunasExistentes === 0) {
     await prisma.quadroColuna.createMany({
       data: [
-        { nome: "A Fazer", ordem: 1, corBadge: "neutral", ehFinal: false },
-        { nome: "Em Andamento", ordem: 2, corBadge: "warning", ehFinal: false },
-        { nome: "Bloqueado", ordem: 3, corBadge: "destructive", ehFinal: false },
-        { nome: "Concluído", ordem: 4, corBadge: "success", ehFinal: true },
+        { nome: "A Fazer", ordem: 1, corBadge: "neutral", ehFinal: false, notificarGestor: false },
+        { nome: "Em Andamento", ordem: 2, corBadge: "warning", ehFinal: false, notificarGestor: false },
+        { nome: "Bloqueado", ordem: 3, corBadge: "destructive", ehFinal: false, notificarGestor: true },
+        { nome: "Concluído", ordem: 4, corBadge: "success", ehFinal: true, notificarGestor: true },
       ],
     });
     console.log("Colunas iniciais do quadro Kanban criadas");
+  } else {
+    await prisma.quadroColuna.updateMany({ where: { nome: { in: ["Bloqueado", "Concluído"] } }, data: { notificarGestor: true } });
   }
 
   const passwordHash = await bcrypt.hash("admin123", 10);

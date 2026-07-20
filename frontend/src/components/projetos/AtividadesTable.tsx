@@ -46,9 +46,10 @@ const PAGE_SIZE = 25;
 
 interface AtividadesTableProps {
   onMovido?: () => void;
+  onAbrirDetalhe: (atividadeId: number, titulo: string, podeEditar: boolean) => void;
 }
 
-export function AtividadesTable({ onMovido }: AtividadesTableProps) {
+export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTableProps) {
   const [rows, setRows] = useState<AtividadeRow[]>([]);
   const [colunas, setColunas] = useState<ColunaKanban[]>([]);
   const [departamentos, setDepartamentos] = useState<OpcaoFiltro[]>([]);
@@ -201,6 +202,7 @@ export function AtividadesTable({ onMovido }: AtividadesTableProps) {
                 <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Situação
                 </th>
+                <th className="bg-surface-2 px-5 py-3" />
               </tr>
             </thead>
             <tbody>
@@ -249,11 +251,19 @@ export function AtividadesTable({ onMovido }: AtividadesTableProps) {
                       ))}
                     </select>
                   </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <button
+                      onClick={() => onAbrirDetalhe(row.id, `Proposta ${row.codpro} · Projeto ${row.numprj}`, row.podeMover)}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      Detalhes
+                    </button>
+                  </td>
                 </tr>
               ))}
               {rows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
+                  <td colSpan={9} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhuma atividade encontrada com os filtros atuais.
                   </td>
                 </tr>
