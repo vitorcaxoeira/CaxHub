@@ -64,6 +64,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
 
     const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
     const apenasComSaldo = req.query.apenasComSaldo === "true";
+    const compartilhadas = req.query.compartilhadas === "true";
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 25));
 
@@ -102,10 +103,10 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       numprj: number;
       cliente: string;
       sitpro: number | null;
+      propostaDepexe: number | null;
       totalItens: number;
       qtdhorTotal: number;
       horasAlocadas: number;
-      depexesSet: Set<string>;
     }
     const porProposta = new Map<string, Agregado>();
     for (const item of itens) {
@@ -121,33 +122,43 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
           numprj: proposta.numprj,
           cliente: `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}`,
           sitpro: proposta.sitpro,
+          propostaDepexe: proposta.depexe,
           totalItens: 0,
           qtdhorTotal: 0,
           horasAlocadas: 0,
-          depexesSet: new Set(),
         });
       }
       const agregado = porProposta.get(chaveProposta)!;
       agregado.totalItens += 1;
       agregado.qtdhorTotal += item.qtdhor ?? 0;
       agregado.horasAlocadas += alocadoPorItem.get(`${item.codemp}-${item.codpro}-${item.seqite}`) ?? 0;
-      agregado.depexesSet.add(depexeLabel(item.depexe));
     }
 
-    let linhas = [...porProposta.values()].map((a) => ({
-      codemp: a.codemp,
-      codpro: a.codpro,
-      numprj: a.numprj,
-      cliente: a.cliente,
-      sitpro: a.sitpro,
-      sitproLabel: sitproLabel(a.sitpro),
-      sitproTone: sitproTone(a.sitpro),
-      depexes: [...a.depexesSet].sort(),
-      totalItens: a.totalItens,
-      qtdhorTotal: a.qtdhorTotal,
-      horasAlocadas: a.horasAlocadas,
-      saldo: a.qtdhorTotal - a.horasAlocadas,
-    }));
+    // "Compartilhada" = a proposta pertence (Proposta.depexe, o depto "dono" dela no
+    // Senior) a outro departamento, mas tem pelo menos um item no(s) departamento(s)
+    // que o usuário gerencia de verdade — ou seja, item emprestado pro time dele.
+    // Usa departamentosGerenciados (não `permitidos`, que pra admin vira "todos").
+    const meusDepartamentos = contexto.departamentosGerenciados;
+
+    let linhas = [...porProposta.values()]
+      .filter((a) => !compartilhadas || a.propostaDepexe == null || !meusDepartamentos.includes(a.propostaDepexe))
+      .map((a) => ({
+        codemp: a.codemp,
+        codpro: a.codpro,
+        numprj: a.numprj,
+        cliente: a.cliente,
+        sitpro: a.sitpro,
+        sitproLabel: sitproLabel(a.sitpro),
+        sitproTone: sitproTone(a.sitpro),
+        // Sempre o departamento "dono" da proposta no Senior — não os departamentos
+        // dos itens (que podem ser só os visíveis pro usuário, e confundiriam numa
+        // proposta compartilhada mostrando o depto de quem está vendo, não o real).
+        depexeLabel: depexeLabel(a.propostaDepexe),
+        totalItens: a.totalItens,
+        qtdhorTotal: a.qtdhorTotal,
+        horasAlocadas: a.horasAlocadas,
+        saldo: a.qtdhorTotal - a.horasAlocadas,
+      }));
 
     if (busca) {
       linhas = linhas.filter((l) => l.cliente.toLowerCase().includes(busca) || String(l.codpro).includes(busca));
@@ -217,6 +228,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
         return {
           codfor,
           nome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${codfor}`,
+          depexeLabel: consultor?.depexedes ?? depexeLabel(consultor?.depexe ?? null),
           horasAlocadas: horasPorCodfor.get(codfor) ?? 0,
         };
       })

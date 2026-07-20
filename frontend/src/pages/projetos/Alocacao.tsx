@@ -1,6 +1,6 @@
 import axios from "axios";
 import { Fragment, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { Pagination } from "../../components/ui/Pagination";
 import { formatHoras } from "../../utils/horas";
@@ -18,7 +18,7 @@ interface PropostaRow {
   sitpro: number | null;
   sitproLabel: string;
   sitproTone: "success" | "warning" | "destructive" | "neutral";
-  depexes: string[];
+  depexeLabel: string;
   totalItens: number;
   qtdhorTotal: number;
   horasAlocadas: number;
@@ -28,6 +28,7 @@ interface PropostaRow {
 interface ConsultorResumo {
   codfor: number;
   nome: string;
+  depexeLabel: string;
   horasAlocadas: number;
 }
 
@@ -47,17 +48,52 @@ const toneBadge: Record<string, string> = {
 export function Alocacao() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  // Filtros ficam sincronizados na URL — assim, ao voltar da tela de detalhe da
+  // proposta (via histórico do navegador), a lista reaparece com os mesmos filtros
+  // em vez de resetar.
+  const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<PropostaRow[]>([]);
   const [departamentos, setDepartamentos] = useState<OpcaoFiltro[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
+  const [page, setPageState] = useState(Number(searchParams.get("page")) || 1);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [semAcesso, setSemAcesso] = useState(false);
 
-  const [depexe, setDepexe] = useState("");
-  const [busca, setBusca] = useState("");
-  const [apenasComSaldo, setApenasComSaldo] = useState(true);
+  const [depexe, setDepexeState] = useState(searchParams.get("depexe") ?? "");
+  const [busca, setBuscaState] = useState(searchParams.get("busca") ?? "");
+  const [apenasComSaldo, setApenasComSaldoState] = useState(searchParams.get("apenasComSaldo") !== "false");
+  const [compartilhadas, setCompartilhadasState] = useState(searchParams.get("compartilhadas") === "true");
+
+  function atualizarFiltros(
+    patch: Partial<{ depexe: string; busca: string; apenasComSaldo: boolean; compartilhadas: boolean; page: number }>
+  ) {
+    const mudouFiltro =
+      patch.depexe !== undefined ||
+      patch.busca !== undefined ||
+      patch.apenasComSaldo !== undefined ||
+      patch.compartilhadas !== undefined;
+    const proximo = {
+      depexe: patch.depexe ?? depexe,
+      busca: patch.busca ?? busca,
+      apenasComSaldo: patch.apenasComSaldo ?? apenasComSaldo,
+      compartilhadas: patch.compartilhadas ?? compartilhadas,
+      page: patch.page ?? (mudouFiltro ? 1 : page),
+    };
+    setDepexeState(proximo.depexe);
+    setBuscaState(proximo.busca);
+    setApenasComSaldoState(proximo.apenasComSaldo);
+    setCompartilhadasState(proximo.compartilhadas);
+    setPageState(proximo.page);
+
+    const params = new URLSearchParams();
+    if (proximo.depexe) params.set("depexe", proximo.depexe);
+    if (proximo.busca) params.set("busca", proximo.busca);
+    if (!proximo.apenasComSaldo) params.set("apenasComSaldo", "false");
+    if (proximo.compartilhadas) params.set("compartilhadas", "true");
+    if (proximo.page > 1) params.set("page", String(proximo.page));
+    setSearchParams(params, { replace: true });
+  }
 
   const [expandidas, setExpandidas] = useState<Set<string>>(new Set());
   const [consultoresPorProposta, setConsultoresPorProposta] = useState<
@@ -87,6 +123,7 @@ export function Alocacao() {
           depexe: depexe || undefined,
           busca: busca || undefined,
           apenasComSaldo: apenasComSaldo || undefined,
+          compartilhadas: compartilhadas || undefined,
           page,
           pageSize: PAGE_SIZE,
         },
@@ -110,7 +147,7 @@ export function Alocacao() {
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [depexe, busca, apenasComSaldo, page]);
+  }, [depexe, busca, apenasComSaldo, compartilhadas, page]);
 
   function toggleExpandir(row: PropostaRow) {
     const chave = `${row.codemp}-${row.codpro}`;
@@ -167,19 +204,13 @@ export function Alocacao() {
           type="text"
           placeholder="Buscar cliente ou proposta..."
           value={busca}
-          onChange={(e) => {
-            setBusca(e.target.value);
-            setPage(1);
-          }}
+          onChange={(e) => atualizarFiltros({ busca: e.target.value })}
           className={`${selectClass} w-56`}
         />
         {departamentos.length > 1 && (
           <select
             value={depexe}
-            onChange={(e) => {
-              setDepexe(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => atualizarFiltros({ depexe: e.target.value })}
             className={selectClass}
           >
             <option value="">Todos os departamentos</option>
@@ -194,12 +225,17 @@ export function Alocacao() {
           <input
             type="checkbox"
             checked={apenasComSaldo}
-            onChange={(e) => {
-              setApenasComSaldo(e.target.checked);
-              setPage(1);
-            }}
+            onChange={(e) => atualizarFiltros({ apenasComSaldo: e.target.checked })}
           />
           Só propostas com saldo pendente
+        </label>
+        <label className="flex items-center gap-2 text-sm text-muted">
+          <input
+            type="checkbox"
+            checked={compartilhadas}
+            onChange={(e) => atualizarFiltros({ compartilhadas: e.target.checked })}
+          />
+          Compartilhadas com meu departamento
         </label>
       </div>
 
@@ -221,7 +257,7 @@ export function Alocacao() {
                   Cliente
                 </th>
                 <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
-                  Departamento(s)
+                  Departamento
                 </th>
                 <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Itens
@@ -267,13 +303,9 @@ export function Alocacao() {
                         {row.cliente}
                       </td>
                       <td className="hidden px-5 py-3.5 md:table-cell">
-                        <div className="flex flex-wrap gap-1">
-                          {row.depexes.map((d) => (
-                            <span key={d} className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
-                              {d}
-                            </span>
-                          ))}
-                        </div>
+                        <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+                          {row.depexeLabel}
+                        </span>
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{row.totalItens}</td>
                       <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
@@ -321,6 +353,9 @@ export function Alocacao() {
                                   <th className="py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                     Nome Consultor
                                   </th>
+                                  <th className="py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                    Departamento
+                                  </th>
                                   <th className="py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                     Horas Alocada
                                   </th>
@@ -331,6 +366,11 @@ export function Alocacao() {
                                   <tr key={c.codfor} className="border-t border-border/40">
                                     <td className="py-1.5 font-mono text-[12.5px] tabular-nums text-muted">{c.codfor}</td>
                                     <td className="py-1.5 text-[12.5px] text-foreground">{c.nome}</td>
+                                    <td className="py-1.5">
+                                      <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+                                        {c.depexeLabel}
+                                      </span>
+                                    </td>
                                     <td className="py-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground">
                                       {formatHoras(c.horasAlocadas / 60)}
                                     </td>
@@ -356,7 +396,14 @@ export function Alocacao() {
           </table>
         </div>
 
-        <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPageChange={setPage} label="propostas" />
+        <Pagination
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={total}
+          loading={loading}
+          onPageChange={(p) => atualizarFiltros({ page: p })}
+          label="propostas"
+        />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { formatHoras } from "../../utils/horas";
 
 interface AlocacaoConsultor {
@@ -74,10 +74,21 @@ function formatPeriodo(inicio: string | null, fim: string | null): string | null
   return `${ini} - ${f}`;
 }
 
+// Aceita "H:MM" (H sem limite de dígitos, já que passa de 1.000h com facilidade —
+// mesma convenção de exibição usada em formatHoras), nunca decimal.
 function horasParaMinutos(horas: string): number | null {
-  const valor = Number(horas.replace(",", "."));
-  if (!Number.isFinite(valor) || valor <= 0) return null;
-  return Math.round(valor * 60);
+  const match = horas.trim().match(/^(\d+):([0-5]\d)$/);
+  if (!match) return null;
+  const total = Number(match[1]) * 60 + Number(match[2]);
+  return total > 0 ? total : null;
+}
+
+function minutosParaInputHoras(minutos: number | null): string {
+  if (minutos == null) return "";
+  const totalMinutos = Math.round(minutos);
+  const horasParte = Math.trunc(totalMinutos / 60);
+  const minutosParte = Math.abs(totalMinutos % 60);
+  return `${horasParte}:${String(minutosParte).padStart(2, "0")}`;
 }
 
 function paraInputDate(valor: string | null): string {
@@ -90,6 +101,7 @@ function paraInputDate(valor: string | null): string {
 // número de sequência (como no sistema desktop), a seleção já faz esse vínculo.
 export function AlocacaoPropostaDetalhe() {
   const { codemp, codpro } = useParams<{ codemp: string; codpro: string }>();
+  const navigate = useNavigate();
   const [proposta, setProposta] = useState<PropostaHeader | null>(null);
   const [itens, setItens] = useState<ItemDetalhe[]>([]);
   const [selecionado, setSelecionado] = useState<number | null>(null);
@@ -148,7 +160,7 @@ export function AlocacaoPropostaDetalhe() {
 
   function abrirEditar(item: ItemDetalhe, alocacao: AlocacaoConsultor) {
     setModal({ tipo: "editar", item, alocacao });
-    setHorasForm(String(alocacao.qtdhor != null ? alocacao.qtdhor / 60 : ""));
+    setHorasForm(minutosParaInputHoras(alocacao.qtdhor));
     setInicioForm(paraInputDate(alocacao.dataPrevistaInicio));
     setFimForm(paraInputDate(alocacao.dataPrevistaFim));
     setErroModal(null);
@@ -162,7 +174,7 @@ export function AlocacaoPropostaDetalhe() {
     if (!modal || modal.tipo !== "criar") return;
     const minutos = horasParaMinutos(horasForm);
     if (!codforSelecionado || !fasidSelecionado || minutos == null) {
-      setErroModal("Preencha consultor, fase e horas (maior que zero)");
+      setErroModal("Preencha consultor, fase e horas no formato hh:mm (maior que zero)");
       return;
     }
     if (inicioForm && fimForm && inicioForm > fimForm) {
@@ -193,7 +205,7 @@ export function AlocacaoPropostaDetalhe() {
     if (!modal || modal.tipo !== "editar") return;
     const minutos = horasParaMinutos(horasForm);
     if (minutos == null) {
-      setErroModal("Informe horas maiores que zero");
+      setErroModal("Informe horas no formato hh:mm (maior que zero)");
       return;
     }
     if (inicioForm && fimForm && inicioForm > fimForm) {
@@ -234,9 +246,9 @@ export function AlocacaoPropostaDetalhe() {
   if (erro && !proposta) {
     return (
       <div>
-        <Link to="/projetos/alocacao" className="text-sm text-primary hover:underline">
+        <button onClick={() => navigate(-1)} className="text-sm text-primary hover:underline">
           ← Voltar pra lista de propostas
-        </Link>
+        </button>
         <p className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {erro}
         </p>
@@ -246,9 +258,9 @@ export function AlocacaoPropostaDetalhe() {
 
   return (
     <div>
-      <Link to="/projetos/alocacao" className="text-sm text-primary hover:underline">
+      <button onClick={() => navigate(-1)} className="text-sm text-primary hover:underline">
         ← Voltar pra lista de propostas
-      </Link>
+      </button>
 
       {proposta && (
         <div className="mb-6 mt-3">
@@ -451,11 +463,10 @@ export function AlocacaoPropostaDetalhe() {
                 <p className="text-sm text-muted">{modal.alocacao.consultorNome}</p>
               )}
               <div>
-                <label className="mb-1 block text-[11.5px] text-muted">Horas</label>
+                <label className="mb-1 block text-[11.5px] text-muted">Horas (hh:mm)</label>
                 <input
                   type="text"
-                  inputMode="decimal"
-                  placeholder="ex: 8 ou 2,5"
+                  placeholder="ex: 8:00 ou 160:30"
                   value={horasForm}
                   onChange={(e) => setHorasForm(e.target.value)}
                   className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
