@@ -65,11 +65,11 @@ export function SincronizacaoSenior() {
   return (
     <div>
       <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
-        Administração · Sincronização Senior
+        Administração · Exportados para o Senior
       </p>
 
       <div className="mb-6">
-        <h1 className="font-display text-2xl font-bold text-foreground">Sincronização com o Senior</h1>
+        <h1 className="font-display text-2xl font-bold text-foreground">Exportados para o Senior</h1>
         <p className="mt-1 text-sm text-muted">
           Fila (outbox) de mudanças feitas no CaxHub que precisam ser propagadas de volta pro ERP Senior. O canal de
           escrita do Senior ainda não foi confirmado — por isso os itens abaixo tendem a acumular em "Bloqueado" até

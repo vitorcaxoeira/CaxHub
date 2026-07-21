@@ -12,6 +12,7 @@ export const syncErpRouter = Router();
 syncErpRouter.use(requireAuth, requireRole("admin"));
 
 const jobsEmAndamento = new Set<string>();
+let sincronizandoTodos = false;
 
 function handleError(res: import("express").Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);
@@ -32,13 +33,21 @@ syncErpRouter.get("/", async (_req, res) => {
       if (!ultimoPorJob.has(log.jobName)) ultimoPorJob.set(log.jobName, log);
     }
 
+    const contagens = await Promise.all(SYNC_JOBS.map((job) => job.contarRegistros()));
+
     const agora = new Date();
     res.json({
-      jobs: SYNC_JOBS.map((job) => {
+      sincronizandoTodos,
+      jobs: SYNC_JOBS.map((job, indice) => {
         const ultimo = ultimoPorJob.get(job.jobName);
         return {
           jobName: job.jobName,
           displayName: job.displayName,
+          // Ordem em que "Sincronizar Todas as Tabelas" executa esta tabela — mesma ordem
+          // de SYNC_JOBS, que respeita as dependências de FK (ex.: FaseProposta antes de
+          // AtividadeConsultor).
+          ordemExecucao: indice + 1,
+          totalRegistros: contagens[indice],
           suportaAlterados: job.suportaAlterados,
           ultimaSincronizacao: ultimo?.runAt ?? null,
           ultimoStatus: ultimo?.status ?? null,
@@ -60,7 +69,7 @@ syncErpRouter.post("/:jobName/run", async (req, res) => {
       res.status(404).json({ error: "Job não encontrado" });
       return;
     }
-    if (jobsEmAndamento.has(job.jobName)) {
+    if (sincronizandoTodos || jobsEmAndamento.has(job.jobName)) {
       res.status(409).json({ error: "Sincronização já em andamento" });
       return;
     }
@@ -95,5 +104,38 @@ syncErpRouter.post("/:jobName/run", async (req, res) => {
     res.status(202).json({ status: "iniciado", modo });
   } catch (error) {
     handleError(res, error, "run");
+  }
+});
+
+syncErpRouter.post("/run-all", async (_req, res) => {
+  try {
+    if (sincronizandoTodos || jobsEmAndamento.size > 0) {
+      res.status(409).json({ error: "Já existe uma sincronização em andamento" });
+      return;
+    }
+
+    sincronizandoTodos = true;
+    (async () => {
+      // Sequencial e na ordem de SYNC_JOBS (respeita dependências de FK, ex.: FaseProposta
+      // antes de AtividadeConsultor) — mesmo padrão do runSincronizacaoContasReceber.
+      for (const job of SYNC_JOBS) {
+        jobsEmAndamento.add(job.jobName);
+        try {
+          await job.run();
+        } finally {
+          jobsEmAndamento.delete(job.jobName);
+        }
+      }
+    })()
+      .catch((error) => {
+        console.error("[sync-erp:run-all] falhou:", error instanceof Error ? error.message : error);
+      })
+      .finally(() => {
+        sincronizandoTodos = false;
+      });
+
+    res.status(202).json({ status: "iniciado" });
+  } catch (error) {
+    handleError(res, error, "run-all");
   }
 });
