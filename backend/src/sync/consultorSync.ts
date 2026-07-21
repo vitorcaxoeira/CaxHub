@@ -2,7 +2,11 @@ import cron from "node-cron";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "consultores-sync";
+export const JOB_NAME = "consultores-sync";
+export const CRON_EXPR = "0 3 * * *";
+// USU_VBI00Cons é uma view sem coluna de data de geração/alteração — não dá pra
+// sincronizar só os alterados, só o job completo.
+export const CAMPO_DATA: string | null = null;
 const QUERY = `SELECT codemp AS codemp, codusu AS codusu, codfor AS codfor, nomfor AS nomfor, sitfor AS sitfor, nomcom AS nomcom, conhab AS conhab, tipusurat AS tipusurat, depexe AS depexe, depexedes AS depexedes, email AS email FROM USU_VBI00Cons`;
 
 interface ConsultorRow {
@@ -61,5 +65,5 @@ export async function runConsultorSync(): Promise<void> {
 
 // Cadastro de consultores muda raramente — roda 1x por dia às 3h.
 export function scheduleConsultorSync(): void {
-  cron.schedule("0 3 * * *", runConsultorSync);
+  cron.schedule(CRON_EXPR, runConsultorSync);
 }

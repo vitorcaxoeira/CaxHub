@@ -2,7 +2,9 @@ import cron from "node-cron";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "tipos_titulo-sync";
+export const JOB_NAME = "tipos_titulo-sync";
+export const CRON_EXPR = "0 4 * * *";
+export const CAMPO_DATA: string | null = null;
 const QUERY = `SELECT codtpt AS codtpt, destpt AS destpt, abrtpt AS abrtpt, recsom AS recsom, pagsom AS pagsom, apltpt AS apltpt, sittpt AS sittpt FROM e002tpt`;
 
 interface TipoTituloRow {
@@ -42,5 +44,5 @@ export async function runTipoTituloSync(): Promise<void> {
 
 // Ajustar o horário conforme a necessidade real de atualização desta tabela.
 export function scheduleTipoTituloSync(): void {
-  cron.schedule("0 4 * * *", runTipoTituloSync);
+  cron.schedule(CRON_EXPR, runTipoTituloSync);
 }

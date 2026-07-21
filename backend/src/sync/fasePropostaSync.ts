@@ -2,7 +2,10 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "fases_proposta-sync";
+export const JOB_NAME = "fases_proposta-sync";
+export const CRON_EXPR = "50 3 * * *";
+// Tabela de domínio simples (fasid/fasdes) — sem campo de data de geração/alteração.
+export const CAMPO_DATA: string | null = null;
 const QUERY = `SELECT USU_FasId AS fasid, USU_FasDes AS fasdes FROM USU_TFasesPro`;
 
 interface FasePropostaRow {
@@ -41,5 +44,5 @@ export async function runFasePropostaSync(): Promise<void> {
 // Roda antes do atividadeConsultorSync (4h) — AtividadeConsultor.fasid é FK pra cá,
 // então essa tabela precisa estar atualizada primeiro.
 export function scheduleFasePropostaSync(): void {
-  cron.schedule("50 3 * * *", runFasePropostaSync);
+  cron.schedule(CRON_EXPR, runFasePropostaSync);
 }

@@ -59,6 +59,7 @@ const groups: NavGroup[] = [
     items: [
       { to: "/admin/usuarios", label: "Usuários" },
       { to: "/admin/sincronizacao", label: "Sincronização Senior" },
+      { to: "/admin/sincronizacao-erp", label: "Sincronização ERP" },
     ],
     roles: ["admin"],
   },

@@ -2,7 +2,12 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "moedas-sync";
+export const JOB_NAME = "moedas-sync";
+export const CRON_EXPR = "0 4 * * *";
+// DatEmi/DatVct nessa tabela são "data de emissão/vencimento do título público" (usado
+// pra taxas de conversão históricas), não uma data de geração/alteração do cadastro
+// da moeda em si.
+export const CAMPO_DATA: string | null = null;
 const QUERY = `SELECT codmoe AS codmoe, desmoe AS desmoe, sigmoe AS sigmoe, tipmoe AS tipmoe FROM e031moe`;
 
 interface MoedaRow {
@@ -42,5 +47,5 @@ export async function runMoedaSync(): Promise<void> {
 
 // Ajustar o horário conforme a necessidade real de atualização desta tabela.
 export function scheduleMoedaSync(): void {
-  cron.schedule("0 4 * * *", runMoedaSync);
+  cron.schedule(CRON_EXPR, runMoedaSync);
 }

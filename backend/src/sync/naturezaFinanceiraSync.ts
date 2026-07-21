@@ -2,7 +2,9 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "naturezas_financeiras-sync";
+export const JOB_NAME = "naturezas_financeiras-sync";
+export const CRON_EXPR = "0 4 * * *";
+export const CAMPO_DATA: string | null = null;
 const QUERY = `SELECT codemp AS codemp, ctafin AS ctafin, descta AS descta, abrcta AS abrcta, defgru AS defgru, anasin AS anasin, natfin AS natfin, sitfin AS sitfin FROM e091plf`;
 
 interface NaturezaFinanceiraRow {
@@ -46,5 +48,5 @@ export async function runNaturezaFinanceiraSync(): Promise<void> {
 
 // Ajustar o horário conforme a necessidade real de atualização desta tabela.
 export function scheduleNaturezaFinanceiraSync(): void {
-  cron.schedule("0 4 * * *", runNaturezaFinanceiraSync);
+  cron.schedule(CRON_EXPR, runNaturezaFinanceiraSync);
 }

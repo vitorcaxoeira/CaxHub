@@ -2,7 +2,10 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "portadores-sync";
+export const JOB_NAME = "portadores-sync";
+export const CRON_EXPR = "0 4 * * *";
+// Único campo de data é "DatPal" (alteração pro Palmtop, não do registro em si).
+export const CAMPO_DATA: string | null = null;
 const QUERY = `SELECT codemp AS codemp, codpor AS codpor, despor AS despor, abrpor AS abrpor, codban AS codban, codage AS codage, numcco AS numcco FROM e039por`;
 
 interface PortadorRow {
@@ -45,5 +48,5 @@ export async function runPortadorSync(): Promise<void> {
 
 // Ajustar o horário conforme a necessidade real de atualização desta tabela.
 export function schedulePortadorSync(): void {
-  cron.schedule("0 4 * * *", runPortadorSync);
+  cron.schedule(CRON_EXPR, runPortadorSync);
 }

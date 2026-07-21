@@ -20,6 +20,7 @@ import { Alocacao } from "./pages/projetos/Alocacao";
 import { AlocacaoPropostaDetalhe } from "./pages/projetos/AlocacaoPropostaDetalhe";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
+import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
 
 export default function App() {
   return (
@@ -53,6 +54,7 @@ export default function App() {
                 <Route path="/financeiro/historico" element={<Historico />} />
                 <Route path="/admin/usuarios" element={<Usuarios />} />
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
+                <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

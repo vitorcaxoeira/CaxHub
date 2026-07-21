@@ -2,7 +2,12 @@ import cron from "node-cron";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "empresa-sync";
+export const JOB_NAME = "empresa-sync";
+export const CRON_EXPR = "0 3 * * *";
+// Único campo de data em e070emp é "DatPal" (data de alteração pro Palmtop, um recurso
+// específico não relacionado a alteração geral do registro) — sem campo de geração/
+// alteração real, não dá pra sincronizar só os alterados.
+export const CAMPO_DATA: string | null = null;
 const QUERY = "SELECT codemp AS codemp, nomemp AS nomemp, sigemp AS sigemp FROM e070emp";
 
 interface EmpresaRow {
@@ -37,5 +42,5 @@ export async function runEmpresaSync(): Promise<void> {
 
 // Dados cadastrais de empresa mudam raramente — roda 1x por dia às 3h.
 export function scheduleEmpresaSync(): void {
-  cron.schedule("0 3 * * *", runEmpresaSync);
+  cron.schedule(CRON_EXPR, runEmpresaSync);
 }

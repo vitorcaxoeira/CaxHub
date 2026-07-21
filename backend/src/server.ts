@@ -14,6 +14,7 @@ import { atividadesRouter } from "./routes/atividades";
 import { notificacoesRouter } from "./routes/notificacoes";
 import { usersRouter } from "./routes/users";
 import { sincronizacaoRouter } from "./routes/sincronizacao";
+import { syncErpRouter } from "./routes/syncErp";
 import { alocacaoRouter } from "./routes/alocacao";
 import { scheduleEmpresaSync } from "./sync/empresaSync";
 import { scheduleFilialSync } from "./sync/filialSync";
@@ -56,6 +57,7 @@ app.use("/atividades", atividadesRouter);
 app.use("/notificacoes", notificacoesRouter);
 app.use("/users", usersRouter);
 app.use("/sincronizacao", sincronizacaoRouter);
+app.use("/sync-erp", syncErpRouter);
 app.use("/alocacao", alocacaoRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;

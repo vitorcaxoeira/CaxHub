@@ -2,7 +2,10 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "propostas_itens-sync";
+export const JOB_NAME = "propostas_itens-sync";
+export const CRON_EXPR = "0 4 * * *";
+// USU_TE077ITE não tem campo de data de geração/alteração no dicionário do Senior.
+export const CAMPO_DATA: string | null = null;
 const QUERY = `SELECT USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_NumPrj AS numprj, USU_CodSer AS codser, USU_QtdHor AS qtdhor, USU_ValHor AS valhor, USU_DesPro AS despro, USU_EntPro AS entpro, USU_CodFpj AS codfpj, USU_FatSer AS fatser, USU_SitMot AS sitmot, USU_ForFat AS forfat, USU_TipPrj AS tipprj, USU_FrmPrj AS frmprj, USU_SitPrz AS sitprz, USU_ATVPSO AS atvpso, USU_DepExe AS depexe FROM USU_TE077ITE`;
 
 interface PropostaItemRow {
@@ -56,5 +59,5 @@ export async function runPropostaItemSync(): Promise<void> {
 
 // Ajustar o horário conforme a necessidade real de atualização desta tabela.
 export function schedulePropostaItemSync(): void {
-  cron.schedule("0 4 * * *", runPropostaItemSync);
+  cron.schedule(CRON_EXPR, runPropostaItemSync);
 }

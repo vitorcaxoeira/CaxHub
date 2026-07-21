@@ -2,7 +2,12 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "propostas-sync";
+export const JOB_NAME = "propostas-sync";
+export const CRON_EXPR = "0 4 * * *";
+// USU_TE077PRO só tem datas de marco de negócio (DatPro/DatEnv/DatRet/DatVal), sem
+// campo de geração/alteração do registro em si — e a proposta muda de situação com
+// frequência sem nenhuma dessas datas ser atualizada.
+export const CAMPO_DATA: string | null = null;
 const QUERY = `SELECT USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_CodCli AS codcli, USU_QtdHor AS qtdhor, USU_DatPro AS datpro, USU_UsuGer AS usuger, USU_ForAte AS forate, USU_SitPro AS sitpro, USU_HorPro AS horpro, USU_TipPro AS tippro, USU_DesSol AS dessol, USU_ConSol AS consol, USU_PraRea AS prarea, USU_DatEnv AS datenv, USU_DatRet AS datret, USU_NumPrj AS numprj, USU_DatVal AS datval, USU_CodFpj AS codfpj, USU_SisPro AS sispro, USU_DesPro AS despro, usu_Numero AS numero, USU_ObrFas AS obrfas, USU_Executor AS executor, USU_ObsSit AS obssit, USU_LiqBru AS liqbru, USU_CodCcu AS codccu, USU_CtaFin AS ctafin, USU_ClaPro AS clapro, USU_AreExe AS areexe, USU_IdCom AS idcom, USU_CodRep AS codrep, USU_ForFat AS forfat, USU_DscFpg AS dscfpg, USU_HisPro AS hispro, USU_ObsPro AS obspro, USU_PreEnt AS preent, USU_PriPro AS pripro, USU_StaPro AS stapro, USU_TipVen AS tipven, USU_OrdemCns AS ordemcns, USU_SitMot AS sitmot, USU_TipPrj AS tipprj, USU_FrmPrj AS frmprj, USU_CodLev2 AS codlev2, USU_CliFat AS clifat, USU_ExiPedCli AS exipedcli, USU_PedCli AS pedcli, USU_ForFatRdv AS forfatrdv, USU_ModPro AS modpro, USU_ForFatLev AS forfatlev, USU_NumPed AS numped, USU_IdBpm AS idbpm, USU_DepExe AS depexe, USU_FatHrsDes AS fathrsdes FROM USU_TE077PRO`;
 
 interface PropostaRow {
@@ -92,5 +97,5 @@ export async function runPropostaSync(): Promise<void> {
 
 // Ajustar o horário conforme a necessidade real de atualização desta tabela.
 export function schedulePropostaSync(): void {
-  cron.schedule("0 4 * * *", runPropostaSync);
+  cron.schedule(CRON_EXPR, runPropostaSync);
 }

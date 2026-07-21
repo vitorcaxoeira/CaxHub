@@ -2,7 +2,10 @@ import cron from "node-cron";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "filial-sync";
+export const JOB_NAME = "filial-sync";
+export const CRON_EXPR = "10 3 * * *";
+// Único campo de data é "DatPal" (alteração pro Palmtop, não do registro em si).
+export const CAMPO_DATA: string | null = null;
 const QUERY = "SELECT codemp AS codemp, codfil AS codfil, nomfil AS nomfil, sigfil AS sigfil FROM e070fil";
 
 interface FilialRow {
@@ -38,5 +41,5 @@ export async function runFilialSync(): Promise<void> {
 
 // Dados cadastrais de filial mudam raramente — roda 1x por dia às 3h10.
 export function scheduleFilialSync(): void {
-  cron.schedule("10 3 * * *", runFilialSync);
+  cron.schedule(CRON_EXPR, runFilialSync);
 }

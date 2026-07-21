@@ -2,8 +2,15 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "movimentos_receber-sync";
-const QUERY = `SELECT codemp AS codemp, codfil AS codfil, numtit AS numtit, codtpt AS codtpt, seqmov AS seqmov, codtns AS codtns, datmov AS datmov, datpgt AS datpgt, codfpg AS codfpg, vlrmov AS vlrmov, vlrliq AS vlrliq, vlrjrs AS vlrjrs, vlrmul AS vlrmul, vlrdsc AS vlrdsc, diaatr AS diaatr, codpor AS codpor, codcrt AS codcrt, codccu AS codccu, numcco AS numcco FROM e301mcr`;
+export const JOB_NAME = "movimentos_receber-sync";
+export const CRON_EXPR = "0 4 * * *";
+export const CAMPO_DATA: string | null = "DatGer";
+const BASE_QUERY = `SELECT codemp AS codemp, codfil AS codfil, numtit AS numtit, codtpt AS codtpt, seqmov AS seqmov, codtns AS codtns, datmov AS datmov, datpgt AS datpgt, codfpg AS codfpg, vlrmov AS vlrmov, vlrliq AS vlrliq, vlrjrs AS vlrjrs, vlrmul AS vlrmul, vlrdsc AS vlrdsc, diaatr AS diaatr, codpor AS codpor, codcrt AS codcrt, codccu AS codccu, numcco AS numcco FROM e301mcr`;
+
+function montarQuery(desde?: Date): string {
+  if (!desde) return BASE_QUERY;
+  return `${BASE_QUERY} WHERE ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
+}
 
 interface MovimentoTituloReceberRow {
   codemp: number;
@@ -27,9 +34,10 @@ interface MovimentoTituloReceberRow {
   numcco?: string;
 }
 
-export async function runMovimentoTituloReceberSync(): Promise<void> {
+export async function runMovimentoTituloReceberSync(desde?: Date): Promise<void> {
+  const query = montarQuery(desde);
   try {
-    const rows = (await runSqlViaSoapPaginated(QUERY, [
+    const rows = (await runSqlViaSoapPaginated(query, [
       "codemp",
       "codfil",
       "numtit",
@@ -47,18 +55,19 @@ export async function runMovimentoTituloReceberSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success" },
+      data: { jobName: JOB_NAME, query, status: "success" },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message },
+      data: { jobName: JOB_NAME, query, status: "error", message },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
 }
 
-// Ajustar o horário conforme a necessidade real de atualização desta tabela.
+// O agendamento automático sempre roda completo (sem "desde") — o modo incremental
+// só é usado quando disparado manualmente pela tela de administração de sincronização.
 export function scheduleMovimentoTituloReceberSync(): void {
-  cron.schedule("0 4 * * *", runMovimentoTituloReceberSync);
+  cron.schedule(CRON_EXPR, () => runMovimentoTituloReceberSync());
 }

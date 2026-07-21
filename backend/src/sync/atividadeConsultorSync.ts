@@ -2,8 +2,15 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 
-const JOB_NAME = "atividades_consultor-sync";
-const QUERY = `SELECT USU_QtdHor AS qtdhor, USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_CODFOR AS codfor, USU_SeqAti AS seqati, USU_SitReg AS sitreg, USU_DatGer AS datger, USU_HorGer AS horger, USU_UsuGer AS usuger, USU_PerLib AS perlib, USU_FasId AS fasid, USU_SelSol AS selsol FROM USU_TE077ATI`;
+export const JOB_NAME = "atividades_consultor-sync";
+export const CRON_EXPR = "0 4 * * *";
+export const CAMPO_DATA: string | null = "USU_DatGer";
+const BASE_QUERY = `SELECT USU_QtdHor AS qtdhor, USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_CODFOR AS codfor, USU_SeqAti AS seqati, USU_SitReg AS sitreg, USU_DatGer AS datger, USU_HorGer AS horger, USU_UsuGer AS usuger, USU_PerLib AS perlib, USU_FasId AS fasid, USU_SelSol AS selsol FROM USU_TE077ATI`;
+
+function montarQuery(desde?: Date): string {
+  if (!desde) return BASE_QUERY;
+  return `${BASE_QUERY} WHERE ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
+}
 
 interface AtividadeConsultorRow {
   qtdhor?: number;
@@ -24,12 +31,13 @@ interface AtividadeConsultorRow {
 // Essa tabela é a única de mão dupla do projeto (ver comentário do model
 // AtividadeConsultor no schema.prisma) — a PK local é o `id` autoincrement do CaxHub,
 // não o `seqati` do Senior. O upsert casa por `seqati` (único), não por `id`.
-export async function runAtividadeConsultorSync(): Promise<void> {
+export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
+  const query = montarQuery(desde);
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária real da tabela no Senior (USU_SeqAti / seqati).
-    const rows = (await runSqlViaSoapPaginated(QUERY, ["seqati"])) as AtividadeConsultorRow[];
+    const rows = (await runSqlViaSoapPaginated(query, ["seqati"])) as AtividadeConsultorRow[];
 
     // seqite=0 no Senior significa "sem item de proposta vinculado" — ignorado.
     const validas = rows.filter((row) => row.seqite !== 0);
@@ -57,18 +65,19 @@ export async function runAtividadeConsultorSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success" },
+      data: { jobName: JOB_NAME, query, status: "success" },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message },
+      data: { jobName: JOB_NAME, query, status: "error", message },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
 }
 
-// Ajustar o horário conforme a necessidade real de atualização desta tabela.
+// O agendamento automático sempre roda completo (sem "desde") — o modo incremental
+// só é usado quando disparado manualmente pela tela de administração de sincronização.
 export function scheduleAtividadeConsultorSync(): void {
-  cron.schedule("0 4 * * *", runAtividadeConsultorSync);
+  cron.schedule(CRON_EXPR, () => runAtividadeConsultorSync());
 }
