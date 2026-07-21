@@ -2,6 +2,7 @@ import axios from "axios";
 import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
+import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
 import { formatHoras } from "../../utils/horas";
 
@@ -32,6 +33,21 @@ interface ConsultorResumo {
   horasAlocadas: number;
 }
 
+interface KpiValor {
+  quantidade: number;
+  horas: number;
+}
+
+interface KpisResumo {
+  totalNoEscopo: number;
+  semAlocacao: KpiValor;
+  saldoPendente: KpiValor;
+  totalmenteAlocadas: KpiValor;
+  compartilhadasEmAberto: KpiValor;
+}
+
+type Situacao = "semAlocacao" | "saldoPendente" | "totalmenteAlocadas" | "compartilhadasEmAberto";
+
 const PAGE_SIZE = 20;
 
 const toneBadge: Record<string, string> = {
@@ -40,6 +56,92 @@ const toneBadge: Record<string, string> = {
   destructive: "bg-destructive/15 text-destructive",
   neutral: "bg-muted/15 text-muted",
 };
+
+type KpiTone = "destructive" | "warning" | "success" | "primary";
+
+const kpiToneClasses: Record<KpiTone, { texto: string; barra: string; borda: string }> = {
+  destructive: { texto: "text-destructive", barra: "bg-destructive", borda: "border-destructive" },
+  warning: { texto: "text-warning", barra: "bg-warning", borda: "border-warning" },
+  success: { texto: "text-success", barra: "bg-success", borda: "border-success" },
+  primary: { texto: "text-primary", barra: "bg-primary", borda: "border-primary" },
+};
+
+function KpiIcone({ tone }: { tone: KpiTone }) {
+  const paths: Record<KpiTone, JSX.Element> = {
+    destructive: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <line x1="12" y1="8" x2="12" y2="12.5" />
+        <circle cx="12" cy="16" r="0.5" fill="currentColor" />
+      </>
+    ),
+    warning: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <polyline points="12 7 12 12 15.5 14" />
+      </>
+    ),
+    success: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <polyline points="8 12.5 11 15.5 16 9" />
+      </>
+    ),
+    primary: (
+      <>
+        <circle cx="8" cy="8" r="2.5" />
+        <circle cx="16" cy="8" r="2.5" />
+        <path d="M3.5 18c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4" />
+        <path d="M11.5 18c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4" />
+      </>
+    ),
+  };
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {paths[tone]}
+    </svg>
+  );
+}
+
+interface KpiCardProps {
+  label: string;
+  tone: KpiTone;
+  quantidade: number;
+  total: number;
+  horas: number;
+  horasLabel: string;
+  ativo: boolean;
+  onClick: () => void;
+}
+
+function KpiCard({ label, tone, quantidade, total, horas, horasLabel, ativo, onClick }: KpiCardProps) {
+  const cores = kpiToneClasses[tone];
+  const pct = total > 0 ? Math.round((quantidade / total) * 100) : 0;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border bg-surface p-5 text-left transition hover:bg-surface-2 ${ativo ? cores.borda : "border-border"}`}
+    >
+      <p className={`mb-2 flex items-center gap-1.5 text-[11.5px] ${ativo ? cores.texto : "text-muted"}`}>
+        <KpiIcone tone={tone} />
+        {label}
+      </p>
+      <p className="flex items-baseline gap-1.5">
+        <span className="font-mono text-2xl font-semibold tabular-nums text-foreground">{quantidade}</span>
+        <span className="font-mono text-[12px] tabular-nums text-muted">
+          / {total} · {pct}%
+        </span>
+      </p>
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted/20">
+        <div className={`h-full rounded-full ${cores.barra}`} style={{ width: `${pct}%` }} />
+      </div>
+      <p className={`mt-2 font-mono text-[11px] ${cores.texto}`}>
+        {formatHoras(horas / 60)} {horasLabel}
+      </p>
+    </button>
+  );
+}
 
 // Ponto de entrada da área de Alocação: controle sempre por proposta (uma proposta com
 // muitos itens ficava perdida num feed único de itens misturados de propostas
@@ -53,6 +155,7 @@ export function Alocacao() {
   // em vez de resetar.
   const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<PropostaRow[]>([]);
+  const [kpis, setKpis] = useState<KpisResumo | null>(null);
   const [departamentos, setDepartamentos] = useState<OpcaoFiltro[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPageState] = useState(Number(searchParams.get("page")) || 1);
@@ -60,39 +163,78 @@ export function Alocacao() {
   const [erro, setErro] = useState<string | null>(null);
   const [semAcesso, setSemAcesso] = useState(false);
 
-  const [depexe, setDepexeState] = useState(searchParams.get("depexe") ?? "");
+  // Number("") é 0 (não NaN) — sem o parâmetro na URL, split(",") vira [""] e viraria
+  // erroneamente [0] ("Diretoria" selecionado) em vez de "todos" se não checar antes.
+  const depexeParam = searchParams.get("depexe");
+  const depexeInicial = depexeParam
+    ? depexeParam
+        .split(",")
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n))
+    : [];
+  const [depexe, setDepexeState] = useState<number[]>(depexeInicial);
   const [busca, setBuscaState] = useState(searchParams.get("busca") ?? "");
   const [apenasComSaldo, setApenasComSaldoState] = useState(searchParams.get("apenasComSaldo") !== "false");
   const [compartilhadas, setCompartilhadasState] = useState(searchParams.get("compartilhadas") === "true");
+  const situacoesValidas: Situacao[] = ["semAlocacao", "saldoPendente", "totalmenteAlocadas", "compartilhadasEmAberto"];
+  const situacaoInicial = situacoesValidas.includes(searchParams.get("situacao") as Situacao)
+    ? (searchParams.get("situacao") as Situacao)
+    : null;
+  const [situacao, setSituacaoState] = useState<Situacao | null>(situacaoInicial);
 
   function atualizarFiltros(
-    patch: Partial<{ depexe: string; busca: string; apenasComSaldo: boolean; compartilhadas: boolean; page: number }>
+    patch: Partial<{
+      depexe: number[];
+      busca: string;
+      apenasComSaldo: boolean;
+      compartilhadas: boolean;
+      situacao: Situacao | null;
+      page: number;
+    }>
   ) {
     const mudouFiltro =
       patch.depexe !== undefined ||
       patch.busca !== undefined ||
       patch.apenasComSaldo !== undefined ||
-      patch.compartilhadas !== undefined;
+      patch.compartilhadas !== undefined ||
+      patch.situacao !== undefined;
     const proximo = {
       depexe: patch.depexe ?? depexe,
       busca: patch.busca ?? busca,
       apenasComSaldo: patch.apenasComSaldo ?? apenasComSaldo,
       compartilhadas: patch.compartilhadas ?? compartilhadas,
+      situacao: patch.situacao !== undefined ? patch.situacao : situacao,
       page: patch.page ?? (mudouFiltro ? 1 : page),
     };
     setDepexeState(proximo.depexe);
     setBuscaState(proximo.busca);
     setApenasComSaldoState(proximo.apenasComSaldo);
     setCompartilhadasState(proximo.compartilhadas);
+    setSituacaoState(proximo.situacao);
     setPageState(proximo.page);
 
     const params = new URLSearchParams();
-    if (proximo.depexe) params.set("depexe", proximo.depexe);
+    if (proximo.depexe.length > 0) params.set("depexe", proximo.depexe.join(","));
     if (proximo.busca) params.set("busca", proximo.busca);
     if (!proximo.apenasComSaldo) params.set("apenasComSaldo", "false");
     if (proximo.compartilhadas) params.set("compartilhadas", "true");
+    if (proximo.situacao) params.set("situacao", proximo.situacao);
     if (proximo.page > 1) params.set("page", String(proximo.page));
     setSearchParams(params, { replace: true });
+  }
+
+  // Clicar num KPI vira o único critério de "situação" da tabela abaixo (substitui os
+  // checkboxes de saldo/compartilhadas enquanto ativo) — clicar de novo no mesmo KPI
+  // desliga o filtro e volta pros checkboxes manuais. Também realinha o checkbox
+  // "só com saldo pendente" com o KPI escolhido, pra não ficarem contraditórios quando
+  // o filtro do KPI for desligado depois (ex.: "100% alocadas" implica saldo=0, mas o
+  // checkbox pede saldo>0).
+  function clicarKpi(tipo: Situacao) {
+    if (situacao === tipo) {
+      atualizarFiltros({ situacao: null });
+      return;
+    }
+    atualizarFiltros({ situacao: tipo, apenasComSaldo: tipo !== "totalmenteAlocadas" });
   }
 
   const [expandidas, setExpandidas] = useState<Set<string>>(new Set());
@@ -120,10 +262,11 @@ export function Alocacao() {
     axios
       .get("/api/alocacao/propostas", {
         params: {
-          depexe: depexe || undefined,
+          depexe: depexe.length > 0 ? depexe.join(",") : undefined,
           busca: busca || undefined,
           apenasComSaldo: apenasComSaldo || undefined,
           compartilhadas: compartilhadas || undefined,
+          situacao: situacao || undefined,
           page,
           pageSize: PAGE_SIZE,
         },
@@ -131,6 +274,7 @@ export function Alocacao() {
       .then(({ data }) => {
         setRows(data.rows);
         setTotal(data.total);
+        setKpis(data.kpis);
         setErro(null);
         setSemAcesso(false);
       })
@@ -147,7 +291,7 @@ export function Alocacao() {
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [depexe, busca, apenasComSaldo, compartilhadas, page]);
+  }, [depexe, busca, apenasComSaldo, compartilhadas, situacao, page]);
 
   function toggleExpandir(row: PropostaRow) {
     const chave = `${row.codemp}-${row.codpro}`;
@@ -199,6 +343,51 @@ export function Alocacao() {
         </p>
       </div>
 
+      {kpis && (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
+          <KpiCard
+            label="Sem alocação"
+            tone="destructive"
+            quantidade={kpis.semAlocacao.quantidade}
+            total={kpis.totalNoEscopo}
+            horas={kpis.semAlocacao.horas}
+            horasLabel="previstas"
+            ativo={situacao === "semAlocacao"}
+            onClick={() => clicarKpi("semAlocacao")}
+          />
+          <KpiCard
+            label="Saldo pendente"
+            tone="warning"
+            quantidade={kpis.saldoPendente.quantidade}
+            total={kpis.totalNoEscopo}
+            horas={kpis.saldoPendente.horas}
+            horasLabel="restantes"
+            ativo={situacao === "saldoPendente"}
+            onClick={() => clicarKpi("saldoPendente")}
+          />
+          <KpiCard
+            label="100% alocadas"
+            tone="success"
+            quantidade={kpis.totalmenteAlocadas.quantidade}
+            total={kpis.totalNoEscopo}
+            horas={kpis.totalmenteAlocadas.horas}
+            horasLabel="alocadas"
+            ativo={situacao === "totalmenteAlocadas"}
+            onClick={() => clicarKpi("totalmenteAlocadas")}
+          />
+          <KpiCard
+            label="Compartilhadas em aberto"
+            tone="primary"
+            quantidade={kpis.compartilhadasEmAberto.quantidade}
+            total={kpis.totalNoEscopo}
+            horas={kpis.compartilhadasEmAberto.horas}
+            horasLabel="em aberto"
+            ativo={situacao === "compartilhadasEmAberto"}
+            onClick={() => clicarKpi("compartilhadasEmAberto")}
+          />
+        </div>
+      )}
+
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
           type="text"
@@ -208,35 +397,41 @@ export function Alocacao() {
           className={`${selectClass} w-56`}
         />
         {departamentos.length > 1 && (
-          <select
-            value={depexe}
-            onChange={(e) => atualizarFiltros({ depexe: e.target.value })}
-            className={selectClass}
-          >
-            <option value="">Todos os departamentos</option>
-            {departamentos.map((d) => (
-              <option key={d.value} value={d.value}>
-                {d.label}
-              </option>
-            ))}
-          </select>
+          <MultiSelectDropdown
+            opcoes={departamentos}
+            selecionados={depexe}
+            onChange={(selecionados) => atualizarFiltros({ depexe: selecionados })}
+            labelTodos="Todos os departamentos"
+            labelSufixo="departamentos"
+          />
         )}
-        <label className="flex items-center gap-2 text-sm text-muted">
-          <input
-            type="checkbox"
-            checked={apenasComSaldo}
-            onChange={(e) => atualizarFiltros({ apenasComSaldo: e.target.checked })}
-          />
-          Só propostas com saldo pendente
-        </label>
-        <label className="flex items-center gap-2 text-sm text-muted">
-          <input
-            type="checkbox"
-            checked={compartilhadas}
-            onChange={(e) => atualizarFiltros({ compartilhadas: e.target.checked })}
-          />
-          Compartilhadas com meu departamento
-        </label>
+        {situacao ? (
+          <button
+            onClick={() => atualizarFiltros({ situacao: null })}
+            className="flex items-center gap-1.5 rounded-full bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25"
+          >
+            Filtro do KPI ativo <span aria-hidden>✕</span>
+          </button>
+        ) : (
+          <>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={apenasComSaldo}
+                onChange={(e) => atualizarFiltros({ apenasComSaldo: e.target.checked })}
+              />
+              Só propostas com saldo pendente
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={compartilhadas}
+                onChange={(e) => atualizarFiltros({ compartilhadas: e.target.checked })}
+              />
+              Compartilhadas com meu departamento
+            </label>
+          </>
+        )}
       </div>
 
       {erro && (

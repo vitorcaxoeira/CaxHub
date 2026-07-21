@@ -19,8 +19,6 @@ interface ItemDetalhe {
   seqite: number;
   codser: string;
   despro: string | null;
-  sitprz: number | null;
-  sitprzLabel: string;
   depexe: number | null;
   depexeLabel: string;
   qtdhorItem: number | null;
@@ -57,12 +55,6 @@ const toneBadge: Record<string, string> = {
   warning: "bg-warning/15 text-warning",
   destructive: "bg-destructive/15 text-destructive",
   neutral: "bg-muted/15 text-muted",
-};
-
-const sitprzTone: Record<number, string> = {
-  0: "neutral",
-  1: "destructive",
-  2: "success",
 };
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
@@ -313,12 +305,8 @@ export function AlocacaoPropostaDetalhe() {
                       <p className="truncate text-[12.5px] font-medium text-foreground" title={item.despro ?? undefined}>
                         {item.despro ?? item.codser}
                       </p>
-                      <span
-                        className={`mt-0.5 inline-block rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-medium ${
-                          toneBadge[sitprzTone[item.sitprz ?? 0] ?? "neutral"]
-                        }`}
-                      >
-                        {item.sitprzLabel}
+                      <span className={`mt-0.5 inline-block rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-medium ${toneBadge.neutral}`}>
+                        {item.depexeLabel}
                       </span>
                     </td>
                     <td
@@ -343,8 +331,7 @@ export function AlocacaoPropostaDetalhe() {
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-mono text-[10px] uppercase tracking-widest text-muted">
-                    Item {String(itemSelecionado.seqite).padStart(3, "0")} · {itemSelecionado.codser} ·{" "}
-                    {itemSelecionado.depexeLabel}
+                    Item {String(itemSelecionado.seqite).padStart(3, "0")} · {itemSelecionado.codser}
                   </p>
                   <p className="mt-1 text-sm font-medium text-foreground">{itemSelecionado.despro}</p>
                 </div>

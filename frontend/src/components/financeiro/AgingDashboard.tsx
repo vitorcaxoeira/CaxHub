@@ -60,9 +60,9 @@ export function AgingDashboard({
         </header>
       )}
 
-      <div className="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         {kpis.map((kpi) => (
-          <div key={kpi.label} className="bg-surface p-5">
+          <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
             <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
             <span className={`block font-mono text-2xl font-semibold tabular-nums ${toneText[kpi.tone]}`}>
               {kpi.value}

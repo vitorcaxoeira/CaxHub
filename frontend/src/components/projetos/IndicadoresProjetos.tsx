@@ -91,9 +91,9 @@ export function IndicadoresProjetos({ dados }: IndicadoresProjetosProps) {
 
   return (
     <div className="mb-6 space-y-6">
-      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {cards.map((card) => (
-          <div key={card.label} className="bg-surface p-5">
+          <div key={card.label} className="rounded-lg border border-border bg-surface p-5">
             <p className="mb-2 text-[11.5px] text-muted">{card.label}</p>
             <span className={`block font-mono text-2xl font-semibold tabular-nums ${toneText[card.tone]}`}>{card.value}</span>
             <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted">

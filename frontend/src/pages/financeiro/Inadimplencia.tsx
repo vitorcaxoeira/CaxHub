@@ -157,9 +157,9 @@ export function Inadimplencia() {
       ) : (
         kpis && (
           <>
-            <div className="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {kpiCards.map((kpi) => (
-                <div key={kpi.label} className="bg-surface p-5">
+                <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
                   <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
                   <span className={`block font-mono text-2xl font-semibold tabular-nums ${toneText[kpi.tone]}`}>{kpi.value}</span>
                   <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted">

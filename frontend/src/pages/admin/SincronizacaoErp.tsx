@@ -127,12 +127,12 @@ export function SincronizacaoErp() {
       </div>
 
       {!loading && jobs.length > 0 && (
-        <div className="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-4">
-          <div className="bg-surface p-5">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
+          <div className="rounded-lg border border-border bg-surface p-5">
             <p className="mb-2 text-[11.5px] text-muted">Total de tabelas</p>
             <span className="block font-mono text-2xl font-semibold tabular-nums text-foreground">{totalTabelas}</span>
           </div>
-          <div className="bg-surface p-5">
+          <div className="rounded-lg border border-border bg-surface p-5">
             <p className="mb-2 text-[11.5px] text-muted">Com erro</p>
             <span
               className={`block font-mono text-2xl font-semibold tabular-nums ${comErro > 0 ? "text-destructive" : "text-foreground"}`}
@@ -140,7 +140,7 @@ export function SincronizacaoErp() {
               {comErro}
             </span>
           </div>
-          <div className="bg-surface p-5">
+          <div className="rounded-lg border border-border bg-surface p-5">
             <p className="mb-2 text-[11.5px] text-muted">Sincronizando agora</p>
             <span
               className={`block font-mono text-2xl font-semibold tabular-nums ${rodandoAgora > 0 ? "text-warning" : "text-foreground"}`}
@@ -148,7 +148,7 @@ export function SincronizacaoErp() {
               {rodandoAgora}
             </span>
           </div>
-          <div className="bg-surface p-5">
+          <div className="rounded-lg border border-border bg-surface p-5">
             <p className="mb-2 text-[11.5px] text-muted">Mais desatualizada</p>
             <span className="block truncate font-mono text-lg font-semibold tabular-nums text-foreground" title={maisDesatualizada?.displayName}>
               {maisDesatualizada?.displayName ?? "—"}

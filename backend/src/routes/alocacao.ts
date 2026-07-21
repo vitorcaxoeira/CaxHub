@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { depexeLabel, sitproLabel, sitproTone, sitprzLabel, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
+import { depexeLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
 import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
 import { enfileirar } from "../sync/outboxSenior";
 
@@ -11,6 +11,15 @@ import { enfileirar } from "../sync/outboxSenior";
 // Só admin e Líder Técnico têm acesso; Consultor/Comercial não enxergam essa tela.
 export const alocacaoRouter = Router();
 alocacaoRouter.use(requireAuth);
+
+function parseIdsParam(value: unknown): number[] | null {
+  if (typeof value !== "string" || value === "") return null;
+  const ids = value
+    .split(",")
+    .map((v) => Number(v))
+    .filter((n) => Number.isFinite(n));
+  return ids.length > 0 ? ids : null;
+}
 
 function handleError(res: import("express").Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);
@@ -58,13 +67,17 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    const depexeFiltro = req.query.depexe ? Number(req.query.depexe) : null;
+    const depexeFiltro = parseIdsParam(req.query.depexe);
     const depexesConsultados =
-      depexeFiltro != null && permitidos.includes(depexeFiltro) ? [depexeFiltro] : permitidos;
+      depexeFiltro != null ? depexeFiltro.filter((d) => permitidos.includes(d)) : permitidos;
 
     const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
     const apenasComSaldo = req.query.apenasComSaldo === "true";
     const compartilhadas = req.query.compartilhadas === "true";
+    const situacoesValidas = ["semAlocacao", "saldoPendente", "totalmenteAlocadas", "compartilhadasEmAberto"] as const;
+    const situacao = situacoesValidas.includes(req.query.situacao as any)
+      ? (req.query.situacao as (typeof situacoesValidas)[number])
+      : null;
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 25));
 
@@ -72,7 +85,18 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       where: { depexe: { in: depexesConsultados } },
     });
     if (itens.length === 0) {
-      res.json({ rows: [], total: 0 });
+      const kpiZerado = { quantidade: 0, horas: 0 };
+      res.json({
+        rows: [],
+        total: 0,
+        kpis: {
+          totalNoEscopo: 0,
+          semAlocacao: kpiZerado,
+          saldoPendente: kpiZerado,
+          totalmenteAlocadas: kpiZerado,
+          compartilhadasEmAberto: kpiZerado,
+        },
+      });
       return;
     }
 
@@ -140,25 +164,75 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     // Usa departamentosGerenciados (não `permitidos`, que pra admin vira "todos").
     const meusDepartamentos = contexto.departamentosGerenciados;
 
-    let linhas = [...porProposta.values()]
-      .filter((a) => !compartilhadas || a.propostaDepexe == null || !meusDepartamentos.includes(a.propostaDepexe))
-      .map((a) => ({
-        codemp: a.codemp,
-        codpro: a.codpro,
-        numprj: a.numprj,
-        cliente: a.cliente,
-        sitpro: a.sitpro,
-        sitproLabel: sitproLabel(a.sitpro),
-        sitproTone: sitproTone(a.sitpro),
-        // Sempre o departamento "dono" da proposta no Senior — não os departamentos
-        // dos itens (que podem ser só os visíveis pro usuário, e confundiriam numa
-        // proposta compartilhada mostrando o depto de quem está vendo, não o real).
-        depexeLabel: depexeLabel(a.propostaDepexe),
-        totalItens: a.totalItens,
-        qtdhorTotal: a.qtdhorTotal,
-        horasAlocadas: a.horasAlocadas,
-        saldo: a.qtdhorTotal - a.horasAlocadas,
-      }));
+    // KPIs sempre por proposta (nunca por item) e sempre com quantidade + total de horas
+    // juntos no mesmo card — refletem o escopo de departamento(s) selecionado, mas não os
+    // filtros transitórios de busca/saldo/compartilhadas da tabela abaixo, pra não ficarem
+    // pulando enquanto o usuário digita ou alterna um toggle.
+    const todasPropostas = [...porProposta.values()];
+    // "Sem alocação" e "Saldo pendente" são mutuamente exclusivas: a primeira é quem
+    // não teve NENHUMA hora alocada ainda; a segunda é quem já teve alguma alocação
+    // mas ainda não fechou o total (senão uma proposta zerada contava nas duas).
+    const semAlocacao = todasPropostas.filter((a) => a.horasAlocadas === 0);
+    const comSaldoPendente = todasPropostas.filter(
+      (a) => a.horasAlocadas > 0 && a.qtdhorTotal - a.horasAlocadas > 0
+    );
+    const totalmenteAlocadas = todasPropostas.filter(
+      (a) => a.qtdhorTotal > 0 && a.qtdhorTotal - a.horasAlocadas <= 0
+    );
+    const compartilhadasEmAberto = todasPropostas.filter(
+      (a) => a.propostaDepexe != null && !meusDepartamentos.includes(a.propostaDepexe) && a.qtdhorTotal - a.horasAlocadas > 0
+    );
+    const somaHoras = (lista: Agregado[], campo: (a: Agregado) => number) =>
+      lista.reduce((soma, a) => soma + campo(a), 0);
+    const kpis = {
+      totalNoEscopo: todasPropostas.length,
+      semAlocacao: { quantidade: semAlocacao.length, horas: somaHoras(semAlocacao, (a) => a.qtdhorTotal) },
+      saldoPendente: {
+        quantidade: comSaldoPendente.length,
+        horas: somaHoras(comSaldoPendente, (a) => a.qtdhorTotal - a.horasAlocadas),
+      },
+      totalmenteAlocadas: {
+        quantidade: totalmenteAlocadas.length,
+        horas: somaHoras(totalmenteAlocadas, (a) => a.horasAlocadas),
+      },
+      compartilhadasEmAberto: {
+        quantidade: compartilhadasEmAberto.length,
+        horas: somaHoras(compartilhadasEmAberto, (a) => a.qtdhorTotal - a.horasAlocadas),
+      },
+    };
+
+    // Um KPI clicado vira o único critério de "situação" da tabela (substitui os
+    // checkboxes de saldo/compartilhadas, que só valem quando nenhum KPI está ativo) —
+    // reaproveita exatamente as mesmas listas já calculadas acima pros cards.
+    const porSituacao: Record<(typeof situacoesValidas)[number], Agregado[]> = {
+      semAlocacao,
+      saldoPendente: comSaldoPendente,
+      totalmenteAlocadas,
+      compartilhadasEmAberto,
+    };
+    const baseFiltrada = situacao
+      ? porSituacao[situacao]
+      : todasPropostas
+          .filter((a) => !compartilhadas || a.propostaDepexe == null || !meusDepartamentos.includes(a.propostaDepexe))
+          .filter((a) => !apenasComSaldo || a.qtdhorTotal - a.horasAlocadas > 0);
+
+    let linhas = baseFiltrada.map((a) => ({
+      codemp: a.codemp,
+      codpro: a.codpro,
+      numprj: a.numprj,
+      cliente: a.cliente,
+      sitpro: a.sitpro,
+      sitproLabel: sitproLabel(a.sitpro),
+      sitproTone: sitproTone(a.sitpro),
+      // Sempre o departamento "dono" da proposta no Senior — não os departamentos
+      // dos itens (que podem ser só os visíveis pro usuário, e confundiriam numa
+      // proposta compartilhada mostrando o depto de quem está vendo, não o real).
+      depexeLabel: depexeLabel(a.propostaDepexe),
+      totalItens: a.totalItens,
+      qtdhorTotal: a.qtdhorTotal,
+      horasAlocadas: a.horasAlocadas,
+      saldo: a.qtdhorTotal - a.horasAlocadas,
+    }));
 
     if (busca) {
       linhas = linhas.filter((l) => l.cliente.toLowerCase().includes(busca) || String(l.codpro).includes(busca));
@@ -172,7 +246,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     const inicio = (page - 1) * pageSize;
     const pagina = linhas.slice(inicio, inicio + pageSize);
 
-    res.json({ rows: pagina, total });
+    res.json({ rows: pagina, total, kpis });
   } catch (error) {
     handleError(res, error, "propostas");
   }
@@ -308,8 +382,6 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
           seqite: item.seqite,
           codser: item.codser,
           despro: item.despro,
-          sitprz: item.sitprz,
-          sitprzLabel: sitprzLabel(item.sitprz),
           depexe: item.depexe,
           depexeLabel: depexeLabel(item.depexe),
           qtdhorItem: item.qtdhor,

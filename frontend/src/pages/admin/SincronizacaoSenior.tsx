@@ -77,16 +77,16 @@ export function SincronizacaoSenior() {
         </p>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
-        <div className="bg-surface p-5">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded-lg border border-border bg-surface p-5">
           <p className="mb-2 text-[11.5px] text-muted">Pendentes</p>
           <span className="block font-mono text-2xl font-semibold tabular-nums text-warning">{totais.pendente}</span>
         </div>
-        <div className="bg-surface p-5">
+        <div className="rounded-lg border border-border bg-surface p-5">
           <p className="mb-2 text-[11.5px] text-muted">Bloqueados</p>
           <span className="block font-mono text-2xl font-semibold tabular-nums text-destructive">{totais.bloqueado}</span>
         </div>
-        <div className="bg-surface p-5">
+        <div className="rounded-lg border border-border bg-surface p-5">
           <p className="mb-2 text-[11.5px] text-muted">Enviados</p>
           <span className="block font-mono text-2xl font-semibold tabular-nums text-success">{totais.enviado}</span>
         </div>
