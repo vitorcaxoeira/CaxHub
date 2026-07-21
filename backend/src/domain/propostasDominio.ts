@@ -47,6 +47,11 @@ export const MODPRO_LABELS: Record<number, string> = {
   2: "DRM",
 };
 
+export function modproLabel(modpro: number | null): string {
+  if (modpro === null) return "—";
+  return MODPRO_LABELS[modpro] ?? `Modalidade ${modpro}`;
+}
+
 // Domínio "USU_TipProd" do Senior (produto/linha da proposta).
 export const SISPRO_LABELS: Record<number, string> = {
   1: "Gestão Empresarial (ERP)",
@@ -128,4 +133,97 @@ export function sitproTone(sitpro: number | null): "success" | "warning" | "dest
   if (sitpro === 5 || sitpro === 6) return "destructive";
   if (sitpro === 1 || sitpro === 2 || sitpro === 3 || sitpro === 9) return "warning";
   return "neutral";
+}
+
+export function sisproLabel(sispro: number | null): string {
+  if (sispro === null) return "—";
+  return SISPRO_LABELS[sispro] ?? `Sistema ${sispro}`;
+}
+
+export function claproLabel(clapro: number | null): string {
+  if (clapro === null) return "—";
+  return CLAPRO_LABELS[clapro] ?? `Classificação ${clapro}`;
+}
+
+export function tipvenLabel(tipven: number | null): string {
+  if (tipven === null) return "—";
+  return TIPVEN_LABELS[tipven] ?? `Tipo ${tipven}`;
+}
+
+// Domínio "USU_LTipPrj" do Senior (tipo do projeto/proposta).
+export const TIPPRJ_LABELS: Record<number, string> = {
+  1: "Serviço",
+  2: "Comercial",
+  3: "Administrativo",
+  4: "Levantamento",
+};
+export function tipprjLabel(tipprj: number | null): string {
+  if (tipprj === null) return "—";
+  return TIPPRJ_LABELS[tipprj] ?? `Tipo ${tipprj}`;
+}
+
+// Domínio "USU_LFrmPrj" do Senior (forma do projeto: fechado ou aberto).
+export const FRMPRJ_LABELS: Record<number, string> = {
+  1: "Fechado",
+  2: "Aberto",
+};
+export function frmprjLabel(frmprj: number | null): string {
+  if (frmprj === null) return "—";
+  return FRMPRJ_LABELS[frmprj] ?? `Forma ${frmprj}`;
+}
+
+// Domínio "USU_SitMot" do Senior (motivo/situação de consumo de horas da proposta).
+export const SITMOT_LABELS: Record<number, string> = {
+  1: "Atividades dentro do previsto",
+  2: "Atividades estouradas",
+  3: "Horas consumidas sem saldo",
+  4: "Proposta ADM e Comercial",
+  5: "Proposta de levantamento comercial",
+  6: "Proposta estourada — projeto aberto",
+};
+export function sitmotLabel(sitmot: number | null): string {
+  if (sitmot === null) return "—";
+  return SITMOT_LABELS[sitmot] ?? `Motivo ${sitmot}`;
+}
+
+// Domínio "USU_LSitPrz" do Senior (situação de prazo do item de proposta).
+export const SITPRZ_LABELS: Record<number, string> = {
+  0: "Não Iniciado",
+  1: "Prazo Estourado",
+  2: "Dentro do Prazo",
+};
+export function sitprzLabel(sitprz: number | null): string {
+  if (sitprz === null) return "—";
+  return SITPRZ_LABELS[sitprz] ?? `Situação ${sitprz}`;
+}
+
+// Domínio "USU_LFatSer" do Senior (faturamento do item de serviço).
+export const FATSER_LABELS: Record<string, string> = {
+  S: "Faturamento Normal",
+  N: "Sem Faturamento",
+  A: "Faturamento Antecipado",
+  C: "Atividades Comercial",
+  H: "Atividade Suporte",
+  I: "Investimento",
+};
+export function fatserLabel(fatser: string | null): string {
+  if (fatser === null) return "—";
+  return FATSER_LABELS[fatser] ?? `Faturamento ${fatser}`;
+}
+
+// Domínio "USU_ForAte" do Senior (forma de atendimento da proposta).
+export const FORATE_LABELS: Record<string, string> = {
+  P: "Presencial",
+  R: "Remoto",
+};
+export function forateLabel(forate: string | null): string {
+  if (forate === null) return "—";
+  return FORATE_LABELS[forate] ?? forate;
+}
+
+// Domínio "LSimNao" do Senior (S=Sim, N=Não) — usado em vários flags booleanos da proposta.
+export function simNaoLabel(valor: string | null): string {
+  if (valor === "S") return "Sim";
+  if (valor === "N") return "Não";
+  return "—";
 }

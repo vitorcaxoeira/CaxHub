@@ -16,6 +16,7 @@ import { usersRouter } from "./routes/users";
 import { sincronizacaoRouter } from "./routes/sincronizacao";
 import { syncErpRouter } from "./routes/syncErp";
 import { alocacaoRouter } from "./routes/alocacao";
+import { propostaVisualizacaoRouter } from "./routes/propostaVisualizacao";
 import { scheduleEmpresaSync } from "./sync/empresaSync";
 import { scheduleFilialSync } from "./sync/filialSync";
 import { scheduleClienteSync } from "./sync/clienteSync";
@@ -59,6 +60,7 @@ app.use("/users", usersRouter);
 app.use("/sincronizacao", sincronizacaoRouter);
 app.use("/sync-erp", syncErpRouter);
 app.use("/alocacao", alocacaoRouter);
+app.use("/proposta-visualizacao", propostaVisualizacaoRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { depexeLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
+import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
 import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
 import { enfileirar } from "../sync/outboxSenior";
 
@@ -128,6 +128,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       cliente: string;
       sitpro: number | null;
       propostaDepexe: number | null;
+      propostaModpro: number | null;
       totalItens: number;
       qtdhorTotal: number;
       horasAlocadas: number;
@@ -147,6 +148,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
           cliente: `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}`,
           sitpro: proposta.sitpro,
           propostaDepexe: proposta.depexe,
+          propostaModpro: proposta.modpro,
           totalItens: 0,
           qtdhorTotal: 0,
           horasAlocadas: 0,
@@ -228,6 +230,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       // dos itens (que podem ser só os visíveis pro usuário, e confundiriam numa
       // proposta compartilhada mostrando o depto de quem está vendo, não o real).
       depexeLabel: depexeLabel(a.propostaDepexe),
+      modproLabel: modproLabel(a.propostaModpro),
       totalItens: a.totalItens,
       qtdhorTotal: a.qtdhorTotal,
       horasAlocadas: a.horasAlocadas,

@@ -18,6 +18,7 @@ import { Propostas } from "./pages/projetos/Propostas";
 import { Atividades } from "./pages/projetos/Atividades";
 import { Alocacao } from "./pages/projetos/Alocacao";
 import { AlocacaoPropostaDetalhe } from "./pages/projetos/AlocacaoPropostaDetalhe";
+import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="/projetos/atividades" element={<Atividades />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />
               <Route path="/projetos/alocacao/:codemp/:codpro" element={<AlocacaoPropostaDetalhe />} />
+              <Route path="/projetos/proposta/:codemp/:codpro" element={<PropostaVisualizacao />} />
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
               </Route>

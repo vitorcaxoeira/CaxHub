@@ -15,6 +15,7 @@ export interface PropostaRow {
   horas: number;
   pripro: number | null;
   depexeLabel: string;
+  modproLabel: string;
   forfatLabel: string;
   despro: string | null;
   situacaoLabel: string;
@@ -154,7 +155,10 @@ export function PropostasTable({ rows, page, pageSize, total, loading, onPageCha
                     <td className="hidden max-w-[130px] truncate px-2 py-1.5 text-sm text-muted xl:table-cell" title={row.despro ?? undefined}>
                       {row.despro ?? "—"}
                     </td>
-                    <td className="hidden px-2 py-1.5 text-sm text-muted md:table-cell">{row.depexeLabel}</td>
+                    <td className="hidden px-2 py-1.5 text-sm text-muted md:table-cell">
+                      <div>{row.depexeLabel}</div>
+                      <div className="mt-0.5 font-mono text-[10.5px] text-muted/70">{row.modproLabel}</div>
+                    </td>
                     <td
                       className="hidden max-w-[95px] truncate px-2 py-1.5 text-sm text-muted lg:table-cell"
                       title={row.forfatLabel}

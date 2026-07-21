@@ -20,6 +20,7 @@ interface PropostaRow {
   sitproLabel: string;
   sitproTone: "success" | "warning" | "destructive" | "neutral";
   depexeLabel: string;
+  modproLabel: string;
   totalItens: number;
   qtdhorTotal: number;
   horasAlocadas: number;
@@ -454,6 +455,9 @@ export function Alocacao() {
                 <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
                   Departamento
                 </th>
+                <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
+                  Modalidade
+                </th>
                 <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Itens
                 </th>
@@ -485,7 +489,15 @@ export function Alocacao() {
                       <td className={`px-5 py-3.5 ${expandida ? "border-l border-primary" : ""}`}>
                         <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
                           <span className="text-muted">{expandida ? "▾" : "▸"}</span>
-                          {row.codpro}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/projetos/proposta/${row.codemp}/${row.codpro}`);
+                            }}
+                            className="text-primary hover:underline"
+                          >
+                            {row.codpro}
+                          </button>
                           <span
                             className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge[row.sitproTone]}`}
                           >
@@ -500,6 +512,11 @@ export function Alocacao() {
                       <td className="hidden px-5 py-3.5 md:table-cell">
                         <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
                           {row.depexeLabel}
+                        </span>
+                      </td>
+                      <td className="hidden px-5 py-3.5 lg:table-cell">
+                        <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+                          {row.modproLabel}
                         </span>
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{row.totalItens}</td>
@@ -528,7 +545,7 @@ export function Alocacao() {
                     </tr>
                     {expandida && (
                       <tr className="border-t border-border/60 bg-surface-2/40">
-                        <td colSpan={8} className="border-b border-l border-r border-primary px-5 py-3">
+                        <td colSpan={9} className="border-b border-l border-r border-primary px-5 py-3">
                           {consultoresResumo === "carregando" && (
                             <p className="py-2 text-sm text-muted">Carregando consultores...</p>
                           )}
@@ -554,23 +571,37 @@ export function Alocacao() {
                                   <th className="py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                     Horas Alocada
                                   </th>
+                                  <th className="py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                    % do Alocado
+                                  </th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {consultoresResumo.map((c) => (
-                                  <tr key={c.codfor} className="border-t border-border/40">
-                                    <td className="py-1.5 font-mono text-[12.5px] tabular-nums text-muted">{c.codfor}</td>
-                                    <td className="py-1.5 text-[12.5px] text-foreground">{c.nome}</td>
-                                    <td className="py-1.5">
-                                      <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
-                                        {c.depexeLabel}
-                                      </span>
-                                    </td>
-                                    <td className="py-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground">
-                                      {formatHoras(c.horasAlocadas / 60)}
-                                    </td>
-                                  </tr>
-                                ))}
+                                {consultoresResumo.map((c) => {
+                                  const pct = row.horasAlocadas > 0 ? Math.round((c.horasAlocadas / row.horasAlocadas) * 100) : 0;
+                                  return (
+                                    <tr key={c.codfor} className="border-t border-border/40">
+                                      <td className="py-1.5 font-mono text-[12.5px] tabular-nums text-muted">{c.codfor}</td>
+                                      <td className="py-1.5 text-[12.5px] text-foreground">{c.nome}</td>
+                                      <td className="py-1.5">
+                                        <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+                                          {c.depexeLabel}
+                                        </span>
+                                      </td>
+                                      <td className="py-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground">
+                                        {formatHoras(c.horasAlocadas / 60)}
+                                      </td>
+                                      <td className="py-1.5 pl-4">
+                                        <div className="flex items-center justify-end gap-2">
+                                          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted/20">
+                                            <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                                          </div>
+                                          <span className="w-9 font-mono text-[11px] tabular-nums text-muted">{pct}%</span>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           )}
@@ -582,7 +613,7 @@ export function Alocacao() {
               })}
               {rows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
+                  <td colSpan={9} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhuma proposta encontrada com os filtros atuais.
                   </td>
                 </tr>

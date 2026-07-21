@@ -19,6 +19,7 @@ import {
   sitproTone,
   depexeLabel,
   forfatLabel,
+  modproLabel,
 } from "../domain/propostasDominio";
 
 export const projetosRouter = Router();
@@ -891,6 +892,7 @@ projetosRouter.get("/propostas", async (req, res) => {
           depexe: number | null;
           forfat: number | null;
           despro: string | null;
+          modpro: number | null;
         }[]
       >(
         `
@@ -903,7 +905,7 @@ projetosRouter.get("/propostas", async (req, res) => {
         )
         SELECT p.codemp, p.codpro, p.codcli, c.nomcli, p.datpro, p.datret, p.sitpro, p.numprj,
                COALESCE(iv.valor, 0) AS valor, COALESCE(iv.horas, 0) AS horas, p.pripro, p.depexe,
-               p.forfat, p.despro
+               p.forfat, p.despro, p.modpro
         FROM propostas p
         JOIN clientes c ON c.codcli = p.codcli
         LEFT JOIN item_valor iv ON iv.codemp = p.codemp AND iv.codpro = p.codpro
@@ -961,6 +963,7 @@ projetosRouter.get("/propostas", async (req, res) => {
       situacaoTone: sitproTone(row.sitpro),
       depexeLabel: depexeLabel(row.depexe),
       forfatLabel: forfatLabel(row.forfat),
+      modproLabel: modproLabel(row.modpro),
     }));
 
     res.json({
