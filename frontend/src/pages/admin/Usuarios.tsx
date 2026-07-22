@@ -50,6 +50,8 @@ export function Usuarios() {
   const [form, setForm] = useState<FormState>(FORM_VAZIO);
   const [salvando, setSalvando] = useState(false);
   const [erroForm, setErroForm] = useState<string | null>(null);
+  const [buscandoSugestaoForm, setBuscandoSugestaoForm] = useState(false);
+  const debounceFormRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [convidarAberto, setConvidarAberto] = useState(false);
   const [conviteForm, setConviteForm] = useState<ConviteFormState>(CONVITE_VAZIO);
@@ -93,6 +95,34 @@ export function Usuarios() {
 
   function fecharModal() {
     setModalAberto(false);
+  }
+
+  // Só busca sugestão na criação (não faz sentido sobrescrever dados de um usuário já
+  // existente ao editar) — mesmo endpoint já usado pelo fluxo de Convidar usuário.
+  function onEmailFormChange(email: string) {
+    setForm((atual) => ({ ...atual, email }));
+    if (editando) return;
+    if (debounceFormRef.current) clearTimeout(debounceFormRef.current);
+
+    const emailValido = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if (!emailValido) return;
+
+    debounceFormRef.current = setTimeout(() => {
+      setBuscandoSugestaoForm(true);
+      axios
+        .get("/api/users/convites/sugestao", { params: { email } })
+        .then(({ data }) => {
+          if (data.encontrado) {
+            setForm((atual) => ({
+              ...atual,
+              nome: atual.nome || data.nome,
+              roleId: data.roleId ? String(data.roleId) : atual.roleId,
+            }));
+          }
+        })
+        .catch(() => {})
+        .finally(() => setBuscandoSugestaoForm(false));
+    }, 500);
   }
 
   async function salvar() {
@@ -330,20 +360,29 @@ export function Usuarios() {
 
             <div className="space-y-3">
               <div>
+                <label className="mb-1 block text-[11.5px] text-muted">
+                  E-mail {buscandoSugestaoForm && <span className="text-muted">(buscando...)</span>}
+                </label>
+                <input
+                  type="email"
+                  autoComplete="off"
+                  value={form.email}
+                  onChange={(e) => onEmailFormChange(e.target.value)}
+                  className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                {!editando && (
+                  <p className="mt-1 text-[11px] text-muted">
+                    Se o e-mail bater com um consultor do Senior, nome e papel são sugeridos automaticamente.
+                  </p>
+                )}
+              </div>
+              <div>
                 <label className="mb-1 block text-[11.5px] text-muted">Nome</label>
                 <input
                   type="text"
+                  autoComplete="off"
                   value={form.nome}
                   onChange={(e) => setForm({ ...form, nome: e.target.value })}
-                  className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[11.5px] text-muted">E-mail</label>
-                <input
-                  type="email"
-                  value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
                   className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </div>
@@ -353,6 +392,7 @@ export function Usuarios() {
                 </label>
                 <input
                   type="password"
+                  autoComplete="new-password"
                   value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })}
                   className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -411,6 +451,7 @@ export function Usuarios() {
                 </label>
                 <input
                   type="email"
+                  autoComplete="off"
                   value={conviteForm.email}
                   onChange={(e) => onEmailConviteChange(e.target.value)}
                   className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -420,6 +461,7 @@ export function Usuarios() {
                 <label className="mb-1 block text-[11.5px] text-muted">Nome</label>
                 <input
                   type="text"
+                  autoComplete="off"
                   value={conviteForm.nome}
                   onChange={(e) => setConviteForm({ ...conviteForm, nome: e.target.value })}
                   className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
