@@ -550,7 +550,104 @@ model AtividadeConsultor {
   notificacoes            Notificacao[]
   sincronizacoesPendentes SincronizacaoPendente[]
 
+  // Quando a proposta está em modo "estrutura" (ver PropostaModoAlocacao), a alocação
+  // aponta pro nó-folha da EAP em vez de só pro item — fica nulo no modo "item" (o
+  // comportamento de sempre, sem mudança). Ver EstruturaAtividade.
+  estruturaAtividadeId Int?
+  estruturaAtividade   EstruturaAtividade? @relation(fields: [estruturaAtividadeId], references: [id])
+
   @@map("atividades_consultor")
+}
+
+// EAP (Estrutura Analítica de Projeto) opcional de um item de proposta — pastas
+// agrupando atividades-folha, no estilo da aba "Cronograma Físico" do Senior desktop.
+// Dado 100% CaxHub, pendurado num PropostaItem específico: as horas continuam
+// contratadas por item no Senior (PropostaItem.qtdhor), a EAP só fatia o trabalho de UM
+// item em pedaços mais finos — não substitui o item como unidade de negócio. Só existe
+// pra propostas em modo "estrutura" (ver PropostaModoAlocacao).
+model EstruturaAtividade {
+  id       Int  @id @default(autoincrement())
+  codemp   Int
+  codpro   Int
+  // Null só em tipo="pasta": é uma "pasta raiz" da proposta inteira (não pertence a
+  // nenhum item específico), usada só pra agrupar itens de PropostaItem entre si — ver
+  // PropostaItemPosicao. Toda pasta/atividade "normal" (ligada a um item) mantém seqite
+  // preenchido, como sempre foi.
+  seqite   Int?
+
+  parentId Int?
+  parent   EstruturaAtividade?  @relation("EstruturaFilhos", fields: [parentId], references: [id])
+  filhos   EstruturaAtividade[] @relation("EstruturaFilhos")
+
+  /// "pasta" (só agrupa, sem duração/data própria) | "atividade" (folha, aloca consultor)
+  tipo  String @db.VarChar(10)
+  nome  String @db.VarChar(200)
+  ordem Int
+
+  // Só preenchido em tipo="atividade":
+  duracaoHoras        Int? // minutos, mesma convenção de AtividadeConsultor.qtdhor
+  dataPrevistaInicio  DateTime? @db.Date
+  dataPrevistaFim     DateTime? @db.Date
+  // Referência informativa a outro nó da mesma árvore — sem motor de recálculo de
+  // datas nem validação de ciclo nesta fase, é só texto/link pra leitura humana.
+  predecessoraId      Int?
+  percentualConcluido Int? // 0-100, definido manualmente (sem apontamento real de horas ainda)
+
+  // Responsável/dono da atividade — conceito à parte dos N consultores alocados
+  // (AtividadeConsultor.codfor); é só uma referência informativa de quem "é dono" da
+  // atividade, não substitui a distribuição de horas por consultor.
+  responsavelCodfor Int?
+
+  // Status manual — só relevante em tipo="atividade" (pasta/item têm status sempre
+  // derivado dos descendentes na resposta da API, nunca armazenado aqui). "bloqueada"
+  // nunca é gravado neste campo — é sempre calculado em tempo de leitura, comparando
+  // com o status efetivo da predecessora.
+  status String? @db.VarChar(20) // "nao_iniciada" | "em_curso" | "concluida"
+
+  observacao String? @db.VarChar(1000)
+
+  criadoEm  DateTime @default(now())
+  criadoPor Int? // codusu de quem criou
+
+  alocacoes AtividadeConsultor[]
+  itensPosicionados PropostaItemPosicao[]
+
+  @@index([codemp, codpro, seqite])
+  @@map("estrutura_atividades")
+}
+
+// Posição de um item de proposta dentro de uma pasta raiz (ver EstruturaAtividade.seqite
+// null) — dado 100% CaxHub, nunca tocado pelo sync do Senior (PropostaItem é espelhado
+// integralmente de lá, não dá pra pendurar isso nele). Ausência de linha aqui = item
+// "solto" (comportamento de sempre, direto na raiz da árvore da proposta). parentId
+// sempre aponta pra uma EstruturaAtividade com seqite null (pasta raiz) — nunca pra uma
+// pasta comum, ligada a um item.
+model PropostaItemPosicao {
+  codemp Int
+  codpro Int
+  seqite Int
+
+  parentId Int
+  parent   EstruturaAtividade @relation(fields: [parentId], references: [id])
+
+  @@id([codemp, codpro, seqite])
+  @@map("proposta_item_posicao")
+}
+
+// Gate por proposta: decide se ela é alocada "por item" (fluxo direto, de sempre) ou
+// via EstruturaAtividade — escolhido uma vez, na primeira vez que alguém abre a
+// proposta na Alocação, e travado assim que existir a primeira alocação (ver
+// backend/src/routes/alocacao.ts). Dado 100% CaxHub, sem equivalente no Senior.
+model PropostaModoAlocacao {
+  codemp Int
+  codpro Int
+  /// "item" | "estrutura"
+  modo        String   @db.VarChar(10)
+  definidoEm  DateTime @default(now())
+  definidoPor Int? // codusu
+
+  @@id([codemp, codpro])
+  @@map("proposta_modo_alocacao")
 }
 
 // Fila (outbox) de mudanças feitas no CaxHub que precisam ser propagadas de volta pro

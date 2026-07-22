@@ -48,6 +48,26 @@ async function departamentosPermitidos(role: string, contexto: Awaited<ReturnTyp
   return contexto.departamentosGerenciados;
 }
 
+// Ações no nível da proposta inteira (pasta raiz, agrupar/soltar item) não têm um único
+// depexe pra checar contra podeExecutarAcao — uma pasta raiz pode reunir itens de
+// departamentos diferentes. Autoriza quem gerencia pelo menos um departamento presente
+// nos itens desta proposta específica (mesmo espírito de ACOES_LIDER_TECNICO).
+async function podeGerenciarProposta(
+  role: string,
+  contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>,
+  codemp: number,
+  codpro: number
+): Promise<boolean> {
+  const permitidos = await departamentosPermitidos(role, contexto);
+  if (permitidos.length === 0) return false;
+  const itensDaProposta = await prisma.propostaItem.findMany({
+    where: { codemp, codpro, depexe: { not: null } },
+    distinct: ["depexe"],
+    select: { depexe: true },
+  });
+  return itensDaProposta.some((i) => permitidos.includes(i.depexe as number));
+}
+
 // Controle sempre por proposta (uma proposta pode ter muitos itens — misturar tudo
 // num feed único de itens fica ruim de gerenciar). Esta lista é o ponto de entrada:
 // uma linha por proposta, com o total de horas/alocado agregado só sobre os itens nos
@@ -461,6 +481,70 @@ alocacaoRouter.get("/fases", async (_req, res) => {
   }
 });
 
+// Modo de alocação da proposta: "item" (direto no item, fluxo de sempre) ou "estrutura"
+// (EAP — pastas + atividades-folha, ver EstruturaAtividade). Propostas que já tinham
+// alocação antes dessa funcionalidade existir (sincronizadas do Senior ou criadas antes
+// do gate) resolvem pra "item" automaticamente — sem interromper quem já vinha usando
+// o fluxo direto, e sem precisar de uma migração retroativa de dado.
+async function resolverModoAlocacao(codemp: number, codpro: number): Promise<"item" | "estrutura" | null> {
+  const config = await prisma.propostaModoAlocacao.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
+  if (config) return config.modo as "item" | "estrutura";
+  const existeAlocacao = await prisma.atividadeConsultor.findFirst({ where: { codemp, codpro, sitreg: "A" } });
+  if (existeAlocacao) return "item";
+  return null;
+}
+
+alocacaoRouter.get("/propostas/:codemp/:codpro/modo", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    if (!Number.isFinite(codemp) || !Number.isFinite(codpro)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+    const modo = await resolverModoAlocacao(codemp, codpro);
+    res.json({ modo });
+  } catch (error) {
+    handleError(res, error, "modo-alocacao");
+  }
+});
+
+alocacaoRouter.post("/propostas/:codemp/:codpro/modo", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    const modo = req.body?.modo;
+    if (!Number.isFinite(codemp) || !Number.isFinite(codpro)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+    if (modo !== "item" && modo !== "estrutura") {
+      res.status(400).json({ error: "modo deve ser 'item' ou 'estrutura'" });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+
+    const atual = await resolverModoAlocacao(codemp, codpro);
+    if (atual) {
+      res.status(409).json({ error: `Modo já definido para esta proposta (${atual}) — não é possível trocar depois da primeira alocação` });
+      return;
+    }
+
+    await prisma.propostaModoAlocacao.create({
+      data: { codemp, codpro, modo, definidoPor: ctx.contexto.consultor?.codusu ?? null },
+    });
+
+    res.status(201).json({ modo });
+  } catch (error) {
+    handleError(res, error, "definir-modo-alocacao");
+  }
+});
+
 function formatHorasSimples(minutos: number): string {
   const totalMinutos = Math.round(minutos);
   const horas = Math.trunc(totalMinutos / 60);
@@ -473,8 +557,31 @@ async function validarSaldo(
   codpro: number,
   seqite: number,
   qtdhorNovo: number,
-  ignorarAtividadeId?: number
+  opts?: { ignorarAtividadeId?: number; estruturaAtividadeId?: number }
 ): Promise<{ ok: true } | { ok: false; erro: string }> {
+  // Modo "estrutura": o teto é a duração do nó-folha da EAP, não o item inteiro — o
+  // teto do item já foi garantido quando o nó foi criado/editado (ver validarSomaEstrutura).
+  if (opts?.estruturaAtividadeId != null) {
+    const no = await prisma.estruturaAtividade.findUnique({ where: { id: opts.estruturaAtividadeId } });
+    if (!no) return { ok: false, erro: "Atividade da estrutura não encontrada" };
+    if (no.tipo !== "atividade") return { ok: false, erro: "Só é possível alocar consultor em atividades-folha, não em pastas" };
+    if (no.duracaoHoras == null) return { ok: false, erro: "Atividade sem duração definida" };
+
+    const existentesNo = await prisma.atividadeConsultor.findMany({
+      where: { estruturaAtividadeId: opts.estruturaAtividadeId, sitreg: "A" },
+    });
+    const somaAtualNo = existentesNo
+      .filter((a) => a.id !== opts.ignorarAtividadeId)
+      .reduce((soma, a) => soma + (a.qtdhor ?? 0), 0);
+    if (somaAtualNo + qtdhorNovo > no.duracaoHoras) {
+      return {
+        ok: false,
+        erro: `Horas excedem o saldo da atividade (disponível: ${formatHorasSimples(no.duracaoHoras - somaAtualNo)}, tentando alocar: ${formatHorasSimples(qtdhorNovo)})`,
+      };
+    }
+    return { ok: true };
+  }
+
   const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
   if (!item) return { ok: false, erro: "Item de proposta não encontrado" };
   if (item.qtdhor == null) return { ok: false, erro: "Item sem horas definidas na proposta" };
@@ -483,7 +590,7 @@ async function validarSaldo(
     where: { codemp, codpro, seqite, sitreg: "A" },
   });
   const somaAtual = existentes
-    .filter((a) => a.id !== ignorarAtividadeId)
+    .filter((a) => a.id !== opts?.ignorarAtividadeId)
     .reduce((soma, a) => soma + (a.qtdhor ?? 0), 0);
 
   if (somaAtual + qtdhorNovo > item.qtdhor) {
@@ -494,6 +601,629 @@ async function validarSaldo(
   }
   return { ok: true };
 }
+
+// Checagem 2 da EAP: soma da duração de todas as atividades-folha da árvore não pode
+// passar do total de horas do item — roda ao criar/editar um nó, não ao alocar
+// consultor (isso é a checagem 1, dentro de validarSaldo acima).
+async function validarSomaEstrutura(
+  codemp: number,
+  codpro: number,
+  seqite: number,
+  ignorarNoId: number | null,
+  duracaoNova: number
+): Promise<{ ok: true } | { ok: false; erro: string }> {
+  const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+  if (!item || item.qtdhor == null) return { ok: false, erro: "Item sem horas definidas na proposta" };
+
+  const folhas = await prisma.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, tipo: "atividade" } });
+  const somaAtual = folhas
+    .filter((n) => n.id !== ignorarNoId)
+    .reduce((soma, n) => soma + (n.duracaoHoras ?? 0), 0);
+
+  if (somaAtual + duracaoNova > item.qtdhor) {
+    return {
+      ok: false,
+      erro: `Duração excede o saldo do item (disponível: ${formatHorasSimples(item.qtdhor - somaAtual)}, tentando usar: ${formatHorasSimples(duracaoNova)})`,
+    };
+  }
+  return { ok: true };
+}
+
+// EAP (Estrutura Analítica de Projeto) — pastas + atividades-folha dentro de um item,
+// só existe pra propostas em modo "estrutura" (ver resolverModoAlocacao acima).
+// Cronograma exclusivo da proposta inteira (não por item) — todos os itens da proposta
+// entram como âncora da lista, e cada um carrega sua própria árvore de pastas/atividades
+// (EstruturaAtividade). Uma atividade sempre pertence à árvore de UM item (seqite), então
+// "só pode ser adicionada abaixo da pasta do item" já é garantido pela própria FK —
+// aqui só juntamos tudo numa resposta só, pra tela ficar numa página única.
+alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    if (!Number.isFinite(codemp) || !Number.isFinite(codpro)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await departamentosPermitidos(role, contexto);
+
+    const proposta = await prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } }, include: { cliente: true } });
+    if (!proposta || proposta.sitpro == null || !SITPRO_ALOCAVEL.includes(proposta.sitpro)) {
+      res.status(404).json({ error: "Proposta não encontrada ou não alocável" });
+      return;
+    }
+
+    const itens = await prisma.propostaItem.findMany({
+      where: { codemp, codpro, depexe: { in: permitidos } },
+      orderBy: { seqite: "asc" },
+    });
+    if (itens.length === 0) {
+      res.status(403).json({ error: "Sem itens desta proposta nos seus departamentos" });
+      return;
+    }
+
+    const seqites = itens.map((i) => i.seqite);
+    // Nós ligados a um item (seqite preenchido) — filtro redundante em runtime (a query
+    // já garante isso), só pra o TS parar de tratar seqite como number|null daqui pra
+    // frente (o campo virou opcional no schema pra existirem pastas raiz, ver abaixo).
+    const nos = (
+      await prisma.estruturaAtividade.findMany({
+        where: { codemp, codpro, seqite: { in: seqites } },
+        orderBy: { ordem: "asc" },
+      })
+    ).filter((n): n is typeof n & { seqite: number } => n.seqite != null);
+
+    // Pastas raiz da proposta (seqite null) — agrupam itens entre si, ver
+    // PropostaItemPosicao. Entram na mesma lista achatada que os nós normais pro
+    // frontend montar uma árvore só; carregam junto a posição de cada item (pra saber
+    // dentro de qual pasta raiz — ou solto, se não houver linha em PropostaItemPosicao).
+    const pastasRaiz = await prisma.estruturaAtividade.findMany({
+      where: { codemp, codpro, seqite: null },
+      orderBy: { ordem: "asc" },
+    });
+    const posicoesItens = await prisma.propostaItemPosicao.findMany({ where: { codemp, codpro, seqite: { in: seqites } } });
+    const posicaoPorSeqite = new Map(posicoesItens.map((p) => [p.seqite, p.parentId]));
+
+    const todosOsNos = [...nos, ...pastasRaiz];
+    const nosIds = todosOsNos.map((n) => n.id);
+    const alocacoes =
+      nosIds.length > 0
+        ? await prisma.atividadeConsultor.findMany({
+            where: { estruturaAtividadeId: { in: nosIds }, sitreg: "A" },
+            include: { fase: true },
+          })
+        : [];
+    const codforUnicos = [
+      ...new Set([...alocacoes.map((a) => a.codfor), ...todosOsNos.map((n) => n.responsavelCodfor).filter((c): c is number => c != null)]),
+    ];
+    const consultores =
+      codforUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforUnicos } } }) : [];
+    const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
+    const alocacoesPorNo = new Map<number, typeof alocacoes>();
+    for (const a of alocacoes) {
+      if (a.estruturaAtividadeId == null) continue;
+      if (!alocacoesPorNo.has(a.estruturaAtividadeId)) alocacoesPorNo.set(a.estruturaAtividadeId, []);
+      alocacoesPorNo.get(a.estruturaAtividadeId)!.push(a);
+    }
+    const nomePorId = new Map(todosOsNos.map((n) => [n.id, n.nome]));
+    const nosPorSeqite = new Map<number, typeof nos>();
+    for (const n of nos) {
+      if (!nosPorSeqite.has(n.seqite)) nosPorSeqite.set(n.seqite, []);
+      nosPorSeqite.get(n.seqite)!.push(n);
+    }
+
+    function mapNo(n: (typeof todosOsNos)[number]) {
+      const alocacoesDoNo = alocacoesPorNo.get(n.id) ?? [];
+      const horasAlocadas = alocacoesDoNo.reduce((soma, a) => soma + (a.qtdhor ?? 0), 0);
+      return {
+        id: n.id,
+        parentId: n.parentId,
+        tipo: n.tipo,
+        nome: n.nome,
+        ordem: n.ordem,
+        duracaoHoras: n.duracaoHoras,
+        dataPrevistaInicio: n.dataPrevistaInicio,
+        dataPrevistaFim: n.dataPrevistaFim,
+        predecessoraId: n.predecessoraId,
+        predecessoraNome: n.predecessoraId != null ? nomePorId.get(n.predecessoraId) ?? null : null,
+        percentualConcluido: n.percentualConcluido,
+        // Manual, só relevante em tipo="atividade" — "bloqueada" nunca vem daqui, é
+        // sempre derivada no frontend (derivarStatus) a partir da predecessora.
+        status: n.status,
+        responsavelCodfor: n.responsavelCodfor,
+        responsavelNome:
+          n.responsavelCodfor != null
+            ? consultorPorCodfor.get(n.responsavelCodfor)?.nomcom ?? consultorPorCodfor.get(n.responsavelCodfor)?.nomfor ?? null
+            : null,
+        observacao: n.observacao,
+        horasAlocadas,
+        saldo: n.duracaoHoras != null ? n.duracaoHoras - horasAlocadas : null,
+        alocacoes: alocacoesDoNo.map((a) => ({
+          id: a.id,
+          codfor: a.codfor,
+          consultorNome: consultorPorCodfor.get(a.codfor)?.nomcom ?? consultorPorCodfor.get(a.codfor)?.nomfor ?? `Fornecedor ${a.codfor}`,
+          qtdhor: a.qtdhor,
+          fasid: a.fasid,
+          faseDes: a.fase.fasdes,
+          dataPrevistaInicio: a.dataPrevistaInicio,
+          dataPrevistaFim: a.dataPrevistaFim,
+        })),
+      };
+    }
+
+    const podeGerenciarEstaProposta = await podeGerenciarProposta(role, contexto, codemp, codpro);
+
+    res.json({
+      proposta: {
+        codemp,
+        codpro,
+        numprj: proposta.numprj,
+        cliente: `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}`,
+        sitproLabel: sitproLabel(proposta.sitpro),
+        sitproTone: sitproTone(proposta.sitpro),
+        // Cria/renomeia/exclui pasta raiz e agrupa itens dentro dela — ação de nível de
+        // proposta inteira, não de um item/departamento específico (ver
+        // podeGerenciarProposta).
+        podeGerenciarProposta: podeGerenciarEstaProposta,
+      },
+      // Pastas raiz da proposta — organizacionais, fora do escopo de qualquer item;
+      // servem só pra agrupar itens entre si (parentId de EstruturaAtividade normal,
+      // igual pasta comum — a diferença é só não ter seqite).
+      pastasRaiz: pastasRaiz.map((p) => ({ ...mapNo(p), podeEditar: podeGerenciarEstaProposta })),
+      itens: itens.map((item) => ({
+        seqite: item.seqite,
+        codser: item.codser,
+        despro: item.despro,
+        depexe: item.depexe,
+        depexeLabel: depexeLabel(item.depexe),
+        qtdhorItem: item.qtdhor,
+        podeEditar: item.depexe != null && podeExecutarAcao(role, contexto, "criar", { depexe: item.depexe, codfor: 0 }),
+        // Pasta raiz onde este item foi agrupado, ou null se estiver solto (padrão —
+        // comportamento de sempre, direto na raiz da árvore da proposta).
+        parentId: posicaoPorSeqite.get(item.seqite) ?? null,
+        nos: (nosPorSeqite.get(item.seqite) ?? []).map(mapNo),
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "cronograma");
+  }
+});
+
+alocacaoRouter.post("/estrutura", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.body?.codemp);
+    const codpro = Number(req.body?.codpro);
+    // seqite ausente = pasta raiz da proposta (agrupa itens entre si, ver
+    // PropostaItemPosicao) — só tipo "pasta" pode ser raiz, atividade sempre pertence a
+    // um item.
+    const seqiteRaw = req.body?.seqite;
+    const seqite = seqiteRaw != null ? Number(seqiteRaw) : null;
+    const tipo = req.body?.tipo;
+    const nome = typeof req.body?.nome === "string" ? req.body.nome.trim() : "";
+    const parentId = req.body?.parentId != null ? Number(req.body.parentId) : null;
+    if (![codemp, codpro].every(Number.isFinite) || (tipo !== "pasta" && tipo !== "atividade") || nome === "") {
+      res.status(400).json({ error: "codemp, codpro, tipo (pasta|atividade) e nome são obrigatórios" });
+      return;
+    }
+    if (seqite != null && !Number.isFinite(seqite)) {
+      res.status(400).json({ error: "seqite inválido" });
+      return;
+    }
+    if (seqite == null && tipo !== "pasta") {
+      res.status(400).json({ error: "Só uma pasta pode ser raiz da proposta (sem seqite) — atividade sempre pertence a um item" });
+      return;
+    }
+
+    const modo = await resolverModoAlocacao(codemp, codpro);
+    if (modo !== "estrutura") {
+      res.status(400).json({ error: "Esta proposta não está no modo de alocação por estrutura" });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    if (seqite == null) {
+      // Pasta raiz: permissão é no nível da proposta inteira (pode reunir itens de
+      // departamentos diferentes, não dá pra checar contra um depexe só).
+      if (!(await podeGerenciarProposta(role, contexto, codemp, codpro))) {
+        res.status(403).json({ error: "Sem permissão para gerenciar esta proposta" });
+        return;
+      }
+      if (parentId != null) {
+        const pai = await prisma.estruturaAtividade.findUnique({ where: { id: parentId } });
+        if (!pai || pai.codemp !== codemp || pai.codpro !== codpro || pai.seqite != null) {
+          res.status(400).json({ error: "Pasta raiz de destino não encontrada" });
+          return;
+        }
+        if (pai.tipo !== "pasta") {
+          res.status(400).json({ error: "Só é possível criar dentro de uma pasta" });
+          return;
+        }
+      }
+      const irmaosRaiz = await prisma.estruturaAtividade.findMany({ where: { codemp, codpro, seqite: null, parentId } });
+      const ordemRaiz = irmaosRaiz.length > 0 ? Math.max(...irmaosRaiz.map((n) => n.ordem)) + 1 : 0;
+      const novaPastaRaiz = await prisma.estruturaAtividade.create({
+        data: { codemp, codpro, seqite: null, parentId, tipo: "pasta", nome, ordem: ordemRaiz, criadoPor: contexto.consultor?.codusu ?? null },
+      });
+      res.status(201).json({ id: novaPastaRaiz.id });
+      return;
+    }
+
+    const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+    if (!item || item.depexe == null) {
+      res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+
+    if (!podeExecutarAcao(role, contexto, "criar", { depexe: item.depexe, codfor: 0 })) {
+      res.status(403).json({ error: "Sem permissão para editar a estrutura deste departamento" });
+      return;
+    }
+
+    if (parentId != null) {
+      const pai = await prisma.estruturaAtividade.findUnique({ where: { id: parentId } });
+      if (!pai || pai.codemp !== codemp || pai.codpro !== codpro || pai.seqite !== seqite) {
+        res.status(400).json({ error: "Pasta pai não encontrada" });
+        return;
+      }
+      if (pai.tipo !== "pasta") {
+        res.status(400).json({ error: "Só é possível criar dentro de uma pasta" });
+        return;
+      }
+    }
+
+    let duracaoHoras: number | null = null;
+    let dataPrevistaInicio: Date | null = null;
+    let dataPrevistaFim: Date | null = null;
+    let predecessoraId: number | null = null;
+    if (tipo === "atividade") {
+      duracaoHoras = req.body?.duracaoHoras != null ? Number(req.body.duracaoHoras) : null;
+      if (duracaoHoras != null) {
+        const saldo = await validarSomaEstrutura(codemp, codpro, seqite, null, duracaoHoras);
+        if (!saldo.ok) {
+          res.status(400).json({ error: saldo.erro });
+          return;
+        }
+      }
+      dataPrevistaInicio = req.body?.dataPrevistaInicio ? new Date(req.body.dataPrevistaInicio) : null;
+      dataPrevistaFim = req.body?.dataPrevistaFim ? new Date(req.body.dataPrevistaFim) : null;
+      if (dataPrevistaInicio && dataPrevistaFim && dataPrevistaInicio > dataPrevistaFim) {
+        res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
+        return;
+      }
+      predecessoraId = req.body?.predecessoraId != null ? Number(req.body.predecessoraId) : null;
+    }
+
+    const irmaos = await prisma.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, parentId } });
+    const ordem = irmaos.length > 0 ? Math.max(...irmaos.map((n) => n.ordem)) + 1 : 0;
+
+    const novo = await prisma.estruturaAtividade.create({
+      data: {
+        codemp,
+        codpro,
+        seqite,
+        parentId,
+        tipo,
+        nome,
+        ordem,
+        duracaoHoras,
+        dataPrevistaInicio,
+        dataPrevistaFim,
+        predecessoraId,
+        criadoPor: contexto.consultor?.codusu ?? null,
+      },
+    });
+
+    res.status(201).json({ id: novo.id });
+  } catch (error) {
+    handleError(res, error, "estrutura-criar");
+  }
+});
+
+alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const no = await prisma.estruturaAtividade.findUnique({ where: { id } });
+    if (!no) {
+      res.status(404).json({ error: "Nó não encontrado" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    if (no.seqite == null) {
+      // Pasta raiz: permissão no nível da proposta inteira (ver POST /estrutura).
+      if (!(await podeGerenciarProposta(role, contexto, no.codemp, no.codpro))) {
+        res.status(403).json({ error: "Sem permissão para gerenciar esta proposta" });
+        return;
+      }
+    } else {
+      const item = await prisma.propostaItem.findUnique({
+        where: { codemp_codpro_seqite: { codemp: no.codemp, codpro: no.codpro, seqite: no.seqite } },
+      });
+      if (!item || item.depexe == null) {
+        res.status(404).json({ error: "Item de proposta não encontrado" });
+        return;
+      }
+      if (!podeExecutarAcao(role, contexto, "editar", { depexe: item.depexe, codfor: 0 })) {
+        res.status(403).json({ error: "Sem permissão para editar a estrutura deste departamento" });
+        return;
+      }
+    }
+
+    const nome = typeof req.body?.nome === "string" && req.body.nome.trim() !== "" ? req.body.nome.trim() : undefined;
+    let ordem = req.body?.ordem != null ? Number(req.body.ordem) : undefined;
+
+    // Reorganização (mover pra dentro de outra pasta, ou pra raiz) — vale pra pasta e
+    // atividade. Precisa impedir ciclo (mover uma pasta pra dentro de uma das suas
+    // próprias subpastas) e recalcula a ordem pro final da nova lista de irmãos.
+    let parentId: number | null | undefined;
+    if (req.body?.parentId !== undefined) {
+      parentId = req.body.parentId != null ? Number(req.body.parentId) : null;
+      if (parentId != null) {
+        if (parentId === no.id) {
+          res.status(400).json({ error: "Não é possível mover um item pra dentro dele mesmo" });
+          return;
+        }
+        const novoPai = await prisma.estruturaAtividade.findUnique({ where: { id: parentId } });
+        // Pasta raiz (seqite null) só reparenta dentro de outra pasta raiz; pasta/atividade
+        // ligada a um item só reparenta dentro do mesmo item — nunca mistura os dois
+        // escopos (não faria sentido uma atividade "pular" pra debaixo de outro item por
+        // aqui; pra mover o ITEM em si, ver POST .../itens/:seqite/posicao).
+        if (!novoPai || novoPai.codemp !== no.codemp || novoPai.codpro !== no.codpro || novoPai.seqite !== no.seqite) {
+          res.status(400).json({ error: "Pasta de destino não encontrada" });
+          return;
+        }
+        if (novoPai.tipo !== "pasta") {
+          res.status(400).json({ error: "Só é possível mover pra dentro de uma pasta" });
+          return;
+        }
+        let atual: typeof novoPai | null = novoPai;
+        while (atual?.parentId != null) {
+          if (atual.parentId === no.id) {
+            res.status(400).json({ error: "Não é possível mover uma pasta pra dentro de uma das suas próprias subpastas" });
+            return;
+          }
+          atual = await prisma.estruturaAtividade.findUnique({ where: { id: atual.parentId } });
+        }
+      }
+      if (ordem === undefined) {
+        const irmaos = await prisma.estruturaAtividade.findMany({
+          where: { codemp: no.codemp, codpro: no.codpro, seqite: no.seqite, parentId },
+        });
+        ordem = irmaos.length > 0 ? Math.max(...irmaos.map((n) => n.ordem)) + 1 : 0;
+      }
+    }
+
+    let percentualConcluido: number | undefined;
+    if (req.body?.percentualConcluido != null) {
+      percentualConcluido = Number(req.body.percentualConcluido);
+      if (!Number.isFinite(percentualConcluido) || percentualConcluido < 0 || percentualConcluido > 100) {
+        res.status(400).json({ error: "percentualConcluido deve estar entre 0 e 100" });
+        return;
+      }
+    }
+
+    let duracaoHoras: number | null | undefined;
+    let dataPrevistaInicio: Date | null | undefined;
+    let dataPrevistaFim: Date | null | undefined;
+    let predecessoraId: number | null | undefined;
+    let status: string | null | undefined;
+    let responsavelCodfor: number | null | undefined;
+    let observacao: string | null | undefined;
+    if (no.tipo === "atividade") {
+      if (req.body?.status !== undefined) {
+        const statusValidos = ["nao_iniciada", "em_curso", "concluida"];
+        if (req.body.status != null && !statusValidos.includes(req.body.status)) {
+          res.status(400).json({ error: "status deve ser 'nao_iniciada', 'em_curso' ou 'concluida' ('bloqueada' é sempre calculada, nunca gravada)" });
+          return;
+        }
+        status = req.body.status ?? null;
+      }
+      if (req.body?.responsavelCodfor !== undefined) {
+        responsavelCodfor = req.body.responsavelCodfor != null ? Number(req.body.responsavelCodfor) : null;
+      }
+      if (req.body?.observacao !== undefined) {
+        observacao = typeof req.body.observacao === "string" && req.body.observacao.trim() !== "" ? req.body.observacao.trim() : null;
+      }
+      if (req.body?.duracaoHoras !== undefined) {
+        duracaoHoras = req.body.duracaoHoras != null ? Number(req.body.duracaoHoras) : null;
+        // Distribuição pode ser provisória — `confirmarExcedente` deixa passar mesmo
+        // estourando o saldo do item (o usuário já viu o aviso no drawer e confirmou).
+        // Sem essa flag, continua bloqueando — é só um "leve" a mais, não uma trava.
+        if (duracaoHoras != null && req.body?.confirmarExcedente !== true) {
+          // no.seqite nunca é null aqui — só pasta pode ser raiz (tipo="atividade" sempre
+          // pertence a um item, garantido na criação em POST /estrutura).
+          const saldo = await validarSomaEstrutura(no.codemp, no.codpro, no.seqite!, no.id, duracaoHoras);
+          if (!saldo.ok) {
+            res.status(400).json({ error: saldo.erro });
+            return;
+          }
+        }
+      }
+      if (req.body?.dataPrevistaInicio !== undefined) {
+        dataPrevistaInicio = req.body.dataPrevistaInicio ? new Date(req.body.dataPrevistaInicio) : null;
+      }
+      if (req.body?.dataPrevistaFim !== undefined) {
+        dataPrevistaFim = req.body.dataPrevistaFim ? new Date(req.body.dataPrevistaFim) : null;
+      }
+      if (dataPrevistaInicio && dataPrevistaFim && dataPrevistaInicio > dataPrevistaFim) {
+        res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
+        return;
+      }
+      if (req.body?.predecessoraId !== undefined) {
+        predecessoraId = req.body.predecessoraId != null ? Number(req.body.predecessoraId) : null;
+      }
+    }
+
+    await prisma.estruturaAtividade.update({
+      where: { id },
+      data: {
+        nome,
+        ordem,
+        parentId,
+        percentualConcluido,
+        duracaoHoras,
+        dataPrevistaInicio,
+        dataPrevistaFim,
+        predecessoraId,
+        status,
+        responsavelCodfor,
+        observacao,
+      },
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "estrutura-editar");
+  }
+});
+
+alocacaoRouter.delete("/estrutura/:id", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const no = await prisma.estruturaAtividade.findUnique({ where: { id } });
+    if (!no) {
+      res.status(404).json({ error: "Nó não encontrado" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    if (no.seqite == null) {
+      if (!(await podeGerenciarProposta(role, contexto, no.codemp, no.codpro))) {
+        res.status(403).json({ error: "Sem permissão para gerenciar esta proposta" });
+        return;
+      }
+    } else {
+      const item = await prisma.propostaItem.findUnique({
+        where: { codemp_codpro_seqite: { codemp: no.codemp, codpro: no.codpro, seqite: no.seqite } },
+      });
+      if (!item || item.depexe == null) {
+        res.status(404).json({ error: "Item de proposta não encontrado" });
+        return;
+      }
+      if (!podeExecutarAcao(role, contexto, "excluir", { depexe: item.depexe, codfor: 0 })) {
+        res.status(403).json({ error: "Sem permissão para editar a estrutura deste departamento" });
+        return;
+      }
+    }
+
+    const filhos = await prisma.estruturaAtividade.count({ where: { parentId: id } });
+    if (filhos > 0) {
+      res.status(400).json({ error: "Não é possível excluir: existem itens dentro desta pasta/atividade" });
+      return;
+    }
+    // Pasta raiz com item(ns) da proposta agrupados dentro: uma vez que um item entra
+    // numa pasta raiz, ela trava — não pode mais ser excluída (só esvaziada, movendo os
+    // itens de volta pra fora, um por um).
+    const itensAgrupados = await prisma.propostaItemPosicao.count({ where: { parentId: id } });
+    if (itensAgrupados > 0) {
+      res.status(400).json({ error: "Não é possível excluir: existem itens da proposta agrupados nesta pasta" });
+      return;
+    }
+    const alocacoesVinculadas = await prisma.atividadeConsultor.count({ where: { estruturaAtividadeId: id, sitreg: "A" } });
+    if (alocacoesVinculadas > 0) {
+      res.status(400).json({ error: "Não é possível excluir: existem consultores alocados nesta atividade" });
+      return;
+    }
+
+    await prisma.estruturaAtividade.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "estrutura-excluir");
+  }
+});
+
+// Agrupa (ou solta) um item de proposta dentro de uma pasta raiz — o item continua
+// virtual (nunca uma linha em EstruturaAtividade), só a posição é persistida aqui.
+// parentId null = solta o item (volta a ficar direto na raiz da árvore, comportamento
+// de sempre). Permissão é a mesma de editar o próprio item (mesmo depexe), não a da
+// pasta raiz em si (essa foi checada quando a pasta foi criada).
+alocacaoRouter.post("/propostas/:codemp/:codpro/itens/:seqite/posicao", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    const seqite = Number(req.params.seqite);
+    const parentId = req.body?.parentId != null ? Number(req.body.parentId) : null;
+    if (![codemp, codpro, seqite].every(Number.isFinite) || (req.body?.parentId != null && !Number.isFinite(parentId))) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+
+    const modo = await resolverModoAlocacao(codemp, codpro);
+    if (modo !== "estrutura") {
+      res.status(400).json({ error: "Esta proposta não está no modo de alocação por estrutura" });
+      return;
+    }
+
+    const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+    if (!item || item.depexe == null) {
+      res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    if (!podeExecutarAcao(role, contexto, "mover", { depexe: item.depexe, codfor: 0 })) {
+      res.status(403).json({ error: "Sem permissão para mover este item" });
+      return;
+    }
+
+    if (parentId != null) {
+      const pastaRaiz = await prisma.estruturaAtividade.findUnique({ where: { id: parentId } });
+      if (!pastaRaiz || pastaRaiz.codemp !== codemp || pastaRaiz.codpro !== codpro || pastaRaiz.seqite != null) {
+        res.status(400).json({ error: "Pasta raiz de destino não encontrada" });
+        return;
+      }
+      if (pastaRaiz.tipo !== "pasta") {
+        res.status(400).json({ error: "Só é possível agrupar um item dentro de uma pasta" });
+        return;
+      }
+      await prisma.propostaItemPosicao.upsert({
+        where: { codemp_codpro_seqite: { codemp, codpro, seqite } },
+        create: { codemp, codpro, seqite, parentId },
+        update: { parentId },
+      });
+    } else {
+      await prisma.propostaItemPosicao.deleteMany({ where: { codemp, codpro, seqite } });
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "item-posicao");
+  }
+});
 
 alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: AuthenticatedRequest, res) => {
   try {
@@ -513,6 +1243,27 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
     if (dataPrevistaInicio && dataPrevistaFim && dataPrevistaInicio > dataPrevistaFim) {
       res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
       return;
+    }
+
+    // Modo "estrutura": a alocação mira o nó-folha da EAP em vez de ir direto no item
+    // (ver resolverModoAlocacao/EstruturaAtividade) — o nó precisa existir e pertencer
+    // a este mesmo item.
+    let estruturaAtividadeId: number | null = null;
+    if (req.body?.estruturaAtividadeId != null) {
+      estruturaAtividadeId = Number(req.body.estruturaAtividadeId);
+      if (!Number.isFinite(estruturaAtividadeId)) {
+        res.status(400).json({ error: "estruturaAtividadeId inválido" });
+        return;
+      }
+      const no = await prisma.estruturaAtividade.findUnique({ where: { id: estruturaAtividadeId } });
+      if (!no || no.codemp !== codemp || no.codpro !== codpro || no.seqite !== seqite) {
+        res.status(400).json({ error: "Atividade da estrutura não encontrada neste item" });
+        return;
+      }
+      if (no.tipo !== "atividade") {
+        res.status(400).json({ error: "Só é possível alocar consultor em atividades-folha, não em pastas" });
+        return;
+      }
     }
 
     const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
@@ -553,7 +1304,7 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
       return;
     }
 
-    const saldo = await validarSaldo(codemp, codpro, seqite, qtdhor);
+    const saldo = await validarSaldo(codemp, codpro, seqite, qtdhor, { estruturaAtividadeId: estruturaAtividadeId ?? undefined });
     if (!saldo.ok) {
       res.status(400).json({ error: saldo.erro });
       return;
@@ -575,6 +1326,7 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
         dataPrevistaFim,
         fasid,
         colunaId: primeiraColuna?.id ?? null,
+        estruturaAtividadeId,
       },
     });
 
@@ -640,7 +1392,10 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
       return;
     }
 
-    const saldo = await validarSaldo(atividade.codemp, atividade.codpro, atividade.seqite, qtdhor, id);
+    const saldo = await validarSaldo(atividade.codemp, atividade.codpro, atividade.seqite, qtdhor, {
+      ignorarAtividadeId: id,
+      estruturaAtividadeId: atividade.estruturaAtividadeId ?? undefined,
+    });
     if (!saldo.ok) {
       res.status(400).json({ error: saldo.erro });
       return;

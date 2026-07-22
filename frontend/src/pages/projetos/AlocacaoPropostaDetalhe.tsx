@@ -1,7 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { formatHoras } from "../../utils/horas";
+import { formatHoras, horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 
 interface AlocacaoConsultor {
   id: number;
@@ -66,23 +66,6 @@ function formatPeriodo(inicio: string | null, fim: string | null): string | null
   return `${ini} - ${f}`;
 }
 
-// Aceita "H:MM" (H sem limite de dígitos, já que passa de 1.000h com facilidade —
-// mesma convenção de exibição usada em formatHoras), nunca decimal.
-function horasParaMinutos(horas: string): number | null {
-  const match = horas.trim().match(/^(\d+):([0-5]\d)$/);
-  if (!match) return null;
-  const total = Number(match[1]) * 60 + Number(match[2]);
-  return total > 0 ? total : null;
-}
-
-function minutosParaInputHoras(minutos: number | null): string {
-  if (minutos == null) return "";
-  const totalMinutos = Math.round(minutos);
-  const horasParte = Math.trunc(totalMinutos / 60);
-  const minutosParte = Math.abs(totalMinutos % 60);
-  return `${horasParte}:${String(minutosParte).padStart(2, "0")}`;
-}
-
 function paraInputDate(valor: string | null): string {
   if (!valor) return "";
   return valor.slice(0, 10);
@@ -100,6 +83,14 @@ export function AlocacaoPropostaDetalhe() {
   const [fases, setFases] = useState<Fase[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+
+  // Modo de alocação da proposta inteira: "item" (fluxo direto, de sempre) ou
+  // "estrutura" (EAP — pastas + atividades-folha). null = ainda não escolhido, mostra
+  // o modal de decisão antes de qualquer outra coisa. Escolhido uma vez, trava depois
+  // da primeira alocação (ver backend/src/routes/alocacao.ts).
+  const [modo, setModo] = useState<"item" | "estrutura" | null | "carregando">("carregando");
+  const [definindoModo, setDefinindoModo] = useState(false);
+  const [erroModo, setErroModo] = useState<string | null>(null);
 
   const [modal, setModal] = useState<ModalState>(null);
   const [consultoresElegiveis, setConsultoresElegiveis] = useState<ConsultorElegivel[]>([]);
@@ -125,14 +116,45 @@ export function AlocacaoPropostaDetalhe() {
       .finally(() => setLoading(false));
   }
 
+  function carregarModo() {
+    axios
+      .get(`/api/alocacao/propostas/${codemp}/${codpro}/modo`)
+      .then(({ data }) => setModo(data.modo))
+      .catch(() => setModo(null));
+  }
+
   useEffect(() => {
     carregar();
+    carregarModo();
     axios
       .get("/api/alocacao/fases")
       .then(({ data }) => setFases(data.fases))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codemp, codpro]);
+
+  // Modo "estrutura" não usa a divisão em 2 telas (lista de itens à esquerda + detalhe
+  // à direita) — é uma página única com todos os itens da proposta já carregados, então
+  // assim que o modo resolve pra "estrutura" já manda direto pra lá.
+  useEffect(() => {
+    if (modo === "estrutura") {
+      navigate(`/projetos/alocacao/${codemp}/${codpro}/cronograma`, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modo]);
+
+  async function escolherModo(escolha: "item" | "estrutura") {
+    setDefinindoModo(true);
+    setErroModo(null);
+    try {
+      await axios.post(`/api/alocacao/propostas/${codemp}/${codpro}/modo`, { modo: escolha });
+      setModo(escolha);
+    } catch (err: any) {
+      setErroModo(err.response?.data?.error ?? "Falha ao definir o modo de alocação");
+    } finally {
+      setDefinindoModo(false);
+    }
+  }
 
   const itemSelecionado = itens.find((i) => i.seqite === selecionado) ?? null;
 
@@ -272,6 +294,47 @@ export function AlocacaoPropostaDetalhe() {
         </p>
       )}
 
+      {modo === null && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-lg border border-border bg-surface p-6 shadow-lg">
+            <h2 className="mb-2 font-display text-lg font-bold text-foreground">Como esta proposta será alocada?</h2>
+            <p className="mb-4 text-sm text-muted">
+              Essa escolha vale pra proposta inteira e trava assim que a primeira alocação for feita — não dá pra trocar depois.
+            </p>
+
+            {erroModo && (
+              <p className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {erroModo}
+              </p>
+            )}
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                onClick={() => escolherModo("item")}
+                disabled={definindoModo}
+                className="rounded-lg border border-border p-4 text-left transition hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <p className="font-medium text-foreground">Por item</p>
+                <p className="mt-1 text-[12.5px] text-muted">
+                  Aloca horas de consultor direto em cada item da proposta — o fluxo de sempre.
+                </p>
+              </button>
+              <button
+                onClick={() => escolherModo("estrutura")}
+                disabled={definindoModo}
+                className="rounded-lg border border-border p-4 text-left transition hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <p className="font-medium text-foreground">Estrutura de pastas e atividades</p>
+                <p className="mt-1 text-[12.5px] text-muted">
+                  Quebra um item em pastas e atividades-folha (EAP) antes de alocar consultores em cada atividade.
+                </p>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modo === "item" && (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[420px_1fr]">
         <div className="overflow-hidden rounded-lg border border-border bg-surface">
           <div className="overflow-x-auto">
@@ -323,7 +386,7 @@ export function AlocacaoPropostaDetalhe() {
           </div>
         </div>
 
-        <div className="rounded-lg border border-border bg-surface p-5">
+        <div className="min-w-0 rounded-lg border border-border bg-surface p-5">
           {!itemSelecionado ? (
             <p className="text-sm text-muted">Selecione um item à esquerda.</p>
           ) : (
@@ -398,6 +461,7 @@ export function AlocacaoPropostaDetalhe() {
           )}
         </div>
       </div>
+      )}
 
       {modal && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4">
