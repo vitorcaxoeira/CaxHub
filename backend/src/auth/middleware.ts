@@ -3,6 +3,9 @@ import { verifyToken, TokenPayload } from "./jwt";
 
 export interface AuthenticatedRequest extends Request {
   user?: TokenPayload;
+  // Preenchido por attachCorrelationId (backend/src/audit/correlationId.ts), registrado
+  // globalmente em server.ts antes de qualquer router — disponível em toda rota.
+  correlationId?: string;
 }
 
 export function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): void {

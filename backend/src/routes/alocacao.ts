@@ -4,6 +4,11 @@ import { prisma } from "../db/prisma";
 import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
 import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
 import { enfileirar } from "../sync/outboxSenior";
+import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
+import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { Prisma } from "@prisma/client";
 
 // Área de alocação: o Líder Técnico (Gestor) distribui as horas de um item de proposta
 // entre um ou mais consultores do próprio time (AtividadeConsultor = "Distribuição
@@ -1347,22 +1352,48 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
 
     const primeiraColuna = await prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } });
 
-    const nova = await prisma.atividadeConsultor.create({
-      data: {
-        codemp,
-        codpro,
-        seqite,
-        codfor,
-        qtdhor,
-        sitreg: "A",
-        datger: new Date(),
-        usuger: contexto.consultor?.codusu ?? null,
-        dataPrevistaInicio,
-        dataPrevistaFim,
-        fasid,
-        colunaId: primeiraColuna?.id ?? null,
-        estruturaAtividadeId,
-      },
+    // Transação interativa (não array): o entidadeId do evento de auditoria é o `id`
+    // gerado pelo create, que só existe depois do insert — o padrão "array de operações"
+    // usado no resto do projeto não permite essa dependência entre operações da mesma
+    // transação.
+    const nova = await prisma.$transaction(async (tx) => {
+      const criada = await tx.atividadeConsultor.create({
+        data: {
+          codemp,
+          codpro,
+          seqite,
+          codfor,
+          qtdhor,
+          sitreg: "A",
+          datger: new Date(),
+          usuger: contexto.consultor?.codusu ?? null,
+          dataPrevistaInicio,
+          dataPrevistaFim,
+          fasid,
+          colunaId: primeiraColuna?.id ?? null,
+          estruturaAtividadeId,
+        },
+      });
+
+      const entidadeRotulo = `Alocação de ${consultorAlvo?.nomcom ?? consultorAlvo?.nomfor ?? `Fornecedor ${codfor}`} — Item ${seqite}`;
+      await criarEventoAuditoria(
+        {
+          origem: "tela",
+          usuarioId: user.id,
+          codemp,
+          codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+          entidadeId: entidadeIdAtividade(criada.id),
+          entidadeRotulo,
+          eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_CRIADA,
+          alteracoes: null,
+          metadata: { qtdhor, fasid },
+          correlationId: req.correlationId!,
+        },
+        tx
+      );
+
+      return criada;
     });
 
     await enfileirar(nova.id, "criar_atividade", {
@@ -1436,7 +1467,44 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
       return;
     }
 
-    await prisma.atividadeConsultor.update({ where: { id }, data: { qtdhor, dataPrevistaInicio, dataPrevistaFim } });
+    const entidadeId = entidadeIdAtividade(id);
+    const entidadeRotulo = `Alocação — Item ${atividade.seqite} da Proposta ${atividade.codemp}/${atividade.codpro}`;
+    const correlationId = req.correlationId!;
+    const ctxEvento = {
+      origem: "tela" as const,
+      usuarioId: ctx.user.id,
+      codemp: atividade.codemp,
+      codpro: atividade.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+      entidadeId,
+      entidadeRotulo,
+      correlationId,
+    };
+
+    const diffHoras = diffCampos(CAMPOS_AUDITADOS_ALOCACAO, atividade, paraDiff({ qtdhor }));
+    const operacoes: Prisma.PrismaPromise<unknown>[] = [
+      prisma.atividadeConsultor.update({ where: { id }, data: { qtdhor, dataPrevistaInicio, dataPrevistaFim } }),
+    ];
+    if (diffHoras.algumaMudanca) {
+      operacoes.push(
+        criarEventoAuditoria({
+          ...ctxEvento,
+          eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_ALTERADA,
+          alteracoes: diffHoras.alteracoes,
+          metadata: null,
+        })
+      );
+    }
+    operacoes.push(
+      ...criarEventosDeData(
+        CAMPOS_AUDITADOS_ATIVIDADE_DATAS,
+        { dataPrevistaInicio: atividade.dataPrevistaInicio, dataPrevistaFim: atividade.dataPrevistaFim },
+        { dataPrevistaInicio, dataPrevistaFim },
+        { ...ctxEvento, entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE }
+      )
+    );
+    await prisma.$transaction(operacoes);
+
     await enfileirar(id, "editar_atividade", {
       qtdhorNovo: qtdhor,
       dataPrevistaInicio: dataPrevistaInicio?.toISOString() ?? null,
@@ -1479,7 +1547,22 @@ alocacaoRouter.delete("/alocacoes/:id", async (req: AuthenticatedRequest, res) =
     // Soft-delete (mesma convenção do sitreg do ERP: A=Ativo, I=Inativo) — evita mexer
     // no histórico/comentários/anexos já vinculados e é o mesmo filtro que já esconde
     // a atividade das telas de Kanban/Lista/Calendário/Timeline/Workload.
-    await prisma.atividadeConsultor.update({ where: { id }, data: { sitreg: "I" } });
+    await prisma.$transaction([
+      prisma.atividadeConsultor.update({ where: { id }, data: { sitreg: "I" } }),
+      criarEventoAuditoria({
+        origem: "tela",
+        usuarioId: ctx.user.id,
+        codemp: atividade.codemp,
+        codpro: atividade.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+        entidadeId: entidadeIdAtividade(id),
+        entidadeRotulo: `Alocação — Item ${atividade.seqite} da Proposta ${atividade.codemp}/${atividade.codpro}`,
+        eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_REMOVIDA,
+        alteracoes: null,
+        metadata: null,
+        correlationId: req.correlationId!,
+      }),
+    ]);
     await enfileirar(id, "remover_atividade", {});
 
     res.json({ ok: true });

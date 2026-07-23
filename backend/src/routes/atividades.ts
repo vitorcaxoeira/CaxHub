@@ -10,6 +10,10 @@ import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoP
 import { criarNotificacao, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
 import { enfileirar } from "../sync/outboxSenior";
+import { criarEventoAuditoria, criarEventosDeData } from "../audit/registrarEvento";
+import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 
 // Router à parte de `projetosRouter` (que hoje é admin+comercial só, por causa de
 // Propostas) — aqui a tela é aberta a qualquer usuário autenticado; quem pode ver/mover
@@ -491,6 +495,20 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     // entrar numa coluna marcada como "em execução" abre uma nova. O mesmo instante é
     // usado pros dois lados pra não deixar brecha/sobreposição entre fechar e abrir.
     const agora = new Date();
+    const colunaAnterior = atividade.colunaId != null ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } }) : null;
+    const sessaoAbertaAntes = await prisma.atividadeSessaoExecucao.findFirst({ where: { atividadeId: id, fim: null } });
+
+    const entidadeId = entidadeIdAtividade(id);
+    const correlationId = req.correlationId!;
+    const ctxEvento = {
+      origem: "tela" as const,
+      usuarioId: user.id,
+      codemp: atividade.codemp,
+      codpro: atividade.codpro,
+      entidadeId,
+      correlationId,
+    };
+
     const operacoes = [
       prisma.atividadeConsultor.update({ where: { id }, data: { colunaId: colunaIdNovo } }),
       prisma.atividadeHistoricoMovimentacao.create({
@@ -509,6 +527,38 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
         ? [
             prisma.atividadeSessaoExecucao.create({
               data: { atividadeId: id, colunaId: colunaIdNovo, inicio: agora, origem: "movimentacao_kanban" },
+            }),
+          ]
+        : []),
+      criarEventoAuditoria({
+        ...ctxEvento,
+        entidadeTipo: ENTIDADES_AUDITORIA.KANBAN_CARD,
+        entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
+        eventoTipo: EVENTOS_AUDITORIA.KANBAN_RAIA_ALTERADA,
+        alteracoes: { colunaId: { de: atividade.colunaId, para: colunaIdNovo } },
+        metadata: { raia_de: colunaAnterior?.nome ?? null, raia_para: colunaNova.nome },
+      }),
+      ...(sessaoAbertaAntes
+        ? [
+            criarEventoAuditoria({
+              ...ctxEvento,
+              entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+              entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
+              eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_PARADA,
+              alteracoes: null,
+              metadata: { coluna: colunaAnterior?.nome ?? null },
+            }),
+          ]
+        : []),
+      ...(colunaNova.contaComoExecucao
+        ? [
+            criarEventoAuditoria({
+              ...ctxEvento,
+              entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+              entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
+              eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_INICIADA,
+              alteracoes: null,
+              metadata: { coluna: colunaNova.nome },
             }),
           ]
         : []),
@@ -569,16 +619,30 @@ atividadesRouter.patch("/:id/planejamento", async (req: AuthenticatedRequest, re
       return;
     }
 
-    const atualizada = await prisma.atividadeConsultor.update({
-      where: { id },
-      data: { dataPrevistaInicio, dataPrevistaFim },
-    });
+    const operacoes = [
+      prisma.atividadeConsultor.update({
+        where: { id },
+        data: { dataPrevistaInicio, dataPrevistaFim },
+      }),
+      ...criarEventosDeData(
+        CAMPOS_AUDITADOS_ATIVIDADE_DATAS,
+        { dataPrevistaInicio: resolvido.atividade.dataPrevistaInicio, dataPrevistaFim: resolvido.atividade.dataPrevistaFim },
+        { dataPrevistaInicio, dataPrevistaFim },
+        {
+          origem: "tela",
+          usuarioId: ctx.user.id,
+          codemp: resolvido.atividade.codemp,
+          codpro: resolvido.atividade.codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+          entidadeId: entidadeIdAtividade(id),
+          entidadeRotulo: `Atividade — Proposta ${resolvido.atividade.codpro}`,
+          correlationId: req.correlationId!,
+        }
+      ),
+    ];
+    await prisma.$transaction(operacoes);
 
-    res.json({
-      id: atualizada.id,
-      dataPrevistaInicio: atualizada.dataPrevistaInicio,
-      dataPrevistaFim: atualizada.dataPrevistaFim,
-    });
+    res.json({ id, dataPrevistaInicio, dataPrevistaFim });
   } catch (error) {
     handleError(res, error, "planejamento");
   }

@@ -1,4 +1,4 @@
-// Script de verificação manual dos critérios de aceite da Fase 1 do módulo de
+// Script de verificação manual dos critérios de aceite das Fases 1 e 2 do módulo de
 // Auditoria (não é uma suíte automatizada — o projeto não tem framework de teste
 // configurado hoje). Roda contra o banco de DEV apontado por DATABASE_URL.
 //
@@ -7,7 +7,11 @@ import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../src/db/prisma";
 import { processarLinhasProposta, PropostaRow } from "../src/sync/propostaSync";
-import { EVENTOS_AUDITORIA } from "../src/audit/taxonomia";
+import { processarFilaSincronizacao } from "../src/sync/outboxSenior";
+import { EVENTOS_AUDITORIA, ENTIDADES_AUDITORIA } from "../src/audit/taxonomia";
+import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../src/audit/registrarEvento";
+import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../src/audit/camposAuditados";
+import { entidadeIdAtividade } from "../src/audit/identidadeEntidade";
 
 if (process.env.NODE_ENV === "production") {
   console.error("Recusando rodar em NODE_ENV=production — este script cria/apaga dados de teste.");
@@ -20,6 +24,7 @@ const CODPRO_B = 900002; // cenário B: sitpro + outro campo monitorado
 const CODPRO_C = 900003; // cenário C: rollback (FK inválida força erro no upsert)
 const CODCLI = 900001;
 const CODCLI_INEXISTENTE = 999999999;
+const FASID_TESTE = 900001;
 
 let falhas = 0;
 
@@ -53,8 +58,10 @@ function linhaBase(codpro: number): PropostaRow {
 
 async function limparDadosDeTeste() {
   await prisma.auditEvento.deleteMany({ where: { codemp: CODEMP } });
+  await prisma.atividadeConsultor.deleteMany({ where: { codemp: CODEMP } });
   await prisma.proposta.deleteMany({ where: { codemp: CODEMP } });
   await prisma.cliente.deleteMany({ where: { codcli: { in: [CODCLI] } } });
+  await prisma.faseProposta.deleteMany({ where: { fasid: FASID_TESTE } });
 }
 
 async function prepararCliente() {
@@ -148,6 +155,182 @@ async function cenarioC_rollbackNaoDeixaOrfao() {
   assert(propostaCriada === null, "proposta também não foi criada (upsert fez parte do rollback)");
 }
 
+async function prepararFase() {
+  await prisma.faseProposta.upsert({
+    where: { fasid: FASID_TESTE },
+    update: {},
+    create: { fasid: FASID_TESTE, fasdes: "Fase Teste Auditoria" },
+  });
+}
+
+// AuditEvento.codemp/codpro tem FK pra Proposta — os cenários de atividade/alocação
+// também precisam de uma Proposta real por trás pra poder desnormalizar o proposta_id
+// no evento, mesmo não usando os campos de Proposta em si.
+async function prepararPropostaTeste(codpro: number) {
+  await prisma.proposta.upsert({
+    where: { codemp_codpro: { codemp: CODEMP, codpro } },
+    update: {},
+    create: { codemp: CODEMP, codpro, codcli: CODCLI, numprj: 1, codfpj: 1, idcom: 1, codrep: 1, numped: 1 },
+  });
+}
+
+async function cenarioE_alocacaoCriadaAlteradaRemovida() {
+  console.log("\nCenário E — ALOCACAO_CRIADA / ALOCACAO_ALTERADA / ALOCACAO_REMOVIDA");
+  await prepararPropostaTeste(900700);
+
+  // Reproduz o mesmo formato de transação interativa usado em alocacao.ts (POST
+  // .../alocacoes): cria a linha e, na mesma transação, o evento com o id gerado.
+  const criada = await prisma.$transaction(async (tx) => {
+    const nova = await tx.atividadeConsultor.create({
+      data: { codemp: CODEMP, codpro: 900700, seqite: 1, codfor: 1, qtdhor: 100, sitreg: "A", fasid: FASID_TESTE },
+    });
+    await criarEventoAuditoria(
+      {
+        origem: "tela",
+        codemp: CODEMP,
+        codpro: 900700,
+        entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+        entidadeId: entidadeIdAtividade(nova.id),
+        entidadeRotulo: "Alocação de teste",
+        eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_CRIADA,
+        alteracoes: null,
+        metadata: { qtdhor: 100 },
+        correlationId: randomUUID(),
+      },
+      tx
+    );
+    return nova;
+  });
+
+  const eventoCriacao = await prisma.auditEvento.findFirst({ where: { entidadeId: entidadeIdAtividade(criada.id) } });
+  assert(eventoCriacao?.eventoTipo === EVENTOS_AUDITORIA.ALOCACAO_CRIADA, "ALOCACAO_CRIADA gravado com o id real da linha criada");
+
+  // Alterar qtdhor — mesmo padrão de diff usado em PATCH /alocacoes/:id.
+  const diffHoras = diffCampos(CAMPOS_AUDITADOS_ALOCACAO, criada, paraDiff({ qtdhor: 250 }));
+  assert(diffHoras.algumaMudanca && "qtdhor" in diffHoras.alteracoes, "diff de qtdhor detecta a mudança 100 -> 250");
+  await prisma.$transaction([
+    prisma.atividadeConsultor.update({ where: { id: criada.id }, data: { qtdhor: 250 } }),
+    criarEventoAuditoria({
+      origem: "tela",
+      codemp: CODEMP,
+      codpro: 900700,
+      entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+      entidadeId: entidadeIdAtividade(criada.id),
+      entidadeRotulo: "Alocação de teste",
+      eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_ALTERADA,
+      alteracoes: diffHoras.alteracoes,
+      metadata: null,
+      correlationId: randomUUID(),
+    }),
+  ]);
+  const eventoAlteracao = await prisma.auditEvento.findFirst({
+    where: { entidadeId: entidadeIdAtividade(criada.id), eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_ALTERADA },
+  });
+  assert(eventoAlteracao !== null, "ALOCACAO_ALTERADA gravado ao mudar qtdhor");
+
+  // Soft-delete — mesmo padrão de PATCH /alocacao/alocacoes/:id (DELETE).
+  await prisma.$transaction([
+    prisma.atividadeConsultor.update({ where: { id: criada.id }, data: { sitreg: "I" } }),
+    criarEventoAuditoria({
+      origem: "tela",
+      codemp: CODEMP,
+      codpro: 900700,
+      entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+      entidadeId: entidadeIdAtividade(criada.id),
+      entidadeRotulo: "Alocação de teste",
+      eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_REMOVIDA,
+      alteracoes: null,
+      metadata: null,
+      correlationId: randomUUID(),
+    }),
+  ]);
+  const eventoRemocao = await prisma.auditEvento.findFirst({
+    where: { entidadeId: entidadeIdAtividade(criada.id), eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_REMOVIDA },
+  });
+  assert(eventoRemocao !== null, "ALOCACAO_REMOVIDA gravado no soft-delete (sitreg A -> I)");
+}
+
+async function cenarioF_dataIncluidaEAlterada() {
+  console.log("\nCenário F — DATA_INCLUIDA (null -> valor) e DATA_ALTERADA (valor -> outro valor)");
+  await prepararPropostaTeste(900701);
+
+  const criada = await prisma.atividadeConsultor.create({
+    data: {
+      codemp: CODEMP,
+      codpro: 900701,
+      seqite: 1,
+      codfor: 1,
+      qtdhor: 100,
+      sitreg: "A",
+      fasid: FASID_TESTE,
+      dataPrevistaInicio: new Date("2026-01-01"),
+      dataPrevistaFim: null,
+    },
+  });
+
+  const correlationId = randomUUID();
+  const operacoes = criarEventosDeData(
+    CAMPOS_AUDITADOS_ATIVIDADE_DATAS,
+    { dataPrevistaInicio: criada.dataPrevistaInicio, dataPrevistaFim: criada.dataPrevistaFim },
+    { dataPrevistaInicio: new Date("2026-02-01"), dataPrevistaFim: new Date("2026-03-01") },
+    {
+      origem: "tela",
+      codemp: CODEMP,
+      codpro: 900701,
+      entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+      entidadeId: entidadeIdAtividade(criada.id),
+      entidadeRotulo: "Atividade de teste",
+      correlationId,
+    }
+  );
+  assert(operacoes.length === 2, `criarEventosDeData gerou 2 operações (gerou ${operacoes.length})`);
+  await prisma.$transaction(operacoes);
+
+  const eventos = await prisma.auditEvento.findMany({ where: { entidadeId: entidadeIdAtividade(criada.id) } });
+  const tipos = eventos.map((e) => e.eventoTipo).sort();
+  assert(
+    JSON.stringify(tipos) === JSON.stringify([EVENTOS_AUDITORIA.DATA_ALTERADA, EVENTOS_AUDITORIA.DATA_INCLUIDA].sort()),
+    "um evento é DATA_INCLUIDA (dataPrevistaFim, era null) e outro é DATA_ALTERADA (dataPrevistaInicio, tinha valor)"
+  );
+  const correlationIds = new Set(eventos.map((e) => e.correlationId));
+  assert(correlationIds.size === 1, "os 2 eventos de data compartilham o mesmo correlationId");
+}
+
+async function cenarioG_ativadeEnviadaSenior() {
+  console.log("\nCenário G — ATIVIDADE_ENVIADA_SENIOR (fila outbox assíncrona)");
+
+  const pendentesExistentes = await prisma.sincronizacaoPendente.count({ where: { status: "pendente" } });
+  if (pendentesExistentes > 0) {
+    console.log(
+      `  PULADO: já existem ${pendentesExistentes} item(ns) reais na fila outbox — processarFilaSincronizacao() mexeria neles. Rode este cenário manualmente com a fila vazia.`
+    );
+    return;
+  }
+  await prepararPropostaTeste(900702);
+
+  const atividade = await prisma.atividadeConsultor.create({
+    data: { codemp: CODEMP, codpro: 900702, seqite: 1, codfor: 1, qtdhor: 100, sitreg: "A", fasid: FASID_TESTE },
+  });
+  const pendente = await prisma.sincronizacaoPendente.create({
+    data: { atividadeId: atividade.id, tipo: "mover_coluna", payload: { teste: true }, status: "pendente", tentativas: 0 },
+  });
+
+  await processarFilaSincronizacao(); // enviarParaSenior é um stub que sempre falha — testa o caminho de erro
+
+  const evento = await prisma.auditEvento.findFirst({
+    where: { entidadeId: entidadeIdAtividade(atividade.id), eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_ENVIADA_SENIOR },
+  });
+  assert(evento !== null, "ATIVIDADE_ENVIADA_SENIOR gravado mesmo em falha de envio (auditoria registra tentativas)");
+  const metadata = (evento?.metadata ?? {}) as Record<string, unknown>;
+  assert(metadata.sucesso === false, "metadata.sucesso é false (canal do Senior é stub que sempre falha)");
+  assert(typeof metadata.duracaoMs === "number", "metadata.duracaoMs é numérico");
+
+  const pendenteAtualizado = await prisma.sincronizacaoPendente.findUnique({ where: { id: pendente.id } });
+  assert(pendenteAtualizado?.tentativas === 1, "tentativas incrementou de 0 para 1 na fila");
+
+  await prisma.sincronizacaoPendente.delete({ where: { id: pendente.id } });
+}
+
 async function cenarioD_paginacaoPorCursor() {
   console.log("\nCenário D — paginação por cursor em massa (≥1000 eventos, com timestamps duplicados)");
   const TOTAL = 1200;
@@ -214,15 +397,26 @@ async function cenarioD_paginacaoPorCursor() {
 async function main() {
   await limparDadosDeTeste();
   await prepararCliente();
+  await prepararFase();
 
   await cenarioA_diffApenasWhitelist();
   await cenarioB_splitDeStatus();
   await cenarioC_rollbackNaoDeixaOrfao();
   await cenarioD_paginacaoPorCursor();
+  await cenarioE_alocacaoCriadaAlteradaRemovida();
+  await cenarioF_dataIncluidaEAlterada();
+  await cenarioG_ativadeEnviadaSenior();
 
   await limparDadosDeTeste();
 
-  console.log(falhas === 0 ? "\nTodos os critérios de aceite da Fase 1 passaram." : `\n${falhas} critério(s) falharam.`);
+  console.log(
+    "\nNota: KANBAN_RAIA_ALTERADA, ATIVIDADE_INICIADA e ATIVIDADE_PARADA nascem inline em " +
+      "PATCH /atividades/:id/mover (não é uma função exportável isolada como os cenários acima) — " +
+      "verificar manualmente: mover um card pra uma coluna com contaComoExecucao=true e depois pra " +
+      "outra, e conferir os 3 eventos gerados em GET /api/auditoria?entidadeId=<id>&agrupar=true."
+  );
+
+  console.log(falhas === 0 ? "\nTodos os critérios de aceite automatizáveis passaram." : `\n${falhas} critério(s) falharam.`);
   process.exit(falhas === 0 ? 0 : 1);
 }
 

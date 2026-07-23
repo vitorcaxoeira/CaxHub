@@ -1,6 +1,10 @@
 import cron from "node-cron";
+import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
+import { criarEventoAuditoria } from "../audit/registrarEvento";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 
 const JOB_NAME = "outbox_senior-sync";
 
@@ -37,24 +41,65 @@ export async function processarFilaSincronizacao(): Promise<void> {
   let falhas = 0;
 
   for (const item of pendentes) {
+    // Auditoria registra a TENTATIVA de envio, não só sucesso — o evento nasce aqui
+    // (processamento assíncrono da fila), não no clique do usuário que originou o
+    // SincronizacaoPendente: o correlationId é por item processado, não pela ação
+    // original. codemp/codpro vêm da atividade (denormalização do proposta_id).
+    const atividade = await prisma.atividadeConsultor.findUnique({ where: { id: item.atividadeId } });
+    const entidadeId = entidadeIdAtividade(item.atividadeId);
+    const entidadeRotulo = atividade ? `Atividade — Proposta ${atividade.codpro}` : `Atividade ${item.atividadeId}`;
+    const correlationId = randomUUID();
+    const payloadResumo = JSON.stringify(item.payload).slice(0, 1000);
+    const inicioEnvio = Date.now();
+
     try {
       await enviarParaSenior(item);
-      await prisma.sincronizacaoPendente.update({
-        where: { id: item.id },
-        data: { status: "enviado", processadoEm: new Date() },
-      });
+      const duracaoMs = Date.now() - inicioEnvio;
+      await prisma.$transaction([
+        prisma.sincronizacaoPendente.update({
+          where: { id: item.id },
+          data: { status: "enviado", processadoEm: new Date() },
+        }),
+        criarEventoAuditoria({
+          origem: "job",
+          codemp: atividade?.codemp ?? null,
+          codpro: atividade?.codpro ?? null,
+          entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+          entidadeId,
+          entidadeRotulo,
+          eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_ENVIADA_SENIOR,
+          alteracoes: null,
+          metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: true, duracaoMs },
+          correlationId,
+        }),
+      ]);
       enviados += 1;
     } catch (error) {
+      const duracaoMs = Date.now() - inicioEnvio;
       const message = error instanceof Error ? error.message : String(error);
       const tentativas = item.tentativas + 1;
-      await prisma.sincronizacaoPendente.update({
-        where: { id: item.id },
-        data: {
-          tentativas,
-          ultimoErro: message,
-          status: tentativas >= MAX_TENTATIVAS ? "bloqueado" : "pendente",
-        },
-      });
+      await prisma.$transaction([
+        prisma.sincronizacaoPendente.update({
+          where: { id: item.id },
+          data: {
+            tentativas,
+            ultimoErro: message,
+            status: tentativas >= MAX_TENTATIVAS ? "bloqueado" : "pendente",
+          },
+        }),
+        criarEventoAuditoria({
+          origem: "job",
+          codemp: atividade?.codemp ?? null,
+          codpro: atividade?.codpro ?? null,
+          entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+          entidadeId,
+          entidadeRotulo,
+          eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_ENVIADA_SENIOR,
+          alteracoes: null,
+          metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: false, erro: message, duracaoMs },
+          correlationId,
+        }),
+      ]);
       falhas += 1;
     }
   }

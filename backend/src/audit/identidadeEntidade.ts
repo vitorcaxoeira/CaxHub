@@ -8,3 +8,10 @@ export function entidadeIdProposta(codemp: number, codpro: number): string {
 export function entidadeIdPropostaItem(codemp: number, codpro: number, seqite: number): string {
   return `${codemp}:${codpro}:${seqite}`;
 }
+
+// AtividadeConsultor tem PK própria simples (id autoincrement) — usada como entidadeId
+// tanto pra entidadeTipo "atividade" quanto "alocacao"/"kanban_card" (mesma linha,
+// vista por três lentes diferentes conforme a rota que gerou o evento).
+export function entidadeIdAtividade(id: number): string {
+  return String(id);
+}

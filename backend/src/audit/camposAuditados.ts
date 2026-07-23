@@ -26,3 +26,24 @@ export const CAMPOS_AUDITADOS_PROPOSTA_ITEM: Record<string, string> = {
   sitprz: "Situação de Prazo",
   depexe: "Departamento Executor",
 };
+
+// Único campo hoje editável em PATCH /alocacao/alocacoes/:id além das datas (ver
+// CAMPOS_AUDITADOS_ATIVIDADE_DATAS) — dispara ALOCACAO_ALTERADA quando muda.
+export const CAMPOS_AUDITADOS_ALOCACAO: Record<string, string> = {
+  qtdhor: "Horas Alocadas",
+};
+
+// dataPrevistaInicio/dataPrevistaFim de AtividadeConsultor — diferente de diffCampos
+// genérico: cada campo é classificado individualmente como DATA_INCLUIDA (null -> valor)
+// ou DATA_ALTERADA (valor -> outro valor), não um único evento agregando os dois — ver
+// classificarMudancaData em registrarEvento.ts.
+export const CAMPOS_AUDITADOS_ATIVIDADE_DATAS: Record<string, string> = {
+  dataPrevistaInicio: "Data Prevista de Início",
+  dataPrevistaFim: "Data Prevista de Fim",
+};
+
+// NOTA (Fase 2): ATIVIDADE_AJUSTADA está na taxonomia (taxonomia.ts) mas não tem
+// gatilho próprio hoje — as únicas escritas em AtividadeConsultor após a criação são
+// qtdhor (-> ALOCACAO_ALTERADA acima) e as datas (-> DATA_INCLUIDA/DATA_ALTERADA).
+// Não existe rota de "ajustar escopo" (fasid/estruturaAtividadeId são fixados só na
+// criação). Fica reservado pra quando essa rota existir.
