@@ -916,6 +916,24 @@ model FaseProposta {
 // nunca faz UPDATE/DELETE aqui). Um evento por mudança individualmente relevante; eventos
 // nascidos da mesma "ação" (ex.: uma linha de sync que alterou 3 campos monitorados)
 // compartilham `correlationId`. Ver backend/src/audit/ para a lógica de captura.
+//
+// RETENÇÃO (Fase 4 — documentado, não implementado): a tabela cresce sem expurgo hoje.
+// Estratégia proposta para quando o volume justificar (ex.: > alguns milhões de linhas
+// ou impacto perceptível de performance nos índices):
+//   1. Arquivar (não apagar) eventos com `ocorridoEm` older que 24 meses — mover pra uma
+//      tabela fria (`audit_evento_arquivo`, schema idêntico, sem os índices de consulta
+//      "quente") ou exportar em lote pra arquivo (CSV/Parquet) em storage externo antes
+//      de remover da tabela principal. Nunca DELETE simples sem cópia — auditoria não
+//      pode "desaparecer", só sair do caminho quente de consulta.
+//   2. Job mensal (mesmo padrão de cron dos outros jobs de sync em backend/src/sync/),
+//      rodando fora do horário de pico, movendo em lotes pequenos (evita lock longo
+//      numa tabela grande).
+//   3. `GET /auditoria` e `GET /auditoria/entidade/:tipo/:id` (backend/src/routes/
+//      auditoria.ts) passariam a consultar as duas tabelas só se um filtro de período
+//      pedir explicitamente dados mais antigos que 24 meses — o caminho comum (sem
+//      filtro de período longo) nunca toca a tabela fria.
+//   4. Ajustar o prazo de 24 meses é só mudar a constante do job — não é um valor fixo
+//      no schema nem no código de consulta.
 model AuditEvento {
   id         BigInt   @id @default(autoincrement())
   ocorridoEm DateTime @default(now()) @db.Timestamptz(6)

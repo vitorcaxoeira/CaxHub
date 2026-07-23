@@ -1,7 +1,7 @@
 import { NextFunction, Response, Router } from "express";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { resolverContextoConsultor } from "../domain/contextoProjeto";
+import { podeExecutarAcao, resolverContextoConsultor } from "../domain/contextoProjeto";
 import { Prisma } from "@prisma/client";
 
 const INCLUDE_USUARIO = { usuario: { select: { nome: true, fotoUrl: true } } } as const;
@@ -32,7 +32,35 @@ async function requireAcessoAuditoria(req: AuthenticatedRequest, res: Response, 
   res.status(403).json({ error: "Sem permissão para acessar a auditoria" });
 }
 
-auditoriaRouter.use(requireAuth, requireAcessoAuditoria);
+// RBAC fino (Fase 4): consultor comum não vê a tela principal (acima), mas pode ver o
+// histórico contextual das PRÓPRIAS atividades (aba "Auditoria" dentro de
+// AtividadeDetalhe.tsx) — mesmo recorte de "visualizar" já usado em atividades.ts/
+// alocacao.ts (podeExecutarAcao). Proposta/proposta_item continuam só pra admin/gestor,
+// mesmo via /entidade/:tipo/:id — "próprias atividades" no pedido original não inclui
+// a proposta inteira.
+async function podeVerEntidade(req: AuthenticatedRequest, entidadeTipo: string, entidadeId: string): Promise<boolean> {
+  if (req.user!.role === "admin") return true;
+
+  const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+  if (!user) return false;
+  const contexto = await resolverContextoConsultor(user.email);
+  if (contexto.departamentosGerenciados.length > 0) return true;
+
+  if (!["atividade", "alocacao", "kanban_card"].includes(entidadeTipo)) return false;
+  const atividadeId = Number(entidadeId);
+  if (!Number.isFinite(atividadeId)) return false;
+
+  const atividade = await prisma.atividadeConsultor.findUnique({ where: { id: atividadeId } });
+  if (!atividade) return false;
+  const item = await prisma.propostaItem.findUnique({
+    where: { codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite } },
+  });
+  if (!item || item.depexe == null) return false;
+
+  return podeExecutarAcao(req.user!.role, contexto, "visualizar", { depexe: item.depexe, codfor: atividade.codfor });
+}
+
+auditoriaRouter.use(requireAuth);
 
 function handleError(res: Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);
@@ -156,7 +184,7 @@ async function buscarPagina(filtros: FiltrosAuditoria) {
   return { rows: grupos, nextCursor };
 }
 
-auditoriaRouter.get("/", async (req: AuthenticatedRequest, res) => {
+auditoriaRouter.get("/", requireAcessoAuditoria, async (req: AuthenticatedRequest, res) => {
   try {
     const filtros = montarFiltros(req.query);
     const resultado = await buscarPagina(filtros);
@@ -166,8 +194,79 @@ auditoriaRouter.get("/", async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// Máximo de linhas por exportação — evita uma query descontrolada; o filtro de período/
+// proposta já aplicado na tela é o jeito de restringir mais. Só admin/gestor (mesmo
+// recorte da tela principal, não do histórico contextual por entidade).
+const LIMITE_EXPORT_CSV = 5000;
+
+function csvEscape(valor: unknown): string {
+  if (valor === null || valor === undefined) return "";
+  const texto = typeof valor === "object" ? JSON.stringify(valor) : String(valor);
+  if (/[",\n]/.test(texto)) return `"${texto.replace(/"/g, '""')}"`;
+  return texto;
+}
+
+auditoriaRouter.get("/export", requireAcessoAuditoria, async (req: AuthenticatedRequest, res) => {
+  try {
+    const filtros = montarFiltros(req.query);
+    const linhas = await prisma.auditEvento.findMany({
+      where: filtros.where,
+      orderBy: [{ ocorridoEm: "desc" }, { id: "desc" }],
+      take: LIMITE_EXPORT_CSV,
+      include: INCLUDE_USUARIO,
+    });
+
+    const cabecalho = [
+      "id",
+      "ocorrido_em",
+      "usuario",
+      "origem",
+      "codemp",
+      "codpro",
+      "entidade_tipo",
+      "entidade_id",
+      "entidade_rotulo",
+      "evento_tipo",
+      "alteracoes",
+      "metadata",
+      "correlation_id",
+    ];
+    const corpo = linhas.map((e) =>
+      [
+        e.id.toString(),
+        e.ocorridoEm.toISOString(),
+        e.usuario?.nome ?? "",
+        e.origem,
+        e.codemp ?? "",
+        e.codpro ?? "",
+        e.entidadeTipo,
+        e.entidadeId,
+        e.entidadeRotulo ?? "",
+        e.eventoTipo,
+        e.alteracoes ?? "",
+        e.metadata ?? "",
+        e.correlationId,
+      ]
+        .map(csvEscape)
+        .join(",")
+    );
+    const csv = [cabecalho.join(","), ...corpo].join("\n");
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="auditoria_${Date.now()}.csv"`);
+    res.send(`﻿${csv}`); // BOM: Excel no Windows abre UTF-8 corretamente com acentos
+  } catch (error) {
+    handleError(res, error, "export");
+  }
+});
+
 auditoriaRouter.get("/entidade/:tipo/:id", async (req: AuthenticatedRequest, res) => {
   try {
+    const permitido = await podeVerEntidade(req, req.params.tipo, req.params.id);
+    if (!permitido) {
+      res.status(403).json({ error: "Sem permissão para ver o histórico desta entidade" });
+      return;
+    }
     const filtros = montarFiltros(req.query);
     filtros.where.entidadeTipo = req.params.tipo;
     filtros.where.entidadeId = req.params.id;

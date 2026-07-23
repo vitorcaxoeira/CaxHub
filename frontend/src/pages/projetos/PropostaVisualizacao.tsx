@@ -2,6 +2,8 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { formatHoras } from "../../utils/horas";
+import { Tabs } from "../../components/ui/Tabs";
+import { HistoricoContextual } from "../../components/auditoria/HistoricoContextual";
 
 interface PropostaDetalhe {
   codemp: number;
@@ -110,6 +112,7 @@ export function PropostaVisualizacao() {
   const [totais, setTotais] = useState<Totais | null>(null);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [aba, setAba] = useState<"detalhes" | "auditoria">("detalhes");
 
   useEffect(() => {
     setLoading(true);
@@ -152,6 +155,22 @@ export function PropostaVisualizacao() {
             <p className="mt-1 text-sm text-muted">{proposta.cliente}</p>
           </div>
 
+          <Tabs
+            tabs={[
+              { key: "detalhes", label: "Detalhes" },
+              { key: "auditoria", label: "Auditoria" },
+            ]}
+            activeKey={aba}
+            onChange={(key) => setAba(key as "detalhes" | "auditoria")}
+          />
+
+          {aba === "auditoria" && (
+            <div className="rounded-lg border border-border bg-surface p-5">
+              <HistoricoContextual entidadeTipo="proposta" entidadeId={`${proposta.codemp}:${proposta.codpro}`} />
+            </div>
+          )}
+
+          {aba === "detalhes" && (
           <div className="space-y-4">
             <Secao titulo="Classificação">
               <Campo label="Departamento Executor" valor={proposta.depexeLabel} />
@@ -324,6 +343,7 @@ export function PropostaVisualizacao() {
               </div>
             </div>
           </div>
+          )}
         </>
       )}
     </div>

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { orcamentoDeTotais, formatHorasCompacto, descreverSaldoDistribuicao } from "../../lib/cronograma";
 import { toneBadge } from "../ui/badges";
+import { HistoricoContextual } from "../auditoria/HistoricoContextual";
 
 interface Comentario {
   id: number;
@@ -457,6 +458,11 @@ export function AtividadeDetalhe({
                   ))}
                   {historico.length === 0 && <p className="text-[12.5px] text-muted">Sem movimentações registradas.</p>}
                 </div>
+              </section>
+
+              <section>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Auditoria</p>
+                <HistoricoContextual entidadeTipo="atividade" entidadeId={atividadeId} />
               </section>
             </div>
           )}

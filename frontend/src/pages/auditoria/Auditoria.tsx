@@ -100,11 +100,10 @@ export function Auditoria() {
     return grupos.flatMap((g) => GRUPOS_EVENTO[g] ?? []);
   }
 
-  function carregar(cursor: string | null) {
-    const params: Record<string, string | number | boolean | undefined> = {
-      agrupar: true,
-      limit: 30,
-      cursor: cursor ?? undefined,
+  // Filtros compartilhados entre a listagem (agrupada, paginada) e a exportação CSV
+  // (plana, até o limite do backend) — mesma "visão" dos dados nos dois casos.
+  function filtrosBase(): Record<string, string | number | boolean | undefined> {
+    return {
       codemp: propostaSelecionada?.codemp,
       codpro: propostaSelecionada?.codpro,
       de: deEfetivo ?? undefined,
@@ -112,6 +111,10 @@ export function Auditoria() {
       eventoTipo: eventoTipoParaFiltro()?.join(",") || undefined,
       origem: origens.length > 0 ? origens.join(",") : undefined,
     };
+  }
+
+  function carregar(cursor: string | null) {
+    const params = { ...filtrosBase(), agrupar: true, limit: 30, cursor: cursor ?? undefined };
 
     if (cursor) setLoadingMais(true);
     else setLoading(true);
@@ -132,6 +135,23 @@ export function Auditoria() {
         setLoading(false);
         setLoadingMais(false);
       });
+  }
+
+  const [exportando, setExportando] = useState(false);
+  function exportarCsv() {
+    setExportando(true);
+    axios
+      .get("/api/auditoria/export", { params: filtrosBase(), responseType: "blob" })
+      .then(({ data }) => {
+        const url = window.URL.createObjectURL(data);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `auditoria_${new Date().toISOString().slice(0, 10)}.csv`;
+        link.click();
+        window.URL.revokeObjectURL(url);
+      })
+      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao exportar CSV"))
+      .finally(() => setExportando(false));
   }
 
   useEffect(() => {
@@ -281,6 +301,13 @@ export function Auditoria() {
         />
         <MultiSelectDropdown opcoes={GRUPOS_OPCOES} selecionados={grupos} onChange={setGrupos} labelTodos="Todos os grupos" labelSufixo="grupos" />
         <MultiSelectDropdown opcoes={ORIGENS_OPCOES} selecionados={origens} onChange={setOrigens} labelTodos="Todas as origens" labelSufixo="origens" />
+        <button
+          onClick={exportarCsv}
+          disabled={exportando}
+          className="ml-auto rounded-md border border-border px-3 py-1.5 text-sm text-muted transition hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+        >
+          {exportando ? "Exportando..." : "Exportar CSV"}
+        </button>
       </div>
 
       {erro && (
