@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { Pagination } from "../ui/Pagination";
+import { Skeleton } from "../ui/Skeleton";
 
 export interface OperacionalRow {
   numtit: string;
@@ -124,7 +125,34 @@ export function OperacionalTitulosTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
+            {loading &&
+              Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i} className="border-t border-border/60">
+                  <td className="px-5 py-3.5">
+                    <Skeleton className="h-4 w-20" />
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <Skeleton className="h-4 w-36" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 sm:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-20" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 text-right md:table-cell">
+                    <Skeleton className="ml-auto h-4 w-8" />
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <Skeleton className="h-5 w-20 rounded-full" />
+                  </td>
+                </tr>
+              ))}
+            {!loading &&
+              rows.map((row, i) => (
               <tr key={`${row.numtit}-${row.codtpt}-${i}`} className="border-t border-border/60 transition hover:bg-surface-2">
                 <td className="whitespace-nowrap px-5 py-3.5 font-mono text-sm text-muted">
                   {row.numtit} - {row.codtpt}
@@ -151,7 +179,7 @@ export function OperacionalTitulosTable({
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && !loading && (
+            {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted">
                   Nenhum título encontrado com os filtros atuais.

@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 interface JobSync {
   jobName: string;
@@ -126,6 +127,17 @@ export function SincronizacaoErp() {
         </button>
       </div>
 
+      {loading && (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-28" />
+              <Skeleton className="h-7 w-14" />
+            </div>
+          ))}
+        </div>
+      )}
+
       {!loading && jobs.length > 0 && (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
           <div className="rounded-lg border border-border bg-surface p-5">
@@ -195,7 +207,34 @@ export function SincronizacaoErp() {
               </tr>
             </thead>
             <tbody>
-              {jobs.map((job) => (
+              {loading &&
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="border-t border-border/60">
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-4 w-6" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-32" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-4 w-16" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-28" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-28" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-5 w-12 rounded" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-4 w-32" />
+                    </td>
+                  </tr>
+                ))}
+              {!loading &&
+                jobs.map((job) => (
                 <tr key={job.jobName} className="border-t border-border/60 transition hover:bg-surface-2">
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{job.ordemExecucao}</td>
                   <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{job.displayName}</td>
@@ -253,7 +292,7 @@ export function SincronizacaoErp() {
                   </td>
                 </tr>
               ))}
-              {jobs.length === 0 && !loading && (
+              {!loading && jobs.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhuma tabela cadastrada.

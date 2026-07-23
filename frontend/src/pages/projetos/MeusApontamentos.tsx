@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { formatHoras } from "../../utils/horas";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 interface SessaoPendente {
   id: number;
@@ -182,10 +183,7 @@ export function MeusApontamentos() {
         </p>
       )}
 
-      {loading ? (
-        <p className="text-sm text-muted">Carregando...</p>
-      ) : (
-        <div className="space-y-8">
+      <div className="space-y-8">
           <section>
             <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">
               Sessões pendentes de confirmação {sessoes.length > 0 && `(${sessoes.length})`}
@@ -217,46 +215,74 @@ export function MeusApontamentos() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sessoes.map((s) => (
-                      <tr key={s.id} className="border-t border-border/60">
-                        <td className="px-5 py-3.5 text-sm font-semibold text-foreground">
-                          {s.codpro}
-                          {s.cliente && <div className="mt-0.5 text-[11px] font-normal text-muted">{s.cliente}</div>}
-                          {s.itemDescricao && (
-                            <div className="max-w-[220px] truncate text-[11px] text-muted" title={s.itemDescricao}>
-                              {s.itemDescricao}
-                            </div>
-                          )}
-                        </td>
-                        <td className="hidden px-5 py-3.5 text-sm text-muted md:table-cell">{s.colunaNome}</td>
-                        <td className="px-5 py-3.5 font-mono text-sm text-muted">{dateTimeFormatter.format(new Date(s.inicio))}</td>
-                        <td className="hidden px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                          {dateTimeFormatter.format(new Date(s.fim))}
-                        </td>
-                        <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">
-                          {formatMinutos(s.duracaoMinutos)}
-                        </td>
-                        <td className="hidden px-5 py-3.5 lg:table-cell">
-                          <input
-                            type="text"
-                            placeholder="Descrição (opcional)"
-                            value={descricoes[s.id] ?? ""}
-                            onChange={(e) => setDescricoes((atual) => ({ ...atual, [s.id]: e.target.value }))}
-                            className={`${selectClass} w-full`}
-                          />
-                        </td>
-                        <td className="px-5 py-3.5 text-right">
-                          <button
-                            onClick={() => confirmar(s.id)}
-                            disabled={confirmando === s.id}
-                            className="rounded-md border border-border px-3 py-1.5 text-sm text-primary hover:bg-surface-2 disabled:opacity-50"
-                          >
-                            {confirmando === s.id ? "Confirmando..." : "Confirmar"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {sessoes.length === 0 && (
+                    {loading &&
+                      Array.from({ length: 4 }).map((_, i) => (
+                        <tr key={i} className="border-t border-border/60">
+                          <td className="px-5 py-3.5">
+                            <Skeleton className="h-4 w-16" />
+                            <Skeleton className="mt-1.5 h-3 w-28" />
+                          </td>
+                          <td className="hidden px-5 py-3.5 md:table-cell">
+                            <Skeleton className="h-4 w-20" />
+                          </td>
+                          <td className="px-5 py-3.5">
+                            <Skeleton className="h-4 w-24" />
+                          </td>
+                          <td className="hidden px-5 py-3.5 sm:table-cell">
+                            <Skeleton className="h-4 w-24" />
+                          </td>
+                          <td className="px-5 py-3.5 text-right">
+                            <Skeleton className="ml-auto h-4 w-12" />
+                          </td>
+                          <td className="hidden px-5 py-3.5 lg:table-cell">
+                            <Skeleton className="h-7 w-full" />
+                          </td>
+                          <td className="px-5 py-3.5 text-right">
+                            <Skeleton className="ml-auto h-7 w-20 rounded" />
+                          </td>
+                        </tr>
+                      ))}
+                    {!loading &&
+                      sessoes.map((s) => (
+                        <tr key={s.id} className="border-t border-border/60">
+                          <td className="px-5 py-3.5 text-sm font-semibold text-foreground">
+                            {s.codpro}
+                            {s.cliente && <div className="mt-0.5 text-[11px] font-normal text-muted">{s.cliente}</div>}
+                            {s.itemDescricao && (
+                              <div className="max-w-[220px] truncate text-[11px] text-muted" title={s.itemDescricao}>
+                                {s.itemDescricao}
+                              </div>
+                            )}
+                          </td>
+                          <td className="hidden px-5 py-3.5 text-sm text-muted md:table-cell">{s.colunaNome}</td>
+                          <td className="px-5 py-3.5 font-mono text-sm text-muted">{dateTimeFormatter.format(new Date(s.inicio))}</td>
+                          <td className="hidden px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">
+                            {dateTimeFormatter.format(new Date(s.fim))}
+                          </td>
+                          <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">
+                            {formatMinutos(s.duracaoMinutos)}
+                          </td>
+                          <td className="hidden px-5 py-3.5 lg:table-cell">
+                            <input
+                              type="text"
+                              placeholder="Descrição (opcional)"
+                              value={descricoes[s.id] ?? ""}
+                              onChange={(e) => setDescricoes((atual) => ({ ...atual, [s.id]: e.target.value }))}
+                              className={`${selectClass} w-full`}
+                            />
+                          </td>
+                          <td className="px-5 py-3.5 text-right">
+                            <button
+                              onClick={() => confirmar(s.id)}
+                              disabled={confirmando === s.id}
+                              className="rounded-md border border-border px-3 py-1.5 text-sm text-primary hover:bg-surface-2 disabled:opacity-50"
+                            >
+                              {confirmando === s.id ? "Confirmando..." : "Confirmar"}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    {!loading && sessoes.length === 0 && (
                       <tr>
                         <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted">
                           Nenhuma sessão pendente — mova um card pra "Em Andamento" pra começar a rastrear tempo.
@@ -295,35 +321,59 @@ export function MeusApontamentos() {
                     </tr>
                   </thead>
                   <tbody>
-                    {historico.map((h) => (
-                      <tr key={h.id} className="border-t border-border/60">
-                        <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{h.codpro}</td>
-                        <td className="px-5 py-3.5 font-mono text-sm text-muted">{dateTimeFormatter.format(new Date(h.inicio))}</td>
-                        <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">
-                          {h.duracaoMinutos != null ? formatMinutos(h.duracaoMinutos) : "—"}
-                        </td>
-                        <td className="hidden max-w-[280px] truncate px-5 py-3.5 text-sm text-muted md:table-cell" title={h.desati ?? undefined}>
-                          {h.desati ?? "—"}
-                        </td>
-                        <td className="px-5 py-3.5 text-right">
-                          <span
-                            className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${
-                              STATUS_TONE[h.statusEnvio] ?? "bg-muted/15 text-muted"
-                            }`}
-                          >
-                            {STATUS_LABEL[h.statusEnvio] ?? h.statusEnvio}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 text-right">
-                          {h.statusEnvio === "pendente" && (
-                            <button onClick={() => excluir(h.id)} className="text-[11px] text-destructive hover:underline">
-                              Excluir
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                    {historico.length === 0 && (
+                    {loading &&
+                      Array.from({ length: 4 }).map((_, i) => (
+                        <tr key={i} className="border-t border-border/60">
+                          <td className="px-5 py-3.5">
+                            <Skeleton className="h-4 w-16" />
+                          </td>
+                          <td className="px-5 py-3.5">
+                            <Skeleton className="h-4 w-24" />
+                          </td>
+                          <td className="px-5 py-3.5 text-right">
+                            <Skeleton className="ml-auto h-4 w-12" />
+                          </td>
+                          <td className="hidden px-5 py-3.5 md:table-cell">
+                            <Skeleton className="h-4 w-32" />
+                          </td>
+                          <td className="px-5 py-3.5 text-right">
+                            <Skeleton className="ml-auto h-5 w-24 rounded-full" />
+                          </td>
+                          <td className="px-5 py-3.5 text-right">
+                            <Skeleton className="ml-auto h-4 w-12" />
+                          </td>
+                        </tr>
+                      ))}
+                    {!loading &&
+                      historico.map((h) => (
+                        <tr key={h.id} className="border-t border-border/60">
+                          <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{h.codpro}</td>
+                          <td className="px-5 py-3.5 font-mono text-sm text-muted">{dateTimeFormatter.format(new Date(h.inicio))}</td>
+                          <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">
+                            {h.duracaoMinutos != null ? formatMinutos(h.duracaoMinutos) : "—"}
+                          </td>
+                          <td className="hidden max-w-[280px] truncate px-5 py-3.5 text-sm text-muted md:table-cell" title={h.desati ?? undefined}>
+                            {h.desati ?? "—"}
+                          </td>
+                          <td className="px-5 py-3.5 text-right">
+                            <span
+                              className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${
+                                STATUS_TONE[h.statusEnvio] ?? "bg-muted/15 text-muted"
+                              }`}
+                            >
+                              {STATUS_LABEL[h.statusEnvio] ?? h.statusEnvio}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5 text-right">
+                            {h.statusEnvio === "pendente" && (
+                              <button onClick={() => excluir(h.id)} className="text-[11px] text-destructive hover:underline">
+                                Excluir
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    {!loading && historico.length === 0 && (
                       <tr>
                         <td colSpan={6} className="px-5 py-8 text-center text-sm text-muted">
                           Nenhum apontamento confirmado ainda.
@@ -335,8 +385,7 @@ export function MeusApontamentos() {
               </div>
             </div>
           </section>
-        </div>
-      )}
+      </div>
 
       {modalManual && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4">

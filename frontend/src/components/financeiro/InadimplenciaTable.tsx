@@ -1,3 +1,5 @@
+import { Skeleton } from "../ui/Skeleton";
+
 export interface InadimplenciaRow {
   codemp: number;
   codfil: number;
@@ -48,7 +50,28 @@ export function InadimplenciaTable({ rows, page, pageSize, total, loading, onPag
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {loading &&
+              Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i} className="border-t border-border/60">
+                  <td className="hidden px-5 py-3.5 sm:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <Skeleton className="h-4 w-36" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 sm:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-10" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-20" />
+                  </td>
+                </tr>
+              ))}
+            {!loading &&
+              rows.map((row) => (
               <tr key={`${row.codemp}-${row.codfil}-${row.numtit}`} className="border-t border-border/60 transition hover:bg-surface-2">
                 <td className="hidden whitespace-nowrap px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">{row.numtit}</td>
                 <td className="px-5 py-3.5 text-sm text-foreground">
@@ -65,7 +88,7 @@ export function InadimplenciaTable({ rows, page, pageSize, total, loading, onPag
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && !loading && (
+            {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-5 py-8 text-center text-sm text-muted">
                   Nenhum título vencido encontrado com os filtros atuais.

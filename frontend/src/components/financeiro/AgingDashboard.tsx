@@ -1,3 +1,5 @@
+import { Skeleton } from "../ui/Skeleton";
+
 type Tone = "success" | "warning" | "destructive" | "neutral";
 
 interface Kpi {
@@ -24,6 +26,7 @@ interface AgingDashboardProps {
   buckets: Bucket[];
   activeBucket?: string | null;
   onBucketClick?: (key: string) => void;
+  loading?: boolean;
 }
 
 const toneText: Record<Tone, string> = {
@@ -49,6 +52,7 @@ export function AgingDashboard({
   buckets,
   activeBucket,
   onBucketClick,
+  loading,
 }: AgingDashboardProps) {
   return (
     <div>
@@ -61,18 +65,26 @@ export function AgingDashboard({
       )}
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {kpis.map((kpi) => (
-          <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
-            <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
-            <span className={`block font-mono text-2xl font-semibold tabular-nums ${toneText[kpi.tone]}`}>
-              {kpi.value}
-            </span>
-            <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted">
-              <span className={`h-1.5 w-1.5 flex-none rounded-full ${toneBg[kpi.tone]}`} />
-              {kpi.sub}
-            </p>
-          </div>
-        ))}
+        {loading
+          ? Array.from({ length: kpis.length || 12 }).map((_, i) => (
+              <div key={i} className="rounded-lg border border-border bg-surface p-5">
+                <Skeleton className="mb-2 h-3.5 w-32" />
+                <Skeleton className="h-7 w-20" />
+                <Skeleton className="mt-2 h-3 w-24" />
+              </div>
+            ))
+          : kpis.map((kpi) => (
+              <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
+                <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
+                <span className={`block font-mono text-2xl font-semibold tabular-nums ${toneText[kpi.tone]}`}>
+                  {kpi.value}
+                </span>
+                <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted">
+                  <span className={`h-1.5 w-1.5 flex-none rounded-full ${toneBg[kpi.tone]}`} />
+                  {kpi.sub}
+                </p>
+              </div>
+            ))}
       </div>
 
       {buckets.length > 0 && (

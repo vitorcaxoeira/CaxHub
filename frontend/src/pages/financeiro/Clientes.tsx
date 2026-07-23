@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { EmpresaFilialFilter, EmpresaOption, FilialOption } from "../../components/financeiro/EmpresaFilialFilter";
 import { RankingBarra, RankingItem } from "../../components/ui/RankingBarra";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 const API_BASE = "/api/financeiro/clientes";
 
@@ -123,8 +124,16 @@ export function Clientes() {
         </p>
       )}
 
-      {loading && !kpis ? (
-        <p className="text-sm text-muted">Carregando indicadores...</p>
+      {loading ? (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-32" />
+              <Skeleton className="h-7 w-16" />
+              <Skeleton className="mt-2 h-3 w-24" />
+            </div>
+          ))}
+        </div>
       ) : (
         kpis && (
           <>

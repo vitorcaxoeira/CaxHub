@@ -12,6 +12,7 @@ import { ComposicaoPipeline, ComposicaoTipoVenda, ComposicaoProduto, ComposicaoC
 import { RankingRepresentantes, RepresentanteRow } from "../../components/projetos/RankingRepresentantes";
 import { TendenciaMensalPropostas, PontoTendenciaMensal } from "../../components/projetos/TendenciaMensalPropostas";
 import { AgingPipelineChart, AgingBucketPropostas } from "../../components/projetos/AgingPipelineChart";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 const API_BASE = "/api/projetos/propostas";
 
@@ -397,8 +398,16 @@ export function Propostas() {
         </p>
       )}
 
-      {loadingResumo && !kpis ? (
-        <p className="text-sm text-muted">Carregando indicadores...</p>
+      {loadingResumo ? (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-32" />
+              <Skeleton className="h-7 w-20" />
+              <Skeleton className="mt-2 h-3 w-24" />
+            </div>
+          ))}
+        </div>
       ) : (
         kpis && (
           <>

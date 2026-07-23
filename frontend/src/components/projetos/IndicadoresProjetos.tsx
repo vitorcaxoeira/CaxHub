@@ -1,4 +1,5 @@
 import { KpiCard } from "../ui/KpiCard";
+import { Skeleton } from "../ui/Skeleton";
 
 export type SituacaoKpi = "backlog" | "atrasadas" | "concluidas";
 
@@ -25,10 +26,11 @@ export interface IndicadoresProjetosData {
 }
 
 interface IndicadoresProjetosProps {
-  dados: IndicadoresProjetosData;
-  kpis: KpisAtividades;
+  dados: IndicadoresProjetosData | null;
+  kpis: KpisAtividades | null;
   situacaoAtiva: SituacaoKpi | null;
   onKpiClick: (situacao: SituacaoKpi) => void;
+  loading: boolean;
 }
 
 const fmtPct = (v: number | null) => (v === null ? "—" : `${v.toFixed(1)}%`);
@@ -47,7 +49,22 @@ function toneSla(pct: number | null): "success" | "warning" | "destructive" | "n
   return "destructive";
 }
 
-export function IndicadoresProjetos({ dados, kpis, situacaoAtiva, onKpiClick }: IndicadoresProjetosProps) {
+export function IndicadoresProjetos({ dados, kpis, situacaoAtiva, onKpiClick, loading }: IndicadoresProjetosProps) {
+  if (loading || !dados || !kpis) {
+    return (
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="rounded-lg border border-border bg-surface p-5">
+            <Skeleton className="mb-2 h-3.5 w-24" />
+            <Skeleton className="h-7 w-16" />
+            <Skeleton className="mt-2 h-1 w-full" />
+            <Skeleton className="mt-2 h-3 w-20" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const pctAtrasadas = kpis.backlog.quantidade > 0 ? (kpis.atrasadas.quantidade / kpis.backlog.quantidade) * 100 : null;
 
   return (

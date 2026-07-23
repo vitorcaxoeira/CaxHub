@@ -1,3 +1,5 @@
+import { Skeleton } from "../ui/Skeleton";
+
 export interface TituloRow {
   codemp: number;
   codfil: number;
@@ -85,7 +87,37 @@ export function TitulosTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {loading &&
+              Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i} className="border-t border-border/60">
+                  <td className="px-3 py-3.5">
+                    <Skeleton className="h-4 w-10" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 sm:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <Skeleton className="h-4 w-36" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 sm:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 sm:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-20" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-20" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-5 w-16 rounded" />
+                  </td>
+                </tr>
+              ))}
+            {!loading &&
+              rows.map((row) => (
               <tr key={`${row.codemp}-${row.codfil}-${row.numtit}-${row.codtpt}`} className="border-t border-border/60 transition hover:bg-surface-2">
                 <td className="whitespace-nowrap px-3 py-3.5 font-mono text-sm text-muted">
                   {row.codemp}/{row.codfil}
@@ -121,7 +153,7 @@ export function TitulosTable({
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && !loading && (
+            {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
                   Nenhum título encontrado com os filtros atuais.

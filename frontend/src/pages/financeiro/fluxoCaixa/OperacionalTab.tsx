@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { OperacionalTitulosTable, OperacionalRow } from "../../../components/financeiro/OperacionalTitulosTable";
+import { Skeleton } from "../../../components/ui/Skeleton";
 
 const API_BASE = "/api/financeiro/fluxo-caixa";
 
@@ -99,8 +100,16 @@ export function OperacionalTab({ empFilIds, refreshKey }: OperacionalTabProps) {
           {erroKpis}
         </div>
       )}
-      {loadingKpis && !kpis ? (
-        <p className="mb-6 text-sm text-muted">Carregando indicadores...</p>
+      {loadingKpis ? (
+        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-28" />
+              <Skeleton className="h-7 w-20" />
+              <Skeleton className="mt-2 h-3 w-16" />
+            </div>
+          ))}
+        </div>
       ) : (
         kpis && (
           <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">

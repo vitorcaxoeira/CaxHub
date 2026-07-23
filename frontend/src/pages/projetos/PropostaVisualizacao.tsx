@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { formatHoras } from "../../utils/horas";
 import { Tabs } from "../../components/ui/Tabs";
 import { HistoricoContextual } from "../../components/auditoria/HistoricoContextual";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 interface PropostaDetalhe {
   codemp: number;
@@ -169,9 +170,13 @@ export function PropostaVisualizacao() {
               <HistoricoContextual entidadeTipo="proposta" entidadeId={`${proposta.codemp}:${proposta.codpro}`} />
             </div>
           )}
+        </>
+      )}
 
-          {aba === "detalhes" && (
+      {(loading || proposta) && aba === "detalhes" && (
           <div className="space-y-4">
+            {proposta && (
+            <>
             <Secao titulo="Classificação">
               <Campo label="Departamento Executor" valor={proposta.depexeLabel} />
               <Campo label="Modalidade" valor={proposta.modproLabel} />
@@ -248,6 +253,8 @@ export function PropostaVisualizacao() {
                 </div>
               </div>
             )}
+            </>
+            )}
 
             <div className="overflow-hidden rounded-lg border border-border bg-surface">
               <div className="border-b border-border px-5 py-3">
@@ -286,7 +293,37 @@ export function PropostaVisualizacao() {
                     </tr>
                   </thead>
                   <tbody>
-                    {itens.map((item) => (
+                    {loading &&
+                      Array.from({ length: 5 }).map((_, i) => (
+                        <tr key={i} className="border-t border-border/60">
+                          <td className="px-4 py-2.5">
+                            <Skeleton className="h-4 w-16" />
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <Skeleton className="h-4 w-40" />
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <Skeleton className="h-5 w-20 rounded-full" />
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <Skeleton className="h-4 w-20" />
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <Skeleton className="h-4 w-16" />
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <Skeleton className="ml-auto h-4 w-10" />
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <Skeleton className="ml-auto h-4 w-16" />
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <Skeleton className="ml-auto h-4 w-16" />
+                          </td>
+                        </tr>
+                      ))}
+                    {!loading &&
+                      itens.map((item) => (
                       <tr key={item.seqite} className="border-t border-border/60">
                         <td className="px-4 py-2.5 font-mono text-sm text-foreground">{item.codser}</td>
                         <td className="max-w-[220px] px-4 py-2.5 text-sm text-muted" title={item.despro ?? undefined}>
@@ -315,7 +352,7 @@ export function PropostaVisualizacao() {
                         </td>
                       </tr>
                     ))}
-                    {itens.length === 0 && (
+                    {!loading && itens.length === 0 && (
                       <tr>
                         <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">
                           Nenhum item cadastrado nesta proposta.
@@ -343,8 +380,6 @@ export function PropostaVisualizacao() {
               </div>
             </div>
           </div>
-          )}
-        </>
       )}
     </div>
   );

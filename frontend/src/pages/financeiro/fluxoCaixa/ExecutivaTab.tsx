@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { PrevistoRealizadoAcumuladoChart, PontoAcumulado } from "../../../components/financeiro/PrevistoRealizadoAcumuladoChart";
 import { CurvaProjetadaChart, PontoProjecao } from "../../../components/financeiro/CurvaProjetadaChart";
+import { Skeleton } from "../../../components/ui/Skeleton";
 
 const API_BASE = "/api/financeiro/fluxo-caixa";
 
@@ -135,8 +136,16 @@ export function ExecutivaTab({ empFilIds, periodoParams, refreshKey }: Executiva
           {erroKpis}
         </div>
       )}
-      {loadingKpis && !kpis ? (
-        <p className="mb-6 text-sm text-muted">Carregando indicadores...</p>
+      {loadingKpis ? (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-32" />
+              <Skeleton className="h-7 w-20" />
+              <Skeleton className="mt-2 h-3 w-28" />
+            </div>
+          ))}
+        </div>
       ) : (
         kpis && (
           <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">

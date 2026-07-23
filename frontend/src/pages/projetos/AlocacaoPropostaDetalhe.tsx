@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { formatHoras, horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 interface AlocacaoConsultor {
   id: number;
@@ -353,7 +354,23 @@ export function AlocacaoPropostaDetalhe() {
                 </tr>
               </thead>
               <tbody>
-                {itens.map((item) => (
+                {loading &&
+                  Array.from({ length: 6 }).map((_, i) => (
+                    <tr key={i} className="border-t border-border/60">
+                      <td className="px-3 py-2.5">
+                        <Skeleton className="h-4 w-8" />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="mt-1 h-3 w-16" />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <Skeleton className="ml-auto h-4 w-14" />
+                      </td>
+                    </tr>
+                  ))}
+                {!loading &&
+                  itens.map((item) => (
                   <tr
                     key={item.seqite}
                     onClick={() => setSelecionado(item.seqite)}

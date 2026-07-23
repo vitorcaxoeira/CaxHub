@@ -1,6 +1,7 @@
 import axios from "axios";
 import { Fragment, useState } from "react";
 import { formatHoras } from "../../utils/horas";
+import { Skeleton } from "../ui/Skeleton";
 
 export interface PropostaRow {
   codemp: number;
@@ -121,7 +122,44 @@ export function PropostasTable({ rows, page, pageSize, total, loading, onPageCha
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {loading &&
+              Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i} className="border-t border-border/60">
+                  <td className="px-1" />
+                  <td className="px-2 py-1.5">
+                    <Skeleton className="h-4 w-14" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <Skeleton className="h-4 w-32" />
+                  </td>
+                  <td className="hidden px-2 py-1.5 sm:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="hidden px-2 py-1.5 lg:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="hidden px-2 py-1.5 xl:table-cell">
+                    <Skeleton className="h-4 w-24" />
+                  </td>
+                  <td className="hidden px-2 py-1.5 md:table-cell">
+                    <Skeleton className="h-4 w-20" />
+                  </td>
+                  <td className="hidden px-2 py-1.5 lg:table-cell">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-10" />
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-16" />
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    <Skeleton className="ml-auto h-5 w-16 rounded" />
+                  </td>
+                </tr>
+              ))}
+            {!loading &&
+              rows.map((row) => {
               const chave = chaveProposta(row.codemp, row.codpro);
               const expandido = expandida === chave;
               return (

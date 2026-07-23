@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useState } from "react";
 import { Pagination } from "../ui/Pagination";
+import { Skeleton } from "../ui/Skeleton";
 
 export interface ClienteRiscoRow {
   codcli: number;
@@ -125,7 +126,32 @@ export function ClientesRiscoTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {loading &&
+              Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i} className="border-t border-border/60">
+                  <td className="px-2" />
+                  <td className="px-5 py-3.5">
+                    <Skeleton className="h-4 w-36" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-20" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-20" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-14" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-14" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-5 w-10 rounded-full" />
+                  </td>
+                </tr>
+              ))}
+            {!loading &&
+              rows.map((row) => (
               <>
                 <tr
                   key={row.codcli}
@@ -186,7 +212,7 @@ export function ClientesRiscoTable({
                 )}
               </>
             ))}
-            {rows.length === 0 && !loading && (
+            {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={COLUNAS.length + 1} className="px-5 py-8 text-center text-sm text-muted">
                   Nenhum cliente em risco encontrado com os filtros atuais.

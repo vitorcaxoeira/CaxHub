@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../../auth/AuthContext";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 interface Role {
   id: number;
@@ -291,7 +292,28 @@ export function Usuarios() {
               </tr>
             </thead>
             <tbody>
-              {usuarios.map((usuario) => (
+              {loading &&
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="border-t border-border/60">
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-32" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-40" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-5 w-16 rounded" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-5 w-14 rounded" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-4 w-20" />
+                    </td>
+                  </tr>
+                ))}
+              {!loading &&
+                usuarios.map((usuario) => (
                 <tr key={usuario.id} className="border-t border-border/60 transition hover:bg-surface-2">
                   <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{usuario.nome}</td>
                   <td className="px-5 py-3.5 text-sm text-muted">{usuario.email}</td>
@@ -333,7 +355,7 @@ export function Usuarios() {
                   </td>
                 </tr>
               ))}
-              {usuarios.length === 0 && !loading && (
+              {!loading && usuarios.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhum usuário cadastrado.

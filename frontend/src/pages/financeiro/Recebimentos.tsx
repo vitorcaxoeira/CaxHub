@@ -7,6 +7,7 @@ import { ClienteFilter, ClienteOption } from "../../components/financeiro/Client
 import { RankingBarra, RankingItem } from "../../components/ui/RankingBarra";
 import { RecebidoPorDiaChart, PontoRecebidoDia } from "../../components/financeiro/RecebidoPorDiaChart";
 import { RecebimentosTable, RecebimentoRow } from "../../components/financeiro/RecebimentosTable";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 const API_BASE = "/api/financeiro/recebimentos";
 
@@ -210,8 +211,16 @@ export function Recebimentos() {
         </p>
       )}
 
-      {loadingResumo && !kpis ? (
-        <p className="text-sm text-muted">Carregando indicadores...</p>
+      {loadingResumo ? (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-32" />
+              <Skeleton className="h-7 w-20" />
+              <Skeleton className="mt-2 h-3 w-24" />
+            </div>
+          ))}
+        </div>
       ) : (
         kpis && (
           <>

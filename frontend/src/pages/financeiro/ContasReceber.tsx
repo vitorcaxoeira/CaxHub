@@ -237,19 +237,14 @@ export function ContasReceber() {
         </p>
       )}
 
-      {loadingResumo && !kpis ? (
-        <p className="text-sm text-muted">Carregando indicadores...</p>
-      ) : (
-        kpis && (
-          <AgingDashboard
-            dataLabel="Aging da carteira (clique numa faixa para filtrar a lista abaixo)"
-            kpis={kpiCards}
-            buckets={bucketCards}
-            activeBucket={faixa}
-            onBucketClick={handleBucketClick}
-          />
-        )
-      )}
+      <AgingDashboard
+        dataLabel="Aging da carteira (clique numa faixa para filtrar a lista abaixo)"
+        kpis={kpiCards}
+        buckets={loadingResumo ? [] : bucketCards}
+        activeBucket={faixa}
+        onBucketClick={handleBucketClick}
+        loading={loadingResumo}
+      />
 
       <div className="mt-6">
         <SituacaoFilter

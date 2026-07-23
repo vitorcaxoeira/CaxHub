@@ -296,9 +296,7 @@ export function Atividades() {
         </div>
       </div>
 
-      {indicadores && kpis && (
-        <IndicadoresProjetos dados={indicadores} kpis={kpis} situacaoAtiva={situacao} onKpiClick={clicarKpi} />
-      )}
+      <IndicadoresProjetos dados={indicadores} kpis={kpis} situacaoAtiva={situacao} onKpiClick={clicarKpi} loading={loading} />
 
       {erro && (
         <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
@@ -306,9 +304,7 @@ export function Atividades() {
         </p>
       )}
 
-      {loading && atividades.length === 0 ? (
-        <p className="text-sm text-muted">Carregando...</p>
-      ) : visao === "lista" ? (
+      {visao === "lista" ? (
         <AtividadesTable
           rows={atividades}
           total={total}
@@ -329,6 +325,8 @@ export function Atividades() {
           onParar={pararAtividade}
           processando={processando}
         />
+      ) : loading && atividades.length === 0 ? (
+        <p className="text-sm text-muted">Carregando...</p>
       ) : visao === "quadro" ? (
         <div>
           <AtividadesFiltros

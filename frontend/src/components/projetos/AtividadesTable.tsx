@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { Pagination } from "../ui/Pagination";
+import { Skeleton } from "../ui/Skeleton";
 import { toneBadge, priproTone } from "../ui/badges";
 import { IconePlay, IconeStop } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
@@ -154,7 +155,41 @@ export function AtividadesTable({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {loading &&
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="border-t border-border/60">
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-16" />
+                      <Skeleton className="mt-1.5 h-3 w-12" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-36" />
+                    </td>
+                    <td className="hidden px-5 py-3.5 md:table-cell">
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                    <td className="hidden px-5 py-3.5 lg:table-cell">
+                      <Skeleton className="h-4 w-24" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-4 w-10" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-5 w-16 rounded" />
+                    </td>
+                    <td className="hidden px-5 py-3.5 sm:table-cell">
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-7 w-24 rounded" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="ml-auto h-4 w-16" />
+                    </td>
+                  </tr>
+                ))}
+              {!loading &&
+                rows.map((row) => (
                 <tr key={row.id} className="border-t border-border/60 transition hover:bg-surface-2">
                   <td className="px-5 py-3.5 text-sm font-semibold">
                     <button

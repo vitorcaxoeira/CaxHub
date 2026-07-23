@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 interface ItemSincronizacao {
   id: number;
@@ -77,20 +78,31 @@ export function SincronizacaoSenior() {
         </p>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-lg border border-border bg-surface p-5">
-          <p className="mb-2 text-[11.5px] text-muted">Pendentes</p>
-          <span className="block font-mono text-2xl font-semibold tabular-nums text-warning">{totais.pendente}</span>
+      {loading ? (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-20" />
+              <Skeleton className="h-7 w-12" />
+            </div>
+          ))}
         </div>
-        <div className="rounded-lg border border-border bg-surface p-5">
-          <p className="mb-2 text-[11.5px] text-muted">Bloqueados</p>
-          <span className="block font-mono text-2xl font-semibold tabular-nums text-destructive">{totais.bloqueado}</span>
+      ) : (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="rounded-lg border border-border bg-surface p-5">
+            <p className="mb-2 text-[11.5px] text-muted">Pendentes</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-warning">{totais.pendente}</span>
+          </div>
+          <div className="rounded-lg border border-border bg-surface p-5">
+            <p className="mb-2 text-[11.5px] text-muted">Bloqueados</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-destructive">{totais.bloqueado}</span>
+          </div>
+          <div className="rounded-lg border border-border bg-surface p-5">
+            <p className="mb-2 text-[11.5px] text-muted">Enviados</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-success">{totais.enviado}</span>
+          </div>
         </div>
-        <div className="rounded-lg border border-border bg-surface p-5">
-          <p className="mb-2 text-[11.5px] text-muted">Enviados</p>
-          <span className="block font-mono text-2xl font-semibold tabular-nums text-success">{totais.enviado}</span>
-        </div>
-      </div>
+      )}
 
       {erro && (
         <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
@@ -125,7 +137,32 @@ export function SincronizacaoSenior() {
               </tr>
             </thead>
             <tbody>
-              {itens.map((item) => (
+              {loading &&
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="border-t border-border/60">
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-16" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-24" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-4 w-8" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-40" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-24" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-5 w-16 rounded" />
+                    </td>
+                    <td className="px-5 py-3.5" />
+                  </tr>
+                ))}
+              {!loading &&
+                itens.map((item) => (
                 <tr key={item.id} className="border-t border-border/60 transition hover:bg-surface-2">
                   <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{item.codpro}</td>
                   <td className="px-5 py-3.5 text-sm text-muted">{item.tipo}</td>
@@ -156,7 +193,7 @@ export function SincronizacaoSenior() {
                   </td>
                 </tr>
               ))}
-              {itens.length === 0 && !loading && (
+              {!loading && itens.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhum item na fila de sincronização.

@@ -1,3 +1,5 @@
+import { Skeleton } from "../ui/Skeleton";
+
 export interface RecebimentoRow {
   codemp: number;
   codfil: number;
@@ -54,7 +56,31 @@ export function RecebimentosTable({ rows, page, pageSize, total, loading, onPage
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
+            {loading &&
+              Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i} className="border-t border-border/60">
+                  <td className="px-3 py-3.5">
+                    <Skeleton className="h-4 w-16" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 sm:table-cell">
+                    <Skeleton className="h-4 w-20" />
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <Skeleton className="h-4 w-36" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 md:table-cell">
+                    <Skeleton className="h-4 w-20" />
+                  </td>
+                  <td className="hidden px-5 py-3.5 md:table-cell">
+                    <Skeleton className="h-4 w-20" />
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <Skeleton className="ml-auto h-4 w-20" />
+                  </td>
+                </tr>
+              ))}
+            {!loading &&
+              rows.map((row, i) => (
               <tr key={`${row.codemp}-${row.codfil}-${row.numtit}-${i}`} className="border-t border-border/60 transition hover:bg-surface-2">
                 <td className="whitespace-nowrap px-3 py-3.5 font-mono text-sm text-muted">
                   {dateFormatter.format(new Date(row.datpgt))}
@@ -72,7 +98,7 @@ export function RecebimentosTable({ rows, page, pageSize, total, loading, onPage
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && !loading && (
+            {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-5 py-8 text-center text-sm text-muted">
                   Nenhum recebimento encontrado com os filtros atuais.
