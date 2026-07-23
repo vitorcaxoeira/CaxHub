@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -10,10 +11,11 @@ import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoP
 import { criarNotificacao, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
 import { enfileirar } from "../sync/outboxSenior";
-import { criarEventoAuditoria, criarEventosDeData } from "../audit/registrarEvento";
+import { criarEventosDeData } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
-import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { ENTIDADES_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { RAIA_A_FAZER, RAIA_EM_ANDAMENTO, montarOperacoesMovimentacao, podeIniciar, podeParar } from "../domain/execucaoAtividade";
 
 // Router à parte de `projetosRouter` (que hoje é admin+comercial só, por causa de
 // Propostas) — aqui a tela é aberta a qualquer usuário autenticado; quem pode ver/mover
@@ -132,6 +134,18 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
     return (a.seqati != null ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) + (minutosRealizadosPorAtividadeId.get(a.id) ?? 0);
   }
 
+  // Sessão ABERTA (fim: null) de cada atividade — alimenta o cronômetro ao vivo no
+  // Kanban/Lista (card em "Em Andamento" mostra o timer contando a partir daqui). No
+  // máximo 1 por atividade (a regra de start/stop garante isso), então um Map simples.
+  const sessoesAbertas =
+    atividades.length > 0
+      ? await prisma.atividadeSessaoExecucao.findMany({
+          where: { atividadeId: { in: atividades.map((a) => a.id) }, fim: null },
+          select: { atividadeId: true, inicio: true },
+        })
+      : [];
+  const sessaoAbertaPorAtividadeId = new Map(sessoesAbertas.map((s) => [s.atividadeId, s.inicio]));
+
   // Realizado por ITEM (soma de todas as atividades do item, mesmo padrão de
   // alocadoPorItem) — usado no orçamento do item (contratado x distribuído x realizado);
   // diferente de `horasRealizadas` por atividade, exposto à parte pra uso futuro (ex.:
@@ -220,6 +234,9 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
         // Minutos: sessões ainda não confirmadas + RatItem já confirmados/sincronizados
         // (nunca as duas fontes ao mesmo tempo pra mesma sessão — ver comentário acima).
         horasRealizadas: horasRealizadasDaAtividade(a),
+        // Início da sessão em aberto (fim: null) — presente só quando a atividade está
+        // "Em Andamento" agora; o cronômetro do frontend conta a partir deste timestamp.
+        sessaoAtualInicio: sessaoAbertaPorAtividadeId.get(a.id)?.toISOString() ?? null,
         estruturaAtividadeId: a.estruturaAtividadeId,
         estruturaNome: noEstrutura?.nome ?? null,
         estruturaPercentual: noEstrutura?.percentualConcluido ?? null,
@@ -492,77 +509,21 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     }
 
     // Sessão de execução: sair de qualquer coluna fecha a sessão aberta (se houver);
-    // entrar numa coluna marcada como "em execução" abre uma nova. O mesmo instante é
-    // usado pros dois lados pra não deixar brecha/sobreposição entre fechar e abrir.
+    // entrar numa coluna marcada como "em execução" abre uma nova. Lógica compartilhada
+    // com POST /:id/start e /:id/stop — ver backend/src/domain/execucaoAtividade.ts.
     const agora = new Date();
     const colunaAnterior = atividade.colunaId != null ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } }) : null;
-    const sessaoAbertaAntes = await prisma.atividadeSessaoExecucao.findFirst({ where: { atividadeId: id, fim: null } });
-
-    const entidadeId = entidadeIdAtividade(id);
     const correlationId = req.correlationId!;
-    const ctxEvento = {
-      origem: "tela" as const,
-      usuarioId: user.id,
-      codemp: atividade.codemp,
-      codpro: atividade.codpro,
-      entidadeId,
-      correlationId,
-    };
 
-    const operacoes = [
-      prisma.atividadeConsultor.update({ where: { id }, data: { colunaId: colunaIdNovo } }),
-      prisma.atividadeHistoricoMovimentacao.create({
-        data: {
-          atividadeId: id,
-          colunaAnteriorId: atividade.colunaId,
-          colunaNovaId: colunaIdNovo,
-          userId: user.id,
-        },
-      }),
-      prisma.atividadeSessaoExecucao.updateMany({
-        where: { atividadeId: id, fim: null },
-        data: { fim: agora },
-      }),
-      ...(colunaNova.contaComoExecucao
-        ? [
-            prisma.atividadeSessaoExecucao.create({
-              data: { atividadeId: id, colunaId: colunaIdNovo, inicio: agora, origem: "movimentacao_kanban" },
-            }),
-          ]
-        : []),
-      criarEventoAuditoria({
-        ...ctxEvento,
-        entidadeTipo: ENTIDADES_AUDITORIA.KANBAN_CARD,
-        entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
-        eventoTipo: EVENTOS_AUDITORIA.KANBAN_RAIA_ALTERADA,
-        alteracoes: { colunaId: { de: atividade.colunaId, para: colunaIdNovo, rotulo: "Coluna" } },
-        metadata: { raia_de: colunaAnterior?.nome ?? null, raia_para: colunaNova.nome },
-      }),
-      ...(sessaoAbertaAntes
-        ? [
-            criarEventoAuditoria({
-              ...ctxEvento,
-              entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
-              entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
-              eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_PARADA,
-              alteracoes: null,
-              metadata: { coluna: colunaAnterior?.nome ?? null },
-            }),
-          ]
-        : []),
-      ...(colunaNova.contaComoExecucao
-        ? [
-            criarEventoAuditoria({
-              ...ctxEvento,
-              entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
-              entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
-              eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_INICIADA,
-              alteracoes: null,
-              metadata: { coluna: colunaNova.nome },
-            }),
-          ]
-        : []),
-    ];
+    const { operacoes } = await montarOperacoesMovimentacao({
+      atividade,
+      colunaAnterior,
+      colunaNova,
+      usuarioId: user.id,
+      origemSessao: "movimentacao_kanban",
+      correlationId,
+      agora,
+    });
     await prisma.$transaction(operacoes);
 
     // Automação: coluna marcada pra notificar o(s) Líder(es) Técnico(s) do departamento.
@@ -585,6 +546,206 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     res.json({ id, colunaId: colunaIdNovo });
   } catch (error) {
     handleError(res, error, "mover");
+  }
+});
+
+// ---------- Start/Stop (controle manual de execução, independente do drag-and-drop) ----------
+
+async function carregarAtividadeParaExecucao(id: number) {
+  const atividade = await prisma.atividadeConsultor.findUnique({ where: { id } });
+  if (!atividade) return null;
+  const item = await prisma.propostaItem.findUnique({
+    where: { codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite } },
+  });
+  if (!item || item.depexe == null) return null;
+  const colunaAtual = atividade.colunaId != null ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } }) : null;
+  return { atividade, depexe: item.depexe, colunaAtual };
+}
+
+atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeParaExecucao(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const { atividade, depexe, colunaAtual } = resolvido;
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { user, contexto, role } = ctx;
+
+    if (!podeExecutarAcao(role, contexto, "mover", { depexe, codfor: atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para iniciar esta atividade" });
+      return;
+    }
+
+    // Validação da mesma regra de negócio do frontend (podeIniciar/podeParar) — o
+    // frontend só desabilita o botão; quem garante de verdade é o servidor.
+    if (!podeIniciar(colunaAtual?.nome)) {
+      res.status(409).json({ error: `Atividade não está em "${RAIA_A_FAZER}" — não pode ser iniciada agora.` });
+      return;
+    }
+
+    const [colunaAFazer, colunaEmAndamento] = await Promise.all([
+      prisma.quadroColuna.findFirst({ where: { nome: RAIA_A_FAZER } }),
+      prisma.quadroColuna.findFirst({ where: { nome: RAIA_EM_ANDAMENTO } }),
+    ]);
+    if (!colunaAFazer || !colunaEmAndamento) {
+      res.status(500).json({ error: "Raias padrão do quadro não configuradas (\"A Fazer\"/\"Em Andamento\")" });
+      return;
+    }
+
+    const agora = new Date();
+    const correlationId = req.correlationId!;
+    const operacoes: Prisma.PrismaPromise<unknown>[] = [];
+
+    // Regra de concorrência: 1 atividade em andamento por consultor — se já houver outra
+    // com sessão aberta, para ela automaticamente (mesma transação, mesmo correlationId)
+    // antes de iniciar esta.
+    const sessaoDoConsultor = await prisma.atividadeSessaoExecucao.findFirst({
+      where: { fim: null, atividade: { codfor: atividade.codfor, id: { not: id } } },
+      include: { atividade: { include: { coluna: true } } },
+    });
+
+    let pausada: { id: number; codpro: number } | null = null;
+    if (sessaoDoConsultor) {
+      const atividadeAnterior = sessaoDoConsultor.atividade;
+      const { operacoes: opsPausa } = await montarOperacoesMovimentacao({
+        atividade: atividadeAnterior,
+        colunaAnterior: atividadeAnterior.coluna,
+        colunaNova: colunaAFazer,
+        usuarioId: user.id,
+        origemSessao: "manual",
+        correlationId,
+        agora,
+      });
+      operacoes.push(...opsPausa);
+      pausada = { id: atividadeAnterior.id, codpro: atividadeAnterior.codpro };
+
+      if (atividadeAnterior.seqati != null) {
+        await enfileirar(atividadeAnterior.id, "mover_coluna", {
+          seqati: atividadeAnterior.seqati.toString(),
+          colunaAnteriorId: atividadeAnterior.colunaId,
+          colunaNovaId: colunaAFazer.id,
+          colunaNovaNome: colunaAFazer.nome,
+        });
+      }
+    }
+
+    const { operacoes: opsInicio } = await montarOperacoesMovimentacao({
+      atividade,
+      colunaAnterior: colunaAtual,
+      colunaNova: colunaEmAndamento,
+      usuarioId: user.id,
+      origemSessao: "manual",
+      correlationId,
+      agora,
+    });
+    operacoes.push(...opsInicio);
+
+    await prisma.$transaction(operacoes);
+
+    if (colunaEmAndamento.notificarGestor) {
+      const mensagem = `${user.nome} iniciou a atividade da proposta ${atividade.codpro}`;
+      await notificarGestoresDoDepartamento(atividade.codemp, depexe, "atividade_movida", mensagem, id, user.id);
+    }
+    if (atividade.seqati != null) {
+      await enfileirar(id, "mover_coluna", {
+        seqati: atividade.seqati.toString(),
+        colunaAnteriorId: atividade.colunaId,
+        colunaNovaId: colunaEmAndamento.id,
+        colunaNovaNome: colunaEmAndamento.nome,
+      });
+    }
+
+    res.json({
+      id,
+      colunaId: colunaEmAndamento.id,
+      sessaoInicio: agora.toISOString(),
+      pausada: pausada ? { id: pausada.id, titulo: `Proposta ${pausada.codpro}` } : null,
+    });
+  } catch (error) {
+    handleError(res, error, "start");
+  }
+});
+
+atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeParaExecucao(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const { atividade, depexe, colunaAtual } = resolvido;
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { user, contexto, role } = ctx;
+
+    if (!podeExecutarAcao(role, contexto, "mover", { depexe, codfor: atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para parar esta atividade" });
+      return;
+    }
+
+    if (!podeParar(colunaAtual?.nome)) {
+      res.status(409).json({ error: `Atividade não está em "${RAIA_EM_ANDAMENTO}" — não pode ser parada agora.` });
+      return;
+    }
+
+    const colunaAFazer = await prisma.quadroColuna.findFirst({ where: { nome: RAIA_A_FAZER } });
+    if (!colunaAFazer) {
+      res.status(500).json({ error: `Raia "${RAIA_A_FAZER}" não configurada` });
+      return;
+    }
+
+    const agora = new Date();
+    const correlationId = req.correlationId!;
+    const { operacoes, duracaoSessaoFechadaMin } = await montarOperacoesMovimentacao({
+      atividade,
+      colunaAnterior: colunaAtual,
+      colunaNova: colunaAFazer,
+      usuarioId: user.id,
+      origemSessao: "manual",
+      correlationId,
+      agora,
+    });
+    await prisma.$transaction(operacoes);
+
+    if (colunaAFazer.notificarGestor) {
+      const mensagem = `${user.nome} parou a atividade da proposta ${atividade.codpro}`;
+      await notificarGestoresDoDepartamento(atividade.codemp, depexe, "atividade_movida", mensagem, id, user.id);
+    }
+    if (atividade.seqati != null) {
+      await enfileirar(id, "mover_coluna", {
+        seqati: atividade.seqati.toString(),
+        colunaAnteriorId: atividade.colunaId,
+        colunaNovaId: colunaAFazer.id,
+        colunaNovaNome: colunaAFazer.nome,
+      });
+    }
+
+    res.json({ id, colunaId: colunaAFazer.id, duracaoMinutos: duracaoSessaoFechadaMin ?? 0 });
+  } catch (error) {
+    handleError(res, error, "stop");
   }
 });
 

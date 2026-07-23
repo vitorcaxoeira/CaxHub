@@ -1,6 +1,17 @@
 import { useNavigate } from "react-router-dom";
 import { Pagination } from "../ui/Pagination";
 import { toneBadge, priproTone } from "../ui/badges";
+import { IconePlay, IconeStop } from "../ui/iconesExecucao";
+import { Spinner } from "../ui/Spinner";
+import { useCronometro } from "../../hooks/useCronometro";
+import {
+  EXIBIR_AMBOS_BOTOES,
+  RAIA_EM_ANDAMENTO,
+  motivoIniciarDesabilitado,
+  motivoPararDesabilitado,
+  podeIniciar,
+  podeParar,
+} from "../../lib/atividade-acoes";
 import { AtividadeKanban, ColunaKanban, DetalheInfo } from "./KanbanBoard";
 import { AtividadesFiltros } from "./AtividadesFiltros";
 import type { SituacaoKpi } from "./IndicadoresProjetos";
@@ -52,6 +63,24 @@ interface AtividadesTableProps {
   onLimparKpi: () => void;
   onMover: (atividadeId: number, novaColunaId: number) => void;
   onAbrirDetalhe: (atividadeId: number, info: DetalheInfo) => void;
+  onIniciar: (atividadeId: number) => void;
+  onParar: (atividadeId: number) => void;
+  processando: Set<number>;
+}
+
+function IndicadorSessao({ row }: { row: AtividadeRow }) {
+  const emAndamento = row.coluna?.nome === RAIA_EM_ANDAMENTO;
+  const cronometro = useCronometro(row.sessaoAtualInicio);
+  if (!emAndamento) return null;
+  return (
+    <span className="ml-1.5 inline-flex items-center gap-1.5 align-middle">
+      <span className="relative flex h-2 w-2 flex-none">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
+      </span>
+      {cronometro && <span className="font-mono text-[10.5px] tabular-nums text-success">{cronometro}</span>}
+    </span>
+  );
 }
 
 // Componente controlado: filtros, paginação e dados vêm da página (Atividades.tsx),
@@ -73,6 +102,9 @@ export function AtividadesTable({
   onLimparKpi,
   onMover,
   onAbrirDetalhe,
+  onIniciar,
+  onParar,
+  processando,
 }: AtividadesTableProps) {
   const navigate = useNavigate();
 
@@ -148,7 +180,10 @@ export function AtividadesTable({
                     )}
                   </td>
                   <td className="hidden px-5 py-3.5 text-sm text-muted md:table-cell">{row.depexeLabel}</td>
-                  <td className="hidden px-5 py-3.5 text-sm text-muted lg:table-cell">{row.consultorNome}</td>
+                  <td className="hidden px-5 py-3.5 text-sm text-muted lg:table-cell">
+                    {row.consultorNome}
+                    <IndicadorSessao row={row} />
+                  </td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
                     {formatQtdHor(row.qtdhorPrevisto)}
                   </td>
@@ -181,31 +216,55 @@ export function AtividadesTable({
                       ))}
                     </select>
                   </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <button
-                      onClick={() =>
-                        onAbrirDetalhe(row.id, {
-                          titulo: `Proposta ${row.codpro} · Projeto ${row.numprj}`,
-                          podeEditar: row.podeEditar,
-                          dataPrevistaInicio: row.dataPrevistaInicio,
-                          dataPrevistaFim: row.dataPrevistaFim,
-                          codemp: row.codemp,
-                          codpro: row.codpro,
-                          seqite: row.seqite,
-                          itemDescricao: row.itemDescricao,
-                          itemQtdhor: row.itemQtdhor,
-                          itemAlocado: row.itemAlocado,
-                          itemRealizado: row.itemRealizado,
-                          estruturaNome: row.estruturaNome,
-                          horasRealizadas: row.horasRealizadas,
-                          estruturaPercentual: row.estruturaPercentual,
-                          podeVerCronograma: row.podeVerCronograma,
-                        })
-                      }
-                      className="text-sm text-primary hover:underline"
-                    >
-                      Detalhes
-                    </button>
+                  <td className="px-5 py-3.5">
+                    <div className="flex items-center justify-end gap-2">
+                      {(EXIBIR_AMBOS_BOTOES || podeIniciar(row)) && (
+                        <button
+                          onClick={() => onIniciar(row.id)}
+                          disabled={!podeIniciar(row) || processando.has(row.id)}
+                          title={motivoIniciarDesabilitado(row)}
+                          className="flex items-center gap-1 rounded border border-primary/40 px-2 py-1 text-[11.5px] font-medium text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:pointer-events-none"
+                        >
+                          {processando.has(row.id) ? <Spinner className="h-3 w-3" /> : <IconePlay />}
+                          Iniciar
+                        </button>
+                      )}
+                      {(EXIBIR_AMBOS_BOTOES || podeParar(row)) && (
+                        <button
+                          onClick={() => onParar(row.id)}
+                          disabled={!podeParar(row) || processando.has(row.id)}
+                          title={motivoPararDesabilitado(row)}
+                          className="flex items-center gap-1 rounded border border-destructive/40 px-2 py-1 text-[11.5px] font-medium text-destructive transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:pointer-events-none"
+                        >
+                          {processando.has(row.id) ? <Spinner className="h-3 w-3" /> : <IconeStop />}
+                          Parar
+                        </button>
+                      )}
+                      <button
+                        onClick={() =>
+                          onAbrirDetalhe(row.id, {
+                            titulo: `Proposta ${row.codpro} · Projeto ${row.numprj}`,
+                            podeEditar: row.podeEditar,
+                            dataPrevistaInicio: row.dataPrevistaInicio,
+                            dataPrevistaFim: row.dataPrevistaFim,
+                            codemp: row.codemp,
+                            codpro: row.codpro,
+                            seqite: row.seqite,
+                            itemDescricao: row.itemDescricao,
+                            itemQtdhor: row.itemQtdhor,
+                            itemAlocado: row.itemAlocado,
+                            itemRealizado: row.itemRealizado,
+                            estruturaNome: row.estruturaNome,
+                            horasRealizadas: row.horasRealizadas,
+                            estruturaPercentual: row.estruturaPercentual,
+                            podeVerCronograma: row.podeVerCronograma,
+                          })
+                        }
+                        className="text-sm text-primary hover:underline"
+                      >
+                        Detalhes
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

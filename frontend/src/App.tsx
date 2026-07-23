@@ -3,6 +3,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
 import { ThemeProvider } from "./theme/ThemeContext";
+import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
 import { Login } from "./pages/Login";
 import { AceitarConvite } from "./pages/AceitarConvite";
@@ -29,9 +30,10 @@ import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
 export default function App() {
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
+      <ToastProvider>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/aceitar-convite" element={<AceitarConvite />} />
             <Route
@@ -69,6 +71,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
       </AuthProvider>
+      </ToastProvider>
     </ThemeProvider>
   );
 }

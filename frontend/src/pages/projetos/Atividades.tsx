@@ -9,6 +9,8 @@ import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { CalendarioAtividades } from "../../components/projetos/CalendarioAtividades";
 import { TimelineAtividades } from "../../components/projetos/TimelineAtividades";
 import { WorkloadConsultores } from "../../components/projetos/WorkloadConsultores";
+import { useToast } from "../../components/ui/Toast";
+import { RAIA_A_FAZER, RAIA_EM_ANDAMENTO } from "../../lib/atividade-acoes";
 
 type Visao = "quadro" | "lista" | "calendario" | "timeline" | "workload";
 const VISOES: Visao[] = ["quadro", "lista", "calendario", "timeline", "workload"];
@@ -68,6 +70,8 @@ export function Atividades() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<DetalheSelecionado | null>(null);
+  const [processando, setProcessando] = useState<Set<number>>(new Set());
+  const toast = useToast();
 
   function atualizarFiltros(patch: FiltrosPatch) {
     const mudouFiltro =
@@ -185,6 +189,72 @@ export function Atividades() {
     }
   }
 
+  async function iniciarAtividade(atividadeId: number) {
+    const colunaEmAndamento = colunas.find((c) => c.nome === RAIA_EM_ANDAMENTO) ?? null;
+    const alvo = atividades.find((a) => a.id === atividadeId);
+    const anterior = atividades;
+    setProcessando((atual) => new Set(atual).add(atividadeId));
+    // Otimista: já mostra o card em "Em Andamento" com o cronômetro começando agora;
+    // se o servidor recusar (409/403) ou pausar outra atividade, `carregar()` corrige
+    // tudo de qualquer forma — o rollback abaixo só cobre erro de rede/servidor fora do ar.
+    if (colunaEmAndamento) {
+      setAtividades((atual) =>
+        atual.map((a) =>
+          a.id === atividadeId
+            ? { ...a, colunaId: colunaEmAndamento.id, coluna: colunaEmAndamento, sessaoAtualInicio: new Date().toISOString() }
+            : a
+        )
+      );
+    }
+    try {
+      const { data } = await axios.post(`/api/atividades/${atividadeId}/start`);
+      if (data.pausada) {
+        toast.mostrar(
+          `Atividade ${data.pausada.titulo} foi pausada para iniciar a Proposta ${alvo?.codpro ?? atividadeId}`,
+          "warning"
+        );
+      }
+      carregar();
+      carregarIndicadores();
+    } catch (err: any) {
+      setAtividades(anterior);
+      toast.mostrar(err.response?.data?.error ?? "Falha ao iniciar atividade", "destructive");
+    } finally {
+      setProcessando((atual) => {
+        const proximo = new Set(atual);
+        proximo.delete(atividadeId);
+        return proximo;
+      });
+    }
+  }
+
+  async function pararAtividade(atividadeId: number) {
+    const colunaAFazer = colunas.find((c) => c.nome === RAIA_A_FAZER) ?? null;
+    const anterior = atividades;
+    setProcessando((atual) => new Set(atual).add(atividadeId));
+    if (colunaAFazer) {
+      setAtividades((atual) =>
+        atual.map((a) =>
+          a.id === atividadeId ? { ...a, colunaId: colunaAFazer.id, coluna: colunaAFazer, sessaoAtualInicio: null } : a
+        )
+      );
+    }
+    try {
+      await axios.post(`/api/atividades/${atividadeId}/stop`);
+      carregar();
+      carregarIndicadores();
+    } catch (err: any) {
+      setAtividades(anterior);
+      toast.mostrar(err.response?.data?.error ?? "Falha ao parar atividade", "destructive");
+    } finally {
+      setProcessando((atual) => {
+        const proximo = new Set(atual);
+        proximo.delete(atividadeId);
+        return proximo;
+      });
+    }
+  }
+
   function abrirDetalhe(atividadeId: number, info: DetalheInfo) {
     setDetalhe({ id: atividadeId, ...info });
   }
@@ -255,6 +325,9 @@ export function Atividades() {
           onLimparKpi={() => atualizarFiltros({ situacao: null })}
           onMover={moverAtividade}
           onAbrirDetalhe={abrirDetalhe}
+          onIniciar={iniciarAtividade}
+          onParar={pararAtividade}
+          processando={processando}
         />
       ) : visao === "quadro" ? (
         <div>
@@ -268,7 +341,15 @@ export function Atividades() {
             onFiltros={(patch) => atualizarFiltros(patch)}
             onLimparKpi={() => atualizarFiltros({ situacao: null })}
           />
-          <KanbanBoard colunas={colunas} atividades={atividades} onMover={moverAtividade} onAbrirDetalhe={abrirDetalhe} />
+          <KanbanBoard
+            colunas={colunas}
+            atividades={atividades}
+            onMover={moverAtividade}
+            onAbrirDetalhe={abrirDetalhe}
+            onIniciar={iniciarAtividade}
+            onParar={pararAtividade}
+            processando={processando}
+          />
         </div>
       ) : visao === "calendario" ? (
         <CalendarioAtividades atividades={atividades} onAbrirDetalhe={abrirDetalhe} />
