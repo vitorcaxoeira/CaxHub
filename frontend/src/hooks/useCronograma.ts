@@ -51,6 +51,7 @@ interface NoApi {
   responsavelNome: string | null;
   observacao: string | null;
   horasAlocadas: number;
+  horasRealizadas: number;
   saldo: number | null;
 }
 
@@ -191,7 +192,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
               nome: n.nome,
               ordem: n.ordem,
               horasPrevistas: n.duracaoHoras,
-              horasRealizadas: 0,
+              horasRealizadas: n.horasRealizadas,
               responsavelCodfor: n.responsavelCodfor,
               predecessoraId: n.predecessoraId,
               statusManual: (n.status as Exclude<StatusNo, "bloqueada"> | null) ?? null,

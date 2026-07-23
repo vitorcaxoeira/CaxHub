@@ -38,15 +38,18 @@ async function main() {
   if (colunasExistentes === 0) {
     await prisma.quadroColuna.createMany({
       data: [
-        { nome: "A Fazer", ordem: 1, corBadge: "neutral", ehFinal: false, notificarGestor: false },
-        { nome: "Em Andamento", ordem: 2, corBadge: "warning", ehFinal: false, notificarGestor: false },
-        { nome: "Bloqueado", ordem: 3, corBadge: "destructive", ehFinal: false, notificarGestor: true },
-        { nome: "Concluído", ordem: 4, corBadge: "success", ehFinal: true, notificarGestor: true },
+        { nome: "A Fazer", ordem: 1, corBadge: "neutral", ehFinal: false, notificarGestor: false, contaComoExecucao: false },
+        { nome: "Em Andamento", ordem: 2, corBadge: "warning", ehFinal: false, notificarGestor: false, contaComoExecucao: true },
+        { nome: "Bloqueado", ordem: 3, corBadge: "destructive", ehFinal: false, notificarGestor: true, contaComoExecucao: false },
+        { nome: "Concluído", ordem: 4, corBadge: "success", ehFinal: true, notificarGestor: true, contaComoExecucao: false },
       ],
     });
     console.log("Colunas iniciais do quadro Kanban criadas");
   } else {
     await prisma.quadroColuna.updateMany({ where: { nome: { in: ["Bloqueado", "Concluído"] } }, data: { notificarGestor: true } });
+    // "Em Andamento" é a única coluna de trabalho ativo por padrão — abre/fecha
+    // AtividadeSessaoExecucao ao entrar/sair dela (ver PATCH /atividades/:id/mover).
+    await prisma.quadroColuna.updateMany({ where: { nome: "Em Andamento" }, data: { contaComoExecucao: true } });
   }
 
   // fasid=0 aparece em AtividadeConsultor sincronizadas do Senior mas não existe em

@@ -33,6 +33,11 @@ export interface AtividadeKanban {
   itemDescricao: string | null;
   itemQtdhor: number | null;
   itemAlocado: number;
+  // Minutos já trabalhados de verdade, agregados por item (soma de todas as atividades
+  // do item) e por esta atividade — sessões de execução + apontamentos confirmados, ver
+  // carregarAtividadesVisiveis em backend/src/routes/atividades.ts.
+  itemRealizado: number;
+  horasRealizadas: number;
   estruturaAtividadeId: number | null;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
@@ -50,6 +55,8 @@ export interface DetalheInfo {
   itemDescricao: string | null;
   itemQtdhor: number | null;
   itemAlocado: number;
+  itemRealizado: number;
+  horasRealizadas: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
   podeVerCronograma: boolean;
@@ -143,6 +150,8 @@ function DraggableCard({
             itemDescricao: atividade.itemDescricao,
             itemQtdhor: atividade.itemQtdhor,
             itemAlocado: atividade.itemAlocado,
+            itemRealizado: atividade.itemRealizado,
+            horasRealizadas: atividade.horasRealizadas,
             estruturaNome: atividade.estruturaNome,
             estruturaPercentual: atividade.estruturaPercentual,
             podeVerCronograma: atividade.podeVerCronograma,

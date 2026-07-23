@@ -195,7 +195,9 @@ export function AtividadesTable({
                           itemDescricao: row.itemDescricao,
                           itemQtdhor: row.itemQtdhor,
                           itemAlocado: row.itemAlocado,
+                          itemRealizado: row.itemRealizado,
                           estruturaNome: row.estruturaNome,
+                          horasRealizadas: row.horasRealizadas,
                           estruturaPercentual: row.estruturaPercentual,
                           podeVerCronograma: row.podeVerCronograma,
                         })

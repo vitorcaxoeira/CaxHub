@@ -21,6 +21,8 @@ import { JOB_NAME as NATUREZA_FINANCEIRA_JOB, CRON_EXPR as NATUREZA_FINANCEIRA_C
 import { JOB_NAME as PORTADOR_JOB, CRON_EXPR as PORTADOR_CRON, CAMPO_DATA as PORTADOR_DATA, runPortadorSync } from "./portadorSync";
 import { JOB_NAME as PROPOSTA_ITEM_JOB, CRON_EXPR as PROPOSTA_ITEM_CRON, CAMPO_DATA as PROPOSTA_ITEM_DATA, runPropostaItemSync } from "./propostaItemSync";
 import { JOB_NAME as PROPOSTA_JOB, CRON_EXPR as PROPOSTA_CRON, CAMPO_DATA as PROPOSTA_DATA, runPropostaSync } from "./propostaSync";
+import { JOB_NAME as RAT_JOB, CRON_EXPR as RAT_CRON, CAMPO_DATA as RAT_DATA, runRatSync } from "./ratSync";
+import { JOB_NAME as RAT_ITEM_JOB, CRON_EXPR as RAT_ITEM_CRON, CAMPO_DATA as RAT_ITEM_DATA, runRatItemSync } from "./ratItemSync";
 import { JOB_NAME as REPRESENTANTE_JOB, CRON_EXPR as REPRESENTANTE_CRON, CAMPO_DATA as REPRESENTANTE_DATA, runRepresentanteSync } from "./representanteSync";
 import { JOB_NAME as TIPO_TITULO_JOB, CRON_EXPR as TIPO_TITULO_CRON, CAMPO_DATA as TIPO_TITULO_DATA, runTipoTituloSync } from "./tipoTituloSync";
 import { JOB_NAME as TITULO_RECEBER_JOB, CRON_EXPR as TITULO_RECEBER_CRON, CAMPO_DATA as TITULO_RECEBER_DATA, runTituloReceberSync } from "./tituloReceberSync";
@@ -61,4 +63,7 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   // FaseProposta roda antes de AtividadeConsultor: AtividadeConsultor.fasid é FK pra fases_proposta.
   { jobName: FASE_PROPOSTA_JOB, displayName: "Fases de Proposta", cronExpr: FASE_PROPOSTA_CRON, suportaAlterados: FASE_PROPOSTA_DATA != null, run: runFasePropostaSync, contarRegistros: () => prisma.faseProposta.count() },
   { jobName: ATIVIDADE_CONSULTOR_JOB, displayName: "Atividades por Consultor", cronExpr: ATIVIDADE_CONSULTOR_CRON, suportaAlterados: ATIVIDADE_CONSULTOR_DATA != null, run: runAtividadeConsultorSync, contarRegistros: () => prisma.atividadeConsultor.count() },
+  { jobName: RAT_JOB, displayName: "RATs (Cabeçalho)", cronExpr: RAT_CRON, suportaAlterados: RAT_DATA != null, run: runRatSync, contarRegistros: () => prisma.rat.count() },
+  // RatItem roda depois de Rat: RatItem.ratId é resolvido casando (codemp, numrat, codpro) contra Rat já sincronizado.
+  { jobName: RAT_ITEM_JOB, displayName: "Itens de RAT (Apontamentos)", cronExpr: RAT_ITEM_CRON, suportaAlterados: RAT_ITEM_DATA != null, run: runRatItemSync, contarRegistros: () => prisma.ratItem.count() },
 ];

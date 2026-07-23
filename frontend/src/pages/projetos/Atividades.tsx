@@ -294,6 +294,7 @@ export function Atividades() {
           itemDescricao={detalhe.itemDescricao}
           itemQtdhor={detalhe.itemQtdhor}
           itemAlocado={detalhe.itemAlocado}
+          itemRealizado={detalhe.itemRealizado}
           estruturaNome={detalhe.estruturaNome}
           estruturaPercentual={detalhe.estruturaPercentual}
           podeVerCronograma={detalhe.podeVerCronograma}

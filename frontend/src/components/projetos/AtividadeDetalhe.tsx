@@ -44,6 +44,7 @@ interface AtividadeDetalheProps {
   itemDescricao: string | null;
   itemQtdhor: number | null;
   itemAlocado: number;
+  itemRealizado: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
   podeVerCronograma: boolean;
@@ -80,6 +81,7 @@ export function AtividadeDetalhe({
   itemDescricao,
   itemQtdhor,
   itemAlocado,
+  itemRealizado,
   estruturaNome,
   estruturaPercentual,
   podeVerCronograma,
@@ -256,13 +258,14 @@ export function AtividadeDetalhe({
                     </p>
                   )}
                   {(() => {
-                    const orcamento = orcamentoDeTotais(itemQtdhor ?? 0, itemAlocado, 0);
+                    const orcamento = orcamentoDeTotais(itemQtdhor ?? 0, itemAlocado, itemRealizado);
                     const largura = 2;
                     const saldo = descreverSaldoDistribuicao(orcamento, largura);
                     return (
                       <p className="font-mono text-[11.5px] text-muted">
                         Contratado {formatHorasCompacto(orcamento.horasContratadas, largura)} · Distribuído{" "}
-                        {formatHorasCompacto(orcamento.horasDistribuidas, largura)} ·{" "}
+                        {formatHorasCompacto(orcamento.horasDistribuidas, largura)} · Realizado{" "}
+                        {formatHorasCompacto(orcamento.horasRealizadas, largura)} ·{" "}
                         <span className={tomTexto[saldo.tom]}>{saldo.texto}</span>
                       </p>
                     );

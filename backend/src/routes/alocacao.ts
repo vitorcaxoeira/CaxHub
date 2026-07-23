@@ -718,9 +718,43 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
       nosPorSeqite.get(n.seqite)!.push(n);
     }
 
+    // "Horas realizadas" por alocação — mesmo cálculo de carregarAtividadesVisiveis em
+    // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
+    // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão).
+    const seqatisValidos = [...new Set(alocacoes.map((a) => a.seqati).filter((s): s is bigint => s != null))];
+    const ratItemsComHoras =
+      seqatisValidos.length > 0
+        ? await prisma.ratItem.findMany({
+            where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
+            select: { seqati: true, horini: true, horfim: true },
+          })
+        : [];
+    const minutosRealizadosPorSeqati = new Map<bigint, number>();
+    for (const item of ratItemsComHoras) {
+      if (item.seqati == null || item.horini == null || item.horfim == null) continue;
+      minutosRealizadosPorSeqati.set(item.seqati, (minutosRealizadosPorSeqati.get(item.seqati) ?? 0) + (item.horfim - item.horini));
+    }
+    const sessoesNaoConfirmadas =
+      alocacoes.length > 0
+        ? await prisma.atividadeSessaoExecucao.findMany({
+            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null } },
+            select: { atividadeId: true, inicio: true, fim: true },
+          })
+        : [];
+    const minutosRealizadosPorAtividadeId = new Map<number, number>();
+    for (const s of sessoesNaoConfirmadas) {
+      if (s.fim == null) continue;
+      const minutos = Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000);
+      minutosRealizadosPorAtividadeId.set(s.atividadeId, (minutosRealizadosPorAtividadeId.get(s.atividadeId) ?? 0) + minutos);
+    }
+    function horasRealizadasDaAlocacao(a: (typeof alocacoes)[number]): number {
+      return (a.seqati != null ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) + (minutosRealizadosPorAtividadeId.get(a.id) ?? 0);
+    }
+
     function mapNo(n: (typeof todosOsNos)[number]) {
       const alocacoesDoNo = alocacoesPorNo.get(n.id) ?? [];
       const horasAlocadas = alocacoesDoNo.reduce((soma, a) => soma + (a.qtdhor ?? 0), 0);
+      const horasRealizadas = alocacoesDoNo.reduce((soma, a) => soma + horasRealizadasDaAlocacao(a), 0);
       return {
         id: n.id,
         parentId: n.parentId,
@@ -743,6 +777,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
             : null,
         observacao: n.observacao,
         horasAlocadas,
+        horasRealizadas,
         saldo: n.duracaoHoras != null ? n.duracaoHoras - horasAlocadas : null,
         alocacoes: alocacoesDoNo.map((a) => ({
           id: a.id,

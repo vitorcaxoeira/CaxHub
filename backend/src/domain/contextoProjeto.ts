@@ -46,7 +46,8 @@ export type AcaoProjeto =
   | "excluir"
   | "aprovar"
   | "exportar"
-  | "importar";
+  | "importar"
+  | "lancarApontamento";
 
 interface AtividadeParaPermissao {
   depexe: number;
@@ -68,12 +69,15 @@ export function podeExecutarAcao(
   if (role === "comercial") return acao === "visualizar";
 
   if (contexto.departamentosGerenciados.includes(atividade.depexe)) {
+    // Apontamento é sempre de quem executou, mesmo pro Líder Técnico do departamento —
+    // gerenciar o time não é a mesma coisa que ter trabalhado na atividade.
+    if (acao === "lancarApontamento") return contexto.consultor?.codfor === atividade.codfor;
     return ACOES_LIDER_TECNICO.includes(acao);
   }
 
   if (contexto.departamentosTime.includes(atividade.depexe)) {
     if (acao === "visualizar") return true;
-    if (acao === "mover" || acao === "editar") {
+    if (acao === "mover" || acao === "editar" || acao === "lancarApontamento") {
       return contexto.consultor?.codfor === atividade.codfor;
     }
     return false;

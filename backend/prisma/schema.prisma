@@ -33,6 +33,7 @@ model User {
   comentariosAtividade   AtividadeComentario[]
   anexosAtividade        AtividadeAnexo[]
   notificacoes           Notificacao[]
+  auditEventos           AuditEvento[]
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -393,8 +394,9 @@ model Proposta {
   /// Domínio "LSimNao": S=Sim, N=Não
   fathrsdes String?   @db.VarChar(1)
 
-  cliente Cliente        @relation(fields: [codcli], references: [codcli])
-  itens   PropostaItem[]
+  cliente      Cliente        @relation(fields: [codcli], references: [codcli])
+  itens        PropostaItem[]
+  auditEventos AuditEvento[]
 
   @@id([codemp, codpro])
   @@index([sitpro])
@@ -549,6 +551,7 @@ model AtividadeConsultor {
   anexos                  AtividadeAnexo[]
   notificacoes            Notificacao[]
   sincronizacoesPendentes SincronizacaoPendente[]
+  sessoesExecucao         AtividadeSessaoExecucao[]
 
   // Quando a proposta está em modo "estrutura" (ver PropostaModoAlocacao), a alocação
   // aponta pro nó-folha da EAP em vez de só pro item — fica nulo no modo "item" (o
@@ -688,11 +691,124 @@ model QuadroColuna {
   // (gestor do departamento da atividade) — ver PATCH /atividades/:id/mover.
   notificarGestor Boolean @default(false)
 
+  // Marca colunas de trabalho ativo (ex.: "Em Andamento") — entrar nelas abre uma
+  // AtividadeSessaoExecucao, sair fecha. Colunas neutras (backlog, aguardando,
+  // concluído) não contam tempo. Ver PATCH /atividades/:id/mover.
+  contaComoExecucao Boolean @default(false)
+
   atividades        AtividadeConsultor[]
   historicoAnterior AtividadeHistoricoMovimentacao[] @relation("colunaAnterior")
   historicoNova     AtividadeHistoricoMovimentacao[] @relation("colunaNova")
+  sessoesExecucao   AtividadeSessaoExecucao[]
 
   @@map("quadro_colunas")
+}
+
+// Sessão de trabalho numa atividade — 100% CaxHub, sem espelho no Senior. É a fonte da
+// verdade de "quanto tempo foi realmente trabalhado" (uma atividade de muitas horas pode
+// ser trabalhada em várias sessões ao longo de dias/semanas). Hoje só é criada/fechada
+// automaticamente pela movimentação de coluna no Kanban (ver PATCH /atividades/:id/mover
+// e QuadroColuna.contaComoExecucao); no futuro também por um Start/Stop manual — mesma
+// estrutura, o campo `origem` já diferencia as duas fontes.
+model AtividadeSessaoExecucao {
+  id          Int                @id @default(autoincrement())
+  atividadeId Int
+  atividade   AtividadeConsultor @relation(fields: [atividadeId], references: [id])
+  colunaId    Int
+  coluna      QuadroColuna       @relation(fields: [colunaId], references: [id])
+
+  inicio DateTime
+  fim    DateTime? // null = sessão em andamento
+
+  /// "movimentacao_kanban" (hoje) | "manual" (Start/Stop futuro)
+  origem String @db.VarChar(20)
+
+  // true quando o consultor já revisou a sessão e ela virou um RatItem de verdade —
+  // a partir daí, "horas realizadas" passa a contar via RatItem, não mais via sessão
+  // (ver GET /apontamentos/sessoes-pendentes), pra não somar a mesma hora duas vezes.
+  confirmada Boolean  @default(false)
+  ratItemId  Int?
+  ratItem    RatItem? @relation(fields: [ratItemId], references: [id])
+
+  criadoEm DateTime @default(now())
+
+  @@map("atividade_sessoes_execucao")
+}
+
+// Cabeçalho de RAT (Registro de Atividade Técnica) — espelho parcial de USU_TE777RAT
+// (só os campos usados hoje pelo CaxHub, não a tabela inteira). Mão dupla como
+// AtividadeConsultor/seqati: PK local é `id`; a chave natural do Senior
+// (codemp+numprj+codfpj+numrat) só existe depois que o documento é confirmado lá — fica
+// nula enquanto for um rascunho criado no CaxHub (ver POST /apontamentos/confirmar).
+// Sem campo `sitreg`: não há soft-delete nesta tabela no Senior, cancelamento é só
+// sitrat=5 (Cancelado), refletido visualmente, sem filtrar a linha.
+model Rat {
+  id     Int @id @default(autoincrement())
+  codemp Int
+  codfor Int // consultor executor (sem FK formal, mesmo padrão de AtividadeConsultor.codfor)
+
+  numprj Int?
+  codfpj Int?
+  numrat Int? // nulo até o Senior confirmar
+  codpro Int?
+  codcli Int?
+
+  datemi  DateTime? @db.Date
+  dataApr DateTime? @db.Date
+  /// Domínio "USU_LSITRAT": 9=Digitado 8=Impresso 6=Aprovado 5=Cancelado 4=Faturado 2=Faturado Parcial 1=Fechado
+  sitrat  Int?
+  obsrat  String?   @db.VarChar(250)
+  usufor  Int?
+  depexe  Int?
+
+  // true = criado pelo consultor no CaxHub (ainda sem numrat confirmado); false = veio do
+  // Senior via ratSync (apontamento feito direto no desktop por outro consultor).
+  origemCaxHub Boolean @default(false)
+
+  itens RatItem[]
+
+  @@unique([codemp, numprj, codfpj, numrat])
+  @@map("rats")
+}
+
+// Linha de apontamento (IAT) — espelho parcial de USU_TE777IAT. PK local `id`; chave
+// natural (codemp, numrat, seqrat) só existe após confirmação no Senior. Sem `qtdhpor`
+// (quantidade de horas em decimal) de propósito — a duração vem de horini/horfim, que
+// por sua vez vêm da AtividadeSessaoExecucao confirmada (sessão é a fonte da verdade do
+// tempo trabalhado, RAT/IAT é só o formato de exportação pro Senior).
+model RatItem {
+  id     Int @id @default(autoincrement())
+  ratId  Int
+  rat    Rat @relation(fields: [ratId], references: [id])
+  codemp Int
+
+  numprj Int?
+  numrat Int?
+  seqrat Int?
+
+  codser String?   @db.VarChar(14)
+  datati DateTime? @db.Date
+  // Minutos desde meia-noite (confirmado com amostra real do Senior: 480=08:00,
+  // 720=12:00 etc.) — nunca HHMM. Pra formatar: Math.trunc(v/60) + ":" + v%60.
+  horini Int?
+  horfim Int?
+  desati String?   @db.VarChar(1000)
+
+  codpro Int?
+  seqite Int?
+  codfas Int?
+  datreg DateTime? @db.Date
+
+  // Vínculo central: AtividadeConsultor.seqati executado. Sem @relation formal (mesmo
+  // espírito de codfor em Rat) — casamento por valor em código, não FK rígida, porque os
+  // dois lados podem estar nulos em momentos diferentes do ciclo de vida.
+  seqati BigInt?
+
+  origemCaxHub Boolean @default(false)
+  sessoes      AtividadeSessaoExecucao[]
+
+  @@unique([codemp, numrat, seqrat])
+  @@map("rat_itens")
 }
 
 // Histórico de movimentação de atividades entre colunas do Kanban — dado 100% do
@@ -794,4 +910,52 @@ model FaseProposta {
   atividades AtividadeConsultor[]
 
   @@map("fases_proposta")
+}
+
+// Trilha de auditoria transversal do CaxHub — dado 100% CaxHub, append-only (a aplicação
+// nunca faz UPDATE/DELETE aqui). Um evento por mudança individualmente relevante; eventos
+// nascidos da mesma "ação" (ex.: uma linha de sync que alterou 3 campos monitorados)
+// compartilham `correlationId`. Ver backend/src/audit/ para a lógica de captura.
+model AuditEvento {
+  id         BigInt   @id @default(autoincrement())
+  ocorridoEm DateTime @default(now()) @db.Timestamptz(6)
+
+  // Nulo quando o evento não tem usuário interativo por trás (origem "job"/
+  // "integracao_senior" — sync não tem request HTTP nem usuário logado). SetNull pelo
+  // mesmo motivo de AtividadeHistoricoMovimentacao.userId: o evento é histórico e
+  // sobrevive à exclusão do usuário.
+  usuarioId Int?
+  usuario   User? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  /// "tela" | "api" | "job" | "integracao_senior"
+  origem String @db.VarChar(20)
+
+  // Ligação opcional com a proposta (par igual à PK real de Proposta), usada pelo filtro
+  // mais comum ("auditoria desta proposta"). Nullable porque nem todo evento futuro
+  // (Fase 2+) será de uma proposta.
+  codemp   Int?
+  codpro   Int?
+  proposta Proposta? @relation(fields: [codemp, codpro], references: [codemp, codpro])
+
+  // Identidade genérica da entidade auditada, independente de ter FK pra Proposta.
+  // entidadeId é string porque as PKs reais variam (compostas em Proposta/PropostaItem,
+  // simples em AtividadeConsultor na Fase 2) — ver encoding em
+  // backend/src/audit/identidadeEntidade.ts.
+  entidadeTipo   String  @db.VarChar(40)
+  entidadeId     String  @db.VarChar(60)
+  entidadeRotulo String? @db.VarChar(200)
+
+  eventoTipo String @db.VarChar(60)
+
+  // { campo: { de, para } } — sempre a forma bruta dos valores antes/depois.
+  alteracoes Json?
+  // Dados adicionais não capturados por "antes/depois" (ex.: rótulos humanos de status).
+  metadata Json?
+
+  correlationId String @db.Uuid
+
+  @@index([codemp, codpro, ocorridoEm(sort: Desc)], map: "idx_audit_evento_proposta")
+  @@index([entidadeTipo, entidadeId, ocorridoEm(sort: Desc)], map: "idx_audit_evento_entidade")
+  @@index([eventoTipo, ocorridoEm(sort: Desc)], map: "idx_audit_evento_tipo")
+  @@map("audit_evento")
 }

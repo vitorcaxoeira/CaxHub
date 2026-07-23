@@ -107,6 +107,8 @@ export function TimelineAtividades({ atividades, onAbrirDetalhe }: TimelineAtivi
                           itemQtdhor: atividade.itemQtdhor,
                           itemAlocado: atividade.itemAlocado,
                           estruturaNome: atividade.estruturaNome,
+                          itemRealizado: atividade.itemRealizado,
+                          horasRealizadas: atividade.horasRealizadas,
                           estruturaPercentual: atividade.estruturaPercentual,
                           podeVerCronograma: atividade.podeVerCronograma,
                         })

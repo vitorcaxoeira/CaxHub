@@ -91,6 +91,53 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
     alocadoPorItem.set(chave, (alocadoPorItem.get(chave) ?? 0) + (a.qtdhor ?? 0));
   }
 
+  // "Horas realizadas" = duração das sessões de execução ainda não confirmadas (tempo já
+  // rastreado, mas ainda não virou RatItem) + duração (horfim-horini) dos RatItem já
+  // confirmados/sincronizados pra essa atividade. Uma sessão confirmada tem `ratItemId`
+  // preenchido, então sai da conta de "sessões" e passa a contar via RatItem — nunca as
+  // duas ao mesmo tempo, pra não somar a mesma hora duas vezes.
+  const seqatisValidos = [...new Set(atividades.map((a) => a.seqati).filter((s): s is bigint => s != null))];
+  const ratItemsComHoras =
+    seqatisValidos.length > 0
+      ? await prisma.ratItem.findMany({
+          where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
+          select: { seqati: true, horini: true, horfim: true },
+        })
+      : [];
+  const minutosRealizadosPorSeqati = new Map<bigint, number>();
+  for (const item of ratItemsComHoras) {
+    if (item.seqati == null || item.horini == null || item.horfim == null) continue;
+    const atual = minutosRealizadosPorSeqati.get(item.seqati) ?? 0;
+    minutosRealizadosPorSeqati.set(item.seqati, atual + (item.horfim - item.horini));
+  }
+
+  const sessoesNaoConfirmadas =
+    atividades.length > 0
+      ? await prisma.atividadeSessaoExecucao.findMany({
+          where: { atividadeId: { in: atividades.map((a) => a.id) }, confirmada: false, fim: { not: null } },
+          select: { atividadeId: true, inicio: true, fim: true },
+        })
+      : [];
+  const minutosRealizadosPorAtividadeId = new Map<number, number>();
+  for (const s of sessoesNaoConfirmadas) {
+    if (s.fim == null) continue;
+    const minutos = Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000);
+    minutosRealizadosPorAtividadeId.set(s.atividadeId, (minutosRealizadosPorAtividadeId.get(s.atividadeId) ?? 0) + minutos);
+  }
+  function horasRealizadasDaAtividade(a: (typeof atividades)[number]): number {
+    return (a.seqati != null ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) + (minutosRealizadosPorAtividadeId.get(a.id) ?? 0);
+  }
+
+  // Realizado por ITEM (soma de todas as atividades do item, mesmo padrão de
+  // alocadoPorItem) — usado no orçamento do item (contratado x distribuído x realizado);
+  // diferente de `horasRealizadas` por atividade, exposto à parte pra uso futuro (ex.:
+  // progresso individual do card).
+  const realizadoPorItem = new Map<string, number>();
+  for (const a of atividades) {
+    const chave = `${a.codemp}-${a.codpro}-${a.seqite}`;
+    realizadoPorItem.set(chave, (realizadoPorItem.get(chave) ?? 0) + horasRealizadasDaAtividade(a));
+  }
+
   const idsEstrutura = [...new Set(atividades.map((a) => a.estruturaAtividadeId).filter((id): id is number => id != null))];
   const nosEstrutura =
     idsEstrutura.length > 0
@@ -165,6 +212,10 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
         itemDescricao: item?.despro ?? null,
         itemQtdhor: item?.qtdhor ?? null,
         itemAlocado: alocadoPorItem.get(chaveItem) ?? 0,
+        itemRealizado: realizadoPorItem.get(chaveItem) ?? 0,
+        // Minutos: sessões ainda não confirmadas + RatItem já confirmados/sincronizados
+        // (nunca as duas fontes ao mesmo tempo pra mesma sessão — ver comentário acima).
+        horasRealizadas: horasRealizadasDaAtividade(a),
         estruturaAtividadeId: a.estruturaAtividadeId,
         estruturaNome: noEstrutura?.nome ?? null,
         estruturaPercentual: noEstrutura?.percentualConcluido ?? null,
@@ -436,7 +487,11 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    const [atividadeAtualizada] = await prisma.$transaction([
+    // Sessão de execução: sair de qualquer coluna fecha a sessão aberta (se houver);
+    // entrar numa coluna marcada como "em execução" abre uma nova. O mesmo instante é
+    // usado pros dois lados pra não deixar brecha/sobreposição entre fechar e abrir.
+    const agora = new Date();
+    const operacoes = [
       prisma.atividadeConsultor.update({ where: { id }, data: { colunaId: colunaIdNovo } }),
       prisma.atividadeHistoricoMovimentacao.create({
         data: {
@@ -446,7 +501,19 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
           userId: user.id,
         },
       }),
-    ]);
+      prisma.atividadeSessaoExecucao.updateMany({
+        where: { atividadeId: id, fim: null },
+        data: { fim: agora },
+      }),
+      ...(colunaNova.contaComoExecucao
+        ? [
+            prisma.atividadeSessaoExecucao.create({
+              data: { atividadeId: id, colunaId: colunaIdNovo, inicio: agora, origem: "movimentacao_kanban" },
+            }),
+          ]
+        : []),
+    ];
+    await prisma.$transaction(operacoes);
 
     // Automação: coluna marcada pra notificar o(s) Líder(es) Técnico(s) do departamento.
     if (colunaNova.notificarGestor) {
@@ -465,7 +532,7 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    res.json({ id: atividadeAtualizada.id, colunaId: atividadeAtualizada.colunaId });
+    res.json({ id, colunaId: colunaIdNovo });
   } catch (error) {
     handleError(res, error, "mover");
   }
