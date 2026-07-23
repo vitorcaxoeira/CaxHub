@@ -35,6 +35,7 @@ const groups: NavGroup[] = [
       { to: "/projetos/atividades", label: "Atividades" },
       { to: "/projetos/apontamentos", label: "Meus Apontamentos" },
       { to: "/projetos/alocacao", label: "Alocação", gestorOuAdmin: true },
+      { to: "/projetos/auditoria", label: "Auditoria", gestorOuAdmin: true },
     ],
     roles: "*",
   },

@@ -535,7 +535,7 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
         entidadeTipo: ENTIDADES_AUDITORIA.KANBAN_CARD,
         entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
         eventoTipo: EVENTOS_AUDITORIA.KANBAN_RAIA_ALTERADA,
-        alteracoes: { colunaId: { de: atividade.colunaId, para: colunaIdNovo } },
+        alteracoes: { colunaId: { de: atividade.colunaId, para: colunaIdNovo, rotulo: "Coluna" } },
         metadata: { raia_de: colunaAnterior?.nome ?? null, raia_para: colunaNova.nome },
       }),
       ...(sessaoAbertaAntes

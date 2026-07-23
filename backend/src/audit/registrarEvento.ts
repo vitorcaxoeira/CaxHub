@@ -5,6 +5,9 @@ import { EntidadeAuditoriaTipo, EVENTOS_AUDITORIA, EventoAuditoriaTipo, OrigemAu
 export interface DiffEntry {
   de: unknown;
   para: unknown;
+  // Rótulo humano do campo (ex.: "Situação"), vindo da whitelist — a UI usa isso
+  // direto na coluna "Campo" do drawer de detalhe, sem duplicar a tradução no frontend.
+  rotulo: string;
 }
 
 export interface DiffResultado {
@@ -41,7 +44,7 @@ export function diffCampos<T extends Record<string, unknown>>(
     const valorAntes = antes ? (antes[campo] ?? null) : null;
     const valorDepois = depois[campo] ?? null;
     if (normalizar(valorAntes) !== normalizar(valorDepois)) {
-      alteracoes[campo] = { de: valorAntes, para: valorDepois };
+      alteracoes[campo] = { de: valorAntes, para: valorDepois, rotulo: whitelist[campo] };
     }
   }
   return { alteracoes, algumaMudanca: Object.keys(alteracoes).length > 0 };
@@ -126,7 +129,7 @@ export function criarEventosDeData(
         {
           ...ctx,
           eventoTipo: mudanca === "incluida" ? EVENTOS_AUDITORIA.DATA_INCLUIDA : EVENTOS_AUDITORIA.DATA_ALTERADA,
-          alteracoes: { [campo]: { de: valorAntes, para: valorDepois } },
+          alteracoes: { [campo]: { de: valorAntes, para: valorDepois, rotulo } },
           metadata: { campo: rotulo },
         },
         client

@@ -18,6 +18,7 @@ import { Propostas } from "./pages/projetos/Propostas";
 import { Atividades } from "./pages/projetos/Atividades";
 import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
+import { Auditoria } from "./pages/auditoria/Auditoria";
 import { AlocacaoPropostaDetalhe } from "./pages/projetos/AlocacaoPropostaDetalhe";
 import { CronogramaProposta } from "./pages/projetos/CronogramaProposta";
 import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
@@ -44,6 +45,7 @@ export default function App() {
               <Route path="/projetos/atividades" element={<Atividades />} />
               <Route path="/projetos/apontamentos" element={<MeusApontamentos />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />
+              <Route path="/projetos/auditoria" element={<Auditoria />} />
               <Route path="/projetos/alocacao/:codemp/:codpro" element={<AlocacaoPropostaDetalhe />} />
               <Route path="/projetos/alocacao/:codemp/:codpro/cronograma" element={<CronogramaProposta />} />
               <Route path="/projetos/proposta/:codemp/:codpro" element={<PropostaVisualizacao />} />

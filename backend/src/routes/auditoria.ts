@@ -2,7 +2,10 @@ import { NextFunction, Response, Router } from "express";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
-import { Prisma, AuditEvento } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+
+const INCLUDE_USUARIO = { usuario: { select: { nome: true, fotoUrl: true } } } as const;
+type EventoComUsuario = Prisma.AuditEventoGetPayload<{ include: typeof INCLUDE_USUARIO }>;
 
 export const auditoriaRouter = Router();
 
@@ -56,11 +59,16 @@ function parseDateTimeParam(value: unknown): Date | null {
 }
 
 // BigInt/Decimal não serializam em JSON.stringify nativo, e correlationId(uuid)/datas já
-// vêm como string/Date do client — só id precisa de conversão explícita.
-function serializarEvento(evento: AuditEvento) {
+// vêm como string/Date do client — só id precisa de conversão explícita. `usuario` (join)
+// é achatado em usuarioNome/usuarioFotoUrl — nulo quando origem é job/integracao_senior
+// (sem usuário interativo) ou quando o usuário foi excluído depois (SetNull).
+function serializarEvento(evento: EventoComUsuario) {
+  const { usuario, ...resto } = evento;
   return {
-    ...evento,
+    ...resto,
     id: evento.id.toString(),
+    usuarioNome: usuario?.nome ?? null,
+    usuarioFotoUrl: usuario?.fotoUrl ?? null,
   };
 }
 
@@ -116,6 +124,7 @@ async function buscarPagina(filtros: FiltrosAuditoria) {
     where: filtros.where,
     orderBy: [{ ocorridoEm: "desc" }, { id: "desc" }],
     take: filtros.limit + 1,
+    include: INCLUDE_USUARIO,
     ...(filtros.cursor !== null ? { cursor: { id: filtros.cursor }, skip: 1 } : {}),
   });
 
