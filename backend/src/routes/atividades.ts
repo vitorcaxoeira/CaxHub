@@ -77,10 +77,29 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
     chavesItem.length > 0
       ? await prisma.propostaItem.findMany({
           where: { OR: chavesItem },
-          select: { codemp: true, codpro: true, seqite: true, depexe: true },
+          select: { codemp: true, codpro: true, seqite: true, depexe: true, despro: true, qtdhor: true },
         })
       : [];
+  const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
   const depexePorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i.depexe]));
+
+  // Total distribuído (soma de qtdhor de todas as atividades ativas) por item — usado
+  // para mostrar orçamento contratado x distribuído sem precisar da árvore de EAP.
+  const alocadoPorItem = new Map<string, number>();
+  for (const a of atividades) {
+    const chave = `${a.codemp}-${a.codpro}-${a.seqite}`;
+    alocadoPorItem.set(chave, (alocadoPorItem.get(chave) ?? 0) + (a.qtdhor ?? 0));
+  }
+
+  const idsEstrutura = [...new Set(atividades.map((a) => a.estruturaAtividadeId).filter((id): id is number => id != null))];
+  const nosEstrutura =
+    idsEstrutura.length > 0
+      ? await prisma.estruturaAtividade.findMany({
+          where: { id: { in: idsEstrutura } },
+          select: { id: true, nome: true, percentualConcluido: true },
+        })
+      : [];
+  const nosEstruturaPorId = new Map(nosEstrutura.map((n) => [n.id, n]));
 
   const chavesPropostaUnicas = [...new Set(atividades.map((a) => `${a.codemp}-${a.codpro}`))];
   const propostas =
@@ -114,14 +133,20 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
       const consultor = consultorPorCodfor.get(a.codfor);
       const coluna = a.coluna ?? primeiraColuna ?? null;
       const hoje = new Date(new Date().toDateString());
-      const atrasada = !coluna?.ehFinal && proposta.datval != null && new Date(proposta.datval) < hoje;
+      // Atraso é medido pela data prevista de fim DA ATIVIDADE (planejamento manual do
+      // CaxHub), não pelo prazo contratual da proposta inteira (datval, do Senior) — uma
+      // atividade sem dataPrevistaFim definida nunca conta como atrasada.
+      const atrasada = !coluna?.ehFinal && a.dataPrevistaFim != null && new Date(a.dataPrevistaFim) < hoje;
+      const chaveItem = `${a.codemp}-${a.codpro}-${a.seqite}`;
+      const item = itemPorChave.get(chaveItem);
+      const noEstrutura = a.estruturaAtividadeId != null ? nosEstruturaPorId.get(a.estruturaAtividadeId) : null;
       return {
         id: a.id,
         codemp: a.codemp,
         codpro: a.codpro,
         seqite: a.seqite,
         numprj: proposta.numprj,
-        cliente: proposta.cliente.nomcli,
+        cliente: `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}`,
         pripro: proposta.pripro,
         priproLabel: priproLabel(proposta.pripro),
         datval: proposta.datval,
@@ -137,6 +162,16 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
         dataPrevistaFim: a.dataPrevistaFim,
         podeMover: podeExecutarAcao(role, contexto, "mover", { depexe, codfor: a.codfor }),
         podeEditar: podeExecutarAcao(role, contexto, "editar", { depexe, codfor: a.codfor }),
+        itemDescricao: item?.despro ?? null,
+        itemQtdhor: item?.qtdhor ?? null,
+        itemAlocado: alocadoPorItem.get(chaveItem) ?? 0,
+        estruturaAtividadeId: a.estruturaAtividadeId,
+        estruturaNome: noEstrutura?.nome ?? null,
+        estruturaPercentual: noEstrutura?.percentualConcluido ?? null,
+        // Mesma regra de acesso da Alocação (departamentosPermitidos/podeGerenciarProposta
+        // em alocacao.ts) — evita mandar um consultor comum pra rota do cronograma, que
+        // devolveria 403 por não gerenciar o departamento.
+        podeVerCronograma: role === "admin" || contexto.departamentosGerenciados.includes(depexe),
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -161,8 +196,9 @@ atividadesRouter.get("/indicadores", async (req: AuthenticatedRequest, res) => {
     const pctAtrasadas = totalBacklog > 0 ? (totalAtrasadas / totalBacklog) * 100 : null;
 
     // SLA: de quando cada atividade concluída entrou pela 1ª vez numa coluna "ehFinal",
-    // comparado com o prazo (datval) da proposta. Sem histórico de movimentação
-    // registrado, não dá pra saber quando foi concluída — fica fora da amostra do SLA.
+    // comparado com a data prevista de fim da própria atividade (dataPrevistaFim). Sem
+    // histórico de movimentação ou sem data prevista definida, não dá pra saber se foi
+    // concluída no prazo — fica fora da amostra do SLA.
     const historico =
       concluidas.length > 0
         ? await prisma.atividadeHistoricoMovimentacao.findMany({
@@ -178,9 +214,9 @@ atividadesRouter.get("/indicadores", async (req: AuthenticatedRequest, res) => {
     let slaAmostra = 0;
     for (const v of concluidas) {
       const concluidaEm = primeiraConclusaoPorAtividade.get(v.id);
-      if (!concluidaEm || !v.datval) continue;
+      if (!concluidaEm || !v.dataPrevistaFim) continue;
       slaAmostra += 1;
-      if (concluidaEm <= new Date(v.datval)) slaDentroPrazo += 1;
+      if (concluidaEm <= new Date(v.dataPrevistaFim)) slaDentroPrazo += 1;
     }
     const slaPct = slaAmostra > 0 ? (slaDentroPrazo / slaAmostra) * 100 : null;
 
@@ -242,14 +278,36 @@ atividadesRouter.get("/indicadores", async (req: AuthenticatedRequest, res) => {
   }
 });
 
-atividadesRouter.get("/opcoes-filtro", (_req, res) => {
-  const departamentos = Object.entries(DEPEXE_LABELS)
-    .map(([value, label]) => ({ value: Number(value), label }))
-    .sort((a, b) => a.value - b.value);
-  const prioridades = Object.entries(PRIPRO_LABELS)
-    .map(([value, label]) => ({ value: Number(value), label }))
-    .sort((a, b) => a.value - b.value);
-  res.json({ departamentos, prioridades });
+atividadesRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
+  try {
+    const departamentos = Object.entries(DEPEXE_LABELS)
+      .map(([value, label]) => ({ value: Number(value), label }))
+      .sort((a, b) => a.value - b.value);
+    const prioridades = Object.entries(PRIPRO_LABELS)
+      .map(([value, label]) => ({ value: Number(value), label }))
+      .sort((a, b) => a.value - b.value);
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    // Consultores derivados do mesmo recorte de visibilidade da listagem/indicadores —
+    // não do time de um departamento específico (isso é `/alocacao/consultores-elegiveis`,
+    // que serve pra escolher quem RECEBE uma alocação nova, não pra filtrar quem já tem
+    // atividade visível). Considera todo `visiveis` (não só backlog), pra incluir quem só
+    // tem atividade concluída.
+    const visiveis = await carregarAtividadesVisiveis(ctx.role, ctx.contexto);
+    const consultoresPorCodfor = new Map<number, string>();
+    for (const v of visiveis) consultoresPorCodfor.set(v.codfor, v.consultorNome);
+    const consultores = [...consultoresPorCodfor.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+
+    res.json({ departamentos, prioridades, consultores });
+  } catch (error) {
+    handleError(res, error, "opcoes-filtro");
+  }
 });
 
 atividadesRouter.get("/quadro-colunas", async (_req, res) => {
@@ -273,19 +331,46 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
     const filtroDepexe = parseIntParam(req.query.depexe);
     const filtroColunaId = parseIntParam(req.query.colunaId);
     const filtroPripro = parseIntParam(req.query.pripro);
+    const filtroCodfor = parseIntParam(req.query.codfor);
     const somenteAtrasadas = req.query.atrasada === "true";
     const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
     const page = parseIntParam(req.query.page);
     const pageSize = parseIntParam(req.query.pageSize);
+    const situacoesValidas = ["backlog", "atrasadas", "concluidas"] as const;
+    const situacaoRaw = typeof req.query.situacao === "string" ? req.query.situacao : null;
+    const situacao = situacoesValidas.includes(situacaoRaw as (typeof situacoesValidas)[number])
+      ? (situacaoRaw as (typeof situacoesValidas)[number])
+      : null;
 
     const visiveis = await carregarAtividadesVisiveis(role, contexto);
+
+    // KPIs calculados sobre o escopo total (visível pro usuário), antes de aplicar os
+    // filtros transitórios abaixo — mesmo padrão da Alocação (alocacao.ts). Horas em
+    // MINUTOS (o frontend converte pra "H:MM"), diferente de /indicadores (em horas).
+    const backlogKpi = visiveis.filter((v) => !v.coluna?.ehFinal);
+    const atrasadasKpi = backlogKpi.filter((v) => v.atrasada);
+    const concluidasKpi = visiveis.filter((v) => v.coluna?.ehFinal);
+    const somaHoras = (lista: typeof visiveis) => lista.reduce((soma, v) => soma + (v.qtdhorPrevisto ?? 0), 0);
+    const kpis = {
+      totalNoEscopo: visiveis.length,
+      backlog: { quantidade: backlogKpi.length, horas: somaHoras(backlogKpi) },
+      atrasadas: { quantidade: atrasadasKpi.length, horas: somaHoras(atrasadasKpi) },
+      concluidas: { quantidade: concluidasKpi.length, horas: somaHoras(concluidasKpi) },
+    };
 
     const rows = visiveis
       .filter((item) => filtroDepexe === null || item.depexe === filtroDepexe)
       .filter((item) => filtroColunaId === null || item.colunaId === filtroColunaId)
       .filter((item) => filtroPripro === null || item.pripro === filtroPripro)
+      .filter((item) => filtroCodfor === null || item.codfor === filtroCodfor)
       .filter((item) => !somenteAtrasadas || item.atrasada)
-      .filter((item) => !busca || item.cliente.toLowerCase().includes(busca) || String(item.codpro).includes(busca));
+      .filter((item) => !busca || item.cliente.toLowerCase().includes(busca) || String(item.codpro).includes(busca))
+      .filter((item) => {
+        if (situacao === "backlog") return !item.coluna?.ehFinal;
+        if (situacao === "atrasadas") return item.atrasada;
+        if (situacao === "concluidas") return !!item.coluna?.ehFinal;
+        return true;
+      });
 
     const total = rows.length;
     const rowsPagina =
@@ -294,6 +379,7 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
     res.json({
       rows: rowsPagina,
       total,
+      kpis,
       contexto: {
         role,
         departamentosGerenciados: contexto.departamentosGerenciados,

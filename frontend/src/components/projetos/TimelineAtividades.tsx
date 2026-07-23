@@ -100,6 +100,15 @@ export function TimelineAtividades({ atividades, onAbrirDetalhe }: TimelineAtivi
                           podeEditar: atividade.podeEditar,
                           dataPrevistaInicio: atividade.dataPrevistaInicio,
                           dataPrevistaFim: atividade.dataPrevistaFim,
+                          codemp: atividade.codemp,
+                          codpro: atividade.codpro,
+                          seqite: atividade.seqite,
+                          itemDescricao: atividade.itemDescricao,
+                          itemQtdhor: atividade.itemQtdhor,
+                          itemAlocado: atividade.itemAlocado,
+                          estruturaNome: atividade.estruturaNome,
+                          estruturaPercentual: atividade.estruturaPercentual,
+                          podeVerCronograma: atividade.podeVerCronograma,
                         })
                       }
                       title={`${atividade.cliente} · ${atividade.depexeLabel}`}

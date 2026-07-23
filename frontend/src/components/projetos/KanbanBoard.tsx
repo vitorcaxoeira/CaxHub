@@ -1,5 +1,6 @@
 import { DndContext, DragEndEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { formatHoras } from "../../utils/horas";
+import { toneBadge, priproTone } from "../ui/badges";
 
 export interface ColunaKanban {
   id: number;
@@ -11,13 +12,16 @@ export interface ColunaKanban {
 
 export interface AtividadeKanban {
   id: number;
+  codemp: number;
   codpro: number;
+  seqite: number;
   numprj: number;
   cliente: string;
   pripro: number | null;
   priproLabel: string;
   datval: string | null;
   depexeLabel: string;
+  codfor: number;
   consultorNome: string;
   qtdhorPrevisto: number | null;
   colunaId: number | null;
@@ -26,6 +30,13 @@ export interface AtividadeKanban {
   dataPrevistaFim: string | null;
   podeMover: boolean;
   podeEditar: boolean;
+  itemDescricao: string | null;
+  itemQtdhor: number | null;
+  itemAlocado: number;
+  estruturaAtividadeId: number | null;
+  estruturaNome: string | null;
+  estruturaPercentual: number | null;
+  podeVerCronograma: boolean;
 }
 
 export interface DetalheInfo {
@@ -33,6 +44,15 @@ export interface DetalheInfo {
   podeEditar: boolean;
   dataPrevistaInicio: string | null;
   dataPrevistaFim: string | null;
+  codemp: number;
+  codpro: number;
+  seqite: number;
+  itemDescricao: string | null;
+  itemQtdhor: number | null;
+  itemAlocado: number;
+  estruturaNome: string | null;
+  estruturaPercentual: number | null;
+  podeVerCronograma: boolean;
 }
 
 interface KanbanBoardProps {
@@ -49,12 +69,6 @@ const corBorda: Record<string, string> = {
   warning: "border-t-warning",
   destructive: "border-t-destructive",
   success: "border-t-success",
-};
-
-const corBadgePrioridade: Record<number, string> = {
-  1: "bg-destructive/15 text-destructive",
-  2: "bg-warning/15 text-warning",
-  3: "bg-muted/15 text-muted",
 };
 
 function DraggableCard({
@@ -82,14 +96,10 @@ function DraggableCard({
       } ${isDragging ? "opacity-50" : ""}`}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="text-[12.5px] font-semibold text-foreground">
-          Proposta {atividade.codpro} · Projeto {atividade.numprj}
-        </p>
+        <p className="text-[12.5px] font-semibold text-foreground">Proposta {atividade.codpro}</p>
         {atividade.pripro !== null && (
           <span
-            className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide ${
-              corBadgePrioridade[atividade.pripro] ?? "bg-muted/15 text-muted"
-            }`}
+            className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide ${toneBadge[priproTone(atividade.pripro)]}`}
           >
             {atividade.priproLabel}
           </span>
@@ -98,14 +108,24 @@ function DraggableCard({
       <p className="mt-1 truncate text-[12px] text-muted" title={atividade.cliente}>
         {atividade.cliente}
       </p>
+      {atividade.itemDescricao && (
+        <p className="mt-1 truncate text-[11px] text-muted" title={atividade.itemDescricao}>
+          {atividade.itemDescricao}
+        </p>
+      )}
+      {atividade.estruturaNome && (
+        <span className={`mt-1 inline-block rounded px-1.5 py-0.5 font-mono text-[9.5px] ${toneBadge.neutral}`}>
+          {atividade.estruturaNome}
+        </span>
+      )}
       <p className="mt-2 text-[12px] text-foreground">{atividade.consultorNome}</p>
       <p className="text-[11px] text-muted">{atividade.depexeLabel}</p>
       <div className="mt-2 flex items-center justify-between font-mono text-[11px] tabular-nums text-muted">
         <span>{atividade.qtdhorPrevisto != null ? formatHoras(atividade.qtdhorPrevisto / 60) : "—"}</span>
-        {atividade.datval && (
+        {atividade.dataPrevistaFim && (
           <span className={atrasada ? "font-semibold text-destructive" : ""}>
             {atrasada ? "Atrasado · " : ""}
-            {dateFormatter.format(new Date(atividade.datval))}
+            {dateFormatter.format(new Date(atividade.dataPrevistaFim))}
           </span>
         )}
       </div>
@@ -117,6 +137,15 @@ function DraggableCard({
             podeEditar: atividade.podeEditar,
             dataPrevistaInicio: atividade.dataPrevistaInicio,
             dataPrevistaFim: atividade.dataPrevistaFim,
+            codemp: atividade.codemp,
+            codpro: atividade.codpro,
+            seqite: atividade.seqite,
+            itemDescricao: atividade.itemDescricao,
+            itemQtdhor: atividade.itemQtdhor,
+            itemAlocado: atividade.itemAlocado,
+            estruturaNome: atividade.estruturaNome,
+            estruturaPercentual: atividade.estruturaPercentual,
+            podeVerCronograma: atividade.podeVerCronograma,
           });
         }}
         onPointerDown={(e) => e.stopPropagation()}

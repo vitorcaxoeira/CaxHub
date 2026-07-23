@@ -1,31 +1,26 @@
-import axios from "axios";
-import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Pagination } from "../ui/Pagination";
-import { ColunaKanban, DetalheInfo } from "./KanbanBoard";
+import { toneBadge, priproTone } from "../ui/badges";
+import { AtividadeKanban, ColunaKanban, DetalheInfo } from "./KanbanBoard";
+import { AtividadesFiltros } from "./AtividadesFiltros";
+import type { SituacaoKpi } from "./IndicadoresProjetos";
 
-interface AtividadeRow {
-  id: number;
-  codpro: number;
-  numprj: number;
-  cliente: string;
-  pripro: number | null;
-  priproLabel: string;
-  datval: string | null;
-  depexe: number;
-  depexeLabel: string;
-  consultorNome: string;
-  qtdhorPrevisto: number | null;
-  colunaId: number | null;
-  atrasada: boolean;
-  dataPrevistaInicio: string | null;
-  dataPrevistaFim: string | null;
-  podeMover: boolean;
-  podeEditar: boolean;
-}
+// Mesmo array que alimenta o Kanban/Calendário/Timeline (GET /api/atividades) — o tipo
+// de linha da tabela é o mesmo, não uma projeção separada.
+export type AtividadeRow = AtividadeKanban;
 
 interface OpcaoFiltro {
   value: number;
   label: string;
+}
+
+export interface FiltrosAtividades {
+  busca: string;
+  depexe: string;
+  colunaId: string;
+  pripro: string;
+  codfor: string;
+  atrasada: boolean;
 }
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
@@ -39,142 +34,60 @@ function formatQtdHor(minutos: number | null): string {
   return `${horasFormatter.format(horas)}:${String(resto).padStart(2, "0")} h`;
 }
 
-const corBadgePrioridade: Record<number, string> = {
-  1: "bg-destructive/15 text-destructive",
-  2: "bg-warning/15 text-warning",
-  3: "bg-muted/15 text-muted",
-};
-
 const PAGE_SIZE = 25;
 
 interface AtividadesTableProps {
-  onMovido?: () => void;
+  rows: AtividadeRow[];
+  total: number;
+  page: number;
+  loading: boolean;
+  colunas: ColunaKanban[];
+  departamentos: OpcaoFiltro[];
+  prioridades: OpcaoFiltro[];
+  consultores: OpcaoFiltro[];
+  filtros: FiltrosAtividades;
+  situacaoKpi: SituacaoKpi | null;
+  onFiltros: (patch: Partial<FiltrosAtividades>) => void;
+  onPageChange: (page: number) => void;
+  onLimparKpi: () => void;
+  onMover: (atividadeId: number, novaColunaId: number) => void;
   onAbrirDetalhe: (atividadeId: number, info: DetalheInfo) => void;
 }
 
-export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTableProps) {
-  const [rows, setRows] = useState<AtividadeRow[]>([]);
-  const [colunas, setColunas] = useState<ColunaKanban[]>([]);
-  const [departamentos, setDepartamentos] = useState<OpcaoFiltro[]>([]);
-  const [prioridades, setPrioridades] = useState<OpcaoFiltro[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
-
-  const [depexe, setDepexe] = useState("");
-  const [colunaId, setColunaId] = useState("");
-  const [pripro, setPripro] = useState("");
-  const [atrasada, setAtrasada] = useState(false);
-  const [busca, setBusca] = useState("");
-
-  useEffect(() => {
-    Promise.all([axios.get("/api/atividades/opcoes-filtro"), axios.get("/api/atividades/quadro-colunas")]).then(
-      ([opcoesRes, colunasRes]) => {
-        setDepartamentos(opcoesRes.data.departamentos);
-        setPrioridades(opcoesRes.data.prioridades);
-        setColunas(colunasRes.data.colunas);
-      }
-    );
-  }, []);
-
-  useEffect(() => {
-    setLoading(true);
-    axios
-      .get("/api/atividades", {
-        params: {
-          depexe: depexe || undefined,
-          colunaId: colunaId || undefined,
-          pripro: pripro || undefined,
-          atrasada: atrasada || undefined,
-          busca: busca || undefined,
-          page,
-          pageSize: PAGE_SIZE,
-        },
-      })
-      .then(({ data }) => {
-        setRows(data.rows);
-        setTotal(data.total);
-        setErro(null);
-      })
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar atividades"))
-      .finally(() => setLoading(false));
-  }, [depexe, colunaId, pripro, atrasada, busca, page]);
-
-  function atualizarFiltro(setter: (v: string) => void) {
-    return (valor: string) => {
-      setter(valor);
-      setPage(1);
-    };
-  }
-
-  async function moverAtividade(atividadeId: number, novaColunaId: number) {
-    const anterior = rows;
-    setRows((atual) => atual.map((a) => (a.id === atividadeId ? { ...a, colunaId: novaColunaId } : a)));
-    try {
-      await axios.patch(`/api/atividades/${atividadeId}/mover`, { colunaId: novaColunaId });
-      onMovido?.();
-    } catch (err: any) {
-      setRows(anterior);
-      setErro(err.response?.data?.error ?? "Falha ao mover atividade");
-    }
-  }
-
-  const selectClass =
-    "rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+// Componente controlado: filtros, paginação e dados vêm da página (Atividades.tsx),
+// que também alimenta o Kanban/Calendário/Timeline com o mesmo recorte — isso permite
+// que um KPI clicado filtre tanto a lista quanto o quadro.
+export function AtividadesTable({
+  rows,
+  total,
+  page,
+  loading,
+  colunas,
+  departamentos,
+  prioridades,
+  consultores,
+  filtros,
+  situacaoKpi,
+  onFiltros,
+  onPageChange,
+  onLimparKpi,
+  onMover,
+  onAbrirDetalhe,
+}: AtividadesTableProps) {
+  const navigate = useNavigate();
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <input
-          type="text"
-          placeholder="Buscar cliente ou proposta..."
-          value={busca}
-          onChange={(e) => atualizarFiltro(setBusca)(e.target.value)}
-          className={`${selectClass} w-56`}
-        />
-        <select value={depexe} onChange={(e) => atualizarFiltro(setDepexe)(e.target.value)} className={selectClass}>
-          <option value="">Todos os departamentos</option>
-          {departamentos.map((d) => (
-            <option key={d.value} value={d.value}>
-              {d.label}
-            </option>
-          ))}
-        </select>
-        <select value={colunaId} onChange={(e) => atualizarFiltro(setColunaId)(e.target.value)} className={selectClass}>
-          <option value="">Todas as situações</option>
-          {colunas.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.nome}
-            </option>
-          ))}
-        </select>
-        <select value={pripro} onChange={(e) => atualizarFiltro(setPripro)(e.target.value)} className={selectClass}>
-          <option value="">Todas as prioridades</option>
-          {prioridades.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <label className="flex items-center gap-2 text-sm text-muted">
-          <input
-            type="checkbox"
-            checked={atrasada}
-            onChange={(e) => {
-              setAtrasada(e.target.checked);
-              setPage(1);
-            }}
-          />
-          Só atrasadas
-        </label>
-      </div>
-
-      {erro && (
-        <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
-          {erro}
-        </p>
-      )}
+      <AtividadesFiltros
+        colunas={colunas}
+        departamentos={departamentos}
+        prioridades={prioridades}
+        consultores={consultores}
+        filtros={filtros}
+        situacaoKpi={situacaoKpi}
+        onFiltros={onFiltros}
+        onLimparKpi={onLimparKpi}
+      />
 
       <div className="overflow-hidden rounded-lg border border-border bg-surface">
         <div className="overflow-x-auto">
@@ -200,7 +113,7 @@ export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTablePro
                   Prioridade
                 </th>
                 <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                  Prazo
+                  Fim previsto
                 </th>
                 <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Situação
@@ -211,12 +124,28 @@ export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTablePro
             <tbody>
               {rows.map((row) => (
                 <tr key={row.id} className="border-t border-border/60 transition hover:bg-surface-2">
-                  <td className="px-5 py-3.5 text-sm font-semibold text-foreground">
-                    {row.codpro}
-                    {row.numprj != null && <div className="mt-0.5 font-mono text-[11px] text-muted">Projeto {row.numprj}</div>}
+                  <td className="px-5 py-3.5 text-sm font-semibold">
+                    <button
+                      onClick={() => navigate(`/projetos/proposta/${row.codemp}/${row.codpro}`)}
+                      className="text-primary hover:underline"
+                    >
+                      {row.codpro}
+                    </button>
+                    {row.estruturaNome && (
+                      <span className={`mt-1 inline-block rounded px-1.5 py-0.5 font-mono text-[10px] ${toneBadge.neutral}`}>
+                        {row.estruturaNome}
+                      </span>
+                    )}
                   </td>
-                  <td className="max-w-[220px] truncate px-5 py-3.5 text-sm text-foreground" title={row.cliente}>
-                    {row.cliente}
+                  <td className="max-w-[220px] px-5 py-3.5 text-sm text-foreground">
+                    <p className="truncate" title={row.cliente}>
+                      {row.cliente}
+                    </p>
+                    {row.itemDescricao && (
+                      <p className="truncate text-[11px] text-muted" title={row.itemDescricao}>
+                        {row.itemDescricao}
+                      </p>
+                    )}
                   </td>
                   <td className="hidden px-5 py-3.5 text-sm text-muted md:table-cell">{row.depexeLabel}</td>
                   <td className="hidden px-5 py-3.5 text-sm text-muted lg:table-cell">{row.consultorNome}</td>
@@ -226,9 +155,7 @@ export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTablePro
                   <td className="px-5 py-3.5 text-right">
                     {row.pripro !== null && (
                       <span
-                        className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
-                          corBadgePrioridade[row.pripro] ?? "bg-muted/15 text-muted"
-                        }`}
+                        className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${toneBadge[priproTone(row.pripro)]}`}
                       >
                         {row.priproLabel}
                       </span>
@@ -236,7 +163,7 @@ export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTablePro
                   </td>
                   <td className="hidden px-5 py-3.5 font-mono text-sm sm:table-cell">
                     <span className={row.atrasada ? "font-semibold text-destructive" : "text-muted"}>
-                      {row.datval ? dateFormatter.format(new Date(row.datval)) : "—"}
+                      {row.dataPrevistaFim ? dateFormatter.format(new Date(row.dataPrevistaFim)) : "—"}
                       {row.atrasada ? " · Atrasado" : ""}
                     </span>
                   </td>
@@ -244,7 +171,7 @@ export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTablePro
                     <select
                       value={row.colunaId ?? ""}
                       disabled={!row.podeMover}
-                      onChange={(e) => moverAtividade(row.id, Number(e.target.value))}
+                      onChange={(e) => onMover(row.id, Number(e.target.value))}
                       className="rounded-md border border-border bg-surface px-2 py-1 text-[12px] text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {colunas.map((c) => (
@@ -262,6 +189,15 @@ export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTablePro
                           podeEditar: row.podeEditar,
                           dataPrevistaInicio: row.dataPrevistaInicio,
                           dataPrevistaFim: row.dataPrevistaFim,
+                          codemp: row.codemp,
+                          codpro: row.codpro,
+                          seqite: row.seqite,
+                          itemDescricao: row.itemDescricao,
+                          itemQtdhor: row.itemQtdhor,
+                          itemAlocado: row.itemAlocado,
+                          estruturaNome: row.estruturaNome,
+                          estruturaPercentual: row.estruturaPercentual,
+                          podeVerCronograma: row.podeVerCronograma,
                         })
                       }
                       className="text-sm text-primary hover:underline"
@@ -282,7 +218,7 @@ export function AtividadesTable({ onMovido, onAbrirDetalhe }: AtividadesTablePro
           </table>
         </div>
 
-        <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPageChange={setPage} label="atividades" />
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPageChange={onPageChange} label="atividades" />
       </div>
     </div>
   );

@@ -271,6 +271,13 @@ export function calcularOrcamentoItem(item: NoCronograma, agregados: Map<number,
   return derivarOrcamento(item.horasPrevistas ?? 0, somarDistribuidas(item, agregados), somarRealizadas(item, agregados));
 }
 
+// Mesmo cálculo de calcularOrcamentoItem, mas a partir de totais já conhecidos (sem
+// árvore/agregados) — usado pela tela de Atividades, onde contratado/distribuído vêm
+// prontos da API (GET /api/atividades) em vez de virem da EAP.
+export function orcamentoDeTotais(horasContratadas: number, horasDistribuidas: number, horasRealizadas: number): OrcamentoItem {
+  return derivarOrcamento(horasContratadas, horasDistribuidas, horasRealizadas);
+}
+
 // Soma o orçamento de vários itens num só (rodapé de totais da proposta) — mesma forma
 // de OrcamentoItem, então descreverSaldoDistribuicao/estadoAlertaItem funcionam igual
 // pra um item ou pro total inteiro, sem lógica de cor/texto duplicada pro rodapé.

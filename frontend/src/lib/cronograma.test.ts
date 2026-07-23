@@ -10,6 +10,7 @@ import {
   formatHorasCompacto,
   larguraHorasProposta,
   NoCronograma,
+  orcamentoDeTotais,
   projetarSaldo,
   somarDistribuidas,
   somarOrcamentos,
@@ -221,6 +222,18 @@ describe("calcularOrcamentoItem", () => {
     expect(orcamento.horasDistribuidas).toBe(0);
     expect(orcamento.saldoDistribuicao).toBe(480);
     expect(orcamento.consumoDistribuido).toBe(0);
+  });
+});
+
+describe("orcamentoDeTotais", () => {
+  it("calcula o mesmo orçamento que calcularOrcamentoItem a partir de totais prontos (sem árvore)", () => {
+    const nos = [
+      no({ id: 1, tipo: "item", nome: "Item", horasPrevistas: 600 }),
+      no({ id: 2, tipo: "atividade", nome: "Ativ 1", parentId: 1, horasPrevistas: 300, horasRealizadas: 150 }),
+    ];
+    const esperado = calcularOrcamentoItem(nos[0], agregarHoras(nos));
+    const orcamento = orcamentoDeTotais(600, 300, 150);
+    expect(orcamento).toEqual(esperado);
   });
 });
 

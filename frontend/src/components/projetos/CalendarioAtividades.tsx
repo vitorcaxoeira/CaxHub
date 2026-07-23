@@ -94,6 +94,15 @@ export function CalendarioAtividades({ atividades, onAbrirDetalhe }: CalendarioA
                         podeEditar: a.podeEditar,
                         dataPrevistaInicio: a.dataPrevistaInicio,
                         dataPrevistaFim: a.dataPrevistaFim,
+                        codemp: a.codemp,
+                        codpro: a.codpro,
+                        seqite: a.seqite,
+                        itemDescricao: a.itemDescricao,
+                        itemQtdhor: a.itemQtdhor,
+                        itemAlocado: a.itemAlocado,
+                        estruturaNome: a.estruturaNome,
+                        estruturaPercentual: a.estruturaPercentual,
+                        podeVerCronograma: a.podeVerCronograma,
                       })
                     }
                     title={`${a.cliente} · ${a.depexeLabel}`}

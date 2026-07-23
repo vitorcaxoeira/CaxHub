@@ -1,5 +1,8 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { orcamentoDeTotais, formatHorasCompacto, descreverSaldoDistribuicao } from "../../lib/cronograma";
+import { toneBadge } from "../ui/badges";
 
 interface Comentario {
   id: number;
@@ -36,8 +39,22 @@ interface AtividadeDetalheProps {
   podeEditar: boolean;
   dataPrevistaInicio: string | null;
   dataPrevistaFim: string | null;
+  codemp: number;
+  codpro: number;
+  itemDescricao: string | null;
+  itemQtdhor: number | null;
+  itemAlocado: number;
+  estruturaNome: string | null;
+  estruturaPercentual: number | null;
+  podeVerCronograma: boolean;
   onClose: () => void;
 }
+
+const tomTexto: Record<"success" | "muted" | "destructive", string> = {
+  success: "text-success",
+  muted: "text-muted",
+  destructive: "text-destructive",
+};
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
@@ -58,8 +75,17 @@ export function AtividadeDetalhe({
   podeEditar,
   dataPrevistaInicio,
   dataPrevistaFim,
+  codemp,
+  codpro,
+  itemDescricao,
+  itemQtdhor,
+  itemAlocado,
+  estruturaNome,
+  estruturaPercentual,
+  podeVerCronograma,
   onClose,
 }: AtividadeDetalheProps) {
+  const navigate = useNavigate();
   const [comentarios, setComentarios] = useState<Comentario[]>([]);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [anexos, setAnexos] = useState<Anexo[]>([]);
@@ -217,6 +243,46 @@ export function AtividadeDetalhe({
             <p className="text-sm text-muted">Carregando...</p>
           ) : (
             <div className="space-y-6">
+              <section>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Contexto do item</p>
+                <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5">
+                  {itemDescricao && <p className="mb-2 text-sm text-foreground">{itemDescricao}</p>}
+                  {estruturaNome && (
+                    <p className="mb-2 flex items-center gap-1.5 text-[12px] text-muted">
+                      <span className={`inline-block rounded px-1.5 py-0.5 font-mono text-[10.5px] ${toneBadge.neutral}`}>
+                        {estruturaNome}
+                      </span>
+                      {estruturaPercentual != null && `${estruturaPercentual}% concluído`}
+                    </p>
+                  )}
+                  {(() => {
+                    const orcamento = orcamentoDeTotais(itemQtdhor ?? 0, itemAlocado, 0);
+                    const largura = 2;
+                    const saldo = descreverSaldoDistribuicao(orcamento, largura);
+                    return (
+                      <p className="font-mono text-[11.5px] text-muted">
+                        Contratado {formatHorasCompacto(orcamento.horasContratadas, largura)} · Distribuído{" "}
+                        {formatHorasCompacto(orcamento.horasDistribuidas, largura)} ·{" "}
+                        <span className={tomTexto[saldo.tom]}>{saldo.texto}</span>
+                      </p>
+                    );
+                  })()}
+                  <div className="mt-2 flex flex-wrap gap-3 text-[12px]">
+                    <button onClick={() => navigate(`/projetos/proposta/${codemp}/${codpro}`)} className="text-primary hover:underline">
+                      Ver proposta →
+                    </button>
+                    {estruturaNome && podeVerCronograma && (
+                      <button
+                        onClick={() => navigate(`/projetos/alocacao/${codemp}/${codpro}/cronograma`)}
+                        className="text-primary hover:underline"
+                      >
+                        Cronograma →
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </section>
+
               <section>
                 <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Planejamento (Timeline)</p>
                 <div className="flex flex-wrap items-end gap-3">
