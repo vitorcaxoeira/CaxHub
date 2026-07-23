@@ -438,6 +438,7 @@ model PropostaItem {
   proposta Proposta @relation(fields: [codemp, codpro], references: [codemp, codpro])
 
   @@id([codemp, codpro, seqite])
+  @@index([depexe])
   @@map("propostas_itens")
 }
 
@@ -559,6 +560,8 @@ model AtividadeConsultor {
   estruturaAtividadeId Int?
   estruturaAtividade   EstruturaAtividade? @relation(fields: [estruturaAtividadeId], references: [id])
 
+  @@index([codemp, codpro, seqite])
+  @@index([sitreg])
   @@map("atividades_consultor")
 }
 

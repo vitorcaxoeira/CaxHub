@@ -5,8 +5,10 @@ import { useAuth } from "../../auth/AuthContext";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
 import { KpiCard } from "../../components/ui/KpiCard";
+import { Skeleton } from "../../components/ui/Skeleton";
 import { toneBadge } from "../../components/ui/badges";
 import { formatHoras } from "../../utils/horas";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 
 interface OpcaoFiltro {
   value: number;
@@ -84,6 +86,11 @@ export function Alocacao() {
     : [];
   const [depexe, setDepexeState] = useState<number[]>(depexeInicial);
   const [busca, setBuscaState] = useState(searchParams.get("busca") ?? "");
+  // Digitar atualiza a caixa na hora; a busca pesada (2 queries sem filtro seletivo no
+  // banco) só dispara 350ms depois de parar de digitar — sem isso, cada tecla repetia
+  // o carregamento completo do escopo do usuário.
+  const [buscaInput, setBuscaInput] = useState(busca);
+  const buscaDebounced = useDebouncedValue(buscaInput, 350);
   const [apenasComSaldo, setApenasComSaldoState] = useState(searchParams.get("apenasComSaldo") !== "false");
   const [compartilhadas, setCompartilhadasState] = useState(searchParams.get("compartilhadas") === "true");
   const situacoesValidas: Situacao[] = ["semAlocacao", "saldoPendente", "totalmenteAlocadas", "compartilhadasEmAberto"];
@@ -132,6 +139,11 @@ export function Alocacao() {
     if (proximo.page > 1) params.set("page", String(proximo.page));
     setSearchParams(params, { replace: true });
   }
+
+  useEffect(() => {
+    if (buscaDebounced !== busca) atualizarFiltros({ busca: buscaDebounced });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buscaDebounced]);
 
   // Clicar num KPI vira o único critério de "situação" da tabela abaixo (substitui os
   // checkboxes de saldo/compartilhadas enquanto ativo) — clicar de novo no mesmo KPI
@@ -253,7 +265,19 @@ export function Alocacao() {
         </p>
       </div>
 
-      {kpis && (
+      {loading ? (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-24" />
+              <Skeleton className="h-7 w-16" />
+              <Skeleton className="mt-2 h-1 w-full" />
+              <Skeleton className="mt-2 h-3 w-20" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        kpis && (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
           <KpiCard
             label="Sem alocação"
@@ -296,14 +320,15 @@ export function Alocacao() {
             onClick={() => clicarKpi("compartilhadasEmAberto")}
           />
         </div>
+        )
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
           type="text"
           placeholder="Buscar cliente ou proposta..."
-          value={busca}
-          onChange={(e) => atualizarFiltros({ busca: e.target.value })}
+          value={buscaInput}
+          onChange={(e) => setBuscaInput(e.target.value)}
           className={`${selectClass} w-56`}
         />
         {departamentos.length > 1 && (
@@ -383,7 +408,39 @@ export function Alocacao() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => {
+              {loading &&
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="border-t border-border/60">
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="mt-1.5 h-3 w-16" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-40" />
+                    </td>
+                    <td className="hidden px-5 py-3.5 md:table-cell">
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                    <td className="hidden px-5 py-3.5 lg:table-cell">
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="ml-auto h-4 w-8" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="ml-auto h-4 w-14" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="ml-auto h-4 w-14" />
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Skeleton className="ml-auto h-4 w-14" />
+                    </td>
+                    <td className="px-5 py-3.5" />
+                  </tr>
+                ))}
+              {!loading &&
+                rows.map((row) => {
                 const chave = `${row.codemp}-${row.codpro}`;
                 const expandida = expandidas.has(chave);
                 const consultoresResumo = consultoresPorProposta[chave];
