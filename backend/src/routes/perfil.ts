@@ -154,7 +154,10 @@ const senhaLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req: AuthenticatedRequest) => String(req.user?.userId ?? req.ip),
+  // perfilRouter.use(requireAuth) já roda antes de qualquer rota deste router — req.user
+  // sempre existe aqui (nunca cai num fallback por IP, então não precisa do helper
+  // ipKeyGenerator do express-rate-limit).
+  keyGenerator: (req: AuthenticatedRequest) => String(req.user!.userId),
   message: { error: "Muitas tentativas — aguarde um minuto antes de tentar novamente" },
 });
 
