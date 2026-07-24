@@ -341,7 +341,11 @@ export function ArvoreCronograma({
     }
     try {
       const criado = await criarNo({ seqite: no.seqite ?? undefined, tipo: "pasta", nome: "Nova pasta", parentId: no.id });
-      setExpandidos((atual) => new Set(atual).add(no.id));
+      // Expande tanto o pai (pra pasta nova aparecer) quanto a própria pasta recém-criada
+      // (pra linha fantasma "＋ Nova atividade em..." já nascer visível) — sem isso, toda
+      // pasta nova nascia recolhida e só tinha um "·" pouco óbvio como toggle, já que
+      // ainda não tinha filho nenhum (ver LinhaNo.tsx).
+      setExpandidos((atual) => new Set(atual).add(no.id).add(criado.id));
       setSelecionadoId(criado.id);
     } catch (err) {
       setErroAcao((err as Error).message);
