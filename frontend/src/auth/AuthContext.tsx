@@ -15,6 +15,11 @@ interface AuthContextValue {
   loading: boolean;
   login: (token: string, user: AuthUser) => void;
   logout: () => void;
+  // Merge otimista no usuário em memória (nome/fotoUrl) — usado depois de PUT/POST em
+  // /api/perfil, cujas respostas já trazem o dado atualizado. Evita precisar de reload
+  // ou de um novo GET /api/auth/me: o token não muda (payload é só {userId, role}, ver
+  // backend/src/auth/jwt.ts), então não há nada pra revalidar além do estado local.
+  atualizarUsuario: (patch: Partial<Pick<AuthUser, "nome" | "fotoUrl">>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -53,8 +58,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }
 
+  function atualizarUsuario(patch: Partial<Pick<AuthUser, "nome" | "fotoUrl">>) {
+    setUser((atual) => (atual ? { ...atual, ...patch } : atual));
+  }
+
   return (
-    <AuthContext.Provider value={{ token, user, loading, login, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ token, user, loading, login, logout, atualizarUsuario }}>
+      {children}
+    </AuthContext.Provider>
   );
 }
 

@@ -464,12 +464,17 @@ alocacaoRouter.get("/consultores-elegiveis", async (req: AuthenticatedRequest, r
       codusuList.length > 0
         ? await prisma.consultor.findMany({
             where: { codemp, codusu: { in: codusuList }, codfor: { not: null }, sitfor: "A" },
+            include: { usuariosCaxHub: { select: { fotoUrl: true } } },
           })
         : [];
 
     res.json({
       consultores: consultoresDoTime
-        .map((c) => ({ codfor: c.codfor as number, nome: c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}` }))
+        .map((c) => ({
+          codfor: c.codfor as number,
+          nome: c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`,
+          fotoUrl: c.usuariosCaxHub[0]?.fotoUrl ?? null,
+        }))
         .sort((a, b) => a.nome.localeCompare(b.nome)),
     });
   } catch (error) {

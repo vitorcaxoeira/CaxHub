@@ -10,6 +10,7 @@ import { Spinner } from "../ui/Spinner";
 interface ConsultorElegivel {
   codfor: number;
   nome: string;
+  fotoUrl: string | null;
 }
 
 type DestinoModal = "item" | "pasta_existente" | "nova_pasta";
@@ -280,7 +281,7 @@ export function ModalAlocarConsultores({
                       onChange={() => alternarMarcado(c.codfor)}
                       className="h-4 w-4 flex-none accent-primary"
                     />
-                    <Avatar nome={c.nome} size="sm" />
+                    <Avatar nome={c.nome} fotoUrl={c.fotoUrl} size="sm" />
                     <span className="min-w-0 flex-1 truncate text-sm text-foreground">{c.nome}</span>
                     <input
                       type="text"

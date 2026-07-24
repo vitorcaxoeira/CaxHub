@@ -21,6 +21,13 @@
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-ring: var(--ring);
+
+  /* Camadas de sobreposição — maior valor já usado no app até aqui era z-50 (Toast,
+     antigo menu de contexto do cronograma); popover fica acima de tudo (dropdowns,
+     tooltips), já que sempre precisa vencer modal (z-30) e headers sticky (z-20/z-40).
+     Namespace correto no Tailwind v4 pra gerar a utility `z-popover` é `--z-index-*`,
+     não `--z-*` (esse é só o valor puro, sem virar classe). */
+  --z-index-popover: 60;
 }
 
 /* ---------- TEMA CLARO ---------- */

@@ -15,3 +15,7 @@ export function entidadeIdPropostaItem(codemp: number, codpro: number, seqite: n
 export function entidadeIdAtividade(id: number): string {
   return String(id);
 }
+
+export function entidadeIdUsuario(id: number): string {
+  return String(id);
+}

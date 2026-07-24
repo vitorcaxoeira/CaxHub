@@ -1,7 +1,8 @@
 import "dotenv/config";
 import express from "express";
-import { garantirDiretorioUploads } from "./config/uploads";
+import { garantirDiretorioUploads, AVATARS_DIR } from "./config/uploads";
 import { authRouter } from "./auth/routes";
+import { perfilRouter } from "./routes/perfil";
 import { dashboardRouter } from "./routes/dashboard";
 import { financeiroRouter } from "./routes/financeiro";
 import { recebimentosRouter } from "./routes/recebimentos";
@@ -51,7 +52,13 @@ const app = express();
 app.use(express.json());
 app.use(attachCorrelationId);
 
+// Única pasta de upload servida como estático — sem requireAuth de propósito, avatar
+// precisa carregar via <img src> puro (sem header Authorization). Cache-busting vem da
+// query string `?v=timestamp` gravada em User.fotoUrl a cada troca, não de headers HTTP.
+app.use("/uploads/avatars", express.static(AVATARS_DIR));
+
 app.use("/auth", authRouter);
+app.use("/perfil", perfilRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/financeiro", financeiroRouter);
 app.use("/financeiro/recebimentos", recebimentosRouter);

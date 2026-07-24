@@ -183,7 +183,12 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
 
   const codforUnicos = [...new Set(atividades.map((a) => a.codfor))];
   const consultores =
-    codforUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforUnicos } } }) : [];
+    codforUnicos.length > 0
+      ? await prisma.consultor.findMany({
+          where: { codfor: { in: codforUnicos } },
+          include: { usuariosCaxHub: { select: { fotoUrl: true } } },
+        })
+      : [];
   const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
 
   return atividades
@@ -218,6 +223,9 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
         depexe,
         depexeLabel: depexeLabel(depexe),
         consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${a.codfor}`,
+        // Vínculo opcional Consultor -> User (ver schema.prisma) — só existe foto quando o
+        // consultor também tem uma conta CaxHub com avatar próprio configurado.
+        consultorFotoUrl: consultor?.usuariosCaxHub[0]?.fotoUrl ?? null,
         codfor: a.codfor,
         qtdhorPrevisto: a.qtdhor,
         colunaId: a.colunaId ?? primeiraColuna?.id ?? null,

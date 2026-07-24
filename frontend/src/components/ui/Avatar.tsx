@@ -1,11 +1,18 @@
 interface AvatarProps {
   nome: string;
   fotoUrl?: string | null;
-  size?: "sm" | "md";
+  size?: "xs" | "sm" | "md" | "xl";
 }
 
+const DIMENSOES: Record<NonNullable<AvatarProps["size"]>, string> = {
+  xs: "h-4 w-4 text-[8px]",
+  sm: "h-8 w-8 text-xs",
+  md: "h-9 w-9 text-sm",
+  xl: "h-24 w-24 text-2xl",
+};
+
 export function Avatar({ nome, fotoUrl, size = "md" }: AvatarProps) {
-  const dimension = size === "sm" ? "h-8 w-8 text-xs" : "h-9 w-9 text-sm";
+  const dimension = DIMENSOES[size];
   const initials = nome
     .trim()
     .split(/\s+/)

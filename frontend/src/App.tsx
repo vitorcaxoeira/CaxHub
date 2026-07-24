@@ -8,6 +8,7 @@ import { AppShell } from "./layout/AppShell";
 import { Login } from "./pages/Login";
 import { AceitarConvite } from "./pages/AceitarConvite";
 import { Home } from "./pages/Home";
+import { Perfil } from "./pages/Perfil";
 import { ContasReceber } from "./pages/financeiro/ContasReceber";
 import { ContasPagar } from "./pages/financeiro/ContasPagar";
 import { Recebimentos } from "./pages/financeiro/Recebimentos";
@@ -44,6 +45,7 @@ export default function App() {
               }
             >
               <Route path="/" element={<Home />} />
+              <Route path="/perfil" element={<Perfil />} />
               <Route path="/projetos/atividades" element={<Atividades />} />
               <Route path="/projetos/apontamentos" element={<MeusApontamentos />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />

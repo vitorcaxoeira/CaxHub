@@ -7,6 +7,7 @@ export const ENTIDADES_AUDITORIA = {
   ATIVIDADE: "atividade",
   ALOCACAO: "alocacao",
   KANBAN_CARD: "kanban_card",
+  USUARIO: "usuario",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -42,5 +43,12 @@ export const EVENTOS_AUDITORIA = {
   // Nasce no processamento assíncrono da fila outbox (outboxSenior.ts), não no clique
   // do usuário — ver correlationId próprio por item processado.
   ATIVIDADE_ENVIADA_SENIOR: "ATIVIDADE_ENVIADA_SENIOR",
+
+  // Autoatendimento de perfil (backend/src/routes/perfil.ts) — nunca carrega dado
+  // sensível em `alteracoes`/`metadata` (nem hash, nem senha em texto puro).
+  USUARIO_PERFIL_ALTERADO: "USUARIO_PERFIL_ALTERADO",
+  USUARIO_SENHA_ALTERADA: "USUARIO_SENHA_ALTERADA",
+  USUARIO_AVATAR_ALTERADO: "USUARIO_AVATAR_ALTERADO",
+  USUARIO_AVATAR_REMOVIDO: "USUARIO_AVATAR_REMOVIDO",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];

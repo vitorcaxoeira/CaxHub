@@ -1,5 +1,6 @@
 import { DndContext, DragEndEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { formatHoras } from "../../utils/horas";
+import { Avatar } from "../ui/Avatar";
 import { toneBadge, priproTone } from "../ui/badges";
 import { IconePlay, IconeStop } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
@@ -34,6 +35,9 @@ export interface AtividadeKanban {
   depexeLabel: string;
   codfor: number;
   consultorNome: string;
+  // Presente só quando o consultor também tem conta CaxHub com avatar configurado (join
+  // Consultor -> User, ver carregarAtividadesVisiveis em backend/src/routes/atividades.ts).
+  consultorFotoUrl: string | null;
   qtdhorPrevisto: number | null;
   colunaId: number | null;
   coluna: { id: number; nome: string } | null;
@@ -190,6 +194,7 @@ function DraggableCard({
             <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
           </span>
         )}
+        <Avatar nome={atividade.consultorNome} fotoUrl={atividade.consultorFotoUrl} size="xs" />
         <p className="truncate text-[12px] text-foreground">{atividade.consultorNome}</p>
         {emAndamento && cronometro && (
           <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-success">{cronometro}</span>

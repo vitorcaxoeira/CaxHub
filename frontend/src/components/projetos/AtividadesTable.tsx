@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { Avatar } from "../ui/Avatar";
 import { Pagination } from "../ui/Pagination";
 import { Skeleton } from "../ui/Skeleton";
 import { toneBadge, priproTone } from "../ui/badges";
@@ -216,7 +217,10 @@ export function AtividadesTable({
                   </td>
                   <td className="hidden px-5 py-3.5 text-sm text-muted md:table-cell">{row.depexeLabel}</td>
                   <td className="hidden px-5 py-3.5 text-sm text-muted lg:table-cell">
-                    {row.consultorNome}
+                    <span className="inline-flex items-center gap-1.5 align-middle">
+                      <Avatar nome={row.consultorNome} fotoUrl={row.consultorFotoUrl} size="xs" />
+                      {row.consultorNome}
+                    </span>
                     <IndicadorSessao row={row} />
                   </td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
