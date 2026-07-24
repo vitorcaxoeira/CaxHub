@@ -15,7 +15,16 @@
 // e explícita (PropostaModoAlocacao.modo="item", de quando o modal "Como esta proposta
 // será alocada?" ainda existia e alguém escolheu "Por item"). As duas viram "estrutura".
 //
-// Idempotente: pula proposta que já esteja em "estrutura" — seguro rodar mais de uma vez.
+// TAMBÉM varre propostas JÁ em "estrutura" atrás de AtividadeConsultor órfã (sem
+// estruturaAtividadeId) — achado rodando a 1ª vez em produção: mesmo proposta migrada
+// há meses continua recebendo alocação nova sem nó na EAP (provável efeito do sync do
+// Senior, que grava AtividadeConsultor direto, sem noção nenhuma de estruturaAtividadeId
+// — um conceito 100% CaxHub). Ou seja, essa lacuna é contínua, não só histórica; rodar
+// este script periodicamente (não só uma vez) faz sentido até existir uma reconciliação
+// automática. Pra proposta já "estrutura", só cria os nós que faltam — não mexe no modo.
+//
+// Idempotente: só cria nó pra alocação que ainda não tem estruturaAtividadeId — seguro
+// rodar quantas vezes precisar.
 //
 // Uso:
 //   npx ts-node prisma/migrarLegadoParaEstrutura.ts              (relatório, não grava nada)
@@ -49,7 +58,6 @@ async function main() {
   const porProposta = new Map<string, typeof alocacoesLegadas>();
   for (const a of alocacoesLegadas) {
     const chave = `${a.codemp}-${a.codpro}`;
-    if (jaEstrutura.has(chave)) continue;
     if (!porProposta.has(chave)) porProposta.set(chave, []);
     porProposta.get(chave)!.push(a);
   }
@@ -70,19 +78,37 @@ async function main() {
       : [];
   const sitproPorProposta = new Map(propostasInfo.map((p) => [`${p.codemp}-${p.codpro}`, p.sitpro]));
 
-  const candidatas: { chave: string; codemp: number; codpro: number; alocacoes: typeof alocacoesLegadas; jaTinhaConfigItem: boolean }[] = [];
+  const candidatas: {
+    chave: string;
+    codemp: number;
+    codpro: number;
+    alocacoes: typeof alocacoesLegadas;
+    jaTinhaConfigItem: boolean;
+    jaEraEstrutura: boolean;
+  }[] = [];
   for (const [chave, alocs] of porProposta) {
     const sitpro = sitproPorProposta.get(chave);
     if (sitpro == null || !SITPRO_ALOCAVEL.includes(sitpro)) continue;
     const [codemp, codpro] = chave.split("-").map(Number);
-    candidatas.push({ chave, codemp, codpro, alocacoes: alocs, jaTinhaConfigItem: itemExplicito.has(chave) });
+    candidatas.push({ chave, codemp, codpro, alocacoes: alocs, jaTinhaConfigItem: itemExplicito.has(chave), jaEraEstrutura: jaEstrutura.has(chave) });
+  }
+  // "item" explícito sem alocação ativa nenhuma (0 nós pra criar, só troca o modo) não
+  // aparece em `porProposta` — inclui aqui também.
+  for (const chave of itemExplicito) {
+    if (candidatas.some((c) => c.chave === chave)) continue;
+    const [codemp, codpro] = chave.split("-").map(Number);
+    const sitpro = sitproPorProposta.get(chave);
+    if (sitpro == null || !SITPRO_ALOCAVEL.includes(sitpro)) continue;
+    candidatas.push({ chave, codemp, codpro, alocacoes: [], jaTinhaConfigItem: true, jaEraEstrutura: false });
   }
 
   const totalAlocacoes = candidatas.reduce((s, c) => s + c.alocacoes.length, 0);
   const comConfigItem = candidatas.filter((c) => c.jaTinhaConfigItem).length;
-  console.log(`\n=== Migração legado -> estrutura ${aplicar ? "(APLICANDO)" : "(RELATÓRIO — nada será gravado)"} ===\n`);
-  console.log(`Propostas candidatas (sitpro 4 ou 7, ainda não em "estrutura"): ${candidatas.length}`);
-  console.log(`  — das quais com PropostaModoAlocacao="item" explícita: ${comConfigItem}`);
+  const reconciliacaoEstrutura = candidatas.filter((c) => c.jaEraEstrutura).length;
+  console.log(`\n=== Migração/reconciliação legado -> estrutura ${aplicar ? "(APLICANDO)" : "(RELATÓRIO — nada será gravado)"} ===\n`);
+  console.log(`Propostas candidatas (sitpro 4 ou 7, com alocação órfã ou "item" explícita): ${candidatas.length}`);
+  console.log(`  — das quais com PropostaModoAlocacao="item" explícita (vão virar "estrutura"): ${comConfigItem}`);
+  console.log(`  — das quais JÁ em "estrutura" (só reconciliação de órfãs, modo não muda): ${reconciliacaoEstrutura}`);
   console.log(`Alocações ativas nessas propostas: ${totalAlocacoes}`);
 
   const anomalas = candidatas.flatMap((c) =>
@@ -146,7 +172,9 @@ async function main() {
         await tx.atividadeConsultor.update({ where: { id: a.id }, data: { estruturaAtividadeId: no.id } });
         nosCriados++;
       }
-      if (c.jaTinhaConfigItem) {
+      if (c.jaEraEstrutura) {
+        // Já estava em "estrutura" — só reconciliação de órfãs, não mexe no modo.
+      } else if (c.jaTinhaConfigItem) {
         await tx.propostaModoAlocacao.update({ where: { codemp_codpro: { codemp: c.codemp, codpro: c.codpro } }, data: { modo: "estrutura" } });
       } else {
         await tx.propostaModoAlocacao.create({ data: { codemp: c.codemp, codpro: c.codpro, modo: "estrutura" } });
@@ -155,7 +183,7 @@ async function main() {
     propostasMigradas++;
   }
 
-  console.log(`\nConcluído: ${propostasMigradas} propostas migradas, ${nosCriados} nós criados.\n`);
+  console.log(`\nConcluído: ${propostasMigradas} propostas processadas, ${nosCriados} nós criados.\n`);
 }
 
 main()
