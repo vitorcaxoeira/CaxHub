@@ -17,6 +17,7 @@ import { LinhaNovaAtividade } from "./LinhaNovaAtividade";
 import { DrawerAtividade } from "./DrawerAtividade";
 import { DestinoMover } from "./MenuAcoesNo";
 import { LegendaOrcamento } from "./LegendaOrcamento";
+import { ModalAlocarConsultores } from "./ModalAlocarConsultores";
 
 const FILTROS_VAZIOS: FiltrosCronograma = {
   status: [],
@@ -52,6 +53,8 @@ function estaAtrasada(no: NoCronogramaCompleto, statusEfetivo: StatusNo): boolea
 
 interface ArvoreCronogramaProps {
   projetoId: string;
+  codemp: string;
+  codpro: string;
   nos: NoCronogramaCompleto[];
   loading: boolean;
   erro: string | null;
@@ -71,6 +74,8 @@ interface ArvoreCronogramaProps {
 
 export function ArvoreCronograma({
   projetoId,
+  codemp,
+  codpro,
   nos,
   loading,
   erro,
@@ -91,6 +96,7 @@ export function ArvoreCronograma({
   const [drawerNoId, setDrawerNoId] = useState<number | null>(null);
   const [erroAcao, setErroAcao] = useState<string | null>(null);
   const [ghostAberto, setGhostAberto] = useState<number | null>(null);
+  const [alocarConsultoresNoId, setAlocarConsultoresNoId] = useState<number | null>(null);
 
   useEffect(() => {
     setExpandidos(carregarExpansaoSalva(projetoId));
@@ -248,6 +254,17 @@ export function ArvoreCronograma({
     });
   }, [nos, filtroAtivo, busca, filtros, statusPorId, orcamentosPorId]);
 
+  // Sobe a árvore a partir de `no` até achar o item — pasta filha de item devolve o
+  // item; o próprio item devolve a si mesmo. Usado pelo modal "Alocar consultores" (o
+  // teto de horas/saldo é sempre do item, mesmo abrindo o modal numa pasta).
+  function resolverItemAncestral(no: NoCronogramaCompleto): NoCronogramaCompleto | undefined {
+    let atual: NoCronogramaCompleto | undefined = no;
+    while (atual && atual.tipo !== "item") {
+      atual = atual.parentId != null ? porId.get(atual.parentId) : undefined;
+    }
+    return atual;
+  }
+
   function ancestraisTodosExpandidos(no: NoCronogramaCompleto): boolean {
     let atual = no.parentId != null ? porId.get(no.parentId) : undefined;
     while (atual) {
@@ -351,10 +368,13 @@ export function ArvoreCronograma({
     }
   }
 
-  async function criarAtividadeEmPasta(pasta: NoCronogramaCompleto, nome: string) {
-    // Só chamado a partir da linha fantasma, que só existe pra pasta ligada a um item
-    // (seqite != null) — ver condição de emissão do ghost row acima.
-    await criarNo({ seqite: pasta.seqite!, tipo: "atividade", nome, parentId: pasta.id });
+  async function criarAtividadeEmPasta(pastaOuItem: NoCronogramaCompleto, nome: string) {
+    // Chamado a partir da linha fantasma — hoje nasce tanto pra pasta ligada a um item
+    // (seqite != null) quanto pro próprio item, ver condição de emissão do ghost row
+    // abaixo. `parentId: pastaOuItem.id` funciona pros dois casos: quando é o item, o id
+    // virtual (negativo) vira `null` automaticamente dentro de criarNo/parentIdReal —
+    // exatamente a convenção que o backend já usa pra "raiz da árvore daquele item".
+    await criarNo({ seqite: pastaOuItem.seqite!, tipo: "atividade", nome, parentId: pastaOuItem.id });
   }
 
   function indentar(no: NoCronogramaCompleto) {
@@ -483,9 +503,18 @@ export function ArvoreCronograma({
       modo = "into";
     }
 
-    if (dragNo.tipo === "atividade" && (novoParentId == null || porId.get(novoParentId)?.tipo !== "pasta")) {
-      setErroAcao("Atividades só podem ficar dentro de uma pasta.");
-      return;
+    if (dragNo.tipo === "atividade") {
+      // "into" um item resolve `novoParentId` pro id virtual (negativo) do próprio item
+      // — `porId` inclui os itens com esse id, então `tipoDestino` já sai "item" sem
+      // precisar de caso especial (a conversão pro `parentId: null` real da API só
+      // acontece depois, dentro de atualizarNo). `novoParentId == null` aqui só acontece
+      // quando o alvo é algo fora do escopo de qualquer item (ex.: pasta raiz da
+      // proposta) — continua inválido pra atividade, como antes.
+      const tipoDestino = novoParentId != null ? porId.get(novoParentId)?.tipo : undefined;
+      if (tipoDestino !== "pasta" && tipoDestino !== "item") {
+        setErroAcao("Atividades só podem ficar dentro de uma pasta ou de um item.");
+        return;
+      }
     }
 
     // Item nunca entra nessa renumeração — não tem `ordem` própria mutável por aqui (só
@@ -551,6 +580,9 @@ export function ArvoreCronograma({
         onMoverPara={(parentId) => moverPara(no, parentId)}
         onSoltar={no.tipo === "item" ? () => soltarItem(no) : undefined}
         onAdicionarDentro={no.tipo !== "atividade" ? (tipo) => adicionarDentro(no, tipo) : undefined}
+        onAlocarConsultores={
+          no.tipo === "item" || (no.tipo === "pasta" && no.seqite != null) ? () => setAlocarConsultoresNoId(no.id) : undefined
+        }
         onExcluir={() => excluir(no)}
         larguraHoras={larguraHoras}
       />
@@ -566,7 +598,8 @@ export function ArvoreCronograma({
     while (noAtual && profundidadeAtual >= profundidadeProxima) {
       const pastaFechando: NoCronogramaCompleto = noAtual;
       const profundidadeFechando: number = profundidadeAtual;
-      if (pastaFechando.tipo === "pasta" && pastaFechando.seqite != null && expandidos.has(pastaFechando.id)) {
+      const podeGhostAtividade = (pastaFechando.tipo === "pasta" && pastaFechando.seqite != null) || pastaFechando.tipo === "item";
+      if (podeGhostAtividade && expandidos.has(pastaFechando.id)) {
         elementos.push(
           <LinhaNovaAtividade
             key={`ghost-${pastaFechando.id}`}
@@ -664,6 +697,26 @@ export function ArvoreCronograma({
           larguraHoras={larguraHoras}
         />
       )}
+
+      {alocarConsultoresNoId != null &&
+        (() => {
+          const noAlocar = porId.get(alocarConsultoresNoId);
+          const itemAlocar = noAlocar ? resolverItemAncestral(noAlocar) : undefined;
+          if (!noAlocar || !itemAlocar) return null;
+          return (
+            <ModalAlocarConsultores
+              no={noAlocar}
+              item={itemAlocar}
+              nos={nos}
+              agregados={agregados}
+              larguraHoras={larguraHoras}
+              codemp={codemp}
+              codpro={codpro}
+              onFechar={() => setAlocarConsultoresNoId(null)}
+              recarregar={onTentarNovamente}
+            />
+          );
+        })()}
     </DndContext>
   );
 }

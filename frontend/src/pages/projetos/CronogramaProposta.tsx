@@ -76,6 +76,8 @@ export function CronogramaProposta() {
 
       <ArvoreCronograma
         projetoId={`${codemp}-${codpro}`}
+        codemp={codemp ?? ""}
+        codpro={codpro ?? ""}
         nos={nos}
         loading={loading}
         erro={erro}

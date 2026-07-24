@@ -494,9 +494,12 @@ alocacaoRouter.get("/fases", async (_req, res) => {
 async function resolverModoAlocacao(codemp: number, codpro: number): Promise<"item" | "estrutura" | null> {
   const config = await prisma.propostaModoAlocacao.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
   if (config) return config.modo as "item" | "estrutura";
-  const existeAlocacao = await prisma.atividadeConsultor.findFirst({ where: { codemp, codpro, sitreg: "A" } });
-  if (existeAlocacao) return "item";
-  return null;
+  // Sem config explícita: sempre "estrutura" — o modo "item" só existe hoje pra
+  // propostas com PropostaModoAlocacao="item" explícita (legado migrado em massa via
+  // backend/prisma/migrarLegadoParaEstrutura.ts; o que sobrou sem config é só proposta
+  // sem nenhuma alocação ainda, ou proposta fora do recorte alocável — SITPRO_ALOCAVEL
+  // já bloqueia as duas telas antes de chegar aqui de qualquer forma).
+  return "estrutura";
 }
 
 alocacaoRouter.get("/propostas/:codemp/:codpro/modo", async (req: AuthenticatedRequest, res) => {
@@ -1188,9 +1191,41 @@ alocacaoRouter.delete("/estrutura/:id", async (req: AuthenticatedRequest, res) =
       res.status(400).json({ error: "Não é possível excluir: existem itens da proposta agrupados nesta pasta" });
       return;
     }
-    const alocacoesVinculadas = await prisma.atividadeConsultor.count({ where: { estruturaAtividadeId: id, sitreg: "A" } });
-    if (alocacoesVinculadas > 0) {
-      res.status(400).json({ error: "Não é possível excluir: existem consultores alocados nesta atividade" });
+    const alocacoesVinculadas = await prisma.atividadeConsultor.findMany({ where: { estruturaAtividadeId: id, sitreg: "A" } });
+    if (alocacoesVinculadas.length > 1) {
+      res.status(400).json({
+        error: `Não é possível excluir: existem ${alocacoesVinculadas.length} consultores alocados nesta atividade — remova as alocações primeiro`,
+      });
+      return;
+    }
+
+    if (alocacoesVinculadas.length === 1) {
+      // Exclusão em cascata: uma atividade-folha do lote novo sempre tem exatamente 1
+      // consultor vinculado (regra estrutural do módulo, ver alocar-lote) — excluir a
+      // atividade sem excluir a alocação deixaria um AtividadeConsultor órfão apontando
+      // pra um estruturaAtividadeId inexistente. Mesmo padrão (soft-delete + auditoria +
+      // outbox) de DELETE /alocacao/alocacoes/:id, só que dentro da mesma transação da
+      // exclusão do nó.
+      const alocacao = alocacoesVinculadas[0];
+      await prisma.$transaction([
+        prisma.atividadeConsultor.update({ where: { id: alocacao.id }, data: { sitreg: "I" } }),
+        criarEventoAuditoria({
+          origem: "tela",
+          usuarioId: ctx.user.id,
+          codemp: alocacao.codemp,
+          codpro: alocacao.codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+          entidadeId: entidadeIdAtividade(alocacao.id),
+          entidadeRotulo: `Alocação — Item ${alocacao.seqite} da Proposta ${alocacao.codemp}/${alocacao.codpro}`,
+          eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_REMOVIDA,
+          alteracoes: null,
+          metadata: null,
+          correlationId: req.correlationId!,
+        }),
+        prisma.estruturaAtividade.delete({ where: { id } }),
+      ]);
+      await enfileirar(alocacao.id, "remover_atividade", {});
+      res.json({ ok: true });
       return;
     }
 
@@ -1410,6 +1445,314 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
     res.status(201).json({ id: nova.id });
   } catch (error) {
     handleError(res, error, "criar-alocacao");
+  }
+});
+
+// Sinaliza especificamente "o saldo mudou entre o usuário abrir o modal e confirmar" —
+// path de erro à parte do 400 de validação normal (ver validarSaldo/validarSomaEstrutura
+// acima, que não tem esse precedente de 409): revalidado por último, já dentro da
+// transação, imediatamente antes dos create — se alguém mais gravou horas nesse meio-
+// tempo, aborta e o cliente recarrega a árvore em vez de só mostrar o erro.
+class SaldoDivergenteError extends Error {}
+
+interface ConsultorLoteInput {
+  codfor: number;
+  qtdhor: number;
+}
+
+type DestinoLote = { tipo: "item" } | { tipo: "pasta"; pastaId: number } | { tipo: "nova_pasta"; nome: string };
+
+function parseDestinoLote(body: unknown): DestinoLote | null {
+  const destino = (body as { destino?: unknown } | undefined)?.destino as Record<string, unknown> | undefined;
+  if (!destino || typeof destino.tipo !== "string") return null;
+  if (destino.tipo === "item") return { tipo: "item" };
+  if (destino.tipo === "pasta") {
+    const pastaId = Number(destino.pastaId);
+    return Number.isFinite(pastaId) ? { tipo: "pasta", pastaId } : null;
+  }
+  if (destino.tipo === "nova_pasta") {
+    const nome = typeof destino.nome === "string" ? destino.nome.trim() : "";
+    return nome !== "" ? { tipo: "nova_pasta", nome } : null;
+  }
+  return null;
+}
+
+// Alocação em lote (EAP): cria N atividades-folha irmãs — uma por consultor marcado no
+// modal "Alocar consultores" — todas filhas do mesmo destino (o próprio item, uma pasta
+// já existente, ou uma pasta nova criada na hora). Cada atividade tem sempre exatamente
+// 1 consultor (regra estrutural do módulo) — nunca reaproveita um nó existente pra
+// receber um 2º consultor, mesmo que o schema tecnicamente permita (AtividadeConsultor.
+// estruturaAtividadeId aceita N linhas por nó, usado historicamente pelo fluxo antigo de
+// POST .../alocacoes com estruturaAtividadeId de um nó já criado à parte — aqui sempre
+// nasce 1 nó novo por consultor).
+alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    const seqite = Number(req.params.seqite);
+    if (![codemp, codpro, seqite].every(Number.isFinite)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+
+    const destino = parseDestinoLote(req.body);
+    if (!destino) {
+      res.status(400).json({ error: "destino inválido — use 'item', 'pasta' (com pastaId) ou 'nova_pasta' (com nome)" });
+      return;
+    }
+
+    const consultoresRaw = Array.isArray(req.body?.consultores) ? (req.body.consultores as unknown[]) : [];
+    const consultores: ConsultorLoteInput[] = consultoresRaw.map((c) => ({
+      codfor: Number((c as Record<string, unknown>)?.codfor),
+      qtdhor: Number((c as Record<string, unknown>)?.qtdhor),
+    }));
+    if (consultores.length === 0 || consultores.some((c) => !Number.isFinite(c.codfor) || !Number.isFinite(c.qtdhor) || c.qtdhor <= 0)) {
+      res.status(400).json({ error: "Informe ao menos 1 consultor, cada um com qtdhor (>0)" });
+      return;
+    }
+    const codforsUnicos = new Set(consultores.map((c) => c.codfor));
+    if (codforsUnicos.size !== consultores.length) {
+      res.status(400).json({ error: "Consultor duplicado na lista" });
+      return;
+    }
+
+    const dataPrevistaInicio = req.body?.dataPrevistaInicio ? new Date(req.body.dataPrevistaInicio) : null;
+    const dataPrevistaFim = req.body?.dataPrevistaFim ? new Date(req.body.dataPrevistaFim) : null;
+    if (dataPrevistaInicio && dataPrevistaFim && dataPrevistaInicio > dataPrevistaFim) {
+      res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
+      return;
+    }
+
+    const modo = await resolverModoAlocacao(codemp, codpro);
+    if (modo !== "estrutura") {
+      res.status(400).json({ error: "Esta proposta não está no modo de alocação por estrutura" });
+      return;
+    }
+
+    const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+    if (!item) {
+      res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+    if (item.depexe == null) {
+      res.status(400).json({ error: "Item sem departamento de execução definido" });
+      return;
+    }
+
+    const proposta = await prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
+    if (!proposta || proposta.sitpro == null || !SITPRO_ALOCAVEL.includes(proposta.sitpro)) {
+      res.status(400).json({ error: "Só é possível alocar horas em propostas Aprovada ou Em Execução" });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { user, contexto, role } = ctx;
+
+    if (!podeExecutarAcao(role, contexto, "criar", { depexe: item.depexe, codfor: 0 })) {
+      res.status(403).json({ error: "Sem permissão para alocar neste departamento" });
+      return;
+    }
+
+    // Resolve o nó de destino (não a pasta nova ainda — essa só nasce dentro da
+    // transação, junto com as atividades, pra não deixar uma pasta órfã se o resto
+    // falhar).
+    let pastaDestinoExistente: Awaited<ReturnType<typeof prisma.estruturaAtividade.findUnique>> = null;
+    if (destino.tipo === "pasta") {
+      pastaDestinoExistente = await prisma.estruturaAtividade.findUnique({ where: { id: destino.pastaId } });
+      if (
+        !pastaDestinoExistente ||
+        pastaDestinoExistente.codemp !== codemp ||
+        pastaDestinoExistente.codpro !== codpro ||
+        pastaDestinoExistente.seqite !== seqite ||
+        pastaDestinoExistente.tipo !== "pasta"
+      ) {
+        res.status(400).json({ error: "Pasta de destino não encontrada" });
+        return;
+      }
+    }
+
+    // Consultor precisa existir, estar ativo E integrar o time do departamento do item —
+    // mesma checagem de POST .../alocacoes, aplicada a cada linha do lote.
+    const codforsAtivos = await prisma.consultor.findMany({
+      where: { codemp, codfor: { in: [...codforsUnicos] }, sitfor: "A" },
+    });
+    const consultorPorCodfor = new Map(codforsAtivos.map((c) => [c.codfor as number, c]));
+    const faltantes = [...codforsUnicos].filter((cf) => !consultorPorCodfor.has(cf));
+    if (faltantes.length > 0) {
+      res.status(400).json({ error: `Consultor(es) não encontrado(s) ou inativo(s): ${faltantes.join(", ")}` });
+      return;
+    }
+    const timeDoDepartamento = await prisma.departamentoTime.findMany({ where: { codemp, depexe: item.depexe, sitreg: "A" } });
+    const codususDoTime = new Set(timeDoDepartamento.map((t) => Number(t.codusu)));
+    const foraDoTime = codforsAtivos.filter((c) => !codususDoTime.has(c.codusu));
+    if (foraDoTime.length > 0) {
+      res.status(400).json({
+        error: `Consultor(es) fora do time do departamento: ${foraDoTime.map((c) => c.nomcom ?? c.nomfor ?? c.codfor).join(", ")}`,
+      });
+      return;
+    }
+
+    const fasidBody = req.body?.fasid != null ? Number(req.body.fasid) : null;
+    let fasid: number;
+    if (fasidBody != null) {
+      if (!Number.isFinite(fasidBody) || !(await prisma.faseProposta.findUnique({ where: { fasid: fasidBody } }))) {
+        res.status(400).json({ error: "fasid inválido" });
+        return;
+      }
+      fasid = fasidBody;
+    } else {
+      const primeiraFase = await prisma.faseProposta.findFirst({ orderBy: { fasid: "asc" } });
+      if (!primeiraFase) {
+        res.status(400).json({ error: "Nenhuma fase cadastrada" });
+        return;
+      }
+      fasid = primeiraFase.fasid;
+    }
+
+    const primeiraColuna = await prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } });
+    const somaLote = consultores.reduce((soma, c) => soma + c.qtdhor, 0);
+
+    let criadas: { id: number; estruturaAtividadeId: number; codfor: number; qtdhor: number }[] = [];
+    let pastaCriadaId: number | null = null;
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Revalidação final do saldo do item, já dentro da transação — a mesma conta de
+        // validarSomaEstrutura, mas recalculada agora (não com o snapshot que o modal
+        // carregou) e incluindo a soma do lote inteiro de uma vez, não consultor a
+        // consultor (senão o 1º consultor "reservaria" saldo que o 2º acabaria vendo como
+        // livre, mesmo os dois cabendo juntos ou os dois estourando juntos).
+        const itemAtual = await tx.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+        if (!itemAtual || itemAtual.qtdhor == null) throw new SaldoDivergenteError("Item sem horas definidas na proposta");
+        const folhasAtuais = await tx.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, tipo: "atividade" } });
+        const somaAtual = folhasAtuais.reduce((soma, n) => soma + (n.duracaoHoras ?? 0), 0);
+        if (somaAtual + somaLote > itemAtual.qtdhor) {
+          throw new SaldoDivergenteError(
+            `O saldo do item mudou — disponível agora: ${formatHorasSimples(itemAtual.qtdhor - somaAtual)}, tentando alocar: ${formatHorasSimples(somaLote)}`
+          );
+        }
+
+        let parentId: number | null;
+        if (destino.tipo === "item") {
+          parentId = null;
+        } else if (destino.tipo === "pasta") {
+          parentId = destino.pastaId;
+        } else {
+          const irmaosRaiz = await tx.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, parentId: null } });
+          const ordemPasta = irmaosRaiz.length > 0 ? Math.max(...irmaosRaiz.map((n) => n.ordem)) + 1 : 0;
+          const novaPasta = await tx.estruturaAtividade.create({
+            data: {
+              codemp,
+              codpro,
+              seqite,
+              parentId: null,
+              tipo: "pasta",
+              nome: destino.nome,
+              ordem: ordemPasta,
+              criadoPor: contexto.consultor?.codusu ?? null,
+            },
+          });
+          pastaCriadaId = novaPasta.id;
+          parentId = novaPasta.id;
+        }
+
+        const irmaosDestino = await tx.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, parentId } });
+        let proximaOrdem = irmaosDestino.length > 0 ? Math.max(...irmaosDestino.map((n) => n.ordem)) + 1 : 0;
+
+        // Nome da atividade = nome do ITEM (mesma regra de useCronograma.ts no
+        // frontend: despro se tiver, senão codser) — o consultor não vira o título da
+        // atividade, só o responsável (responsavelCodfor abaixo), mostrado como
+        // avatar/iniciais na árvore (LinhaNo.tsx já resolve isso, sem mudança de UI).
+        const nomeAtividade = item.despro ?? item.codser;
+
+        for (const c of consultores) {
+          const consultorInfo = consultorPorCodfor.get(c.codfor)!;
+          const nomeConsultor = consultorInfo.nomcom ?? consultorInfo.nomfor ?? `Fornecedor ${c.codfor}`;
+
+          const noEstrutura = await tx.estruturaAtividade.create({
+            data: {
+              codemp,
+              codpro,
+              seqite,
+              parentId,
+              tipo: "atividade",
+              nome: nomeAtividade,
+              responsavelCodfor: c.codfor,
+              ordem: proximaOrdem++,
+              duracaoHoras: c.qtdhor,
+              dataPrevistaInicio,
+              dataPrevistaFim,
+              criadoPor: contexto.consultor?.codusu ?? null,
+            },
+          });
+
+          const atividadeConsultor = await tx.atividadeConsultor.create({
+            data: {
+              codemp,
+              codpro,
+              seqite,
+              codfor: c.codfor,
+              qtdhor: c.qtdhor,
+              sitreg: "A",
+              datger: new Date(),
+              usuger: contexto.consultor?.codusu ?? null,
+              dataPrevistaInicio,
+              dataPrevistaFim,
+              fasid,
+              colunaId: primeiraColuna?.id ?? null,
+              estruturaAtividadeId: noEstrutura.id,
+            },
+          });
+
+          const entidadeRotulo = `Alocação de ${nomeConsultor} — Item ${seqite}`;
+          await criarEventoAuditoria(
+            {
+              origem: "tela",
+              usuarioId: user.id,
+              codemp,
+              codpro,
+              entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+              entidadeId: entidadeIdAtividade(atividadeConsultor.id),
+              entidadeRotulo,
+              eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_CRIADA,
+              alteracoes: null,
+              metadata: { qtdhor: c.qtdhor, fasid, loteDestino: destino.tipo },
+              correlationId: req.correlationId!,
+            },
+            tx
+          );
+
+          criadas.push({ id: atividadeConsultor.id, estruturaAtividadeId: noEstrutura.id, codfor: c.codfor, qtdhor: c.qtdhor });
+        }
+      });
+    } catch (error) {
+      if (error instanceof SaldoDivergenteError) {
+        res.status(409).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+
+    for (const c of criadas) {
+      await enfileirar(c.id, "criar_atividade", {
+        codemp,
+        codpro,
+        seqite,
+        codfor: c.codfor,
+        qtdhor: c.qtdhor,
+        fasid,
+        dataPrevistaInicio: dataPrevistaInicio?.toISOString() ?? null,
+        dataPrevistaFim: dataPrevistaFim?.toISOString() ?? null,
+      });
+    }
+
+    res.status(201).json({ pastaId: pastaCriadaId, atividades: criadas });
+  } catch (error) {
+    handleError(res, error, "alocar-lote");
   }
 });
 

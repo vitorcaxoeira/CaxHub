@@ -71,6 +71,7 @@ interface LinhaNoProps {
   onMoverPara: (parentId: number) => void;
   onSoltar?: () => void;
   onAdicionarDentro?: (tipo: "pasta" | "atividade") => void;
+  onAlocarConsultores?: () => void;
   onExcluir: () => void;
   // Dígitos mínimos de hora usados em toda a linha (ver larguraHorasProposta em
   // cronograma.ts) — mesmo valor pra árvore inteira, calculado uma vez no topo.
@@ -96,6 +97,7 @@ export function LinhaNo({
   onMoverPara,
   onSoltar,
   onAdicionarDentro,
+  onAlocarConsultores,
   onExcluir,
   larguraHoras,
 }: LinhaNoProps) {
@@ -328,7 +330,8 @@ export function LinhaNo({
               onMoverPara={onMoverPara}
               onSoltar={onSoltar}
               onAdicionarDentro={no.tipo !== "atividade" ? onAdicionarDentro : undefined}
-              permiteAdicionarAtividade={no.tipo === "pasta" && no.seqite != null}
+              permiteAdicionarAtividade={no.tipo === "item" || (no.tipo === "pasta" && no.seqite != null)}
+              onAlocarConsultores={onAlocarConsultores}
               onExcluir={onExcluir}
             />
           )}

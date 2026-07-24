@@ -22,6 +22,9 @@ interface MenuAcoesNoProps {
   onSoltar?: () => void;
   onAdicionarDentro?: (tipo: "pasta" | "atividade") => void;
   permiteAdicionarAtividade?: boolean;
+  // Presente só pro item e pra pasta filha de item (nunca pasta raiz da proposta, que
+  // não tem teto de horas próprio — ver ArvoreCronograma).
+  onAlocarConsultores?: () => void;
   onExcluir: () => void;
 }
 
@@ -38,6 +41,7 @@ export function MenuAcoesNo({
   onSoltar,
   onAdicionarDentro,
   permiteAdicionarAtividade = true,
+  onAlocarConsultores,
   onExcluir,
 }: MenuAcoesNoProps) {
   const [aberto, setAberto] = useState(false);
@@ -146,6 +150,20 @@ export function MenuAcoesNo({
                   >
                     Soltar do grupo
                   </button>
+                )}
+                {onAlocarConsultores && (
+                  <>
+                    <div className="my-1 border-t border-border" />
+                    <button
+                      onClick={() => {
+                        onAlocarConsultores();
+                        fechar();
+                      }}
+                      className="block w-full rounded px-2.5 py-1.5 text-left text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    >
+                      Alocar consultores…
+                    </button>
+                  </>
                 )}
                 {onAdicionarDentro && (
                   <>
