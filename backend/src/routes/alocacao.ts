@@ -3,6 +3,7 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
 import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
+import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
 import { enfileirar } from "../sync/outboxSenior";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
@@ -853,7 +854,7 @@ alocacaoRouter.post("/estrutura", async (req: AuthenticatedRequest, res) => {
     const seqiteRaw = req.body?.seqite;
     const seqite = seqiteRaw != null ? Number(seqiteRaw) : null;
     const tipo = req.body?.tipo;
-    const nome = typeof req.body?.nome === "string" ? req.body.nome.trim() : "";
+    const nome = typeof req.body?.nome === "string" ? truncarNomeEstrutura(req.body.nome.trim()) : "";
     const parentId = req.body?.parentId != null ? Number(req.body.parentId) : null;
     if (![codemp, codpro].every(Number.isFinite) || (tipo !== "pasta" && tipo !== "atividade") || nome === "") {
       res.status(400).json({ error: "codemp, codpro, tipo (pasta|atividade) e nome são obrigatórios" });
@@ -1656,7 +1657,7 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
               seqite,
               parentId: null,
               tipo: "pasta",
-              nome: destino.nome,
+              nome: truncarNomeEstrutura(destino.nome),
               ordem: ordemPasta,
               criadoPor: contexto.consultor?.codusu ?? null,
             },
@@ -1672,7 +1673,7 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
         // frontend: despro se tiver, senão codser) — o consultor não vira o título da
         // atividade, só o responsável (responsavelCodfor abaixo), mostrado como
         // avatar/iniciais na árvore (LinhaNo.tsx já resolve isso, sem mudança de UI).
-        const nomeAtividade = item.despro ?? item.codser;
+        const nomeAtividade = truncarNomeEstrutura(item.despro ?? item.codser);
 
         for (const c of consultores) {
           const consultorInfo = consultorPorCodfor.get(c.codfor)!;

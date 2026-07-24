@@ -30,16 +30,9 @@
 //   npx ts-node prisma/migrarLegadoParaEstrutura.ts              (relatório, não grava nada)
 //   npx ts-node prisma/migrarLegadoParaEstrutura.ts --aplicar    (grava de verdade)
 import { prisma } from "../src/db/prisma";
+import { truncarNomeEstrutura } from "../src/domain/estruturaAtividadeDominio";
 
 const SITPRO_ALOCAVEL = [4, 7];
-
-// EstruturaAtividade.nome é VarChar(200) — PropostaItem.despro é VarChar(2000) e vários
-// itens reais passam de 200 (achado rodando este script pela 1ª vez contra o banco real:
-// 40 itens no escopo, um deles com 1545 caracteres). Trunca preservando o texto completo
-// só no `despro` do item em si (que não muda) — aqui é só o rótulo da atividade.
-function truncarNome(nome: string): string {
-  return nome.length > 200 ? `${nome.slice(0, 197)}...` : nome;
-}
 
 const aplicar = process.argv.includes("--aplicar");
 
@@ -150,7 +143,7 @@ async function main() {
           console.warn(`  aviso: PropostaItem não encontrado pra codemp=${c.codemp} codpro=${c.codpro} seqite=${a.seqite}, pulando alocação id=${a.id}`);
           continue;
         }
-        const nome = truncarNome(item.despro ?? item.codser);
+        const nome = truncarNomeEstrutura(item.despro ?? item.codser);
         const ordem = ordemPorSeqite.get(a.seqite) ?? 0;
         ordemPorSeqite.set(a.seqite, ordem + 1);
 
