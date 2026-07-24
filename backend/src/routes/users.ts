@@ -230,9 +230,24 @@ usersRouter.post("/", async (req, res) => {
       return;
     }
 
+    // Mesma resolução de POST /convites (linha ~107) — sem ela, um usuário criado direto
+    // por aqui nunca fica visível como avatar real no Kanban/Atividades (join
+    // Consultor.usuariosCaxHub em carregarAtividadesVisiveis depende desse vínculo).
+    const consultor = await prisma.consultor.findFirst({
+      where: { email: { equals: email, mode: "insensitive" } },
+    });
+
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
-      data: { email, passwordHash, nome, roleId: roleIdNum, fotoUrl: fotoUrl || null },
+      data: {
+        email,
+        passwordHash,
+        nome,
+        roleId: roleIdNum,
+        fotoUrl: fotoUrl || null,
+        consultorCodemp: consultor?.codemp,
+        consultorCodusu: consultor?.codusu,
+      },
       include: { role: true },
     });
 
@@ -308,6 +323,17 @@ usersRouter.put("/:id", async (req, res) => {
     if (fotoUrl !== undefined) data.fotoUrl = fotoUrl || null;
     if (roleIdNum !== undefined) data.roleId = roleIdNum;
     if (password) data.passwordHash = await bcrypt.hash(password, 10);
+
+    // E-mail mudou: revincula ao Consultor certo (mesma resolução de POST / e
+    // POST /convites) — sem isso, o usuário fica com um vínculo apontando pro Consultor
+    // do e-mail antigo (ou nenhum), quebrando o avatar real no Kanban/Atividades.
+    if (email !== undefined && email !== existing.email) {
+      const consultor = await prisma.consultor.findFirst({
+        where: { email: { equals: email, mode: "insensitive" } },
+      });
+      data.consultorCodemp = consultor?.codemp ?? null;
+      data.consultorCodusu = consultor?.codusu ?? null;
+    }
 
     const user = await prisma.user.update({ where: { id }, data, include: { role: true } });
     res.json({ user: toPublicUser(user) });
