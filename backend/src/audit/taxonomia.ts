@@ -8,6 +8,7 @@ export const ENTIDADES_AUDITORIA = {
   ALOCACAO: "alocacao",
   KANBAN_CARD: "kanban_card",
   USUARIO: "usuario",
+  RAT: "rat",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -50,5 +51,9 @@ export const EVENTOS_AUDITORIA = {
   USUARIO_SENHA_ALTERADA: "USUARIO_SENHA_ALTERADA",
   USUARIO_AVATAR_ALTERADO: "USUARIO_AVATAR_ALTERADO",
   USUARIO_AVATAR_REMOVIDO: "USUARIO_AVATAR_REMOVIDO",
+
+  // Aprovação de RAT (backend/src/routes/rats.ts) — só muda sitrat dentro do CaxHub,
+  // sem reflexo no Senior ainda (não há canal de escrita de volta, ver ratSync.ts).
+  RAT_APROVADA: "RAT_APROVADA",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];

@@ -28,16 +28,32 @@ function minutosDesdeMeiaNoite(data: Date): number {
   return data.getHours() * 60 + data.getMinutes();
 }
 
-// Um Rat rascunho por consultor+proposta+dia — reaproveita se já existir um aberto
-// (ainda sem numrat, ou seja, ainda não confirmado no Senior) pra não gerar um
-// documento por apontamento, do mesmo jeito que uma RAT real agrupa várias atividades
-// do dia. `codfpj` é copiado da própria Proposta (mesmo valor que ela já guarda) — é o
-// dado mais confiável disponível hoje pra esse campo.
-async function buscarOuCriarRatRascunho(atividade: { codemp: number; codpro: number }, codfor: number, dataSessao: Date) {
-  const dataDia = new Date(dataSessao.toDateString());
-
+// Uma RAT Digitada por consultor+proposta — reaproveita se já existir uma (do CaxHub OU
+// já confirmada no Senior, tanto faz) pra não gerar um documento por apontamento. Fica
+// recebendo apontamentos de qualquer dia enquanto Digitada; depois de aprovada (PATCH
+// /rats/:id/aprovar) ou aprovada direto no Senior (sync noturno atualiza sitrat aqui), o
+// próximo apontamento pra essa mesma dupla consultor+proposta não encontra mais essa
+// linha (sitrat != 9) e abre uma RAT nova — não há corte por dia. Importante: NÃO
+// filtra por `origemCaxHub`/`numrat` — uma RAT real (já com número do Senior) que ainda
+// esteja "Digitada" lá (documento existe, ainda não impresso/aprovado no ERP) é tão
+// válida pra receber itens quanto uma criada pelo próprio CaxHub; filtrar só por
+// origemCaxHub fazia todo apontamento novo criar uma RAT CaxHub paralela mesmo já
+// existindo uma real digitada pra aquele consultor+proposta. `codfpj` é copiado da
+// própria Proposta (mesmo valor que ela já guarda) — é o dado mais confiável disponível
+// hoje pra esse campo, só usado quando é preciso CRIAR uma RAT nova. `depexe` vem do
+// item que originou este apontamento — usado pra resolver "quem gerencia essa RAT"
+// (mesma regra de podeExecutarAcao); se um consultor apontar em itens de departamentos
+// diferentes na mesma proposta (raro), a RAT fica com o depexe do primeiro item, não
+// resolvemos RAT multi-departamento nesta fase.
+async function buscarOuCriarRatRascunho(
+  atividade: { codemp: number; codpro: number },
+  codfor: number,
+  depexe: number,
+  dataSessao: Date
+) {
   const existente = await prisma.rat.findFirst({
-    where: { origemCaxHub: true, numrat: null, codemp: atividade.codemp, codfor, codpro: atividade.codpro, datemi: dataDia },
+    where: { sitrat: 9, codemp: atividade.codemp, codfor, codpro: atividade.codpro },
+    orderBy: { id: "desc" },
   });
   if (existente) return existente;
 
@@ -53,8 +69,9 @@ async function buscarOuCriarRatRascunho(atividade: { codemp: number; codpro: num
       codfpj: proposta?.codfpj ?? null,
       codpro: atividade.codpro,
       codcli: proposta?.codcli ?? null,
-      datemi: dataDia,
+      datemi: new Date(dataSessao.toDateString()),
       sitrat: 9, // Digitado — rascunho local, ainda não confirmado no Senior
+      depexe,
       origemCaxHub: true,
     },
   });
@@ -94,9 +111,8 @@ async function confirmarSessao(
   if (!podeExecutarAcao(role, contexto, "lancarApontamento", { depexe: item.depexe, codfor: atividade.codfor })) {
     return { status: 403, body: { error: "Sem permissão para lançar apontamento nesta atividade" } };
   }
-  if (atividade.seqati == null) {
-    return { status: 400, body: { error: "Esta atividade ainda não foi confirmada pelo Senior — não é possível apontar horas nela ainda" } };
-  }
+  // Sem seqati (atividade ainda não confirmada pelo Senior) também pode virar
+  // apontamento — RatItem.seqati fica null nesse caso, sem bloquear o fluxo.
 
   const inicio = ajustes.ajusteInicio ? new Date(ajustes.ajusteInicio) : sessao.inicio;
   const fim = ajustes.ajusteFim ? new Date(ajustes.ajusteFim) : sessao.fim;
@@ -104,7 +120,7 @@ async function confirmarSessao(
     return { status: 400, body: { error: "O fim precisa ser depois do início" } };
   }
 
-  const rat = await buscarOuCriarRatRascunho(atividade, atividade.codfor, inicio);
+  const rat = await buscarOuCriarRatRascunho(atividade, atividade.codfor, item.depexe, inicio);
   const ratNovo = rat.origemCaxHub && rat.numrat == null;
 
   const ratItem = await prisma.ratItem.create({
@@ -119,7 +135,11 @@ async function confirmarSessao(
       datati: new Date(inicio.toDateString()),
       horini: minutosDesdeMeiaNoite(inicio),
       horfim: minutosDesdeMeiaNoite(fim),
-      desati: ajustes.descricao ?? item.despro ?? null,
+      // Sem fallback pro despro do item de propósito: a RAT só pode ser aprovada quando
+      // TODO item tiver observação preenchida (ver PATCH /rats/:id/aprovar) — se
+      // caísse pro despro genérico automaticamente, esse gate nunca bloquearia nada de
+      // verdade. A descrição do item continua visível na tela como contexto à parte.
+      desati: ajustes.descricao?.trim() || null,
       origemCaxHub: true,
     },
   });
@@ -132,7 +152,7 @@ async function confirmarSessao(
   await enfileirar(atividade.id, "criar_apontamento", {
     ratItemId: ratItem.id,
     ratId: rat.id,
-    seqati: atividade.seqati.toString(),
+    seqati: atividade.seqati?.toString() ?? null,
     codemp: atividade.codemp,
     codpro: atividade.codpro,
     seqite: atividade.seqite,
@@ -198,7 +218,7 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     const sessoes = await prisma.atividadeSessaoExecucao.findMany({
       where: { fim: { not: null }, confirmada: false, atividade: { codfor, sitreg: "A" } },
       include: { atividade: true, coluna: true },
-      orderBy: { inicio: "asc" },
+      orderBy: { id: "desc" },
     });
 
     const chavesProposta = [...new Set(sessoes.map((s) => `${s.atividade.codemp}-${s.atividade.codpro}`))];
@@ -225,12 +245,15 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           codpro: s.atividade.codpro,
           numprj: proposta?.numprj ?? null,
           cliente: proposta?.cliente.nomcli ?? null,
+          codcli: proposta?.codcli ?? null,
           itemDescricao: item?.despro ?? null,
+          seqite: s.atividade.seqite,
           colunaNome: s.coluna.nome,
           inicio: s.inicio,
           fim: s.fim,
           duracaoMinutos: s.fim ? Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000) : 0,
           origem: s.origem,
+          observacao: s.observacao,
         };
       }),
     });
@@ -306,51 +329,51 @@ apontamentosRouter.post("/manual", async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Histórico de apontamentos já confirmados do consultor logado, com status de envio
-// pro Senior (a fila outbox é genérica por atividade+tipo — casa pelo ratItemId dentro
-// do payload já que não há FK direta entre SincronizacaoPendente e RatItem).
-apontamentosRouter.get("/", async (req: AuthenticatedRequest, res) => {
+// Edita a observação (RatItem.desati) de um apontamento já confirmado — é como o
+// consultor preenche o que faltou pra RAT poder ser aprovada (ver PATCH
+// /rats/:id/aprovar, que exige observação em todo item). Só o dono, só enquanto a RAT
+// pai ainda está Digitada e o item ainda não foi confirmado no Senior — mesmos guards
+// de DELETE /:id logo abaixo.
+apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
   try {
+    const sessaoId = Number(req.params.id);
+    const desati = typeof req.body?.desati === "string" ? req.body.desati.trim() : "";
+    if (!Number.isFinite(sessaoId) || !desati) {
+      res.status(400).json({ error: "desati é obrigatório" });
+      return;
+    }
     const ctx = await contextoDoUsuario(req);
     const codfor = ctx?.contexto.consultor?.codfor;
     if (!codfor) {
-      res.json({ apontamentos: [] });
+      res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
 
-    const sessoes = await prisma.atividadeSessaoExecucao.findMany({
-      where: { confirmada: true, atividade: { codfor } },
-      include: { atividade: true, ratItem: true },
-      orderBy: { inicio: "desc" },
-      take: 200,
+    const sessao = await prisma.atividadeSessaoExecucao.findUnique({
+      where: { id: sessaoId },
+      include: { atividade: true, ratItem: { include: { rat: true } } },
     });
+    if (!sessao || sessao.atividade.codfor !== codfor) {
+      res.status(404).json({ error: "Apontamento não encontrado" });
+      return;
+    }
+    if (!sessao.ratItem) {
+      res.status(400).json({ error: "Sessão ainda não confirmada — nada a editar" });
+      return;
+    }
+    if (sessao.ratItem.numrat != null) {
+      res.status(400).json({ error: "Já confirmado no Senior — não é possível editar" });
+      return;
+    }
+    if (sessao.ratItem.rat.sitrat !== 9) {
+      res.status(400).json({ error: "A RAT deste apontamento não está mais Digitada — não é possível editar" });
+      return;
+    }
 
-    const atividadeIds = [...new Set(sessoes.map((s) => s.atividadeId))];
-    const pendencias =
-      atividadeIds.length > 0
-        ? await prisma.sincronizacaoPendente.findMany({
-            where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIds } },
-          })
-        : [];
-
-    res.json({
-      apontamentos: sessoes.map((s) => {
-        const pendencia = pendencias.find((p) => (p.payload as any)?.ratItemId === s.ratItemId);
-        return {
-          id: s.id,
-          ratItemId: s.ratItemId,
-          codpro: s.atividade.codpro,
-          inicio: s.inicio,
-          fim: s.fim,
-          duracaoMinutos: s.ratItem?.horini != null && s.ratItem?.horfim != null ? s.ratItem.horfim - s.ratItem.horini : null,
-          desati: s.ratItem?.desati ?? null,
-          confirmadoNoSenior: s.ratItem?.numrat != null,
-          statusEnvio: pendencia?.status ?? (s.ratItem?.numrat != null ? "confirmado_senior" : "pendente"),
-        };
-      }),
-    });
+    await prisma.ratItem.update({ where: { id: sessao.ratItem.id }, data: { desati } });
+    res.json({ ok: true });
   } catch (error) {
-    handleError(res, error, "listar");
+    handleError(res, error, "editar-observacao");
   }
 });
 

@@ -6,11 +6,13 @@ import { AtividadesTable, FiltrosAtividades } from "../../components/projetos/At
 import { AtividadesFiltros } from "../../components/projetos/AtividadesFiltros";
 import { IndicadoresProjetos, IndicadoresProjetosData, KpisAtividades, SituacaoKpi } from "../../components/projetos/IndicadoresProjetos";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
+import { ModalObservacaoAtividade } from "../../components/projetos/ModalObservacaoAtividade";
 import { CalendarioAtividades } from "../../components/projetos/CalendarioAtividades";
 import { TimelineAtividades } from "../../components/projetos/TimelineAtividades";
 import { WorkloadConsultores } from "../../components/projetos/WorkloadConsultores";
 import { useToast } from "../../components/ui/Toast";
 import { RAIA_A_FAZER, RAIA_EM_ANDAMENTO } from "../../lib/atividade-acoes";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 
 type Visao = "quadro" | "lista" | "calendario" | "timeline" | "workload";
 const VISOES: Visao[] = ["quadro", "lista", "calendario", "timeline", "workload"];
@@ -24,6 +26,16 @@ interface OpcaoFiltro {
 
 interface DetalheSelecionado extends DetalheInfo {
   id: number;
+}
+
+// Pedido de observação ao sair de "Em Andamento" (mover o card ou clicar Parar) — abre
+// o ModalObservacaoAtividade antes de chamar a API de verdade, ver
+// moverAtividade/pararAtividade abaixo.
+interface PedidoObservacao {
+  atividadeId: number;
+  novaColunaId?: number; // presente só quando tipo === "mover"
+  tipo: "mover" | "parar";
+  titulo: string;
 }
 
 interface FiltrosPatch {
@@ -46,6 +58,9 @@ export function Atividades() {
   const visaoParam = searchParams.get("visao");
   const [visao, setVisaoState] = useState<Visao>(VISOES.includes(visaoParam as Visao) ? (visaoParam as Visao) : "quadro");
   const [busca, setBuscaState] = useState(searchParams.get("busca") ?? "");
+  // Só o texto digitado é "vivo" (reflete na URL e no input a cada tecla); o disparo do
+  // GET /api/atividades espera o debounce, senão cada tecla recalcula o quadro inteiro.
+  const buscaDebounced = useDebouncedValue(busca, 400);
   const [depexe, setDepexeState] = useState(searchParams.get("depexe") ?? "");
   const [colunaId, setColunaIdState] = useState(searchParams.get("colunaId") ?? "");
   const [pripro, setPriproState] = useState(searchParams.get("pripro") ?? "");
@@ -71,6 +86,7 @@ export function Atividades() {
   const [erro, setErro] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<DetalheSelecionado | null>(null);
   const [processando, setProcessando] = useState<Set<number>>(new Set());
+  const [pedidoObservacao, setPedidoObservacao] = useState<PedidoObservacao | null>(null);
   const toast = useToast();
 
   function atualizarFiltros(patch: FiltrosPatch) {
@@ -132,7 +148,7 @@ export function Atividades() {
     axios
       .get("/api/atividades", {
         params: {
-          busca: busca || undefined,
+          busca: buscaDebounced || undefined,
           depexe: depexe || undefined,
           colunaId: colunaId || undefined,
           pripro: pripro || undefined,
@@ -174,19 +190,30 @@ export function Atividades() {
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, busca, depexe, colunaId, pripro, codfor, atrasada, situacao, page]);
+  }, [visao, buscaDebounced, depexe, colunaId, pripro, codfor, atrasada, situacao, page]);
 
-  async function moverAtividade(atividadeId: number, novaColunaId: number) {
+  async function executarMovimentacao(atividadeId: number, novaColunaId: number, observacao: string | null) {
     const anterior = atividades;
     setAtividades((atual) => atual.map((a) => (a.id === atividadeId ? { ...a, colunaId: novaColunaId } : a)));
     try {
-      await axios.patch(`/api/atividades/${atividadeId}/mover`, { colunaId: novaColunaId });
+      await axios.patch(`/api/atividades/${atividadeId}/mover`, { colunaId: novaColunaId, observacao: observacao || undefined });
       carregar();
       carregarIndicadores();
     } catch (err: any) {
       setAtividades(anterior);
       setErro(err.response?.data?.error ?? "Falha ao mover atividade");
     }
+  }
+
+  // Sair de "Em Andamento" (mover pra qualquer outra coluna) pede uma observação rápida
+  // antes de mover de verdade — ver PedidoObservacao/resolverPedidoObservacao.
+  function moverAtividade(atividadeId: number, novaColunaId: number) {
+    const alvo = atividades.find((a) => a.id === atividadeId);
+    if (alvo?.coluna?.nome === RAIA_EM_ANDAMENTO && alvo.colunaId !== novaColunaId) {
+      setPedidoObservacao({ atividadeId, novaColunaId, tipo: "mover", titulo: `Proposta ${alvo.codpro}` });
+      return;
+    }
+    executarMovimentacao(atividadeId, novaColunaId, null);
   }
 
   async function iniciarAtividade(atividadeId: number) {
@@ -228,7 +255,7 @@ export function Atividades() {
     }
   }
 
-  async function pararAtividade(atividadeId: number) {
+  async function executarParada(atividadeId: number, observacao: string | null) {
     const colunaAFazer = colunas.find((c) => c.nome === RAIA_A_FAZER) ?? null;
     const anterior = atividades;
     setProcessando((atual) => new Set(atual).add(atividadeId));
@@ -240,7 +267,7 @@ export function Atividades() {
       );
     }
     try {
-      await axios.post(`/api/atividades/${atividadeId}/stop`);
+      await axios.post(`/api/atividades/${atividadeId}/stop`, { observacao: observacao || undefined });
       carregar();
       carregarIndicadores();
     } catch (err: any) {
@@ -253,6 +280,21 @@ export function Atividades() {
         return proximo;
       });
     }
+  }
+
+  // "Parar" só existe quando a atividade já está em "Em Andamento" (podeParar), então
+  // sempre pede a observação antes de parar de verdade.
+  function pararAtividade(atividadeId: number) {
+    const alvo = atividades.find((a) => a.id === atividadeId);
+    setPedidoObservacao({ atividadeId, tipo: "parar", titulo: `Proposta ${alvo?.codpro ?? atividadeId}` });
+  }
+
+  function resolverPedidoObservacao(observacao: string | null) {
+    if (!pedidoObservacao) return;
+    const { atividadeId, novaColunaId, tipo } = pedidoObservacao;
+    setPedidoObservacao(null);
+    if (tipo === "mover" && novaColunaId != null) executarMovimentacao(atividadeId, novaColunaId, observacao);
+    else if (tipo === "parar") executarParada(atividadeId, observacao);
   }
 
   function abrirDetalhe(atividadeId: number, info: DetalheInfo) {
@@ -378,6 +420,14 @@ export function Atividades() {
           estruturaPercentual={detalhe.estruturaPercentual}
           podeVerCronograma={detalhe.podeVerCronograma}
           onClose={() => setDetalhe(null)}
+        />
+      )}
+
+      {pedidoObservacao && (
+        <ModalObservacaoAtividade
+          titulo={pedidoObservacao.titulo}
+          onConfirmar={(texto) => resolverPedidoObservacao(texto || null)}
+          onFechar={() => resolverPedidoObservacao(null)}
         />
       )}
     </div>

@@ -34,48 +34,63 @@ interface RatRow {
 // (codemp+numprj+codfpj+numrat) só existe depois que o Senior confirma o documento — o
 // CaxHub cria localmente sem numrat (ver POST /apontamentos/confirmar), e essa leitura
 // NUNCA cria linha com numrat nulo (as 4 colunas da chave são NOT NULL na origem).
+async function executarUpsert(query: string): Promise<void> {
+  const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat"])) as RatRow[];
+
+  for (const row of rows) {
+    const data = {
+      codemp: row.codemp,
+      codfor: row.codfor,
+      numprj: row.numprj,
+      codfpj: row.codfpj,
+      numrat: row.numrat,
+      datemi: row.datemi != null ? new Date(row.datemi) : null,
+      dataApr: row.dataapr != null ? new Date(row.dataapr) : null,
+      sitrat: row.sitrat ?? null,
+      obsrat: row.obsrat ?? null,
+      usufor: row.usufor ?? null,
+      codpro: row.codpro ?? null,
+      codcli: row.codcli ?? null,
+      depexe: row.depexe ?? null,
+      origemCaxHub: false,
+    };
+    await prisma.rat.upsert({
+      where: {
+        codemp_numprj_codfpj_numrat: {
+          codemp: row.codemp,
+          numprj: row.numprj,
+          codfpj: row.codfpj,
+          numrat: row.numrat,
+        },
+      },
+      update: data,
+      create: data,
+    });
+  }
+}
+
 export async function runRatSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   try {
-    const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat"])) as RatRow[];
-
-    for (const row of rows) {
-      const data = {
-        codemp: row.codemp,
-        codfor: row.codfor,
-        numprj: row.numprj,
-        codfpj: row.codfpj,
-        numrat: row.numrat,
-        datemi: row.datemi != null ? new Date(row.datemi) : null,
-        dataApr: row.dataapr != null ? new Date(row.dataapr) : null,
-        sitrat: row.sitrat ?? null,
-        obsrat: row.obsrat ?? null,
-        usufor: row.usufor ?? null,
-        codpro: row.codpro ?? null,
-        codcli: row.codcli ?? null,
-        depexe: row.depexe ?? null,
-        origemCaxHub: false,
-      };
-      await prisma.rat.upsert({
-        where: {
-          codemp_numprj_codfpj_numrat: {
-            codemp: row.codemp,
-            numprj: row.numprj,
-            codfpj: row.codfpj,
-            numrat: row.numrat,
-          },
-        },
-        update: data,
-        create: data,
-      });
-    }
-
+    await executarUpsert(query);
     await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "error", message } });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
+}
+
+// Sincroniza só o cabeçalho da RAT com esse numrat — usado pela ação manual "Sinc. ERP"
+// em "Meus Apontamentos" (ver POST /rats/:id/sincronizar). Diferente de runRatSync
+// (job agendado, engole erro e só loga em SyncLog), propaga erro pro chamador: é uma
+// ação síncrona disparada por clique, a rota HTTP precisa saber se falhou pra avisar o
+// usuário. `codemp`/`numrat` vêm do próprio Rat já gravado localmente (nunca input
+// direto do usuário), interpolados como number — mesmo padrão de montarQuery com datas.
+export async function runRatSyncPorNumrat(codemp: number, numrat: number): Promise<void> {
+  const query = `${BASE_QUERY} WHERE USU_CODEMP = ${codemp} AND USU_NUMRAT = ${numrat}`;
+  await executarUpsert(query);
+  await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
 }
 
 // O agendamento automático sempre roda completo (sem "desde") — o modo incremental só é

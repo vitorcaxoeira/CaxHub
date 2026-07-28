@@ -29,6 +29,10 @@ export interface ContextoMovimentacao {
   origemSessao: "movimentacao_kanban" | "manual";
   correlationId: string;
   agora: Date;
+  // Texto capturado na hora de fechar a sessão (modal "O que foi feito?" ao mover o
+  // card pra fora de "Em Andamento" ou clicar Parar) — pré-preenche a Descrição em
+  // Meus Apontamentos. Nunca preenchido na auto-pausa de POST /:id/start.
+  observacaoFechamento?: string | null;
 }
 
 export interface ResultadoMovimentacao {
@@ -44,7 +48,7 @@ export interface ResultadoMovimentacao {
 // chama decide quando/como executar (um array próprio, ou combinado com outra chamada
 // desta mesma função, ex.: pausar uma atividade pra iniciar outra na mesma transação).
 export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Promise<ResultadoMovimentacao> {
-  const { atividade, colunaAnterior, colunaNova, usuarioId, origemSessao, correlationId, agora } = ctx;
+  const { atividade, colunaAnterior, colunaNova, usuarioId, origemSessao, correlationId, agora, observacaoFechamento } = ctx;
 
   const sessaoAbertaAntes = await prisma.atividadeSessaoExecucao.findFirst({
     where: { atividadeId: atividade.id, fim: null },
@@ -76,7 +80,7 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
     }),
     prisma.atividadeSessaoExecucao.updateMany({
       where: { atividadeId: atividade.id, fim: null },
-      data: { fim: agora },
+      data: { fim: agora, ...(observacaoFechamento ? { observacao: observacaoFechamento } : {}) },
     }),
     ...(colunaNova.contaComoExecucao
       ? [
@@ -101,7 +105,11 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
             entidadeRotulo,
             eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_PARADA,
             alteracoes: null,
-            metadata: { coluna: colunaAnterior?.nome ?? null, duracaoMinutos: duracaoSessaoFechadaMin },
+            metadata: {
+              coluna: colunaAnterior?.nome ?? null,
+              duracaoMinutos: duracaoSessaoFechadaMin,
+              observacao: observacaoFechamento ?? null,
+            },
           }),
         ]
       : []),

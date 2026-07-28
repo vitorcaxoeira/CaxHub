@@ -464,6 +464,7 @@ model Consultor {
   usuariosCaxHub User[]
 
   @@id([codemp, codusu])
+  @@index([codfor])
   @@map("consultores")
 }
 
@@ -733,8 +734,15 @@ model AtividadeSessaoExecucao {
   ratItemId  Int?
   ratItem    RatItem? @relation(fields: [ratItemId], references: [id])
 
+  // Capturada ao fechar a sessão (sair de "Em Andamento" — mover o card ou clicar
+  // Parar, ver PATCH /atividades/:id/mover e POST /atividades/:id/stop), pra pré-
+  // preencher a Descrição em Meus Apontamentos. Mesmo tamanho de RatItem.desati — é o
+  // mesmo texto no fim da cadeia (confirmarSessao grava o que estiver nesse input).
+  observacao String? @db.VarChar(1000)
+
   criadoEm DateTime @default(now())
 
+  @@index([atividadeId])
   @@map("atividade_sessoes_execucao")
 }
 
@@ -811,6 +819,7 @@ model RatItem {
   sessoes      AtividadeSessaoExecucao[]
 
   @@unique([codemp, numrat, seqrat])
+  @@index([seqati])
   @@map("rat_itens")
 }
 
@@ -833,6 +842,7 @@ model AtividadeHistoricoMovimentacao {
   // movimentação em si continua existindo.
   user           User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([atividadeId])
   @@map("atividade_historico_movimentacao")
 }
 

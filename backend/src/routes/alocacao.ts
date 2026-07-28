@@ -152,6 +152,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       codpro: number;
       numprj: number;
       cliente: string;
+      despro: string | null;
       sitpro: number | null;
       propostaDepexe: number | null;
       propostaModpro: number | null;
@@ -172,6 +173,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
           codpro: item.codpro,
           numprj: proposta.numprj,
           cliente: `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}`,
+          despro: proposta.despro,
           sitpro: proposta.sitpro,
           propostaDepexe: proposta.depexe,
           propostaModpro: proposta.modpro,
@@ -249,6 +251,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       codpro: a.codpro,
       numprj: a.numprj,
       cliente: a.cliente,
+      despro: a.despro,
       sitpro: a.sitpro,
       sitproLabel: sitproLabel(a.sitpro),
       sitproTone: sitproTone(a.sitpro),

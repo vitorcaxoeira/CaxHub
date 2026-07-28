@@ -20,6 +20,7 @@ interface PropostaRow {
   codpro: number;
   numprj: number;
   cliente: string;
+  despro: string | null;
   sitpro: number | null;
   sitproLabel: string;
   sitproTone: "success" | "warning" | "destructive" | "neutral";
@@ -54,6 +55,11 @@ interface KpisResumo {
 type Situacao = "semAlocacao" | "saldoPendente" | "totalmenteAlocadas" | "compartilhadasEmAberto";
 
 const PAGE_SIZE = 20;
+
+// Sem o sufixo " h" do formatHoras — nas colunas Total/Alocado/Saldo dessa tabela ele
+// forçava quebra de linha (espaço antes do "h") em colunas já estreitas; o cabeçalho já
+// deixa claro que é hora, não precisa repetir por linha.
+const formatHorasCompacto = (horasDecimais: number) => formatHoras(horasDecimais).replace(/ h$/, "");
 
 // Ponto de entrada da área de Alocação: controle sempre por proposta (uma proposta com
 // muitos itens ficava perdida num feed único de itens misturados de propostas
@@ -380,63 +386,69 @@ export function Alocacao() {
           <table className="w-full border-collapse">
             <thead>
               <tr>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Proposta
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Cliente
                 </th>
-                <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
+                <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
+                  Descrição
+                </th>
+                <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
                   Departamento
                 </th>
-                <th className="hidden bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
+                <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
                   Modalidade
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Itens
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Total
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Alocado
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Saldo
                 </th>
-                <th className="bg-surface-2 px-5 py-3" />
+                <th className="bg-surface-2 px-2.5 py-3" />
               </tr>
             </thead>
             <tbody>
               {loading &&
                 Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i} className="border-t border-border/60">
-                    <td className="px-5 py-3.5">
+                    <td className="px-2.5 py-3.5">
                       <Skeleton className="h-4 w-24" />
                       <Skeleton className="mt-1.5 h-3 w-16" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-2.5 py-3.5">
                       <Skeleton className="h-4 w-40" />
                     </td>
-                    <td className="hidden px-5 py-3.5 md:table-cell">
+                    <td className="hidden px-2.5 py-3.5 md:table-cell">
+                      <Skeleton className="h-4 w-32" />
+                    </td>
+                    <td className="hidden px-2.5 py-3.5 md:table-cell">
                       <Skeleton className="h-4 w-20" />
                     </td>
-                    <td className="hidden px-5 py-3.5 lg:table-cell">
+                    <td className="hidden px-2.5 py-3.5 lg:table-cell">
                       <Skeleton className="h-4 w-20" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-2.5 py-3.5">
                       <Skeleton className="ml-auto h-4 w-8" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-2.5 py-3.5">
                       <Skeleton className="ml-auto h-4 w-14" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-2.5 py-3.5">
                       <Skeleton className="ml-auto h-4 w-14" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-2.5 py-3.5">
                       <Skeleton className="ml-auto h-4 w-14" />
                     </td>
-                    <td className="px-5 py-3.5" />
+                    <td className="px-2.5 py-3.5" />
                   </tr>
                 ))}
               {!loading &&
@@ -452,7 +464,7 @@ export function Alocacao() {
                         expandida ? "border-t border-primary bg-primary/5" : "border-t border-border/60 hover:bg-surface-2"
                       }`}
                     >
-                      <td className={`px-5 py-3.5 ${expandida ? "border-l border-primary" : ""}`}>
+                      <td className={`px-2.5 py-3.5 ${expandida ? "border-l border-primary" : ""}`}>
                         <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
                           <span className="text-muted">{expandida ? "▾" : "▸"}</span>
                           <button
@@ -470,34 +482,39 @@ export function Alocacao() {
                             {row.sitproLabel}
                           </span>
                         </p>
-                        <p className="mt-0.5 font-mono text-[11px] text-muted">Projeto {row.numprj}</p>
                       </td>
-                      <td className="max-w-[240px] truncate px-5 py-3.5 text-sm text-foreground" title={row.cliente}>
+                      <td className="max-w-[240px] truncate px-2.5 py-3.5 text-sm text-foreground" title={row.cliente}>
                         {row.cliente}
                       </td>
-                      <td className="hidden px-5 py-3.5 md:table-cell">
+                      <td
+                        className="hidden max-w-[260px] truncate px-2.5 py-3.5 text-sm text-muted md:table-cell"
+                        title={row.despro ?? undefined}
+                      >
+                        {row.despro ?? "—"}
+                      </td>
+                      <td className="hidden px-2.5 py-3.5 md:table-cell">
                         <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
                           {row.depexeLabel}
                         </span>
                       </td>
-                      <td className="hidden px-5 py-3.5 lg:table-cell">
+                      <td className="hidden px-2.5 py-3.5 lg:table-cell">
                         <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
                           {row.modproLabel}
                         </span>
                       </td>
-                      <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{row.totalItens}</td>
-                      <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
-                        {formatHoras(row.qtdhorTotal / 60)}
+                      <td className="px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{row.totalItens}</td>
+                      <td className="whitespace-nowrap px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
+                        {formatHorasCompacto(row.qtdhorTotal / 60)}
                       </td>
-                      <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
-                        {formatHoras(row.horasAlocadas / 60)}
+                      <td className="whitespace-nowrap px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
+                        {formatHorasCompacto(row.horasAlocadas / 60)}
                       </td>
                       <td
-                        className={`px-5 py-3.5 text-right font-mono text-sm tabular-nums ${row.saldo < 0 ? "text-destructive" : "text-foreground"}`}
+                        className={`whitespace-nowrap px-2.5 py-3.5 text-right font-mono text-sm tabular-nums ${row.saldo < 0 ? "text-destructive" : "text-foreground"}`}
                       >
-                        {formatHoras(row.saldo / 60)}
+                        {formatHorasCompacto(row.saldo / 60)}
                       </td>
-                      <td className={`px-5 py-3.5 text-right ${expandida ? "border-r border-primary" : ""}`}>
+                      <td className={`px-2.5 py-3.5 text-right ${expandida ? "border-r border-primary" : ""}`}>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -511,7 +528,7 @@ export function Alocacao() {
                     </tr>
                     {expandida && (
                       <tr className="border-t border-border/60 bg-surface-2/40">
-                        <td colSpan={9} className="border-b border-l border-r border-primary px-5 py-3">
+                        <td colSpan={10} className="border-b border-l border-r border-primary px-2.5 py-3">
                           {consultoresResumo === "carregando" && (
                             <p className="py-2 text-sm text-muted">Carregando consultores...</p>
                           )}
@@ -579,7 +596,7 @@ export function Alocacao() {
               })}
               {rows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={9} className="px-5 py-8 text-center text-sm text-muted">
+                  <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
                     Nenhuma proposta encontrada com os filtros atuais.
                   </td>
                 </tr>

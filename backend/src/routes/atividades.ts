@@ -68,7 +68,30 @@ const upload = multer({
 // Busca todas as atividades ativas, decoradas com dado de proposta/cliente/consultor/
 // coluna, já filtradas pelo que o usuário pode visualizar (usado tanto pela listagem
 // quanto pelos indicadores — ambos precisam do mesmo recorte de permissão).
-async function carregarAtividadesVisiveis(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
+//
+// Coalescência: `/`, `/indicadores` e `/opcoes-filtro` chamam essa função de forma
+// independente, quase ao mesmo tempo, a cada abertura da tela — sem isso, o cálculo
+// pesado abaixo roda 3x em paralelo pra montar exatamente o mesmo resultado. Não é um
+// cache com TTL (não fica stale): só reaproveita o resultado enquanto o cálculo já está
+// em andamento; a entrada some do Map assim que a promise resolve/rejeita, então uma
+// chamada logo depois (ex.: `carregar()` após mover um card) sempre recalcula do zero.
+const carregamentosEmAndamento = new Map<string, ReturnType<typeof carregarAtividadesVisiveisImpl>>();
+
+function carregarAtividadesVisiveis(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
+  const chave = JSON.stringify({
+    role,
+    codfor: contexto.consultor?.codfor ?? null,
+    gerenciados: contexto.departamentosGerenciados,
+    time: contexto.departamentosTime,
+  });
+  const existente = carregamentosEmAndamento.get(chave);
+  if (existente) return existente;
+  const promessa = carregarAtividadesVisiveisImpl(role, contexto).finally(() => carregamentosEmAndamento.delete(chave));
+  carregamentosEmAndamento.set(chave, promessa);
+  return promessa;
+}
+
+async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
   const [atividades, primeiraColuna] = await Promise.all([
     prisma.atividadeConsultor.findMany({
       where: { sitreg: "A" },
@@ -78,14 +101,66 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
     prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } }),
   ]);
 
-  const chavesItem = atividades.map((a) => ({ codemp: a.codemp, codpro: a.codpro, seqite: a.seqite }));
-  const itens =
-    chavesItem.length > 0
-      ? await prisma.propostaItem.findMany({
-          where: { OR: chavesItem },
+  // Chaves derivadas só de `atividades` (sem I/O) — as 7 queries abaixo não dependem
+  // umas das outras, só desse array, então disparam todas juntas num único Promise.all.
+  const codempsUnicos = [...new Set(atividades.map((a) => a.codemp))];
+  const codprosUnicos = [...new Set(atividades.map((a) => a.codpro))];
+  const seqatisValidos = [...new Set(atividades.map((a) => a.seqati).filter((s): s is bigint => s != null))];
+  const atividadeIds = atividades.map((a) => a.id);
+  const idsEstrutura = [...new Set(atividades.map((a) => a.estruturaAtividadeId).filter((id): id is number => id != null))];
+  const codforUnicos = [...new Set(atividades.map((a) => a.codfor))];
+
+  const [itens, ratItemsComHoras, sessoesNaoConfirmadas, sessoesAbertas, nosEstrutura, propostas, consultores] = await Promise.all([
+    // `IN` em vez de `OR` por chave composta: com 2000+ atividades ativas, um `OR` com uma
+    // cláusula por atividade explode o planning time do Postgres (medido: ~1,4s só de
+    // planejamento, pra ~46ms de execução). Traz um pequeno superset (todos os itens dos
+    // codpro referenciados, não só o seqite exato) — sem problema, `itemPorChave` filtra
+    // pela chave exata codemp-codpro-seqite logo abaixo.
+    codprosUnicos.length > 0
+      ? prisma.propostaItem.findMany({
+          where: { codemp: { in: codempsUnicos }, codpro: { in: codprosUnicos } },
           select: { codemp: true, codpro: true, seqite: true, depexe: true, despro: true, qtdhor: true },
         })
-      : [];
+      : Promise.resolve([]),
+    seqatisValidos.length > 0
+      ? prisma.ratItem.findMany({
+          where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
+          select: { seqati: true, horini: true, horfim: true },
+        })
+      : Promise.resolve([]),
+    atividadeIds.length > 0
+      ? prisma.atividadeSessaoExecucao.findMany({
+          where: { atividadeId: { in: atividadeIds }, confirmada: false, fim: { not: null } },
+          select: { atividadeId: true, inicio: true, fim: true },
+        })
+      : Promise.resolve([]),
+    atividadeIds.length > 0
+      ? prisma.atividadeSessaoExecucao.findMany({
+          where: { atividadeId: { in: atividadeIds }, fim: null },
+          select: { atividadeId: true, inicio: true },
+        })
+      : Promise.resolve([]),
+    idsEstrutura.length > 0
+      ? prisma.estruturaAtividade.findMany({
+          where: { id: { in: idsEstrutura } },
+          select: { id: true, nome: true, percentualConcluido: true },
+        })
+      : Promise.resolve([]),
+    // Mesmo motivo do `propostaItem` acima: `IN` composto em vez de `OR` por chave.
+    codprosUnicos.length > 0
+      ? prisma.proposta.findMany({
+          where: { codemp: { in: codempsUnicos }, codpro: { in: codprosUnicos } },
+          include: { cliente: true },
+        })
+      : Promise.resolve([]),
+    codforUnicos.length > 0
+      ? prisma.consultor.findMany({
+          where: { codfor: { in: codforUnicos } },
+          include: { usuariosCaxHub: { select: { fotoUrl: true } } },
+        })
+      : Promise.resolve([]),
+  ]);
+
   const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
   const depexePorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i.depexe]));
 
@@ -102,14 +177,6 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
   // confirmados/sincronizados pra essa atividade. Uma sessão confirmada tem `ratItemId`
   // preenchido, então sai da conta de "sessões" e passa a contar via RatItem — nunca as
   // duas ao mesmo tempo, pra não somar a mesma hora duas vezes.
-  const seqatisValidos = [...new Set(atividades.map((a) => a.seqati).filter((s): s is bigint => s != null))];
-  const ratItemsComHoras =
-    seqatisValidos.length > 0
-      ? await prisma.ratItem.findMany({
-          where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
-          select: { seqati: true, horini: true, horfim: true },
-        })
-      : [];
   const minutosRealizadosPorSeqati = new Map<bigint, number>();
   for (const item of ratItemsComHoras) {
     if (item.seqati == null || item.horini == null || item.horfim == null) continue;
@@ -117,13 +184,6 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
     minutosRealizadosPorSeqati.set(item.seqati, atual + (item.horfim - item.horini));
   }
 
-  const sessoesNaoConfirmadas =
-    atividades.length > 0
-      ? await prisma.atividadeSessaoExecucao.findMany({
-          where: { atividadeId: { in: atividades.map((a) => a.id) }, confirmada: false, fim: { not: null } },
-          select: { atividadeId: true, inicio: true, fim: true },
-        })
-      : [];
   const minutosRealizadosPorAtividadeId = new Map<number, number>();
   for (const s of sessoesNaoConfirmadas) {
     if (s.fim == null) continue;
@@ -137,13 +197,6 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
   // Sessão ABERTA (fim: null) de cada atividade — alimenta o cronômetro ao vivo no
   // Kanban/Lista (card em "Em Andamento" mostra o timer contando a partir daqui). No
   // máximo 1 por atividade (a regra de start/stop garante isso), então um Map simples.
-  const sessoesAbertas =
-    atividades.length > 0
-      ? await prisma.atividadeSessaoExecucao.findMany({
-          where: { atividadeId: { in: atividades.map((a) => a.id) }, fim: null },
-          select: { atividadeId: true, inicio: true },
-        })
-      : [];
   const sessaoAbertaPorAtividadeId = new Map(sessoesAbertas.map((s) => [s.atividadeId, s.inicio]));
 
   // Realizado por ITEM (soma de todas as atividades do item, mesmo padrão de
@@ -156,39 +209,8 @@ async function carregarAtividadesVisiveis(role: string, contexto: Awaited<Return
     realizadoPorItem.set(chave, (realizadoPorItem.get(chave) ?? 0) + horasRealizadasDaAtividade(a));
   }
 
-  const idsEstrutura = [...new Set(atividades.map((a) => a.estruturaAtividadeId).filter((id): id is number => id != null))];
-  const nosEstrutura =
-    idsEstrutura.length > 0
-      ? await prisma.estruturaAtividade.findMany({
-          where: { id: { in: idsEstrutura } },
-          select: { id: true, nome: true, percentualConcluido: true },
-        })
-      : [];
   const nosEstruturaPorId = new Map(nosEstrutura.map((n) => [n.id, n]));
-
-  const chavesPropostaUnicas = [...new Set(atividades.map((a) => `${a.codemp}-${a.codpro}`))];
-  const propostas =
-    chavesPropostaUnicas.length > 0
-      ? await prisma.proposta.findMany({
-          where: {
-            OR: chavesPropostaUnicas.map((chave) => {
-              const [codemp, codpro] = chave.split("-").map(Number);
-              return { codemp, codpro };
-            }),
-          },
-          include: { cliente: true },
-        })
-      : [];
   const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
-
-  const codforUnicos = [...new Set(atividades.map((a) => a.codfor))];
-  const consultores =
-    codforUnicos.length > 0
-      ? await prisma.consultor.findMany({
-          where: { codfor: { in: codforUnicos } },
-          include: { usuariosCaxHub: { select: { fotoUrl: true } } },
-        })
-      : [];
   const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
 
   return atividades
@@ -523,6 +545,8 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     const colunaAnterior = atividade.colunaId != null ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } }) : null;
     const correlationId = req.correlationId!;
 
+    const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null;
+
     const { operacoes } = await montarOperacoesMovimentacao({
       atividade,
       colunaAnterior,
@@ -531,6 +555,7 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       origemSessao: "movimentacao_kanban",
       correlationId,
       agora,
+      observacaoFechamento: observacao,
     });
     await prisma.$transaction(operacoes);
 
@@ -727,6 +752,7 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
 
     const agora = new Date();
     const correlationId = req.correlationId!;
+    const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null;
     const { operacoes, duracaoSessaoFechadaMin } = await montarOperacoesMovimentacao({
       atividade,
       colunaAnterior: colunaAtual,
@@ -735,6 +761,7 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
       origemSessao: "manual",
       correlationId,
       agora,
+      observacaoFechamento: observacao,
     });
     await prisma.$transaction(operacoes);
 

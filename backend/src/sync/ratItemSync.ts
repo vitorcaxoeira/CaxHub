@@ -38,51 +38,64 @@ interface RatItemRow {
 // codemp). `codpro` (presente nos dois lados) desempata em todos os casos encontrados,
 // por isso o casamento usa (codemp, numrat, codpro) em vez da chave natural "oficial"
 // (que exigiria numprj/codfpj, não disponíveis nesta tabela).
+async function executarUpsert(query: string): Promise<void> {
+  const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrat"])) as RatItemRow[];
+
+  for (const row of rows) {
+    const rat = await prisma.rat.findFirst({
+      where: { codemp: row.codemp, numrat: row.numrat, codpro: row.codpro ?? null },
+    });
+    if (!rat) {
+      console.warn(`[${JOB_NAME}] RatItem órfão (codemp=${row.codemp}, numrat=${row.numrat}, codpro=${row.codpro}) — Rat correspondente ainda não sincronizado, linha ignorada`);
+      continue;
+    }
+
+    const data = {
+      ratId: rat.id,
+      codemp: row.codemp,
+      numprj: row.numprj ?? null,
+      numrat: row.numrat,
+      seqrat: row.seqrat,
+      codser: row.codser ?? null,
+      datati: row.datati != null ? new Date(row.datati) : null,
+      horini: row.horini ?? null,
+      horfim: row.horfim ?? null,
+      desati: row.desati ?? null,
+      codpro: row.codpro ?? null,
+      seqite: row.seqite ?? null,
+      codfas: row.codfas ?? null,
+      datreg: row.datreg != null ? new Date(row.datreg) : null,
+      seqati: row.seqati != null ? BigInt(row.seqati) : null,
+      origemCaxHub: false,
+    };
+    await prisma.ratItem.upsert({
+      where: { codemp_numrat_seqrat: { codemp: row.codemp, numrat: row.numrat, seqrat: row.seqrat } },
+      update: data,
+      create: data,
+    });
+  }
+}
+
 export async function runRatItemSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   try {
-    const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrat"])) as RatItemRow[];
-
-    for (const row of rows) {
-      const rat = await prisma.rat.findFirst({
-        where: { codemp: row.codemp, numrat: row.numrat, codpro: row.codpro ?? null },
-      });
-      if (!rat) {
-        console.warn(`[${JOB_NAME}] RatItem órfão (codemp=${row.codemp}, numrat=${row.numrat}, codpro=${row.codpro}) — Rat correspondente ainda não sincronizado, linha ignorada`);
-        continue;
-      }
-
-      const data = {
-        ratId: rat.id,
-        codemp: row.codemp,
-        numprj: row.numprj ?? null,
-        numrat: row.numrat,
-        seqrat: row.seqrat,
-        codser: row.codser ?? null,
-        datati: row.datati != null ? new Date(row.datati) : null,
-        horini: row.horini ?? null,
-        horfim: row.horfim ?? null,
-        desati: row.desati ?? null,
-        codpro: row.codpro ?? null,
-        seqite: row.seqite ?? null,
-        codfas: row.codfas ?? null,
-        datreg: row.datreg != null ? new Date(row.datreg) : null,
-        seqati: row.seqati != null ? BigInt(row.seqati) : null,
-        origemCaxHub: false,
-      };
-      await prisma.ratItem.upsert({
-        where: { codemp_numrat_seqrat: { codemp: row.codemp, numrat: row.numrat, seqrat: row.seqrat } },
-        update: data,
-        create: data,
-      });
-    }
-
+    await executarUpsert(query);
     await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "error", message } });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
+}
+
+// Sincroniza só os itens da RAT com esse numrat — usado pela ação manual "Sinc. ERP" em
+// "Meus Apontamentos" (ver POST /rats/:id/sincronizar), sempre depois de
+// runRatSyncPorNumrat (RatItem.ratId depende do Rat já existir). Propaga erro pro
+// chamador, diferente de runRatItemSync — ver comentário equivalente em ratSync.ts.
+export async function runRatItemSyncPorNumrat(codemp: number, numrat: number): Promise<void> {
+  const query = `${BASE_QUERY} WHERE USU_CODEMP = ${codemp} AND USU_NUMRAT = ${numrat}`;
+  await executarUpsert(query);
+  await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
 }
 
 // O agendamento automático sempre roda completo (sem "desde") — o modo incremental só é
