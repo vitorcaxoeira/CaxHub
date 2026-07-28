@@ -27,6 +27,7 @@ import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
+import { ListarPedidos } from "./pages/mercado/ListarPedidos";
 
 export default function App() {
   return (
@@ -67,6 +68,7 @@ export default function App() {
                 <Route path="/admin/usuarios" element={<Usuarios />} />
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
+                <Route path="/mercado/pedidos" element={<ListarPedidos />} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

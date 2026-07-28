@@ -18,6 +18,7 @@ import { JOB_NAME as MOEDA_JOB, CRON_EXPR as MOEDA_CRON, CAMPO_DATA as MOEDA_DAT
 import { JOB_NAME as MOVIMENTO_CONTA_JOB, CRON_EXPR as MOVIMENTO_CONTA_CRON, CAMPO_DATA as MOVIMENTO_CONTA_DATA, runMovimentoContaSync } from "./movimentoContaSync";
 import { JOB_NAME as MOVIMENTO_TITULO_JOB, CRON_EXPR as MOVIMENTO_TITULO_CRON, CAMPO_DATA as MOVIMENTO_TITULO_DATA, runMovimentoTituloReceberSync } from "./movimentoTituloReceberSync";
 import { JOB_NAME as NATUREZA_FINANCEIRA_JOB, CRON_EXPR as NATUREZA_FINANCEIRA_CRON, CAMPO_DATA as NATUREZA_FINANCEIRA_DATA, runNaturezaFinanceiraSync } from "./naturezaFinanceiraSync";
+import { JOB_NAME as PEDIDO_JOB, CRON_EXPR as PEDIDO_CRON, CAMPO_DATA as PEDIDO_DATA, runPedidoSync } from "./pedidoSync";
 import { JOB_NAME as PORTADOR_JOB, CRON_EXPR as PORTADOR_CRON, CAMPO_DATA as PORTADOR_DATA, runPortadorSync } from "./portadorSync";
 import { JOB_NAME as PROPOSTA_ITEM_JOB, CRON_EXPR as PROPOSTA_ITEM_CRON, CAMPO_DATA as PROPOSTA_ITEM_DATA, runPropostaItemSync } from "./propostaItemSync";
 import { JOB_NAME as PROPOSTA_JOB, CRON_EXPR as PROPOSTA_CRON, CAMPO_DATA as PROPOSTA_DATA, runPropostaSync } from "./propostaSync";
@@ -66,4 +67,6 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   { jobName: RAT_JOB, displayName: "RATs (Cabeçalho)", cronExpr: RAT_CRON, suportaAlterados: RAT_DATA != null, run: runRatSync, contarRegistros: () => prisma.rat.count() },
   // RatItem roda depois de Rat: RatItem.ratId é resolvido casando (codemp, numrat, codpro) contra Rat já sincronizado.
   { jobName: RAT_ITEM_JOB, displayName: "Itens de RAT (Apontamentos)", cronExpr: RAT_ITEM_CRON, suportaAlterados: RAT_ITEM_DATA != null, run: runRatItemSync, contarRegistros: () => prisma.ratItem.count() },
+  // Pedido.numrat é só um valor espelhado (campo customizado do Senior), sem resolução de FK no sync — não depende de nenhum job acima.
+  { jobName: PEDIDO_JOB, displayName: "Pedidos", cronExpr: PEDIDO_CRON, suportaAlterados: PEDIDO_DATA != null, run: runPedidoSync, contarRegistros: () => prisma.pedido.count() },
 ];

@@ -990,3 +990,36 @@ model AuditEvento {
   @@index([eventoTipo, ocorridoEm(sort: Desc)], map: "idx_audit_evento_tipo")
   @@map("audit_evento")
 }
+
+// Espelho local da tabela E120PED do Senior ERP (Vendas - Pedidos - Dados Gerais).
+model Pedido {
+  codemp Int
+  codfil Int
+  numped Int
+  /// Domínio "LTipPed": 1=Normal, 2=Automático, 3=Rascunho, 4=Orçamento, 5=Previsão, 6=Pronta Entrega, 7=Aproveitamento Pedido Pronta Entrega, 8=Assistência Técnica, 9=Reposição
+  tipped Int?
+  /// Domínio "LPrcPed": 1=Digitado - Normal, 2=Via Internet, 3=Via Importação, 4=Via Automação, 5=Digitado - Distribuição, 6=Via Processos Automáticos - Ordem de Compra, 7=Via Processos Automáticos - Gerais, 8=Via Contrato de Licitação, 9=Via Integração Varejo (Lojas), 10=Via devolução com quantidade excedente
+  prcped Int?
+  tnspro String? @db.VarChar(5)
+  tnsser String? @db.VarChar(5)
+  datemi DateTime @db.Date
+  // Minutos desde meia-noite (dicionário do Senior reporta como "hora", mas o dado real
+  // que volta pelo SOAP é inteiro — mesmo formato de RatItem.horini/horfim). Pra
+  // formatar: Math.trunc(v/60) + ":" + v%60.
+  horemi Int?
+  datprv DateTime? @db.Date
+  obsped String? @db.VarChar(999)
+  codcli Int
+  pedcli String? @db.VarChar(20)
+  codcpg String @db.VarChar(6)
+  codfpg Int?
+  /// Domínio "LSitPed": 1=Aberto Total, 2=Aberto Parcial, 3=Suspenso, 4=Liquidado, 5=Cancelado, 6=Aguardando Integração WMS, 7=Em Transmissão, 8=Preparação Análise ou NF, 9=Não Fechado
+  sitped Int
+  // Vínculo com a RAT gerada a partir deste pedido — campo customizado no Senior
+  // (USU_NUMRAT). Casamento por valor em código, não FK rígida (mesmo padrão de
+  // Rat.codfor/RatItem.seqati) — nenhuma feature usa esse vínculo ainda.
+  numrat BigInt?
+  @@id([codemp, codfil, numped])
+
+  @@map("pedidos")
+}
