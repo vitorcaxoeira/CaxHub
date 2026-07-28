@@ -28,6 +28,7 @@ import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
 import { ListarPedidos } from "./pages/mercado/ListarPedidos";
+import { PedidoVisualizacao } from "./pages/mercado/PedidoVisualizacao";
 
 export default function App() {
   return (
@@ -69,6 +70,7 @@ export default function App() {
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
                 <Route path="/mercado/pedidos" element={<ListarPedidos />} />
+                <Route path="/mercado/pedido/:codemp/:codfil/:numped" element={<PedidoVisualizacao />} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

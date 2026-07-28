@@ -1009,6 +1009,11 @@ model Pedido {
   horemi Int?
   datprv DateTime? @db.Date
   obsped String? @db.VarChar(999)
+  // Valor líquido do pedido — primeiro campo monetário real disponível entre
+  // Pedido/Rat/Proposta (nenhum dos três tinha até agora).
+  vlrliq Decimal? @db.Decimal(15, 2)
+  // Observação do motivo da situação do pedido (contextual a sitped).
+  obsmot String? @db.VarChar(250)
   codcli Int
   pedcli String? @db.VarChar(20)
   codcpg String @db.VarChar(6)
@@ -1022,4 +1027,32 @@ model Pedido {
   @@id([codemp, codfil, numped])
 
   @@map("pedidos")
+}
+
+// Espelho local da tabela E066FPG do Senior ERP (Tabelas - Formas de Pagamento ).
+model FormaPagamento {
+  codemp Int
+  codfpg Int
+  desfpg String @db.VarChar(30)
+  abrfpg String @db.VarChar(10)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitfpg String @db.VarChar(1)
+  @@id([codemp, codfpg])
+
+  @@map("formas_pagamento")
+}
+
+// Espelho local da tabela E028CPG do Senior ERP (Tabelas - Condição de Pagamento).
+model CondicaoPagamento {
+  codemp Int
+  codcpg String @db.VarChar(6)
+  descpg String @db.VarChar(50)
+  abrcpg String @db.VarChar(10)
+  /// Domínio "LAplCpg": V=Vendas, C=Compras, A=Ambos
+  aplcpg String @db.VarChar(1)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitcpg String @db.VarChar(1)
+  @@id([codemp, codcpg])
+
+  @@map("condicoes_pagamento")
 }

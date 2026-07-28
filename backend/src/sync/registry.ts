@@ -8,12 +8,14 @@ import { JOB_NAME as ATIVIDADE_CONSULTOR_JOB, CRON_EXPR as ATIVIDADE_CONSULTOR_C
 import { JOB_NAME as CENTRO_CUSTO_JOB, CRON_EXPR as CENTRO_CUSTO_CRON, CAMPO_DATA as CENTRO_CUSTO_DATA, runCentroCustoSync } from "./centroCustoSync";
 import { JOB_NAME as CLIENTE_JOB, CRON_EXPR as CLIENTE_CRON, CAMPO_DATA as CLIENTE_DATA, runClienteSync } from "./clienteSync";
 import { JOB_NAME as CONSULTOR_JOB, CRON_EXPR as CONSULTOR_CRON, CAMPO_DATA as CONSULTOR_DATA, runConsultorSync } from "./consultorSync";
+import { JOB_NAME as CONDICAO_PAGAMENTO_JOB, CRON_EXPR as CONDICAO_PAGAMENTO_CRON, CAMPO_DATA as CONDICAO_PAGAMENTO_DATA, runCondicaoPagamentoSync } from "./condicaoPagamentoSync";
 import { JOB_NAME as CONTA_CORRENTE_JOB, CRON_EXPR as CONTA_CORRENTE_CRON, CAMPO_DATA as CONTA_CORRENTE_DATA, runContaCorrenteSync } from "./contaCorrenteSync";
 import { JOB_NAME as DEPARTAMENTO_GESTOR_JOB, CRON_EXPR as DEPARTAMENTO_GESTOR_CRON, CAMPO_DATA as DEPARTAMENTO_GESTOR_DATA, runDepartamentoGestorSync } from "./departamentoGestorSync";
 import { JOB_NAME as DEPARTAMENTO_TIME_JOB, CRON_EXPR as DEPARTAMENTO_TIME_CRON, CAMPO_DATA as DEPARTAMENTO_TIME_DATA, runDepartamentoTimeSync } from "./departamentoTimeSync";
 import { JOB_NAME as EMPRESA_JOB, CRON_EXPR as EMPRESA_CRON, CAMPO_DATA as EMPRESA_DATA, runEmpresaSync } from "./empresaSync";
 import { JOB_NAME as FASE_PROPOSTA_JOB, CRON_EXPR as FASE_PROPOSTA_CRON, CAMPO_DATA as FASE_PROPOSTA_DATA, runFasePropostaSync } from "./fasePropostaSync";
 import { JOB_NAME as FILIAL_JOB, CRON_EXPR as FILIAL_CRON, CAMPO_DATA as FILIAL_DATA, runFilialSync } from "./filialSync";
+import { JOB_NAME as FORMA_PAGAMENTO_JOB, CRON_EXPR as FORMA_PAGAMENTO_CRON, CAMPO_DATA as FORMA_PAGAMENTO_DATA, runFormaPagamentoSync } from "./formaPagamentoSync";
 import { JOB_NAME as MOEDA_JOB, CRON_EXPR as MOEDA_CRON, CAMPO_DATA as MOEDA_DATA, runMoedaSync } from "./moedaSync";
 import { JOB_NAME as MOVIMENTO_CONTA_JOB, CRON_EXPR as MOVIMENTO_CONTA_CRON, CAMPO_DATA as MOVIMENTO_CONTA_DATA, runMovimentoContaSync } from "./movimentoContaSync";
 import { JOB_NAME as MOVIMENTO_TITULO_JOB, CRON_EXPR as MOVIMENTO_TITULO_CRON, CAMPO_DATA as MOVIMENTO_TITULO_DATA, runMovimentoTituloReceberSync } from "./movimentoTituloReceberSync";
@@ -69,4 +71,6 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   { jobName: RAT_ITEM_JOB, displayName: "Itens de RAT (Apontamentos)", cronExpr: RAT_ITEM_CRON, suportaAlterados: RAT_ITEM_DATA != null, run: runRatItemSync, contarRegistros: () => prisma.ratItem.count() },
   // Pedido.numrat é só um valor espelhado (campo customizado do Senior), sem resolução de FK no sync — não depende de nenhum job acima.
   { jobName: PEDIDO_JOB, displayName: "Pedidos", cronExpr: PEDIDO_CRON, suportaAlterados: PEDIDO_DATA != null, run: runPedidoSync, contarRegistros: () => prisma.pedido.count() },
+  { jobName: FORMA_PAGAMENTO_JOB, displayName: "Formas de Pagamento", cronExpr: FORMA_PAGAMENTO_CRON, suportaAlterados: FORMA_PAGAMENTO_DATA != null, run: runFormaPagamentoSync, contarRegistros: () => prisma.formaPagamento.count() },
+  { jobName: CONDICAO_PAGAMENTO_JOB, displayName: "Condições de Pagamento", cronExpr: CONDICAO_PAGAMENTO_CRON, suportaAlterados: CONDICAO_PAGAMENTO_DATA != null, run: runCondicaoPagamentoSync, contarRegistros: () => prisma.condicaoPagamento.count() },
 ];
