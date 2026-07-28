@@ -52,6 +52,15 @@ export function modproLabel(modpro: number | null): string {
   return MODPRO_LABELS[modpro] ?? `Modalidade ${modpro}`;
 }
 
+// Sem semântica de "bom/ruim" aqui (modalidade não é um estado que evolui, é só uma
+// categoria) — tons escolhidos só pra distinguir visualmente as 3 opções no badge,
+// mesmo espírito de priproTone (frontend/src/components/ui/badges.ts).
+export function modproTone(modpro: number | null): "success" | "warning" | "destructive" | "neutral" {
+  if (modpro === 1) return "warning"; // Levantamento
+  if (modpro === 2) return "success"; // DRM
+  return "neutral"; // Serviço (0) e valores desconhecidos
+}
+
 // Domínio "USU_TipProd" do Senior (produto/linha da proposta).
 export const SISPRO_LABELS: Record<number, string> = {
   1: "Gestão Empresarial (ERP)",

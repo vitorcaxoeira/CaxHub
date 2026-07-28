@@ -24,6 +24,7 @@ import { Auditoria } from "./pages/auditoria/Auditoria";
 import { AlocacaoPropostaDetalhe } from "./pages/projetos/AlocacaoPropostaDetalhe";
 import { CronogramaProposta } from "./pages/projetos/CronogramaProposta";
 import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
+import { RatVisualizacao } from "./pages/projetos/RatVisualizacao";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
@@ -55,6 +56,7 @@ export default function App() {
               <Route path="/projetos/alocacao/:codemp/:codpro" element={<AlocacaoPropostaDetalhe />} />
               <Route path="/projetos/alocacao/:codemp/:codpro/cronograma" element={<CronogramaProposta />} />
               <Route path="/projetos/proposta/:codemp/:codpro" element={<PropostaVisualizacao />} />
+              <Route path="/projetos/rat/:id" element={<RatVisualizacao />} />
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
               </Route>

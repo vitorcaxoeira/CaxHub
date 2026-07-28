@@ -3,7 +3,7 @@ import { Pedido, Cliente } from "@prisma/client";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { sitpedLabel, sitpedTone, SITPED_LABELS } from "../domain/pedidoDominio";
-import { forfatLabel, sitproLabel, sitproTone } from "../domain/propostasDominio";
+import { forfatLabel, modproLabel, modproTone, sitproLabel, sitproTone } from "../domain/propostasDominio";
 
 // Tela "Mercado > Listar Pedidos" — espelho de E120PED (ver backend/src/sync/pedidoSync.ts).
 // Só admin acessa (menu "Mercado" restrito, ver frontend/src/layout/Sidebar.tsx).
@@ -79,27 +79,44 @@ interface FiltrosPedidos {
   buscaCliente: string;
   buscaNumped: string;
   buscaNumrat: string;
+  buscaCodpro: string;
   sitpedFiltro: number[];
+  modproFiltro: number[];
 }
 
-// Lê os filtros compartilhados pelas 3 rotas de listagem (Lista, Por Cliente e os itens
-// de um cliente expandido) — cada rota decide quais desses 4 aplicar.
-function lerFiltros(req: import("express").Request): FiltrosPedidos {
-  const sitpedRaw = typeof req.query.sitped === "string" ? req.query.sitped : "";
-  // Number("") é 0 (não NaN) — sem essa guarda, ausência do filtro virava sitped=[0] e
-  // escondia todos os pedidos.
-  const sitpedFiltro = sitpedRaw
-    ? sitpedRaw
+// Number("") é 0 (não NaN) — sem essa guarda, ausência do filtro viraria [0] e
+// esconderia todos os pedidos. Mesmo padrão pra sitped e modpro.
+function lerFiltroMultiSelect(valor: unknown): number[] {
+  const raw = typeof valor === "string" ? valor : "";
+  return raw
+    ? raw
         .split(",")
         .map((v) => Number(v))
         .filter((v) => Number.isFinite(v))
     : [];
+}
+
+// Lê os filtros compartilhados pelas 3 rotas de listagem (Lista, Por Cliente e os itens
+// de um cliente expandido) — cada rota decide quais desses aplicar.
+function lerFiltros(req: import("express").Request): FiltrosPedidos {
   return {
     buscaCliente: typeof req.query.cliente === "string" ? req.query.cliente.trim().toLowerCase() : "",
     buscaNumped: typeof req.query.numped === "string" ? req.query.numped.trim() : "",
     buscaNumrat: typeof req.query.numrat === "string" ? req.query.numrat.trim() : "",
-    sitpedFiltro,
+    buscaCodpro: typeof req.query.codpro === "string" ? req.query.codpro.trim() : "",
+    sitpedFiltro: lerFiltroMultiSelect(req.query.sitped),
+    modproFiltro: lerFiltroMultiSelect(req.query.modpro),
   };
+}
+
+// Suporta lista separada por vírgula num campo de busca (ex.: "12124,12123,12121") —
+// cada termo continua comparado por substring, igual busca de valor único, só que
+// "bate com QUALQUER um dos termos" em vez de exigir um valor exato.
+function termosBusca(valor: string): string[] {
+  return valor
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
 }
 
 function aplicarFiltros(
@@ -117,15 +134,57 @@ function aplicarFiltros(
     });
   }
   if (filtros.buscaNumped) {
-    resultado = resultado.filter((p) => String(p.numped).includes(filtros.buscaNumped));
+    const termos = termosBusca(filtros.buscaNumped);
+    resultado = resultado.filter((p) => termos.some((t) => String(p.numped).includes(t)));
   }
   if (filtros.buscaNumrat) {
-    resultado = resultado.filter((p) => p.numrat != null && p.numrat.toString().includes(filtros.buscaNumrat));
+    const termos = termosBusca(filtros.buscaNumrat);
+    resultado = resultado.filter((p) => p.numrat != null && termos.some((t) => p.numrat!.toString().includes(t)));
   }
   if (filtros.sitpedFiltro.length > 0) {
     resultado = resultado.filter((p) => filtros.sitpedFiltro.includes(p.sitped));
   }
   return resultado;
+}
+
+// Filtro por nº da proposta — só dá pra aplicar depois de resolver a RAT de cada
+// pedido (Pedido não tem a proposta direto, só via RAT), diferente dos filtros de
+// aplicarFiltros que operam em cima de colunas do próprio Pedido. Por isso fica de
+// fora de aplicarFiltros e é chamado depois de resolverRatEProposta em cada rota.
+// Bate tanto com a proposta principal (rat.codpro) quanto com a relacionada
+// (Proposta.codlev2, mostrada na coluna Proposta como "8589 → 8557") — codlev2 === 0
+// não é uma referência real, mesma regra já aplicada na renderização da coluna.
+function filtrarPorProposta(
+  pedidos: Pedido[],
+  buscaCodpro: string,
+  ratPorChave: Awaited<ReturnType<typeof resolverRatEProposta>>["ratPorChave"],
+  propostaPorChave: Awaited<ReturnType<typeof resolverRatEProposta>>["propostaPorChave"]
+): Pedido[] {
+  if (!buscaCodpro) return pedidos;
+  const termos = termosBusca(buscaCodpro);
+  return pedidos.filter((p) => {
+    const rat = p.numrat != null ? ratPorChave.get(`${p.codemp}-${Number(p.numrat)}`) : undefined;
+    if (rat?.codpro != null && termos.some((t) => String(rat.codpro).includes(t))) return true;
+    const proposta = rat?.codpro != null ? propostaPorChave.get(`${rat.codemp}-${rat.codpro}`) : undefined;
+    return proposta?.codlev2 != null && proposta.codlev2 !== 0 && termos.some((t) => String(proposta.codlev2).includes(t));
+  });
+}
+
+// Filtro por modalidade da proposta (Proposta.modpro) — mesma indireção de
+// filtrarPorProposta (Pedido -> RAT -> Proposta), por isso também fica de fora de
+// aplicarFiltros e é chamado depois de resolverRatEProposta em cada rota.
+function filtrarPorModalidade(
+  pedidos: Pedido[],
+  modproFiltro: number[],
+  ratPorChave: Awaited<ReturnType<typeof resolverRatEProposta>>["ratPorChave"],
+  propostaPorChave: Awaited<ReturnType<typeof resolverRatEProposta>>["propostaPorChave"]
+): Pedido[] {
+  if (modproFiltro.length === 0) return pedidos;
+  return pedidos.filter((p) => {
+    const rat = p.numrat != null ? ratPorChave.get(`${p.codemp}-${Number(p.numrat)}`) : undefined;
+    const proposta = rat?.codpro != null ? propostaPorChave.get(`${rat.codemp}-${rat.codpro}`) : undefined;
+    return proposta?.modpro != null && modproFiltro.includes(proposta.modpro);
+  });
 }
 
 interface Lookups {
@@ -162,9 +221,15 @@ function mapearPedido(p: Pedido, lookups: Lookups) {
     sitpedLabel: sitpedLabel(p.sitped),
     sitpedTone: sitpedTone(p.sitped),
     numrat: p.numrat != null ? p.numrat.toString() : null,
+    // Id local da RAT vinculada (PK de Rat, não o numrat do Senior) — usado pra linkar
+    // pra tela de visualização da RAT (frontend/src/pages/projetos/RatVisualizacao.tsx).
+    ratId: rat?.id ?? null,
     // Nome do consultor executor da RAT vinculada — só existe quando há RAT (rat != null).
     consultorNome: rat ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`) : null,
     propostaCodpro: rat?.codpro ?? null,
+    propostaCodlev2: proposta?.codlev2 ?? null,
+    propostaModproLabel: proposta ? modproLabel(proposta.modpro) : null,
+    propostaModproTone: proposta ? modproTone(proposta.modpro) : null,
     propostaSitproLabel: proposta ? sitproLabel(proposta.sitpro) : null,
     propostaSitproTone: proposta ? sitproTone(proposta.sitpro) : null,
     faturamentoLabel: proposta ? forfatLabel(proposta.forfat) : null,
@@ -174,9 +239,9 @@ function mapearPedido(p: Pedido, lookups: Lookups) {
 }
 
 // GET / — lista de pedidos, com filtro de cliente (busca livre), número do pedido,
-// número da RAT e situação (multi-select). Mesmo padrão de GET /rats: carrega tudo via
-// Prisma, filtra em memória, pagina por último — não há regra de visibilidade por
-// usuário aqui (admin vê tudo).
+// número da RAT, número da proposta e situação (multi-select). Mesmo padrão de
+// GET /rats: carrega tudo via Prisma, filtra em memória, pagina por último — não há
+// regra de visibilidade por usuário aqui (admin vê tudo).
 pedidosRouter.get("/", async (req, res) => {
   try {
     let pedidos = await prisma.pedido.findMany({ orderBy: [{ datemi: "desc" }, { numped: "desc" }] });
@@ -188,15 +253,21 @@ pedidosRouter.get("/", async (req, res) => {
     const filtros = lerFiltros(req);
     pedidos = aplicarFiltros(pedidos, filtros, clientePorCodcli);
 
+    // RAT/Proposta/Consultor resolvidos ANTES da paginação (não só na página atual) —
+    // precisa disso pra saber se um pedido bate com o filtro de Nro. Proposta antes de
+    // paginar. Roda sobre o conjunto já reduzido pelos filtros "baratos" acima
+    // (cliente/pedido/RAT/situação), não a base inteira sem filtro nenhum.
+    const { ratPorChave, propostaPorChave, consultorPorCodfor } = await resolverRatEProposta(pedidos);
+    pedidos = filtrarPorProposta(pedidos, filtros.buscaCodpro, ratPorChave, propostaPorChave);
+    pedidos = filtrarPorModalidade(pedidos, filtros.modproFiltro, ratPorChave, propostaPorChave);
+
     const total = pedidos.length;
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
     const inicioPagina = (page - 1) * pageSize;
     pedidos = pedidos.slice(inicioPagina, inicioPagina + pageSize);
 
-    // Lookups extras (RAT/Proposta/Consultor, Forma/Condição de Pagamento) só pra página
-    // atual, mesmo padrão de rats.ts.
-    const { ratPorChave, propostaPorChave, consultorPorCodfor } = await resolverRatEProposta(pedidos);
+    // Forma/Condição de Pagamento só pra página atual, mesmo padrão de rats.ts.
     const { formaPagamentoPorChave, condicaoPagamentoPorChave } = await resolverFormaECondicaoPagamento(pedidos);
     const lookups: Lookups = {
       clientePorCodcli,
@@ -227,7 +298,13 @@ pedidosRouter.get("/por-cliente", async (req, res) => {
     const clientePorCodcli = new Map(clientes.map((c) => [c.codcli, c]));
 
     const filtros = lerFiltros(req);
-    const pedidosFiltrados = aplicarFiltros(pedidosTodos, filtros, clientePorCodcli);
+    let pedidosFiltrados = aplicarFiltros(pedidosTodos, filtros, clientePorCodcli);
+
+    // Mesmo motivo de GET /: precisa da RAT/Proposta resolvida pra filtrar por Nro.
+    // Proposta e Modalidade.
+    const { ratPorChave, propostaPorChave } = await resolverRatEProposta(pedidosFiltrados);
+    pedidosFiltrados = filtrarPorProposta(pedidosFiltrados, filtros.buscaCodpro, ratPorChave, propostaPorChave);
+    pedidosFiltrados = filtrarPorModalidade(pedidosFiltrados, filtros.modproFiltro, ratPorChave, propostaPorChave);
 
     const porClienteMap = new Map<number, { quantidade: number; valorLiquido: number }>();
     for (const p of pedidosFiltrados) {
@@ -275,6 +352,9 @@ pedidosRouter.get("/por-cliente/:codcli/itens", async (req, res) => {
     pedidos = aplicarFiltros(pedidos, filtros, clientePorCodcli, { comCliente: false });
 
     const { ratPorChave, propostaPorChave, consultorPorCodfor } = await resolverRatEProposta(pedidos);
+    pedidos = filtrarPorProposta(pedidos, filtros.buscaCodpro, ratPorChave, propostaPorChave);
+    pedidos = filtrarPorModalidade(pedidos, filtros.modproFiltro, ratPorChave, propostaPorChave);
+
     const { formaPagamentoPorChave, condicaoPagamentoPorChave } = await resolverFormaECondicaoPagamento(pedidos);
     const lookups: Lookups = {
       clientePorCodcli,

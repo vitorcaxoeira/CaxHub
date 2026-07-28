@@ -25,10 +25,16 @@ interface PedidoRow {
   sitpedLabel: string;
   sitpedTone: Tone;
   numrat: string | null;
+  // Id local da RAT vinculada (PK de Rat) — usado pra linkar pra RatVisualizacao, não
+  // confundir com numrat acima (o número dela lá no Senior).
+  ratId: number | null;
   // Resolvidos a partir da RAT vinculada (Pedido.numrat -> Rat -> Proposta) — nulos
   // quando o pedido não tem RAT vinculada ou a RAT ainda não tem proposta associada.
   consultorNome: string | null;
   propostaCodpro: number | null;
+  propostaCodlev2: number | null;
+  propostaModproLabel: string | null;
+  propostaModproTone: Tone | null;
   propostaSitproLabel: string | null;
   propostaSitproTone: Tone | null;
   faturamentoLabel: string | null;
@@ -53,6 +59,14 @@ const SITPED_OPCOES: MultiSelectOption<number>[] = [
   { value: 7, label: "Em Transmissão" },
   { value: 8, label: "Preparação Análise ou NF" },
   { value: 9, label: "Não Fechado" },
+];
+
+// Domínio "USU_ModPro" do Senior (modalidade da proposta) — mesmos valores de
+// backend/src/domain/propostasDominio.ts (MODPRO_LABELS).
+const MODPRO_OPCOES: MultiSelectOption<number>[] = [
+  { value: 0, label: "Serviço" },
+  { value: 1, label: "Levantamento" },
+  { value: 2, label: "DRM" },
 ];
 
 const PAGE_SIZE = 30;
@@ -97,7 +111,6 @@ function LinhaPedido({
           {p.cliente}
         </td>
       )}
-      <td className={`${TD_CLASS} font-mono text-sm text-muted`}>{dateFormatter.format(new Date(p.datemi))}</td>
       <td className={TD_CLASS}>
         <span
           className={`inline-block max-w-[160px] truncate whitespace-nowrap align-bottom rounded-full px-2 py-0.5 text-[11.5px] font-medium ${toneBadge[p.sitpedTone]}`}
@@ -106,7 +119,18 @@ function LinhaPedido({
           {p.sitpedLabel}
         </span>
       </td>
-      <td className={`hidden ${TD_CLASS} font-mono text-sm text-muted lg:table-cell`}>{p.numrat ?? "—"}</td>
+      <td className={`hidden ${TD_CLASS} lg:table-cell`}>
+        {p.ratId != null ? (
+          <button
+            onClick={() => navigate(`/projetos/rat/${p.ratId}`)}
+            className="font-mono text-sm text-primary hover:underline"
+          >
+            {p.numrat}
+          </button>
+        ) : (
+          <span className="font-mono text-sm text-muted">{p.numrat ?? "—"}</span>
+        )}
+      </td>
       <td className={`hidden ${TD_CLASS} lg:table-cell`}>
         <span className="block max-w-[140px] truncate text-sm text-muted" title={p.consultorNome ?? undefined}>
           {p.consultorNome ?? "—"}
@@ -114,12 +138,37 @@ function LinhaPedido({
       </td>
       <td className={`hidden ${TD_CLASS} lg:table-cell`}>
         {p.propostaCodpro != null ? (
-          <button
-            onClick={() => navigate(`/projetos/proposta/${p.codemp}/${p.propostaCodpro}`)}
-            className="font-mono text-sm text-primary hover:underline"
+          <span className="inline-flex items-center gap-1">
+            <button
+              onClick={() => navigate(`/projetos/proposta/${p.codemp}/${p.propostaCodpro}`)}
+              className="font-mono text-sm text-primary hover:underline"
+            >
+              {p.propostaCodpro}
+            </button>
+            {p.propostaCodlev2 != null && p.propostaCodlev2 !== 0 && (
+              <>
+                <span className="text-sm text-muted">→</span>
+                <button
+                  onClick={() => navigate(`/projetos/proposta/${p.codemp}/${p.propostaCodlev2}`)}
+                  className="font-mono text-sm text-primary hover:underline"
+                >
+                  {p.propostaCodlev2}
+                </button>
+              </>
+            )}
+          </span>
+        ) : (
+          <span className="text-sm text-muted">—</span>
+        )}
+      </td>
+      <td className={`hidden ${TD_CLASS} lg:table-cell`}>
+        {p.propostaModproLabel != null && p.propostaModproTone != null ? (
+          <span
+            className={`inline-block max-w-[140px] truncate whitespace-nowrap align-bottom rounded-full px-2 py-0.5 text-[11.5px] font-medium ${toneBadge[p.propostaModproTone]}`}
+            title={p.propostaModproLabel}
           >
-            {p.propostaCodpro}
-          </button>
+            {p.propostaModproLabel}
+          </span>
         ) : (
           <span className="text-sm text-muted">—</span>
         )}
@@ -141,11 +190,6 @@ function LinhaPedido({
           {p.faturamentoLabel ?? "—"}
         </span>
       </td>
-      <td className={`hidden ${TD_CLASS} xl:table-cell`}>
-        <span className="block max-w-[110px] truncate text-sm text-muted" title={p.formaPagamentoLabel ?? undefined}>
-          {p.formaPagamentoLabel ?? "—"}
-        </span>
-      </td>
       {mostrarCondPgto && (
         <td className={`hidden ${TD_CLASS} xl:table-cell`}>
           <span className="block max-w-[130px] truncate text-sm text-muted" title={p.condicaoPagamentoLabel ?? undefined}>
@@ -155,6 +199,17 @@ function LinhaPedido({
       )}
       <td className={`${TD_CLASS} text-right font-mono text-sm tabular-nums text-foreground`}>
         {p.vlrliq != null ? formatMoney(p.vlrliq) : "—"}
+      </td>
+      <td className={`hidden ${TD_CLASS} xl:table-cell`}>
+        <span className="block max-w-[160px] truncate text-sm text-muted" title={p.obsmot?.trim() || undefined}>
+          {p.obsmot?.trim() || "—"}
+        </span>
+      </td>
+      <td className={`${TD_CLASS} font-mono text-sm text-muted`}>{dateFormatter.format(new Date(p.datemi))}</td>
+      <td className={`hidden ${TD_CLASS} xl:table-cell`}>
+        <span className="block max-w-[110px] truncate text-sm text-muted" title={p.formaPagamentoLabel ?? undefined}>
+          {p.formaPagamentoLabel ?? "—"}
+        </span>
       </td>
     </tr>
   );
@@ -171,9 +226,12 @@ export function ListarPedidos() {
   const numpedDebounced = useDebouncedValue(numpedInput, 350);
   const [numratInput, setNumratInput] = useState("");
   const numratDebounced = useDebouncedValue(numratInput, 350);
-  // Pré-marcado só com "Não Fechado" (9) — decisão do usuário, não existe valor
-  // "Digitado" no domínio real LSitPed.
-  const [sitpedFiltro, setSitpedFiltro] = useState<number[]>([9]);
+  const [codproInput, setCodproInput] = useState("");
+  const codproDebounced = useDebouncedValue(codproInput, 350);
+  // Pré-marcado com "Aberto Total" (1), "Aberto Parcial" (2) e "Não Fechado" (9) —
+  // decisão do usuário, não existe valor "Digitado" no domínio real LSitPed.
+  const [sitpedFiltro, setSitpedFiltro] = useState<number[]>([1, 2, 9]);
+  const [modproFiltro, setModproFiltro] = useState<number[]>([]);
 
   const [page, setPage] = useState(1);
   const [pedidos, setPedidos] = useState<PedidoRow[]>([]);
@@ -197,7 +255,9 @@ export function ListarPedidos() {
           cliente: clienteDebounced || undefined,
           numped: numpedDebounced || undefined,
           numrat: numratDebounced || undefined,
+          codpro: codproDebounced || undefined,
           sitped: sitpedFiltro.length > 0 ? sitpedFiltro.join(",") : undefined,
+          modpro: modproFiltro.length > 0 ? modproFiltro.join(",") : undefined,
           page,
           pageSize: PAGE_SIZE,
         },
@@ -219,7 +279,9 @@ export function ListarPedidos() {
           cliente: clienteDebounced || undefined,
           numped: numpedDebounced || undefined,
           numrat: numratDebounced || undefined,
+          codpro: codproDebounced || undefined,
           sitped: sitpedFiltro.length > 0 ? sitpedFiltro.join(",") : undefined,
+          modpro: modproFiltro.length > 0 ? modproFiltro.join(",") : undefined,
           page: pageCliente,
           pageSize: PAGE_SIZE,
         },
@@ -256,12 +318,12 @@ export function ListarPedidos() {
   useEffect(() => {
     if (visao === "lista") carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, sitpedFiltro, page]);
+  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, page]);
 
   useEffect(() => {
     if (visao === "cliente") carregarPorCliente();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, sitpedFiltro, pageCliente]);
+  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, pageCliente]);
 
   // Digitar ou trocar filtro reseta as duas paginações pra página 1 (senão a busca pode
   // "sumir" numa página que não existe mais) e colapsa qualquer cliente expandido — o
@@ -273,7 +335,7 @@ export function ListarPedidos() {
     setClientesExpandidos(new Set());
     setItensPorCliente({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clienteDebounced, numpedDebounced, numratDebounced, sitpedFiltro]);
+  }, [clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro]);
 
   function toggleExpandirCliente(cliente: ClienteGrupo) {
     setClientesExpandidos((atual) => {
@@ -289,7 +351,9 @@ export function ListarPedidos() {
               params: {
                 numped: numpedDebounced || undefined,
                 numrat: numratDebounced || undefined,
+                codpro: codproDebounced || undefined,
                 sitped: sitpedFiltro.length > 0 ? sitpedFiltro.join(",") : undefined,
+                modpro: modproFiltro.length > 0 ? modproFiltro.join(",") : undefined,
               },
             })
             .then(({ data }) => setItensPorCliente((i) => ({ ...i, [cliente.codcli]: data.itens })))
@@ -344,13 +408,19 @@ export function ListarPedidos() {
           <input
             value={numpedInput}
             onChange={(e) => setNumpedInput(e.target.value)}
-            placeholder="Nro. do pedido..."
+            placeholder="Nro. do pedido... (separe por vírgula)"
             className="w-40 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           <input
             value={numratInput}
             onChange={(e) => setNumratInput(e.target.value)}
-            placeholder="Nro. da RAT..."
+            placeholder="Nro. da RAT... (separe por vírgula)"
+            className="w-40 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <input
+            value={codproInput}
+            onChange={(e) => setCodproInput(e.target.value)}
+            placeholder="Nro. da proposta... (separe por vírgula)"
             className="w-40 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           <MultiSelectDropdown
@@ -359,6 +429,13 @@ export function ListarPedidos() {
             onChange={setSitpedFiltro}
             labelTodos="Todas as situações"
             labelSufixo="situações"
+          />
+          <MultiSelectDropdown
+            opcoes={MODPRO_OPCOES}
+            selecionados={modproFiltro}
+            onChange={setModproFiltro}
+            labelTodos="Todas as modalidades"
+            labelSufixo="modalidades"
           />
         </div>
       )}
@@ -373,15 +450,17 @@ export function ListarPedidos() {
                 <tr>
                   <th className={TH_CLASS}>Pedido</th>
                   <th className={TH_CLASS}>Cliente</th>
-                  <th className={TH_CLASS}>Emissão</th>
                   <th className={TH_CLASS}>Situação</th>
-                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>RAT vinculada</th>
+                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Rat</th>
                   <th className={`hidden ${TH_CLASS} lg:table-cell`}>Consultor</th>
                   <th className={`hidden ${TH_CLASS} lg:table-cell`}>Proposta</th>
-                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Situação (Proposta)</th>
+                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Mod. Prop.</th>
+                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Sit. Prop.</th>
                   <th className={`hidden ${TH_CLASS} xl:table-cell`}>Faturamento</th>
-                  <th className={`hidden ${TH_CLASS} xl:table-cell`}>Forma Pgto</th>
                   <th className={TH_CLASS_RIGHT}>Valor Líquido</th>
+                  <th className={`hidden ${TH_CLASS} xl:table-cell`}>Obs. Mot.</th>
+                  <th className={TH_CLASS}>Emissão</th>
+                  <th className={`hidden ${TH_CLASS} xl:table-cell`}>Forma Pgto</th>
                 </tr>
               </thead>
               <tbody>
@@ -393,9 +472,6 @@ export function ListarPedidos() {
                       </td>
                       <td className="px-[7px] py-[10px]">
                         <Skeleton className="h-4 w-40" />
-                      </td>
-                      <td className="px-[7px] py-[10px]">
-                        <Skeleton className="h-4 w-20" />
                       </td>
                       <td className="px-[7px] py-[10px]">
                         <Skeleton className="h-5 w-24 rounded-full" />
@@ -410,16 +486,25 @@ export function ListarPedidos() {
                         <Skeleton className="h-4 w-16" />
                       </td>
                       <td className="hidden px-[7px] py-[10px] lg:table-cell">
+                        <Skeleton className="h-4 w-20" />
+                      </td>
+                      <td className="hidden px-[7px] py-[10px] lg:table-cell">
                         <Skeleton className="h-5 w-20 rounded-full" />
                       </td>
                       <td className="hidden px-[7px] py-[10px] xl:table-cell">
                         <Skeleton className="h-4 w-32" />
                       </td>
-                      <td className="hidden px-[7px] py-[10px] xl:table-cell">
-                        <Skeleton className="h-4 w-24" />
-                      </td>
                       <td className="px-[7px] py-[10px] text-right">
                         <Skeleton className="ml-auto h-4 w-20" />
+                      </td>
+                      <td className="hidden px-[7px] py-[10px] xl:table-cell">
+                        <Skeleton className="h-4 w-32" />
+                      </td>
+                      <td className="px-[7px] py-[10px]">
+                        <Skeleton className="h-4 w-20" />
+                      </td>
+                      <td className="hidden px-[7px] py-[10px] xl:table-cell">
+                        <Skeleton className="h-4 w-24" />
                       </td>
                     </tr>
                   ))}
@@ -429,7 +514,7 @@ export function ListarPedidos() {
                   ))}
                 {!loading && pedidos.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="px-[7px] py-8 text-center text-sm text-muted">
+                    <td colSpan={13} className="px-[7px] py-8 text-center text-sm text-muted">
                       Nenhum pedido encontrado com esses filtros.
                     </td>
                   </tr>
@@ -509,13 +594,10 @@ export function ListarPedidos() {
                                           Pedido
                                         </th>
                                         <th className="py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Emissão
-                                        </th>
-                                        <th className="py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                           Situação
                                         </th>
                                         <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                                          RAT vinculada
+                                          Rat
                                         </th>
                                         <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
                                           Consultor
@@ -524,19 +606,28 @@ export function ListarPedidos() {
                                           Proposta
                                         </th>
                                         <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                                          Situação (Proposta)
+                                          Mod. Prop.
+                                        </th>
+                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
+                                          Sit. Prop.
                                         </th>
                                         <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted xl:table-cell">
                                           Faturamento
-                                        </th>
-                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted xl:table-cell">
-                                          Forma Pgto
                                         </th>
                                         <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted xl:table-cell">
                                           Cond. Pgto
                                         </th>
                                         <th className="py-[4px] pr-[8px] text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                           Valor Líquido
+                                        </th>
+                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted xl:table-cell">
+                                          Obs. Mot.
+                                        </th>
+                                        <th className="py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                          Emissão
+                                        </th>
+                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted xl:table-cell">
+                                          Forma Pgto
                                         </th>
                                       </tr>
                                     </thead>

@@ -67,6 +67,7 @@ pedidoVisualizacaoRouter.get("/:codemp/:codfil/:numped", async (req, res) => {
         formaPagamentoLabel: formaPagamento?.desfpg ?? null,
         condicaoPagamentoLabel: condicaoPagamento?.descpg ?? null,
         numrat: pedido.numrat != null ? pedido.numrat.toString() : null,
+        ratId: rat?.id ?? null,
         propostaCodpro: rat?.codpro ?? null,
         propostaSitproLabel: proposta ? sitproLabel(proposta.sitpro) : null,
         propostaSitproTone: proposta ? sitproTone(proposta.sitpro) : null,
