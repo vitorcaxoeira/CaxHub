@@ -120,10 +120,24 @@ async function main() {
 
   const idLine = isComposite ? `\n  @@id([${pkAliases.join(", ")}])` : "";
 
+  // Colunas da detecção de exclusão no Senior (ver src/sync/varrerRemovidos.ts). Toda
+  // tabela espelho nasce com elas: sem isso a tabela nova fica cega pra exclusão e
+  // ninguém lembra de acrescentar depois. Sem índice de propósito — `visto_em_sync` é
+  // reescrita em todas as linhas a cada sync, e o Prisma não expressa índice parcial.
+  const colunasVarredura = `
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com \`lt\` estrito, e \`NULL < x\` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)`;
+
   const modelBlock = `
 ${modelHeaderComment}
 model ${modelName} {
-${modelLines.join("\n")}${idLine}
+${modelLines.join("\n")}${colunasVarredura}${idLine}
 
   @@map("${localTableName}")
 }
@@ -182,6 +196,7 @@ ${modelLines.join("\n")}${idLine}
   const syncFileContent = `import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { carimbo } from "./varrerRemovidos";
 
 const JOB_NAME = "${jobName}";
 const QUERY = \`${query.replace(/`/g, "\\`")}\`;
@@ -191,6 +206,10 @@ ${interfaceFields}
 }
 
 export async function run${modelName}Sync(): Promise<void> {
+  // Instante da execução, carimbado em toda linha vista nesta rodada — é o que permite
+  // descobrir depois quem NÃO veio (ver src/sync/varrerRemovidos.ts). Tem que ser
+  // capturado antes do primeiro upsert.
+  const inicio = new Date();
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
@@ -198,7 +217,7 @@ export async function run${modelName}Sync(): Promise<void> {
     const rows = (await runSqlViaSoapPaginated(QUERY, [${orderByColumns}])) as ${modelName}Row[];
 
     for (const row of rows) {
-      const data = { ${dataAssignments} };
+      const data = { ${dataAssignments}, ...carimbo(inicio) };
       await prisma.${modelAccessor}.upsert({
         where: { ${pkWhere} },
         update: data,
@@ -206,7 +225,36 @@ export async function run${modelName}Sync(): Promise<void> {
       });
     }
 
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — vem comentada de
+    // propósito: ligar a varredura exige duas decisões que um gerador não tem como
+    // adivinhar, e o default de politicaVarredura.ts é "desligada" justamente pra tabela
+    // nova nunca começar a marcar registro sozinha.
+    //   1. ESCOPO — precisa excluir registro nascido no CaxHub, se esta tabela for de mão
+    //      dupla (ex.: { origemCaxHub: false }), senão ele é acusado de removido.
+    //   2. CONTAGEM NA ORIGEM — tem que repetir exatamente o mesmo FROM/WHERE da QUERY
+    //      acima, incluindo filtro aplicado às linhas dentro do laço, senão a guarda
+    //      acusa truncamento onde não houve.
+    //
+    // Pra ligar: descomentar o bloco, acrescentar aos imports
+    //   import { Prisma } from "@prisma/client";
+    //   import { carimbo, varrerRemovidos } from "./varrerRemovidos";
+    // e registrar o JOB_NAME em src/sync/politicaVarredura.ts começando por "simular" —
+    // nunca direto em "marcar", sem antes conferir os detectados contra o ERP.
+    //
+    // const varredura = await varrerRemovidos<Prisma.${modelName}WhereInput>(prisma.${modelAccessor}, {
+    //   jobName: JOB_NAME,
+    //   inicio,
+    //   linhasProcessadas: rows.length,
+    //   escopo: {},
+    //   queryContagemOrigem: \`SELECT COUNT(*) AS total FROM ${tableName}\`,
+    // });
+
     await prisma.syncLog.create({
+      // Ao ligar a varredura, acrescentar aqui pra ela aparecer no painel:
+      //   message: varredura.resumo,
+      //   varreduraModo: varredura.modo,
+      //   varreduraDetectados: varredura.candidatos,
+      //   varreduraInicio: inicio,
       data: { jobName: JOB_NAME, query: QUERY, status: "success" },
     });
   } catch (error) {
@@ -240,6 +288,9 @@ export function schedule${modelName}Sync(): void {
     `4. Registrar em backend/src/server.ts: importar { schedule${modelName}Sync } de "./sync/${syncFileName.replace(".ts", "")}" e chamar schedule${modelName}Sync() dentro do app.listen(...).`
   );
   console.log("5. Rodar o job manualmente uma vez pra validar com dado real antes de confiar no agendamento.");
+  console.log(
+    "6. Detecção de exclusão no Senior: o model e o job já nascem com as colunas e o carimbo, mas a varredura vem COMENTADA. Pra ligar, seguir as instruções no próprio job gerado e acrescentar a tabela em src/sync/politicaVarredura.ts começando por \"simular\"."
+  );
 }
 
 main().catch((err) => {

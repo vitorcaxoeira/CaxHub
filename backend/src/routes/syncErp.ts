@@ -29,8 +29,16 @@ syncErpRouter.get("/", async (_req, res) => {
     });
 
     const ultimoPorJob = new Map<string, (typeof logs)[number]>();
+    // Última execução que REALMENTE varreu, que não é necessariamente a última execução:
+    // sync incremental ("Alterados") nunca varre, então uma tabela pode ter sincronizado
+    // agora e não ser varrida há meses. Sem separar os dois, a tela some com a informação
+    // da varredura assim que roda um incremental, e o buraco fica invisível.
+    const ultimaVarreduraPorJob = new Map<string, (typeof logs)[number]>();
     for (const log of logs) {
       if (!ultimoPorJob.has(log.jobName)) ultimoPorJob.set(log.jobName, log);
+      if (log.varreduraModo != null && !ultimaVarreduraPorJob.has(log.jobName)) {
+        ultimaVarreduraPorJob.set(log.jobName, log);
+      }
     }
 
     const contagens = await Promise.all(SYNC_JOBS.map((job) => job.contarRegistros()));
@@ -43,6 +51,7 @@ syncErpRouter.get("/", async (_req, res) => {
       sincronizandoTodos,
       jobs: SYNC_JOBS.map((job, indice) => {
         const ultimo = ultimoPorJob.get(job.jobName);
+        const varredura = ultimaVarreduraPorJob.get(job.jobName);
         return {
           jobName: job.jobName,
           displayName: job.displayName,
@@ -60,13 +69,23 @@ syncErpRouter.get("/", async (_req, res) => {
           // mandar isso como `ultimoErro` pintaria resumo de sucesso de vermelho.
           ultimaMensagem: ultimo?.message ?? null,
           totalRemovidos: removidos[indice],
-          // Resultado da última varredura. `detectados` conta o que ela ACHOU, inclusive
-          // quando o modo é "simular" e nada foi gravado — sem isso a tela mostraria zero
-          // durante toda a fase de observação, que é quando o número importa.
+          // Resultado da ÚLTIMA VARREDURA (não da última sincronização). `detectados`
+          // conta o que ela achou, inclusive em modo "simular", quando nada foi gravado —
+          // sem isso a tela mostraria zero durante toda a fase de observação, que é
+          // justamente quando o número importa. `em` permite à tela avisar quando a
+          // varredura está muito mais velha que a sincronização, sinal de tabela que só
+          // vem rodando no modo "Alterados" e portanto nunca é varrida.
           ultimaVarredura:
-            ultimo?.varreduraModo != null
-              ? { modo: ultimo.varreduraModo, detectados: ultimo.varreduraDetectados ?? 0 }
+            varredura?.varreduraModo != null
+              ? {
+                  modo: varredura.varreduraModo,
+                  detectados: varredura.varreduraDetectados ?? 0,
+                  em: varredura.runAt,
+                }
               : null,
+          // true = a tabela tem detecção configurada mas a última execução não varreu
+          // (sync incremental). Vira alerta na tela quando persiste.
+          temDeteccao: job.contarRemovidos != null,
           proximaExecucao: proximaExecucao(job.cronExpr, agora),
           emAndamento: jobsEmAndamento.has(job.jobName),
         };

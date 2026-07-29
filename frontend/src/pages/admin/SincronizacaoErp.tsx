@@ -16,9 +16,11 @@ interface JobSync {
   ultimaMensagem: string | null;
   // null = tabela ainda sem detecção de exclusão no Senior (a maioria hoje).
   totalRemovidos: number | null;
-  // Resultado da última varredura. `detectados` é o que ela achou — em modo "simular" isso
-  // é > 0 enquanto totalRemovidos continua 0, porque nada foi gravado.
-  ultimaVarredura: { modo: string; detectados: number } | null;
+  // Resultado da última VARREDURA, que pode ser bem mais antiga que a última
+  // sincronização: o modo "Alterados" nunca varre. `detectados` é o que ela achou — em
+  // modo "simular" isso é > 0 enquanto totalRemovidos continua 0, porque nada foi gravado.
+  ultimaVarredura: { modo: string; detectados: number; em: string } | null;
+  temDeteccao: boolean;
   proximaExecucao: string;
   emAndamento: boolean;
 }
@@ -54,6 +56,18 @@ const statusTone: Record<string, string> = {
   success: "bg-success/15 text-success",
   error: "bg-destructive/15 text-destructive",
 };
+
+// Quanto a varredura pode ficar atrás da sincronização antes de virar alerta. Uma tabela
+// que só roda no modo "Alterados" nunca é varrida — o cron completo é diário, então mais
+// de 3 dias de defasagem indica que só o incremental vem rodando.
+const DIAS_VARREDURA_DEFASADA = 3;
+
+function varreduraDefasada(job: JobSync): boolean {
+  if (!job.temDeteccao || !job.ultimaSincronizacao) return false;
+  if (!job.ultimaVarredura) return true; // tem detecção e nunca varreu
+  const atraso = new Date(job.ultimaSincronizacao).getTime() - new Date(job.ultimaVarredura.em).getTime();
+  return atraso > DIAS_VARREDURA_DEFASADA * 24 * 60 * 60 * 1000;
+}
 
 function formatTempoAtras(iso: string | null): string {
   if (!iso) return "nunca sincronizada";
@@ -325,13 +339,25 @@ export function SincronizacaoErp() {
                           className={`inline-block rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide ${
                             modoTone[job.ultimaVarredura.modo] ?? modoTone.desligada
                           }`}
-                          title={
+                          title={`${
                             job.ultimaVarredura.modo === "marcar"
                               ? "Registros que sumirem do Senior são marcados como removidos"
                               : "Varredura só conta os que sumiram, sem marcar nada"
-                          }
+                          } — última varredura em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}`}
                         >
                           {modoRotulo[job.ultimaVarredura.modo] ?? job.ultimaVarredura.modo}
+                        </span>
+                      )}
+                      {varreduraDefasada(job) && (
+                        <span
+                          className="inline-block rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide text-warning"
+                          title={
+                            job.ultimaVarredura
+                              ? `Sincronizada em ${dateTimeFormatter.format(new Date(job.ultimaSincronizacao as string))}, mas varrida pela última vez em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}. O modo "Alterados" não varre — rode "Sincronizar Todos" pra detectar exclusões.`
+                              : 'Esta tabela tem detecção configurada mas nunca foi varrida. O modo "Alterados" não varre — rode "Sincronizar Todos".'
+                          }
+                        >
+                          varredura atrasada
                         </span>
                       )}
                     </span>
