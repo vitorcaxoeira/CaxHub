@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { sitpedLabel, sitpedTone, SITPED_LABELS } from "../domain/pedidoDominio";
 import { forfatLabel, modproLabel, modproTone, sitproLabel, sitproTone } from "../domain/propostasDominio";
+import { runPedidoSyncPorClientes, ResultadoSyncPorCliente } from "../sync/pedidoSync";
 
 // Tela "Mercado > Listar Pedidos" — espelho de E120PED (ver backend/src/sync/pedidoSync.ts).
 // Só admin acessa (menu "Mercado" restrito, ver frontend/src/layout/Sidebar.tsx).
@@ -287,46 +288,52 @@ pedidosRouter.get("/", async (req, res) => {
   }
 });
 
+// Clientes que batem com os filtros atuais, agregados e ordenados por valor líquido
+// somado (maior primeiro) — sem paginação. Usado tanto por GET /por-cliente (que pagina
+// o resultado) quanto por POST /sincronizar (que precisa da lista INTEIRA de codclis do
+// filtro, não só a da página visível).
+async function resolverGruposPorCliente(req: import("express").Request) {
+  const pedidosTodos = await prisma.pedido.findMany();
+
+  const codclisUnicos = [...new Set(pedidosTodos.map((p) => p.codcli))];
+  const clientes = codclisUnicos.length > 0 ? await prisma.cliente.findMany({ where: { codcli: { in: codclisUnicos } } }) : [];
+  const clientePorCodcli = new Map(clientes.map((c) => [c.codcli, c]));
+
+  const filtros = lerFiltros(req);
+  let pedidosFiltrados = aplicarFiltros(pedidosTodos, filtros, clientePorCodcli);
+
+  // Mesmo motivo de GET /: precisa da RAT/Proposta resolvida pra filtrar por Nro.
+  // Proposta e Modalidade.
+  const { ratPorChave, propostaPorChave } = await resolverRatEProposta(pedidosFiltrados);
+  pedidosFiltrados = filtrarPorProposta(pedidosFiltrados, filtros.buscaCodpro, ratPorChave, propostaPorChave);
+  pedidosFiltrados = filtrarPorModalidade(pedidosFiltrados, filtros.modproFiltro, ratPorChave, propostaPorChave);
+
+  const porClienteMap = new Map<number, { quantidade: number; valorLiquido: number }>();
+  for (const p of pedidosFiltrados) {
+    const bucket = porClienteMap.get(p.codcli) ?? { quantidade: 0, valorLiquido: 0 };
+    bucket.quantidade += 1;
+    bucket.valorLiquido += p.vlrliq != null ? Number(p.vlrliq) : 0;
+    porClienteMap.set(p.codcli, bucket);
+  }
+
+  return [...porClienteMap.entries()]
+    .map(([codcli, bucket]) => {
+      const cliente = clientePorCodcli.get(codcli);
+      return { codcli, nome: cliente ? `${cliente.codcli} - ${cliente.nomcli}` : String(codcli), ...bucket };
+    })
+    .sort((a, b) => b.valorLiquido - a.valorLiquido);
+}
+
 // GET /por-cliente — mesmos filtros de GET /, mas agrupado por cliente, ordenado por
 // valor líquido somado (maior primeiro). Paginação é por cliente, não por pedido.
 pedidosRouter.get("/por-cliente", async (req, res) => {
   try {
-    const pedidosTodos = await prisma.pedido.findMany();
-
-    const codclisUnicos = [...new Set(pedidosTodos.map((p) => p.codcli))];
-    const clientes = codclisUnicos.length > 0 ? await prisma.cliente.findMany({ where: { codcli: { in: codclisUnicos } } }) : [];
-    const clientePorCodcli = new Map(clientes.map((c) => [c.codcli, c]));
-
-    const filtros = lerFiltros(req);
-    let pedidosFiltrados = aplicarFiltros(pedidosTodos, filtros, clientePorCodcli);
-
-    // Mesmo motivo de GET /: precisa da RAT/Proposta resolvida pra filtrar por Nro.
-    // Proposta e Modalidade.
-    const { ratPorChave, propostaPorChave } = await resolverRatEProposta(pedidosFiltrados);
-    pedidosFiltrados = filtrarPorProposta(pedidosFiltrados, filtros.buscaCodpro, ratPorChave, propostaPorChave);
-    pedidosFiltrados = filtrarPorModalidade(pedidosFiltrados, filtros.modproFiltro, ratPorChave, propostaPorChave);
-
-    const porClienteMap = new Map<number, { quantidade: number; valorLiquido: number }>();
-    for (const p of pedidosFiltrados) {
-      const bucket = porClienteMap.get(p.codcli) ?? { quantidade: 0, valorLiquido: 0 };
-      bucket.quantidade += 1;
-      bucket.valorLiquido += p.vlrliq != null ? Number(p.vlrliq) : 0;
-      porClienteMap.set(p.codcli, bucket);
-    }
-
-    const grupos = [...porClienteMap.entries()]
-      .map(([codcli, bucket]) => {
-        const cliente = clientePorCodcli.get(codcli);
-        return { codcli, nome: cliente ? `${cliente.codcli} - ${cliente.nomcli}` : String(codcli), ...bucket };
-      })
-      .sort((a, b) => b.valorLiquido - a.valorLiquido);
-
-    const total = grupos.length;
+    const grupos = await resolverGruposPorCliente(req);
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
     const inicioPagina = (page - 1) * pageSize;
 
-    res.json({ total, clientes: grupos.slice(inicioPagina, inicioPagina + pageSize) });
+    res.json({ total: grupos.length, clientes: grupos.slice(inicioPagina, inicioPagina + pageSize) });
   } catch (error) {
     handleError(res, error, "por-cliente");
   }
@@ -369,6 +376,126 @@ pedidosRouter.get("/por-cliente/:codcli/itens", async (req, res) => {
   } catch (error) {
     handleError(res, error, "por-cliente-itens");
   }
+});
+
+// POST /por-cliente/:codcli/sincronizar — puxa do Senior, na hora, todos os pedidos
+// deste cliente (ação "Sinc. ERP" da aba Por Cliente), sem esperar o job diário.
+//
+// Diferente do disparo de sync do painel de administração (syncErp.ts, "fire and
+// forget"), aqui a requisição espera o resultado: é uma consulta pequena (um cliente
+// só) e a tela precisa do número de pedidos novos/atualizados pra dar o retorno e
+// recarregar a lista já com os dados novos.
+const sincronizacoesEmAndamento = new Set<number>();
+
+// Estado da sincronização em lote (POST /sincronizar), em memória — o backend roda em
+// processo único e o painel de administração (syncErp.ts) já guarda o "em andamento"
+// dele do mesmo jeito. Some se o processo reiniciar, e tudo bem: o efeito colateral do
+// job (os upserts) é o que importa, o estado aqui é só pra tela acompanhar.
+interface StatusSincronizacaoLote {
+  emAndamento: boolean;
+  totalClientes: number;
+  iniciadoEm: string | null;
+  concluidoEm: string | null;
+  resultado: ResultadoSyncPorCliente | null;
+  erro: string | null;
+}
+
+let statusLote: StatusSincronizacaoLote = {
+  emAndamento: false,
+  totalClientes: 0,
+  iniciadoEm: null,
+  concluidoEm: null,
+  resultado: null,
+  erro: null,
+};
+
+pedidosRouter.post("/por-cliente/:codcli/sincronizar", async (req, res) => {
+  const codcli = Number(req.params.codcli);
+  if (!Number.isInteger(codcli)) {
+    res.status(400).json({ error: "codcli inválido" });
+    return;
+  }
+  if (statusLote.emAndamento) {
+    res.status(409).json({ error: "Sincronização do filtro em andamento — aguarde ela terminar" });
+    return;
+  }
+  // Guarda contra duplo clique / duas abas: dois pulls simultâneos do mesmo cliente
+  // fariam os mesmos upserts em paralelo à toa.
+  if (sincronizacoesEmAndamento.has(codcli)) {
+    res.status(409).json({ error: "Sincronização deste cliente já em andamento" });
+    return;
+  }
+
+  sincronizacoesEmAndamento.add(codcli);
+  try {
+    const resultado = await runPedidoSyncPorClientes([codcli]);
+    res.json(resultado);
+  } catch (error) {
+    handleError(res, error, "sincronizar-cliente");
+  } finally {
+    sincronizacoesEmAndamento.delete(codcli);
+  }
+});
+
+// POST /sincronizar — mesma coisa, mas pra TODOS os clientes que batem com os filtros
+// atuais (todas as páginas, não só a visível). Recebe os mesmos query params de
+// GET /por-cliente.
+//
+// Aqui, diferente da ação de um cliente só, a requisição NÃO espera o fim: o filtro
+// pode pegar centenas de clientes e o nginx da VPS corta requisição parada em 60s
+// (deploy/nginx.conf não sobe o proxy_read_timeout). Responde 202 e a tela acompanha
+// por GET /sincronizar/status — mesmo padrão "fire and forget" de syncErp.ts.
+pedidosRouter.post("/sincronizar", async (req, res) => {
+  try {
+    if (statusLote.emAndamento) {
+      res.status(409).json({ error: "Já existe uma sincronização de filtro em andamento" });
+      return;
+    }
+    if (sincronizacoesEmAndamento.size > 0) {
+      res.status(409).json({ error: "Existe sincronização de cliente em andamento — aguarde ela terminar" });
+      return;
+    }
+
+    const grupos = await resolverGruposPorCliente(req);
+    const codclis = grupos.map((g) => g.codcli);
+    if (codclis.length === 0) {
+      res.status(400).json({ error: "Nenhum cliente bate com os filtros atuais" });
+      return;
+    }
+
+    statusLote = {
+      emAndamento: true,
+      totalClientes: codclis.length,
+      iniciadoEm: new Date().toISOString(),
+      concluidoEm: null,
+      resultado: null,
+      erro: null,
+    };
+
+    runPedidoSyncPorClientes(codclis)
+      .then((resultado) => {
+        statusLote = { ...statusLote, resultado, erro: null };
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[pedidos:sincronizar-filtro] falhou:", message);
+        statusLote = { ...statusLote, resultado: null, erro: message };
+      })
+      .finally(() => {
+        statusLote = { ...statusLote, emAndamento: false, concluidoEm: new Date().toISOString() };
+      });
+
+    res.status(202).json({ status: "iniciado", totalClientes: codclis.length });
+  } catch (error) {
+    handleError(res, error, "sincronizar-filtro");
+  }
+});
+
+// GET /sincronizar/status — acompanhamento do POST /sincronizar. Depois que termina, o
+// último resultado continua aqui até a próxima sincronização, pra tela conseguir mostrar
+// o desfecho mesmo se o polling perder a virada (ou se a pessoa recarregar a página).
+pedidosRouter.get("/sincronizar/status", (_req, res) => {
+  res.json({ ...statusLote, clientesEmAndamento: [...sincronizacoesEmAndamento] });
 });
 
 // GET /indicadores — KPIs pra aba "Dash": sempre sobre a base inteira, sem aplicar os

@@ -1,11 +1,12 @@
 import axios from "axios";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { useToast } from "../../components/ui/Toast";
 import { PedidosDashboard, PedidosIndicadoresData } from "../../components/mercado/PedidosDashboard";
 
 type Visao = "lista" | "cliente" | "dash";
@@ -216,6 +217,7 @@ function LinhaPedido({
 }
 
 export function ListarPedidos() {
+  const toast = useToast();
   const [visao, setVisao] = useState<Visao>("lista");
   const [indicadores, setIndicadores] = useState<PedidosIndicadoresData | null>(null);
   const [loadingIndicadores, setLoadingIndicadores] = useState(true);
@@ -244,23 +246,36 @@ export function ListarPedidos() {
   const [loadingClientes, setLoadingClientes] = useState(true);
   const [clientesExpandidos, setClientesExpandidos] = useState<Set<number>>(new Set());
   const [itensPorCliente, setItensPorCliente] = useState<Record<number, PedidoRow[] | "carregando" | "erro">>({});
+  // Clientes com "Sinc. ERP" rodando agora — Set (e não um único codcli) porque dá pra
+  // disparar a sincronização de vários clientes da lista sem esperar o anterior acabar.
+  const [sincronizandoClientes, setSincronizandoClientes] = useState<Set<number>>(new Set());
+  // Sincronização do filtro inteiro: o POST só dispara (202) e o resultado chega por
+  // polling em /sincronizar/status — o lote pode passar de minutos, muito além do
+  // timeout do nginx (ver comentário na rota, backend/src/routes/pedidos.ts).
+  const [sincronizandoFiltro, setSincronizandoFiltro] = useState(false);
+  const pollingRef = useRef<number | null>(null);
 
   const [erro, setErro] = useState<string | null>(null);
+
+  // Filtros mandados pras rotas de listagem e pro disparo da sincronização do filtro —
+  // centralizado pra "o que a tela mostra" e "o que a sincronização vai buscar" nunca
+  // divergirem. (A rota de itens de um cliente ignora `cliente`, já escopada pelo path.)
+  function paramsFiltros() {
+    return {
+      cliente: clienteDebounced || undefined,
+      numped: numpedDebounced || undefined,
+      numrat: numratDebounced || undefined,
+      codpro: codproDebounced || undefined,
+      sitped: sitpedFiltro.length > 0 ? sitpedFiltro.join(",") : undefined,
+      modpro: modproFiltro.length > 0 ? modproFiltro.join(",") : undefined,
+    };
+  }
 
   function carregar() {
     setLoading(true);
     axios
       .get("/api/pedidos", {
-        params: {
-          cliente: clienteDebounced || undefined,
-          numped: numpedDebounced || undefined,
-          numrat: numratDebounced || undefined,
-          codpro: codproDebounced || undefined,
-          sitped: sitpedFiltro.length > 0 ? sitpedFiltro.join(",") : undefined,
-          modpro: modproFiltro.length > 0 ? modproFiltro.join(",") : undefined,
-          page,
-          pageSize: PAGE_SIZE,
-        },
+        params: { ...paramsFiltros(), page, pageSize: PAGE_SIZE },
       })
       .then(({ data }) => {
         setPedidos(data.pedidos);
@@ -275,16 +290,7 @@ export function ListarPedidos() {
     setLoadingClientes(true);
     axios
       .get("/api/pedidos/por-cliente", {
-        params: {
-          cliente: clienteDebounced || undefined,
-          numped: numpedDebounced || undefined,
-          numrat: numratDebounced || undefined,
-          codpro: codproDebounced || undefined,
-          sitped: sitpedFiltro.length > 0 ? sitpedFiltro.join(",") : undefined,
-          modpro: modproFiltro.length > 0 ? modproFiltro.join(",") : undefined,
-          page: pageCliente,
-          pageSize: PAGE_SIZE,
-        },
+        params: { ...paramsFiltros(), page: pageCliente, pageSize: PAGE_SIZE },
       })
       .then(({ data }) => {
         setClientes(data.clientes);
@@ -337,6 +343,14 @@ export function ListarPedidos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro]);
 
+  function carregarItensCliente(codcli: number) {
+    setItensPorCliente((i) => ({ ...i, [codcli]: "carregando" }));
+    axios
+      .get(`/api/pedidos/por-cliente/${codcli}/itens`, { params: paramsFiltros() })
+      .then(({ data }) => setItensPorCliente((i) => ({ ...i, [codcli]: data.itens })))
+      .catch(() => setItensPorCliente((i) => ({ ...i, [codcli]: "erro" })));
+  }
+
   function toggleExpandirCliente(cliente: ClienteGrupo) {
     setClientesExpandidos((atual) => {
       const proximo = new Set(atual);
@@ -344,25 +358,124 @@ export function ListarPedidos() {
         proximo.delete(cliente.codcli);
       } else {
         proximo.add(cliente.codcli);
-        if (!itensPorCliente[cliente.codcli]) {
-          setItensPorCliente((i) => ({ ...i, [cliente.codcli]: "carregando" }));
-          axios
-            .get(`/api/pedidos/por-cliente/${cliente.codcli}/itens`, {
-              params: {
-                numped: numpedDebounced || undefined,
-                numrat: numratDebounced || undefined,
-                codpro: codproDebounced || undefined,
-                sitped: sitpedFiltro.length > 0 ? sitpedFiltro.join(",") : undefined,
-                modpro: modproFiltro.length > 0 ? modproFiltro.join(",") : undefined,
-              },
-            })
-            .then(({ data }) => setItensPorCliente((i) => ({ ...i, [cliente.codcli]: data.itens })))
-            .catch(() => setItensPorCliente((i) => ({ ...i, [cliente.codcli]: "erro" })));
-        }
+        if (!itensPorCliente[cliente.codcli]) carregarItensCliente(cliente.codcli);
       }
       return proximo;
     });
   }
+
+  // Puxa do Senior, na hora, todos os pedidos deste cliente (POST .../sincronizar) e
+  // recarrega a tela com o resultado. O cache de itens do cliente é sempre invalidado —
+  // se estiver expandido recarrega na hora, se não, na próxima vez que expandir.
+  async function sincronizarCliente(cliente: ClienteGrupo) {
+    if (sincronizandoClientes.has(cliente.codcli)) return;
+    setSincronizandoClientes((s) => new Set(s).add(cliente.codcli));
+    try {
+      const { data } = await axios.post(`/api/pedidos/por-cliente/${cliente.codcli}/sincronizar`);
+      toast.mostrar(
+        `${cliente.nome}: ${data.total} pedido(s) no Senior — ${data.criados} novo(s), ${data.atualizados} atualizado(s).`,
+        "success"
+      );
+      carregarPorCliente();
+      if (clientesExpandidos.has(cliente.codcli)) {
+        carregarItensCliente(cliente.codcli);
+      } else {
+        setItensPorCliente((i) => {
+          const proximo = { ...i };
+          delete proximo[cliente.codcli];
+          return proximo;
+        });
+      }
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      toast.mostrar(mensagem ?? "Falha ao sincronizar os pedidos deste cliente com o ERP", "destructive");
+    } finally {
+      setSincronizandoClientes((s) => {
+        const proximo = new Set(s);
+        proximo.delete(cliente.codcli);
+        return proximo;
+      });
+    }
+  }
+
+  function pararPolling() {
+    if (pollingRef.current != null) {
+      window.clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }
+
+  // Acompanha a sincronização do filtro até acabar. Chamado tanto logo após o disparo
+  // quanto ao entrar na aba com um lote já rodando (outra aba do navegador, F5 no meio,
+  // ou outro admin) — por isso é idempotente.
+  function acompanharSincronizacaoFiltro() {
+    if (pollingRef.current != null) return;
+    pollingRef.current = window.setInterval(() => {
+      axios
+        .get("/api/pedidos/sincronizar/status")
+        .then(({ data }) => {
+          if (data.emAndamento) return;
+          pararPolling();
+          setSincronizandoFiltro(false);
+
+          if (data.erro) {
+            toast.mostrar(`Falha na sincronização do filtro: ${data.erro}`, "destructive");
+          } else if (data.resultado) {
+            toast.mostrar(
+              `${data.totalClientes} cliente(s) sincronizado(s): ${data.resultado.total} pedido(s) — ` +
+                `${data.resultado.criados} novo(s), ${data.resultado.atualizados} atualizado(s).`,
+              "success"
+            );
+          }
+
+          // Toda a listagem pode ter mudado (pedidos novos entram em grupos, valores
+          // somados mudam), então recarrega o agrupamento e joga fora o cache de itens.
+          // Colapsa os grupos abertos junto — mesmo comportamento de quando um filtro
+          // muda, e evita reabrir tudo com dado velho.
+          carregarPorCliente();
+          setClientesExpandidos(new Set());
+          setItensPorCliente({});
+        })
+        // Erro no polling é transitório (rede/deploy): não derruba o acompanhamento,
+        // tenta de novo no próximo tick.
+        .catch(() => {});
+    }, 3000);
+  }
+
+  // Dispara a sincronização de TODOS os clientes do filtro atual (todas as páginas, não
+  // só a visível) — os mesmos params que a listagem usa vão pro backend, que resolve a
+  // lista de clientes do jeito idêntico.
+  async function sincronizarFiltro() {
+    if (sincronizandoFiltro) return;
+    setSincronizandoFiltro(true);
+    try {
+      const { data } = await axios.post("/api/pedidos/sincronizar", null, { params: paramsFiltros() });
+      toast.mostrar(`Sincronizando ${data.totalClientes} cliente(s) com o Senior — rodando em segundo plano.`, "neutral");
+      acompanharSincronizacaoFiltro();
+    } catch (err) {
+      setSincronizandoFiltro(false);
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      toast.mostrar(mensagem ?? "Falha ao disparar a sincronização do filtro", "destructive");
+    }
+  }
+
+  // Ao abrir a aba Por Cliente, verifica se já existe lote rodando (outra aba, F5 no
+  // meio, ou outro admin) pra tela refletir isso em vez de oferecer um disparo que o
+  // backend recusaria com 409.
+  useEffect(() => {
+    if (visao !== "cliente" || sincronizandoFiltro) return;
+    axios
+      .get("/api/pedidos/sincronizar/status")
+      .then(({ data }) => {
+        if (!data.emAndamento) return;
+        setSincronizandoFiltro(true);
+        acompanharSincronizacaoFiltro();
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visao]);
+
+  useEffect(() => pararPolling, []);
 
   const tabClass = (ativa: boolean) =>
     `rounded-md px-3 py-1.5 text-sm font-medium transition ${
@@ -437,6 +550,21 @@ export function ListarPedidos() {
             labelTodos="Todas as modalidades"
             labelSufixo="modalidades"
           />
+          {/* Ação global da aba Por Cliente: alcança TODOS os clientes do filtro (as
+              outras páginas também), por isso o contador vem de totalClientes e não do
+              tamanho da página. */}
+          {visao === "cliente" && (
+            <button
+              onClick={sincronizarFiltro}
+              disabled={sincronizandoFiltro || loadingClientes || totalClientes === 0}
+              title="Puxa do Senior os pedidos de todos os clientes que batem com os filtros atuais, incluindo os das próximas páginas"
+              className="ml-auto rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {sincronizandoFiltro
+                ? "Sincronizando com o ERP..."
+                : `Sinc. ERP — ${totalClientes} cliente${totalClientes === 1 ? "" : "s"} do filtro`}
+            </button>
+          )}
         </div>
       )}
 
@@ -535,13 +663,14 @@ export function ListarPedidos() {
                   <th className={TH_CLASS}>Cliente</th>
                   <th className={TH_CLASS_RIGHT}>Qtd. Pedidos</th>
                   <th className={TH_CLASS_RIGHT}>Valor Líquido</th>
+                  <th className={TH_CLASS_RIGHT}>Ações</th>
                 </tr>
               </thead>
               <tbody>
                 {loadingClientes &&
                   Array.from({ length: 3 }).map((_, i) => (
                     <tr key={i} className="border-t border-border/60">
-                      <td className="px-[7px] py-[10px]" colSpan={3}>
+                      <td className="px-[7px] py-[10px]" colSpan={4}>
                         <Skeleton className="h-6 w-full" />
                       </td>
                     </tr>
@@ -550,6 +679,7 @@ export function ListarPedidos() {
                   clientes.map((c) => {
                     const expandida = clientesExpandidos.has(c.codcli);
                     const itens = itensPorCliente[c.codcli];
+                    const sincronizando = sincronizandoClientes.has(c.codcli);
                     return (
                       <Fragment key={c.codcli}>
                         <tr
@@ -567,17 +697,28 @@ export function ListarPedidos() {
                           <td className="whitespace-nowrap px-[7px] py-[10px] text-right font-mono text-sm tabular-nums text-muted">
                             {c.quantidade}
                           </td>
-                          <td
-                            className={`whitespace-nowrap px-[7px] py-[10px] text-right font-mono text-sm tabular-nums text-foreground ${
-                              expandida ? "border-r border-primary" : ""
-                            }`}
-                          >
+                          <td className="whitespace-nowrap px-[7px] py-[10px] text-right font-mono text-sm tabular-nums text-foreground">
                             {formatMoney(c.valorLiquido)}
+                          </td>
+                          {/* stopPropagation: a linha inteira é o toggle de expandir — sem isso,
+                              sincronizar também abriria/fecharia o grupo. */}
+                          <td
+                            className={`whitespace-nowrap px-[7px] py-[10px] text-right ${expandida ? "border-r border-primary" : ""}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              onClick={() => sincronizarCliente(c)}
+                              disabled={sincronizando || sincronizandoFiltro}
+                              title="Puxa do Senior todos os pedidos deste cliente, sem esperar a sincronização diária"
+                              className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {sincronizando ? "Sincronizando..." : "Sinc. ERP"}
+                            </button>
                           </td>
                         </tr>
                         {expandida && (
                           <tr className="border-t border-border/60 bg-surface-2/40">
-                            <td colSpan={3} className="border-b border-l border-r border-primary px-[7px] py-3">
+                            <td colSpan={4} className="border-b border-l border-r border-primary px-[7px] py-3">
                               {itens === "carregando" && <p className="py-2 text-sm text-muted">Carregando pedidos...</p>}
                               {itens === "erro" && (
                                 <p className="py-2 text-sm text-destructive">Falha ao carregar os pedidos deste cliente.</p>
@@ -647,7 +788,7 @@ export function ListarPedidos() {
                   })}
                 {!loadingClientes && clientes.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="px-[7px] py-8 text-center text-sm text-muted">
+                    <td colSpan={4} className="px-[7px] py-8 text-center text-sm text-muted">
                       Nenhum cliente encontrado com esses filtros.
                     </td>
                   </tr>
