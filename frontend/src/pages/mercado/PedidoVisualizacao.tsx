@@ -29,6 +29,9 @@ interface PedidoDetalhe {
   obsped: string | null;
   obsmot: string | null;
   pedcli: string | null;
+  // Preenchido quando o pedido foi excluído no Senior: ele some das listagens, mas
+  // continua acessível por link direto com uma tarja (ver backend/src/sync/varrerRemovidos.ts).
+  removidoEmSenior: string | null;
 }
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
@@ -114,6 +117,14 @@ export function PedidoVisualizacao() {
             </p>
             <p className="mt-1 text-sm text-muted">{pedido.cliente}</p>
           </div>
+
+          {pedido.removidoEmSenior && (
+            <div className="mb-6 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-foreground">
+              <span className="font-semibold">Este pedido não existe mais no Senior.</span> Ele sumiu da consulta ao
+              ERP em {dateFormatter.format(new Date(pedido.removidoEmSenior))} e por isso não aparece mais nas
+              listagens nem nos indicadores. Os dados abaixo são o último retrato que o CaxHub recebeu.
+            </div>
+          )}
 
           <div className="space-y-4">
             <Secao titulo="Classificação">

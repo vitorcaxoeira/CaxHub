@@ -77,6 +77,19 @@ model SyncLog {
   status  String
   message String?
   runAt   DateTime @default(now())
+  // Resultado da varredura de removidos (sync/varrerRemovidos.ts) desta execução, em
+  // forma estruturada — o `message` acima continua tendo o resumo legível. Existe porque
+  // em modo "simular" nada é gravado em removidoEmSenior, e sem isso o painel não teria
+  // como mostrar o que a simulação detectou. NULL nos dois = execução sem varredura
+  // (job ainda não adaptado, sync incremental, ou log anterior ao mecanismo).
+  varreduraModo       String?
+  varreduraDetectados Int?
+  // Instante de referência da varredura (o mesmo carimbado em vistoEmSync). Guardado
+  // porque só com ele dá pra LISTAR os candidatos depois: quem tem vistoEmSync anterior
+  // a isso não veio na última consulta. Não dá pra deduzir de MAX(vistoEmSync) na
+  // tabela, porque um sync parcial (por cliente) carimba um subconjunto com um instante
+  // mais novo e envenenaria o máximo.
+  varreduraInicio     DateTime?
 }
 
 // Espelho local da tabela E070EMP do Senior ERP (empresas cadastradas).
@@ -1024,6 +1037,15 @@ model Pedido {
   // (USU_NUMRAT). Casamento por valor em código, não FK rígida (mesmo padrão de
   // Rat.codfor/RatItem.seqati) — nenhuma feature usa esse vínculo ainda.
   numrat BigInt?
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura de removidos (backend/src/sync/varrerRemovidos.ts)
+  // compara com `lt` estrito, e `NULL < x` é NULL em SQL — linha nunca carimbada é imune
+  // por construção, o que protege registros que nasçam no CaxHub.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem (foi excluída no Senior).
+  // NULL = viva. Volta a NULL sozinho se a linha reaparecer, porque todo upsert do sync
+  // grava NULL aqui. Nunca há DELETE físico: ver comentário em varrerRemovidos.ts.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
   @@id([codemp, codfil, numped])
 
   @@map("pedidos")

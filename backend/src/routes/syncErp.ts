@@ -34,6 +34,9 @@ syncErpRouter.get("/", async (_req, res) => {
     }
 
     const contagens = await Promise.all(SYNC_JOBS.map((job) => job.contarRegistros()));
+    // Só os jobs com detecção de exclusão ligada contam removidos; os demais devolvem null
+    // e a tela não mostra nada na coluna.
+    const removidos = await Promise.all(SYNC_JOBS.map((job) => job.contarRemovidos?.() ?? Promise.resolve(null)));
 
     const agora = new Date();
     res.json({
@@ -51,7 +54,19 @@ syncErpRouter.get("/", async (_req, res) => {
           suportaAlterados: job.suportaAlterados,
           ultimaSincronizacao: ultimo?.runAt ?? null,
           ultimoStatus: ultimo?.status ?? null,
-          ultimoErro: ultimo?.message ?? null,
+          // `message` do SyncLog agora também carrega o resumo da varredura em execução
+          // BEM-SUCEDIDA (ex.: "varredura SIMULADA: 3 sumiram do Senior"), não só erro.
+          // Por isso vira `ultimaMensagem` e quem decide a cor na tela é `ultimoStatus` —
+          // mandar isso como `ultimoErro` pintaria resumo de sucesso de vermelho.
+          ultimaMensagem: ultimo?.message ?? null,
+          totalRemovidos: removidos[indice],
+          // Resultado da última varredura. `detectados` conta o que ela ACHOU, inclusive
+          // quando o modo é "simular" e nada foi gravado — sem isso a tela mostraria zero
+          // durante toda a fase de observação, que é quando o número importa.
+          ultimaVarredura:
+            ultimo?.varreduraModo != null
+              ? { modo: ultimo.varreduraModo, detectados: ultimo.varreduraDetectados ?? 0 }
+              : null,
           proximaExecucao: proximaExecucao(job.cronExpr, agora),
           emAndamento: jobsEmAndamento.has(job.jobName),
         };
@@ -59,6 +74,34 @@ syncErpRouter.get("/", async (_req, res) => {
     });
   } catch (error) {
     handleError(res, error, "listar");
+  }
+});
+
+// GET /:jobName/removidos — amostra dos registros que a varredura marcou como excluídos
+// no Senior, pra conferência manual lá no ERP. É o que permite validar a detecção antes
+// de qualquer coisa começar a sumir das telas de negócio.
+syncErpRouter.get("/:jobName/removidos", async (req, res) => {
+  try {
+    const job = SYNC_JOBS.find((j) => j.jobName === req.params.jobName);
+    if (!job) {
+      res.status(404).json({ error: "Job não encontrado" });
+      return;
+    }
+    if (!job.listarRemovidos) {
+      res.status(400).json({ error: "Esta tabela ainda não tem detecção de exclusão no Senior" });
+      return;
+    }
+    const limite = Math.min(500, Math.max(1, Number(req.query.limite) || 100));
+    // Instante da última varredura deste job, pra listagem conseguir incluir os candidatos
+    // que ainda não foram marcados (caso da simulação).
+    const ultimaVarredura = await prisma.syncLog.findFirst({
+      where: { jobName: job.jobName, varreduraInicio: { not: null } },
+      orderBy: { runAt: "desc" },
+      select: { varreduraInicio: true },
+    });
+    res.json({ itens: await job.listarRemovidos(limite, ultimaVarredura?.varreduraInicio ?? null) });
+  } catch (error) {
+    handleError(res, error, "removidos");
   }
 });
 

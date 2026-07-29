@@ -8,6 +8,18 @@ import { runPedidoSyncPorClientes, ResultadoSyncPorCliente } from "../sync/pedid
 
 // Tela "Mercado > Listar Pedidos" — espelho de E120PED (ver backend/src/sync/pedidoSync.ts).
 // Só admin acessa (menu "Mercado" restrito, ver frontend/src/layout/Sidebar.tsx).
+//
+// REGISTROS EXCLUÍDOS NO SENIOR: toda leitura que ALIMENTA uma lista, contagem ou soma de
+// pedidos filtra `removidoEmSenior: null` — senão pedido apagado no ERP segue inflando
+// listagem e KPI (ver backend/src/sync/varrerRemovidos.ts).
+//
+// O que NÃO se filtra, de propósito:
+//   - lookups de Cliente/Rat/Proposta/FormaPagamento/CondicaoPagamento, que só decoram a
+//     linha: filtrar ali faria um pedido vivo aparecer sem nome de cliente. A regra geral
+//     é "se o registro é lido a partir de uma FK de outra linha que continua visível, não
+//     se filtra";
+//   - a tela de detalhe (routes/pedidoVisualizacao.ts), que viraria 404 — ela devolve o
+//     pedido com `removidoEmSenior` preenchido e a tela mostra uma tarja.
 export const pedidosRouter = Router();
 pedidosRouter.use(requireAuth, requireRole("admin"));
 
@@ -245,7 +257,10 @@ function mapearPedido(p: Pedido, lookups: Lookups) {
 // regra de visibilidade por usuário aqui (admin vê tudo).
 pedidosRouter.get("/", async (req, res) => {
   try {
-    let pedidos = await prisma.pedido.findMany({ orderBy: [{ datemi: "desc" }, { numped: "desc" }] });
+    let pedidos = await prisma.pedido.findMany({
+      where: { removidoEmSenior: null },
+      orderBy: [{ datemi: "desc" }, { numped: "desc" }],
+    });
 
     const codclisUnicos = [...new Set(pedidos.map((p) => p.codcli))];
     const clientes = codclisUnicos.length > 0 ? await prisma.cliente.findMany({ where: { codcli: { in: codclisUnicos } } }) : [];
@@ -293,7 +308,7 @@ pedidosRouter.get("/", async (req, res) => {
 // o resultado) quanto por POST /sincronizar (que precisa da lista INTEIRA de codclis do
 // filtro, não só a da página visível).
 async function resolverGruposPorCliente(req: import("express").Request) {
-  const pedidosTodos = await prisma.pedido.findMany();
+  const pedidosTodos = await prisma.pedido.findMany({ where: { removidoEmSenior: null } });
 
   const codclisUnicos = [...new Set(pedidosTodos.map((p) => p.codcli))];
   const clientes = codclisUnicos.length > 0 ? await prisma.cliente.findMany({ where: { codcli: { in: codclisUnicos } } }) : [];
@@ -350,7 +365,10 @@ pedidosRouter.get("/por-cliente/:codcli/itens", async (req, res) => {
       return;
     }
 
-    let pedidos = await prisma.pedido.findMany({ where: { codcli }, orderBy: [{ datemi: "desc" }, { numped: "desc" }] });
+    let pedidos = await prisma.pedido.findMany({
+      where: { codcli, removidoEmSenior: null },
+      orderBy: [{ datemi: "desc" }, { numped: "desc" }],
+    });
 
     const cliente = await prisma.cliente.findUnique({ where: { codcli } });
     const clientePorCodcli = new Map(cliente ? [[cliente.codcli, cliente]] : []);
@@ -503,7 +521,7 @@ pedidosRouter.get("/sincronizar/status", (_req, res) => {
 // /atividades/indicadores em relação aos filtros da lista de Atividades).
 pedidosRouter.get("/indicadores", async (_req, res) => {
   try {
-    const pedidos = await prisma.pedido.findMany();
+    const pedidos = await prisma.pedido.findMany({ where: { removidoEmSenior: null } });
     const total = pedidos.length;
 
     const naoFechados = pedidos.filter((p) => p.sitped === 9).length;

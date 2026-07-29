@@ -31,6 +31,10 @@ pedidoVisualizacaoRouter.get("/:codemp/:codfil/:numped", async (req, res) => {
       return;
     }
 
+    // Sem filtro de `removidoEmSenior` aqui, diferente das listagens: quem chega nesta
+    // tela veio de um link direto e transformar isso em 404 esconderia a informação mais
+    // útil, que é "este pedido existia e sumiu do ERP". O registro vem normalmente, com a
+    // data de remoção, e a tela mostra uma tarja.
     const pedido = await prisma.pedido.findUnique({ where: { codemp_codfil_numped: { codemp, codfil, numped } } });
     if (!pedido) {
       res.status(404).json({ error: "Pedido não encontrado" });
@@ -76,6 +80,9 @@ pedidoVisualizacaoRouter.get("/:codemp/:codfil/:numped", async (req, res) => {
         obsped: textoOuNulo(pedido.obsped),
         obsmot: textoOuNulo(pedido.obsmot),
         pedcli: textoOuNulo(pedido.pedcli),
+        // null = pedido vivo no Senior. Preenchido = sumiu de lá e já não aparece nas
+        // listagens; os dados abaixo são o último retrato conhecido.
+        removidoEmSenior: pedido.removidoEmSenior,
       },
     });
   } catch (error) {

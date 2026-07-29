@@ -1,6 +1,8 @@
 import cron from "node-cron";
-import { runSqlViaSoapPaginated } from "../soap/client";
+import { Prisma } from "@prisma/client";
+import { runSqlViaSoap, runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { carimbo, varrerRemovidos } from "./varrerRemovidos";
 
 export const JOB_NAME = "pedidos-sync";
 // jobName separado pro sync sob demanda de um cliente só (runPedidoSyncPorCliente): o
@@ -12,12 +14,17 @@ export const CRON_EXPR = "35 4 * * *"; // horário livre, sem dependência de ou
 export const CAMPO_DATA: string | null = "DatEmi";
 const BASE_QUERY = `SELECT CodEmp AS codemp, CodFil AS codfil, NumPed AS numped, TipPed AS tipped, PrcPed AS prcped, TnsPro AS tnspro, TnsSer AS tnsser, DatEmi AS datemi, HorEmi AS horemi, DatPrv AS datprv, ObsPed AS obsped, VlrLiq AS vlrliq, ObsMot AS obsmot, CodCli AS codcli, PedCli AS pedcli, CodCpg AS codcpg, CodFpg AS codfpg, SitPed AS sitped, usu_numrat AS numrat FROM E120PED`;
 
+// Guarda principal da varredura: quantas linhas a origem diz ter. Precisa ter o MESMO
+// FROM/WHERE da consulta do sync, senão a comparação acusa truncamento onde não houve.
+// O alias é obrigatório — o serviço usa FOR JSON internamente e recusa coluna sem alias.
+const QUERY_CONTAGEM_ORIGEM = `SELECT COUNT(*) AS total FROM E120PED`;
+
 function montarQuery(desde?: Date): string {
   if (!desde) return BASE_QUERY;
   return `${BASE_QUERY} WHERE ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
 }
 
-interface PedidoRow {
+export interface PedidoRow {
   codemp: number;
   codfil: number;
   numped: number;
@@ -39,8 +46,10 @@ interface PedidoRow {
   numrat?: number;
 }
 
-async function upsertPedido(row: PedidoRow): Promise<void> {
-  const data = { codemp: row.codemp, codfil: row.codfil, numped: row.numped, tipped: row.tipped, prcped: row.prcped, tnspro: row.tnspro, tnsser: row.tnsser, datemi: new Date(row.datemi), horemi: row.horemi, datprv: row.datprv != null ? new Date(row.datprv) : null, obsped: row.obsped, vlrliq: row.vlrliq, obsmot: row.obsmot, codcli: row.codcli, pedcli: row.pedcli, codcpg: row.codcpg, codfpg: row.codfpg, sitped: row.sitped, numrat: row.numrat != null ? BigInt(row.numrat) : null };
+// `inicio` é o instante em que a execução começou; vai pro carimbo `vistoEmSync` de toda
+// linha vista nesta rodada, e é o que a varredura usa depois pra descobrir quem não veio.
+async function upsertPedido(row: PedidoRow, inicio: Date): Promise<void> {
+  const data = { codemp: row.codemp, codfil: row.codfil, numped: row.numped, tipped: row.tipped, prcped: row.prcped, tnspro: row.tnspro, tnsser: row.tnsser, datemi: new Date(row.datemi), horemi: row.horemi, datprv: row.datprv != null ? new Date(row.datprv) : null, obsped: row.obsped, vlrliq: row.vlrliq, obsmot: row.obsmot, codcli: row.codcli, pedcli: row.pedcli, codcpg: row.codcpg, codfpg: row.codfpg, sitped: row.sitped, numrat: row.numrat != null ? BigInt(row.numrat) : null, ...carimbo(inicio) };
   await prisma.pedido.upsert({
     where: { codemp_codfil_numped: { codemp: row.codemp, codfil: row.codfil, numped: row.numped } },
     update: data,
@@ -48,20 +57,48 @@ async function upsertPedido(row: PedidoRow): Promise<void> {
   });
 }
 
+// Extraído do laço pra poder ser exercitado com linhas sintéticas, sem SOAP, pelo script
+// backend/prisma/verificarVarreduraRemocoes.ts — mesmo motivo pelo qual propostaSync.ts
+// separou processarLinhasProposta.
+export async function processarLinhasPedido(rows: PedidoRow[], inicio: Date): Promise<void> {
+  for (const row of rows) {
+    await upsertPedido(row, inicio);
+  }
+}
+
 export async function runPedidoSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
+  const inicio = new Date();
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codfil", "numped"])) as PedidoRow[];
 
-    for (const row of rows) {
-      await upsertPedido(row);
-    }
+    await processarLinhasPedido(rows, inicio);
+
+    // Varredura só faz sentido no modo COMPLETO: no incremental a query é um recorte por
+    // DatEmi, então quase toda a tabela ficaria sem carimbo e seria acusada de removida.
+    const varredura = desde
+      ? null
+      : await varrerRemovidos<Prisma.PedidoWhereInput>(prisma.pedido, {
+          jobName: JOB_NAME,
+          inicio,
+          linhasProcessadas: rows.length,
+          escopo: {},
+          queryContagemOrigem: QUERY_CONTAGEM_ORIGEM,
+        });
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success" },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: varredura?.resumo ?? `${rows.length} linha(s), sem varredura (sync incremental)`,
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -111,6 +148,7 @@ export async function runPedidoSyncPorClientes(codclis: number[]): Promise<Resul
       ? `${BASE_QUERY} WHERE CodCli IN (${lotes[0].join(",")})`
       : `${BASE_QUERY} WHERE CodCli IN (...) — ${alvos.length} cliente(s) em ${lotes.length} lote(s)`;
 
+  const inicio = new Date();
   try {
     // Chaves já existentes lidas ANTES dos upserts, pra conseguir dizer na tela quantos
     // pedidos são novos e quantos só foram atualizados.
@@ -128,9 +166,38 @@ export async function runPedidoSyncPorClientes(codclis: number[]): Promise<Resul
       total += rows.length;
       for (const row of rows) {
         if (!chavesExistentes.has(`${row.codemp}-${row.codfil}-${row.numped}`)) criados += 1;
-        await upsertPedido(row);
+        await upsertPedido(row, inicio);
       }
     }
+
+    // Varredura restrita aos clientes consultados: sem esse escopo, um sync de um cliente
+    // só marcaria como removida a tabela inteira que ele nem consultou. Restrita assim,
+    // ela detecta exclusão dentro daquele cliente de graça — e é o caminho mais rápido de
+    // conferir a detecção, porque são poucos pedidos pra checar no Senior.
+    const varredura = await varrerRemovidos<Prisma.PedidoWhereInput>(prisma.pedido, {
+      jobName: JOB_NAME_CLIENTE,
+      inicio,
+      linhasProcessadas: total,
+      escopo: { codcli: { in: alvos } },
+      // Contagem na origem lote a lote, somada — mesmo recorte da consulta principal.
+      contarOrigem: async () => {
+        let soma = 0;
+        for (const lote of lotes) {
+          const r = (await runSqlViaSoap(
+            `SELECT COUNT(*) AS total FROM E120PED WHERE CodCli IN (${lote.join(",")})`
+          )) as { total: number }[];
+          soma += Number(r?.[0]?.total ?? NaN);
+        }
+        return soma;
+      },
+      // Teto mais frouxo que o do job noturno porque aqui o escopo é pequeno: um cliente
+      // com 3 pedidos estouraria os 2% do padrão com uma única exclusão legítima. O mínimo
+      // de 25 cobre esse caso (dá pra esvaziar um cliente pequeno inteiro), e os 10%
+      // limitam o estrago quando o escopo é grande — o botão "Sinc. ERP — N clientes do
+      // filtro" aceita o filtro inteiro, então uma clicada só pode cobrir os 265 clientes
+      // e 12 mil pedidos de uma vez.
+      teto: { pct: 0.1, minimo: 25 },
+    });
 
     const resultado = { total, criados, atualizados: total - criados };
     await prisma.syncLog.create({
@@ -138,7 +205,12 @@ export async function runPedidoSyncPorClientes(codclis: number[]): Promise<Resul
         jobName: JOB_NAME_CLIENTE,
         query: queryLog,
         status: "success",
-        message: `${alvos.length} cliente(s), ${total} pedido(s): ${criados} novo(s), ${resultado.atualizados} atualizado(s)`,
+        message:
+          `${alvos.length} cliente(s), ${total} pedido(s): ${criados} novo(s), ` +
+          `${resultado.atualizados} atualizado(s) — ${varredura.resumo}`,
+        varreduraModo: varredura.modo,
+        varreduraDetectados: varredura.candidatos,
+        varreduraInicio: inicio,
       },
     });
     return resultado;

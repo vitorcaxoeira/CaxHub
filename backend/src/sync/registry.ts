@@ -41,6 +41,27 @@ export interface SyncJobDescriptor {
   // Total de linhas já sincronizadas localmente (tabela pequena o bastante — no máximo
   // dezenas de milhares de linhas hoje — pra um COUNT(*) direto não pesar no polling da tela).
   contarRegistros: () => Promise<number>;
+  // Detecção de exclusão no Senior (ver sync/varrerRemovidos.ts). Opcionais de propósito:
+  // só os jobs já adaptados preenchem, os outros continuam exatamente como estavam. Quando
+  // ausentes, a tela não mostra a coluna de removidos pra essa tabela.
+  contarRemovidos?: () => Promise<number>;
+  // Amostra dos registros marcados, pra conferir no Senior se a detecção está certa —
+  // é o que torna a fase de observação verificável.
+  //
+  // `candidatosDesde` é o instante da última varredura (SyncLog.varreduraInicio): quando
+  // informado, a lista inclui também quem AINDA NÃO foi marcado mas seria (carimbo mais
+  // antigo que isso). Sem isso, em modo "simular" a lista viria sempre vazia — e é
+  // justamente na simulação que a conferência precisa acontecer.
+  listarRemovidos?: (limite: number, candidatosDesde: Date | null) => Promise<ItemRemovido[]>;
+}
+
+export interface ItemRemovido {
+  // Chave natural do registro no Senior, pra busca manual lá (ex.: "1/1/12124").
+  chave: string;
+  rotulo: string;
+  // null quando é candidato ainda não marcado (varredura em simulação).
+  removidoEmSenior: Date | null;
+  marcado: boolean;
 }
 
 export const SYNC_JOBS: SyncJobDescriptor[] = [
@@ -70,7 +91,36 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   // RatItem roda depois de Rat: RatItem.ratId é resolvido casando (codemp, numrat, codpro) contra Rat já sincronizado.
   { jobName: RAT_ITEM_JOB, displayName: "Itens de RAT (Apontamentos)", cronExpr: RAT_ITEM_CRON, suportaAlterados: RAT_ITEM_DATA != null, run: runRatItemSync, contarRegistros: () => prisma.ratItem.count() },
   // Pedido.numrat é só um valor espelhado (campo customizado do Senior), sem resolução de FK no sync — não depende de nenhum job acima.
-  { jobName: PEDIDO_JOB, displayName: "Pedidos", cronExpr: PEDIDO_CRON, suportaAlterados: PEDIDO_DATA != null, run: runPedidoSync, contarRegistros: () => prisma.pedido.count() },
+  // Piloto da detecção de exclusão no Senior — por enquanto o único job com contarRemovidos/
+  // listarRemovidos preenchidos (ver sync/politicaVarredura.ts pro modo atual).
+  {
+    jobName: PEDIDO_JOB,
+    displayName: "Pedidos",
+    cronExpr: PEDIDO_CRON,
+    suportaAlterados: PEDIDO_DATA != null,
+    run: runPedidoSync,
+    contarRegistros: () => prisma.pedido.count(),
+    contarRemovidos: () => prisma.pedido.count({ where: { removidoEmSenior: { not: null } } }),
+    listarRemovidos: async (limite, candidatosDesde) => {
+      const pedidos = await prisma.pedido.findMany({
+        where: candidatosDesde
+          ? // Marcados + os que a varredura marcaria agora (útil em modo "simular", onde
+            // os primeiros não existem). O `lt` estrito ignora carimbo NULL, então
+            // registro nascido fora do sync nunca entra nesta lista.
+            { OR: [{ removidoEmSenior: { not: null } }, { vistoEmSync: { lt: candidatosDesde } }] }
+          : { removidoEmSenior: { not: null } },
+        orderBy: [{ removidoEmSenior: "desc" }, { numped: "desc" }],
+        take: limite,
+        select: { codemp: true, codfil: true, numped: true, codcli: true, datemi: true, removidoEmSenior: true },
+      });
+      return pedidos.map((p) => ({
+        chave: `${p.codemp}/${p.codfil}/${p.numped}`,
+        rotulo: `Pedido ${p.numped} — cliente ${p.codcli}, emissão ${p.datemi.toISOString().slice(0, 10)}`,
+        removidoEmSenior: p.removidoEmSenior,
+        marcado: p.removidoEmSenior != null,
+      }));
+    },
+  },
   { jobName: FORMA_PAGAMENTO_JOB, displayName: "Formas de Pagamento", cronExpr: FORMA_PAGAMENTO_CRON, suportaAlterados: FORMA_PAGAMENTO_DATA != null, run: runFormaPagamentoSync, contarRegistros: () => prisma.formaPagamento.count() },
   { jobName: CONDICAO_PAGAMENTO_JOB, displayName: "Condições de Pagamento", cronExpr: CONDICAO_PAGAMENTO_CRON, suportaAlterados: CONDICAO_PAGAMENTO_DATA != null, run: runCondicaoPagamentoSync, contarRegistros: () => prisma.condicaoPagamento.count() },
 ];
