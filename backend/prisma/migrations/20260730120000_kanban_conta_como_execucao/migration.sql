@@ -1,0 +1,16 @@
+-- Liga a coluna de trabalho ativo do Kanban.
+--
+-- Não há mudança de schema aqui: é correção de DADO. A coluna `contaComoExecucao` nasceu
+-- com default false e é o que faz entrar em "Em Andamento" abrir uma AtividadeSessaoExecucao
+-- (ver montarOperacoesMovimentacao em backend/src/domain/execucaoAtividade.ts). O seed
+-- (prisma/seed.ts) força esse valor, mas o deploy roda só `prisma migrate deploy` e nunca o
+-- seed — então produção ficou com as quatro colunas em false desde a criação.
+--
+-- O efeito não era só o cronômetro do card não aparecer: sem sessão de execução, nada chega
+-- à lista de sessões pendentes de "Meus Apontamentos", ou seja, era impossível confirmar
+-- apontamento e, por consequência, registrar qualquer coisa no Senior. Produção tinha 0
+-- sessões desde sempre.
+--
+-- Como migration (e não UPDATE manual), qualquer ambiente novo já nasce correto — foi
+-- exatamente essa divergência entre ambientes que causou o problema.
+UPDATE "quadro_colunas" SET "contaComoExecucao" = true WHERE "nome" = 'Em Andamento';
