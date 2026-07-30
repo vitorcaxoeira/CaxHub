@@ -10,6 +10,18 @@ import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 export const RAIA_A_FAZER = "A Fazer";
 export const RAIA_EM_ANDAMENTO = "Em Andamento";
 
+// Coluna efetiva de um card. `AtividadeConsultor.colunaId` nulo significa "nunca foi
+// movida", e vale como a primeira raia do quadro — hoje 99% das atividades estão assim
+// (2.206 de 2.227 na base local), porque só quem foi arrastado ganhou coluna gravada.
+//
+// Função pura, e uma só, de propósito: a listagem já aplicava esse fallback pra renderizar
+// o card em "A Fazer", mas a validação de Iniciar/Parar lia o `colunaId` cru. O resultado
+// era o card aparecer em "A Fazer" e o start recusar dizendo que ele não estava lá. Quem
+// mostra e quem valida têm que enxergar a MESMA coluna.
+export function colunaEfetiva(colunaDaAtividade: QuadroColuna | null, primeiraColuna: QuadroColuna | null): QuadroColuna | null {
+  return colunaDaAtividade ?? primeiraColuna;
+}
+
 export function podeIniciar(nomeColunaAtual: string | null | undefined): boolean {
   return nomeColunaAtual === RAIA_A_FAZER;
 }

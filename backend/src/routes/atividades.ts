@@ -21,7 +21,14 @@ import { criarEventosDeData } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
-import { RAIA_A_FAZER, RAIA_EM_ANDAMENTO, montarOperacoesMovimentacao, podeIniciar, podeParar } from "../domain/execucaoAtividade";
+import {
+  RAIA_A_FAZER,
+  RAIA_EM_ANDAMENTO,
+  colunaEfetiva,
+  montarOperacoesMovimentacao,
+  podeIniciar,
+  podeParar,
+} from "../domain/execucaoAtividade";
 
 // Router à parte de `projetosRouter` (que hoje é admin+comercial só, por causa de
 // Propostas) — aqui a tela é aberta a qualquer usuário autenticado; quem pode ver/mover
@@ -233,7 +240,7 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
       if (!podeExecutarAcao(role, contexto, "visualizar", { depexe, codfor: a.codfor })) return null;
 
       const consultor = consultorPorCodfor.get(a.codfor);
-      const coluna = a.coluna ?? primeiraColuna ?? null;
+      const coluna = colunaEfetiva(a.coluna, primeiraColuna);
       const hoje = new Date(new Date().toDateString());
       // Atraso é medido pela data prevista de fim DA ATIVIDADE (planejamento manual do
       // CaxHub), não pelo prazo contratual da proposta inteira (datval, do Senior) — uma
@@ -260,7 +267,9 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         consultorFotoUrl: consultor?.usuariosCaxHub[0]?.fotoUrl ?? null,
         codfor: a.codfor,
         qtdhorPrevisto: a.qtdhor,
-        colunaId: a.colunaId ?? primeiraColuna?.id ?? null,
+        // Derivado de `coluna` (e não de `a.colunaId`) pra não haver como os dois
+        // divergirem — o card renderiza por `coluna` e o drag-and-drop compara por este id.
+        colunaId: coluna?.id ?? null,
         coluna,
         atrasada,
         dataPrevistaInicio: a.dataPrevistaInicio,
@@ -619,7 +628,14 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     // entrar numa coluna marcada como "em execução" abre uma nova. Lógica compartilhada
     // com POST /:id/start e /:id/stop — ver backend/src/domain/execucaoAtividade.ts.
     const agora = new Date();
-    const colunaAnterior = atividade.colunaId != null ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } }) : null;
+    // Mesma resolução de coluna da listagem e do start/stop. Aqui não há validação contra
+    // ela, mas é o que a auditoria registra como raia de origem — sem o fallback, mover um
+    // card que estava em "A Fazer" na tela ficaria gravado como vindo de lugar nenhum.
+    const [colunaGravada, primeiraColuna] = await Promise.all([
+      atividade.colunaId != null ? prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } }) : null,
+      prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } }),
+    ]);
+    const colunaAnterior = colunaEfetiva(colunaGravada, primeiraColuna);
     const correlationId = req.correlationId!;
 
     const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null;
@@ -668,8 +684,13 @@ async function carregarAtividadeParaExecucao(id: number) {
     where: { codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite } },
   });
   if (!item || item.depexe == null) return null;
-  const colunaAtual = atividade.colunaId != null ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } }) : null;
-  return { atividade, depexe: item.depexe, colunaAtual };
+  // Mesma resolução de coluna que a listagem usa (ver colunaEfetiva) — sem ela, atividade
+  // com colunaId nulo aparece em "A Fazer" no quadro e o start recusa com 409.
+  const [colunaDaAtividade, primeiraColuna] = await Promise.all([
+    atividade.colunaId != null ? prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } }) : null,
+    prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } }),
+  ]);
+  return { atividade, depexe: item.depexe, colunaAtual: colunaEfetiva(colunaDaAtividade, primeiraColuna) };
 }
 
 atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
