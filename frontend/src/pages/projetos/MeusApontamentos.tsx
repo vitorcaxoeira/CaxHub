@@ -6,7 +6,10 @@ import { Skeleton } from "../../components/ui/Skeleton";
 import { Spinner } from "../../components/ui/Spinner";
 import { Pagination } from "../../components/ui/Pagination";
 import { DropdownMenu } from "../../components/ui/DropdownMenu";
+import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
+import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { ModalEditarDescricao } from "../../components/projetos/ModalEditarDescricao";
+import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 
@@ -30,7 +33,11 @@ interface SessaoPendente {
 interface AtividadeResumo {
   id: number;
   codpro: number;
+  seqite: number | null;
   itemDescricao: string | null;
+  // Usado no cabeçalho do grupo do seletor — número de proposta sozinho não identifica o
+  // projeto pra quem lança pelo time.
+  cliente: string | null;
 }
 
 interface RatRow {
@@ -58,6 +65,8 @@ interface RatItemRow {
   atividadeId: number | null;
   codser: string | null;
   itemDescricao: string | null;
+  // Sequência do item na proposta — vira prefixo da descrição na coluna Item.
+  seqite: number | null;
   datati: string | null;
   horini: number | null;
   horfim: number | null;
@@ -80,6 +89,24 @@ interface ConsultorFiltro {
   nome: string;
 }
 
+// Cabeçalho da atividade devolvido por GET /atividades/:id/detalhe — o mesmo conjunto que
+// a tela de Atividades passa por prop pro AtividadeDetalhe. Só os campos consumidos aqui.
+interface AtividadeDetalheDados {
+  id: number;
+  codemp: number;
+  codpro: number;
+  numprj: number | null;
+  dataPrevistaInicio: string | null;
+  dataPrevistaFim: string | null;
+  itemDescricao: string | null;
+  itemQtdhor: number | null;
+  itemAlocado: number;
+  itemRealizado: number;
+  estruturaNome: string | null;
+  estruturaPercentual: number | null;
+  podeVerCronograma: boolean;
+}
+
 const dataCurtaFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" });
 const horaCurtaFormatter = new Intl.DateTimeFormat("pt-BR", { timeStyle: "short" });
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
@@ -90,6 +117,25 @@ function formatHorario(inicioIso: string, fimIso: string): string {
 
 function formatMinutos(minutos: number): string {
   return formatHoras(minutos / 60);
+}
+
+// Item da proposta com a sequência como prefixo ("3 - Automação de indicadores"). Mesma
+// forma de "código - descrição" já usada em cliente (`${codcli} - ${nomcli}`).
+//
+// Assinatura estrutural pra servir às DUAS tabelas da tela (sessões pendentes e itens da
+// RAT): elas mostram o mesmo dado e antes divergiam — aqui era sufixo entre parênteses,
+// lá não havia sequência nenhuma.
+function rotuloItem(item: { seqite: number | null; itemDescricao: string | null }): string {
+  const descricao = item.itemDescricao ?? "—";
+  return item.seqite != null ? `${item.seqite} - ${descricao}` : descricao;
+}
+
+// Quando a observação de um item pode ser alterada: as mesmas condições que o backend
+// valida em PATCH /apontamentos/:id (dono, RAT ainda Digitada, item não registrado no
+// Senior) mais a guarda de envio em voo — nesse instante o job já leu o registro pra
+// montar o payload, então a edição não chegaria ao ERP.
+function podeEditarObservacao(item: RatItemRow): boolean {
+  return item.editavel && item.sessaoId != null && item.envioStatus !== "enviando";
 }
 
 function formatHoraDoDia(minutosDesdeMeiaNoite: number): string {
@@ -186,8 +232,10 @@ const selectClass =
 // Tela do consultor: revisa as sessões que o sistema já rastreou automaticamente (ao
 // mover o card pra uma coluna "em execução", ver PATCH /atividades/:id/mover) e
 // confirma — só nesse momento vira um apontamento de verdade (RatItem) e entra na fila
-// pro Senior. O botão "+ Apontamento manual" cobre o caso de não ter passado pelo
-// Kanban (trabalho fora do CaxHub, ou esqueceu de mover o card).
+// pro Senior. O botão "+ Apontamento manual" cobre o caso de não ter passado pelo Kanban
+// (trabalho fora do CaxHub, ou esqueceu de mover o card) e é restrito a gestor de
+// departamento e admin — inclusive no servidor, ver podeLancarManual em
+// backend/src/routes/apontamentos.ts. Gestor pode lançar por qualquer consultor do time.
 //
 // Apontamentos confirmados aparecem agrupados por RAT (Rat/RatItem, ver backend/src/
 // routes/rats.ts) — uma RAT por consultor+proposta, aberta enquanto "Digitada",
@@ -215,7 +263,7 @@ export function MeusApontamentos() {
   const [pageRats, setPageRats] = useState(1);
   const [loadingRats, setLoadingRats] = useState(true);
   const [opcoesFiltro, setOpcoesFiltro] = useState<ConsultorFiltro[]>([]);
-  const [codforFiltro, setCodforFiltro] = useState("");
+  const [codforsFiltro, setCodforsFiltro] = useState<number[]>([]);
   const [buscaInput, setBuscaInput] = useState("");
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
   const [ratsExpandidas, setRatsExpandidas] = useState<Set<number>>(new Set());
@@ -224,6 +272,14 @@ export function MeusApontamentos() {
   const [sincronizando, setSincronizando] = useState<number | null>(null);
 
   const [modalManual, setModalManual] = useState(false);
+  // Por quem o apontamento pode ser lançado: o próprio usuário e, se for gestor, o time
+  // dos departamentos que ele gerencia. Separado de `opcoesFiltro` (filtro das RATs), que
+  // vem das RATs existentes e não serve aqui — consultor sem RAT não apareceria.
+  const [consultoresManual, setConsultoresManual] = useState<ConsultorFiltro[]>([]);
+  // Quem decide é o servidor (é ele que também recusa o POST) — a tela só obedece.
+  const [podeLancarManual, setPodeLancarManual] = useState(false);
+  const [manualCodfor, setManualCodfor] = useState("");
+  const [carregandoAtividadesManual, setCarregandoAtividadesManual] = useState(false);
   const [manualAtividadeId, setManualAtividadeId] = useState("");
   const [manualData, setManualData] = useState("");
   const [manualInicio, setManualInicio] = useState("");
@@ -244,11 +300,35 @@ export function MeusApontamentos() {
       .finally(() => setLoading(false));
   }
 
+  // Atividades de quem vai receber o apontamento. Sem codfor, o backend usa o próprio
+  // usuário — é o caminho do consultor comum, idêntico ao de antes.
+  function carregarAtividadesManual(codfor: string) {
+    setCarregandoAtividadesManual(true);
+    axios
+      .get("/api/apontamentos/minhas-atividades", { params: { codfor: codfor || undefined } })
+      .then(({ data }) => setAtividades(data.atividades))
+      .catch((err) => setErroManual(err.response?.data?.error ?? "Falha ao carregar as atividades do consultor"))
+      .finally(() => setCarregandoAtividadesManual(false));
+  }
+
+  function onMudarConsultorManual(codfor: string) {
+    setManualCodfor(codfor);
+    // Limpa a atividade: a que estava escolhida é de outro consultor e o POST recusaria.
+    setManualAtividadeId("");
+    setErroManual(null);
+    carregarAtividadesManual(codfor);
+  }
+
   function carregarRats() {
     setLoadingRats(true);
     axios
       .get("/api/rats", {
-        params: { codfor: codforFiltro || undefined, busca: buscaDebounced || undefined, page: pageRats, pageSize: PAGE_SIZE_RATS },
+        params: {
+          codfor: codforsFiltro.length > 0 ? codforsFiltro.join(",") : undefined,
+          busca: buscaDebounced || undefined,
+          page: pageRats,
+          pageSize: PAGE_SIZE_RATS,
+        },
       })
       .then(({ data }) => {
         setRats(data.rats);
@@ -265,13 +345,20 @@ export function MeusApontamentos() {
       .get("/api/rats/opcoes-filtro")
       .then(({ data }) => setOpcoesFiltro(data.consultores))
       .catch(() => {});
+    axios
+      .get("/api/apontamentos/consultores")
+      .then(({ data }) => {
+        setConsultoresManual(data.consultores);
+        setPodeLancarManual(Boolean(data.podeLancarManual));
+      })
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     carregarRats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [codforFiltro, buscaDebounced, pageRats]);
+  }, [codforsFiltro, buscaDebounced, pageRats]);
 
   // Digitar reseta pra página 1 (senão a busca poderia "sumir" numa página que não
   // existe mais no resultado filtrado) — só dispara depois do debounce, pra não
@@ -281,8 +368,10 @@ export function MeusApontamentos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buscaDebounced]);
 
-  function onMudarFiltroConsultor(codfor: string) {
-    setCodforFiltro(codfor);
+  function onMudarFiltroConsultor(codfors: number[]) {
+    setCodforsFiltro(codfors);
+    // Volta pra página 1: o resultado filtrado pode ter menos páginas que o atual, e a
+    // lista "sumiria" numa página que não existe mais.
     setPageRats(1);
   }
 
@@ -292,6 +381,15 @@ export function MeusApontamentos() {
   // Resultado informativo do "Sinc. ERP" (ex.: itens desvinculados). Separado de `erro`
   // porque não é falha — é o sync tendo encontrado divergência e resolvido.
   const [avisoSinc, setAvisoSinc] = useState<string | null>(null);
+  // Atividade aberta no painel de detalhe (o mesmo do card do quadro), em modo leitura.
+  const [detalheAtividade, setDetalheAtividade] = useState<AtividadeDetalheDados | null>(null);
+  // Item da RAT com a observação em edição. Guarda o ratId junto porque depois de salvar é
+  // preciso recarregar os itens daquela RAT.
+  const [editandoObservacao, setEditandoObservacao] = useState<{
+    item: RatItemRow;
+    ratId: number;
+    somenteLeitura: boolean;
+  } | null>(null);
 
   // Timers do acompanhamento, cancelados ao sair da tela pra não bater em endpoint depois
   // que o componente já saiu.
@@ -398,6 +496,12 @@ export function MeusApontamentos() {
   }
 
   function limparFormularioManual() {
+    // Volta pro próprio usuário e recarrega as atividades dele: sem isso, o gestor que
+    // lançou por alguém do time reabriria o modal com a lista do outro consultor.
+    if (manualCodfor) {
+      setManualCodfor("");
+      carregarAtividadesManual("");
+    }
     setManualAtividadeId("");
     setManualData("");
     setManualInicio("");
@@ -478,6 +582,35 @@ export function MeusApontamentos() {
     }
   }
 
+  // Abre o MESMO painel de detalhe do card do quadro, só que em leitura. Os dados de
+  // cabeçalho vêm de GET /atividades/:id/detalhe, que reaproveita a derivação da listagem
+  // de Atividades (item, alocado, realizado, estrutura) — aqui só se tem o atividadeId.
+  async function abrirDetalheAtividade(atividadeId: number) {
+    try {
+      const { data } = await axios.get(`/api/atividades/${atividadeId}/detalhe`);
+      setDetalheAtividade(data.atividade);
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao abrir a atividade");
+    }
+  }
+
+  // Observação (RatItem.desati) de um item já confirmado. É o campo que a aprovação da RAT
+  // exige em todos os itens e que vai no desAti do Senior, então precisa ser preenchível
+  // depois do fato — o backend só permite enquanto o item não foi registrado no ERP.
+  async function salvarObservacaoItem(sessaoId: number, ratId: number, texto: string) {
+    try {
+      await axios.patch(`/api/apontamentos/${sessaoId}`, { desati: texto });
+      setEditandoObservacao(null);
+      const { data } = await axios.get(`/api/rats/${ratId}/itens`);
+      setItensPorRat((i) => ({ ...i, [ratId]: data.itens }));
+      // A RAT só pode ser aprovada quando todo item tem observação, e esse gate é
+      // calculado no backend — recarregar a lista atualiza o "Aprovar" do menu.
+      carregarRats();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao salvar a observação");
+    }
+  }
+
   async function sincronizarErp(rat: RatRow) {
     setSincronizando(rat.id);
     setAvisoSinc(null);
@@ -526,15 +659,19 @@ export function MeusApontamentos() {
         <div>
           <h1 className="font-display text-2xl font-bold text-foreground">Meus Apontamentos</h1>
           <p className="mt-1 text-sm text-muted">
-            Revise o tempo rastreado nas suas atividades e confirme pra virar apontamento oficial.
+            Revise o tempo rastreado nas atividades e confirme pra virar apontamento oficial.
           </p>
         </div>
-        <button
-          onClick={() => setModalManual(true)}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          + Apontamento manual
-        </button>
+        {/* Restrito a gestor de departamento e admin (o servidor decide e também recusa o
+            POST) — consultor comum aponta pelo quadro, que gera sessão rastreada. */}
+        {podeLancarManual && (
+          <button
+            onClick={() => setModalManual(true)}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            + Apontamento manual
+          </button>
+        )}
       </div>
 
       {erro && (
@@ -638,10 +775,9 @@ export function MeusApontamentos() {
                         </td>
                         <td
                           className="hidden max-w-[220px] truncate px-2.5 py-3.5 text-sm text-muted lg:table-cell"
-                          title={s.itemDescricao ?? undefined}
+                          title={rotuloItem(s)}
                         >
-                          {s.itemDescricao ?? "—"}
-                          {s.seqite != null && ` (${s.seqite})`}
+                          {rotuloItem(s)}
                         </td>
                         <td
                           className="hidden max-w-[200px] truncate px-2.5 py-3.5 text-sm text-muted md:table-cell"
@@ -709,14 +845,13 @@ export function MeusApontamentos() {
             </div>
             <div className="flex items-center gap-3">
               {opcoesFiltro.length > 1 && (
-                <select value={codforFiltro} onChange={(e) => onMudarFiltroConsultor(e.target.value)} className={selectClass}>
-                  <option value="">Todos os consultores</option>
-                  {opcoesFiltro.map((c) => (
-                    <option key={c.codfor} value={c.codfor}>
-                      {c.nome}
-                    </option>
-                  ))}
-                </select>
+                <MultiSelectDropdown
+                  opcoes={opcoesFiltro.map((c) => ({ value: c.codfor, label: c.nome }))}
+                  selecionados={codforsFiltro}
+                  onChange={onMudarFiltroConsultor}
+                  labelTodos="Todos os consultores"
+                  labelSufixo="consultores"
+                />
               )}
             </div>
           </div>
@@ -860,6 +995,15 @@ export function MeusApontamentos() {
                                   <table className="w-full border-collapse">
                                     <thead>
                                       <tr>
+                                        <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                          Id. Ativ.
+                                        </th>
+                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                          Serviço
+                                        </th>
+                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                          Item
+                                        </th>
                                         <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                           Data
                                         </th>
@@ -872,21 +1016,32 @@ export function MeusApontamentos() {
                                         <th className="w-2/5 py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                           Observação
                                         </th>
-                                        <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Atividade
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Serviço
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Item
-                                        </th>
                                         <th className="py-1.5" />
                                       </tr>
                                     </thead>
                                     <tbody>
                                       {itens.map((item) => (
                                         <tr key={item.id} className="border-t border-border/40">
+                                          <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums">
+                                            {item.atividadeId != null ? (
+                                              <button
+                                                onClick={() => abrirDetalheAtividade(item.atividadeId!)}
+                                                className="text-primary hover:underline"
+                                                title="Abrir a atividade (somente visualização)"
+                                              >
+                                                {item.atividadeId}
+                                              </button>
+                                            ) : (
+                                              <span className="text-muted">—</span>
+                                            )}
+                                          </td>
+                                          <td className="py-1.5 pr-3 font-mono text-[12.5px] text-muted">{item.codser ?? "—"}</td>
+                                          <td
+                                            className="max-w-[260px] truncate py-1.5 pr-3 text-[12.5px] text-muted"
+                                            title={rotuloItem(item)}
+                                          >
+                                            {rotuloItem(item)}
+                                          </td>
                                           <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
                                             {item.datati ? dateFormatter.format(new Date(item.datati)) : "—"}
                                           </td>
@@ -898,20 +1053,28 @@ export function MeusApontamentos() {
                                           <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">
                                             {item.duracaoMinutos != null ? formatMinutos(item.duracaoMinutos) : "—"}
                                           </td>
-                                          <td className="py-1.5 pr-3">
-                                            <span className={`text-[12.5px] ${item.desati?.trim() ? "text-foreground" : "text-warning"}`}>
-                                              {item.desati ?? "Sem observação"}
-                                            </span>
-                                          </td>
-                                          <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-muted">
-                                            {item.atividadeId ?? "—"}
-                                          </td>
-                                          <td className="py-1.5 pr-3 font-mono text-[12.5px] text-muted">{item.codser ?? "—"}</td>
-                                          <td
-                                            className="max-w-[260px] truncate py-1.5 pr-3 text-[12.5px] text-muted"
-                                            title={item.itemDescricao ?? undefined}
-                                          >
-                                            {item.itemDescricao ?? "—"}
+                                          {/* Observação é o que trava a aprovação da RAT (todo item precisa ter) e
+                                              vai no desAti do Senior — por isso ela mesma é o clique, em vez de
+                                              mais uma ação na coluna da direita. Editável abre pra editar; já
+                                              registrado no ERP abre a MESMA janela em leitura, que é onde se lê o
+                                              texto completo sem depender do tooltip. */}
+                                          <td className="max-w-[320px] py-1.5 pr-3">
+                                            <button
+                                              onClick={() =>
+                                                setEditandoObservacao({
+                                                  item,
+                                                  ratId: rat.id,
+                                                  somenteLeitura: !podeEditarObservacao(item),
+                                                })
+                                              }
+                                              title={item.desati?.trim() || "Sem observação"}
+                                              className={`block w-full truncate text-left text-[12.5px] hover:underline ${
+                                                item.desati?.trim() ? "text-foreground" : "font-medium text-warning"
+                                              }`}
+                                            >
+                                              {item.desati?.trim() ||
+                                                (podeEditarObservacao(item) ? "Sem observação — clique para preencher" : "Sem observação")}
+                                            </button>
                                           </td>
                                           <td className="py-1.5 text-right">
                                             <AcaoIntegracao
@@ -971,6 +1134,46 @@ export function MeusApontamentos() {
           );
         })()}
 
+      {/* Edição da observação de um item JÁ confirmado (dentro da RAT). Diferente do modal
+          acima, que edita a descrição de uma sessão ainda não confirmada e só guarda o
+          texto em memória, aqui o salvar vai direto pro banco via PATCH. */}
+      {editandoObservacao && (
+        <ModalEditarDescricao
+          somenteLeitura={editandoObservacao.somenteLeitura}
+          titulo={`Apontamento de ${
+            editandoObservacao.item.datati ? dateFormatter.format(new Date(editandoObservacao.item.datati)) : "—"
+          }`}
+          valorInicial={editandoObservacao.item.desati ?? ""}
+          onSalvar={(texto) =>
+            salvarObservacaoItem(editandoObservacao.item.sessaoId!, editandoObservacao.ratId, texto)
+          }
+          onFechar={() => setEditandoObservacao(null)}
+        />
+      )}
+
+      {/* Mesmo painel que abre ao clicar no card do quadro, em modo leitura: todas as ações
+          de escrita do AtividadeDetalhe (planejamento, checklist, anexos, comentários) são
+          governadas por `podeEditar`, então false basta pra virar só visualização. */}
+      {detalheAtividade && (
+        <AtividadeDetalhe
+          atividadeId={detalheAtividade.id}
+          titulo={`Proposta ${detalheAtividade.codpro} · Projeto ${detalheAtividade.numprj ?? "—"}`}
+          podeEditar={false}
+          dataPrevistaInicio={detalheAtividade.dataPrevistaInicio}
+          dataPrevistaFim={detalheAtividade.dataPrevistaFim}
+          codemp={detalheAtividade.codemp}
+          codpro={detalheAtividade.codpro}
+          itemDescricao={detalheAtividade.itemDescricao}
+          itemQtdhor={detalheAtividade.itemQtdhor}
+          itemAlocado={detalheAtividade.itemAlocado}
+          itemRealizado={detalheAtividade.itemRealizado}
+          estruturaNome={detalheAtividade.estruturaNome}
+          estruturaPercentual={detalheAtividade.estruturaPercentual}
+          podeVerCronograma={detalheAtividade.podeVerCronograma}
+          onClose={() => setDetalheAtividade(null)}
+        />
+      )}
+
       {modalManual && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-lg">
@@ -992,17 +1195,39 @@ export function MeusApontamentos() {
               </p>
             )}
             <div className="space-y-3">
+              {/* Só aparece pra quem pode lançar por mais de uma pessoa (gestor/admin) —
+                  consultor comum recebe uma lista com ele mesmo e não vê seletor nenhum. */}
+              {consultoresManual.length > 1 && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] text-muted">Consultor</span>
+                  <select value={manualCodfor} onChange={(e) => onMudarConsultorManual(e.target.value)} className={selectClass}>
+                    <option value="">Eu mesmo</option>
+                    {consultoresManual.map((c) => (
+                      <option key={c.codfor} value={c.codfor}>
+                        {c.nome}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label className="flex flex-col gap-1">
                 <span className="text-[11px] text-muted">Atividade</span>
-                <select value={manualAtividadeId} onChange={(e) => setManualAtividadeId(e.target.value)} className={selectClass}>
-                  <option value="">Selecione...</option>
-                  {atividades.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      Proposta {a.codpro}
-                      {a.itemDescricao ? ` · ${a.itemDescricao}` : ""}
-                    </option>
-                  ))}
-                </select>
+                {/* Combobox em vez de <select>: a lista de um consultor chega a dezenas de
+                    atividades, com a mesma proposta repetida em vários itens. Agrupa por
+                    proposta+cliente e permite buscar — `<option>` nativo não aceita nada
+                    disso. */}
+                <SelectBuscavel
+                  opcoes={atividades.map((a) => ({
+                    value: a.id,
+                    grupo: `Proposta ${a.codpro}${a.cliente ? ` · ${a.cliente}` : ""}`,
+                    rotulo: rotuloItem(a),
+                  }))}
+                  valor={manualAtividadeId ? Number(manualAtividadeId) : null}
+                  onChange={(id) => setManualAtividadeId(String(id))}
+                  placeholder={carregandoAtividadesManual ? "Carregando..." : "Selecione a atividade..."}
+                  textoVazio="Nenhuma atividade disponível para este consultor."
+                  desabilitado={carregandoAtividadesManual}
+                />
               </label>
               <label className="flex flex-col gap-1">
                 <span className="text-[11px] text-muted">Data</span>

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
+import { resolverContextoConsultor, podeExecutarAcao, codforsDoTime } from "../domain/contextoProjeto";
 import { sitratLabel, sitratTone } from "../domain/ratDominio";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
@@ -67,9 +67,15 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
 
     let rats = await ratsVisiveis(role, contexto);
 
-    const codforFiltro = req.query.codfor != null ? Number(req.query.codfor) : null;
-    if (codforFiltro != null && Number.isFinite(codforFiltro)) {
-      rats = rats.filter((r) => r.codfor === codforFiltro);
+    // Lista separada por vírgula ("134,207") — o seletor da tela é multi-seleção. Number("")
+    // é 0, não NaN, então sem a guarda de string vazia um filtro ausente viraria [0] e
+    // esconderia todas as RATs. Mesmo padrão dos filtros de Mercado > Pedidos.
+    const codforsFiltro = (typeof req.query.codfor === "string" ? req.query.codfor : "")
+      .split(",")
+      .map((v) => Number(v.trim()))
+      .filter((v) => Number.isFinite(v) && v !== 0);
+    if (codforsFiltro.length > 0) {
+      rats = rats.filter((r) => codforsFiltro.includes(r.codfor));
     }
 
     // Join com Proposta/Cliente precisa vir ANTES da paginação — busca por cliente
@@ -191,7 +197,15 @@ ratsRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
       return;
     }
     const rats = await ratsVisiveis(ctx.role, ctx.contexto);
-    const codforsUnicos = [...new Set(rats.map((r) => r.codfor))];
+
+    // Restringe ao time: `Rat.depexe` é o departamento do ITEM que originou o apontamento
+    // (ver buscarOuCriarRatRascunho), não o do consultor — então um consultor de fora do
+    // time que trabalhe num item deste departamento tem RAT visível aqui e, sem esse
+    // filtro, apareceria no seletor como se fosse do time. A visibilidade das RATs em si
+    // não muda: como gestor do departamento, ele continua vendo o trabalho feito nos itens
+    // dele. `null` = admin, sem restrição.
+    const doTime = await codforsDoTime(ctx.role, ctx.contexto);
+    const codforsUnicos = [...new Set(rats.map((r) => r.codfor))].filter((codfor) => doTime == null || doTime.has(codfor));
     const consultores =
       codforsUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } }) : [];
 
@@ -266,6 +280,8 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           atividadeId: item.sessoes[0]?.atividadeId ?? null,
           codser: propostaItem?.codser ?? null,
           itemDescricao: propostaItem?.despro ?? null,
+          // Sequência do item na proposta — exibida como prefixo da descrição na tela.
+          seqite: item.seqite,
           datati: item.datati,
           horini: item.horini,
           horfim: item.horfim,

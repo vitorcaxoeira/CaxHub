@@ -38,6 +38,40 @@ export async function resolverContextoConsultor(email: string): Promise<Contexto
   };
 }
 
+// Consultores ativos dos departamentos informados (o "time" de um Líder Técnico). Mora
+// aqui, e não numa rota, porque duas telas dependem da MESMA definição de time: o seletor
+// de consultor do apontamento manual e o filtro de consultor das RATs. Se cada uma
+// derivasse o time do seu próprio jeito, elas divergiriam.
+//
+// O caminho é DepartamentoTime -> Consultor, e a conversão de tipo é obrigatória:
+// `DepartamentoTime.codusu` é BigInt e `Consultor.codusu` é Int. Consultor sem `codfor`
+// fica fora — sem ele não há como amarrar a atividades nem a RATs.
+export async function consultoresDosDepartamentos(depexes: number[]): Promise<Consultor[]> {
+  if (depexes.length === 0) return [];
+  const doTime = await prisma.departamentoTime.findMany({
+    where: { depexe: { in: depexes }, sitreg: "A" },
+    select: { codemp: true, codusu: true },
+  });
+  if (doTime.length === 0) return [];
+  return prisma.consultor.findMany({
+    where: {
+      OR: doTime.map((t) => ({ codemp: t.codemp, codusu: Number(t.codusu) })),
+      codfor: { not: null },
+    },
+  });
+}
+
+// Codfors por quem o usuário pode olhar/lançar como "time": os consultores dos
+// departamentos que ele gerencia mais ele próprio. `null` = sem restrição (admin).
+export async function codforsDoTime(role: string, contexto: ContextoConsultor): Promise<Set<number> | null> {
+  if (role === "admin") return null;
+  const doTime = await consultoresDosDepartamentos(contexto.departamentosGerenciados);
+  const codfors = new Set<number>();
+  for (const c of doTime) if (c.codfor != null) codfors.add(c.codfor);
+  if (contexto.consultor?.codfor != null) codfors.add(contexto.consultor.codfor);
+  return codfors;
+}
+
 export type AcaoProjeto =
   | "visualizar"
   | "criar"
@@ -69,10 +103,18 @@ export function podeExecutarAcao(
   if (role === "comercial") return acao === "visualizar";
 
   if (contexto.departamentosGerenciados.includes(atividade.depexe)) {
-    // Apontamento é sempre de quem executou, mesmo pro Líder Técnico do departamento —
-    // gerenciar o time não é a mesma coisa que ter trabalhado na atividade.
-    if (acao === "lancarApontamento") return contexto.consultor?.codfor === atividade.codfor;
-    return ACOES_LIDER_TECNICO.includes(acao);
+    // O Líder Técnico PODE lançar apontamento por qualquer consultor do departamento que
+    // gerencia. Isso foi uma revisão consciente (30/07/2026): antes a regra aqui exigia
+    // `contexto.consultor?.codfor === atividade.codfor`, com o argumento de que gerenciar
+    // o time não é a mesma coisa que ter trabalhado na atividade. Na prática o gestor
+    // precisa registrar tempo de quem esqueceu de apontar, e nada se perde em
+    // rastreabilidade: o apontamento continua pertencendo a quem executou (a RAT nasce
+    // com o `codfor` da atividade, ver buscarOuCriarRatRascunho em routes/apontamentos.ts)
+    // e o AuditEvento grava o usuário logado, então fica registrado quem lançou.
+    //
+    // A liberação é SÓ deste ramo. No ramo de `departamentosTime` abaixo a exigência
+    // continua: colega de time não lança por colega.
+    return acao === "lancarApontamento" || ACOES_LIDER_TECNICO.includes(acao);
   }
 
   if (contexto.departamentosTime.includes(atividade.depexe)) {

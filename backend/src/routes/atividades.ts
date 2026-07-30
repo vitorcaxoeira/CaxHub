@@ -493,6 +493,42 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// GET /:id/detalhe — os mesmos dados de cabeçalho que a tela de Atividades passa por prop
+// pro AtividadeDetalhe, mas para UMA atividade. Existe porque "Meus Apontamentos" precisa
+// abrir esse mesmo detalhe a partir de um apontamento, e lá só se tem o atividadeId.
+//
+// Reaproveita `carregarAtividadesVisiveis` de propósito, mesmo carregando mais do que
+// precisa: é o que garante que a regra de visibilidade e os campos derivados (itemAlocado,
+// itemRealizado, percentual da estrutura, podeEditar, podeVerCronograma) sejam
+// exatamente os mesmos da listagem. Duplicar essa derivação aqui seria a receita pra
+// divergir silenciosamente depois. Como a busca é por id dentro da lista visível, uma
+// atividade que o usuário não pode ver simplesmente não é encontrada -> 404.
+atividadesRouter.get("/:id/detalhe", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+
+    const visiveis = await carregarAtividadesVisiveis(ctx.role, ctx.contexto);
+    const atividade = visiveis.find((a) => a.id === id);
+    if (!atividade) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+
+    res.json({ atividade });
+  } catch (error) {
+    handleError(res, error, "detalhe");
+  }
+});
+
 atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
   try {
     const id = Number(req.params.id);

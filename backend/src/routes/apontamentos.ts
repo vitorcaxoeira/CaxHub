@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
+import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos } from "../domain/contextoProjeto";
 import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
@@ -26,6 +26,21 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
 
 function minutosDesdeMeiaNoite(data: Date): number {
   return data.getHours() * 60 + data.getMinutes();
+}
+
+function nomeConsultor(c: { codfor: number | null; nomcom: string | null; nomfor: string | null }): string {
+  return c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`;
+}
+
+// Quem pode lançar apontamento MANUAL: só admin e Líder Técnico (quem gerencia algum
+// departamento). Decisão de produto de 30/07/2026 — lançar tempo "na mão" virou ferramenta
+// de gestão; o consultor comum aponta pelo Kanban (mover o card, ou Iniciar/Parar), que é
+// o caminho que gera sessão de execução rastreada.
+//
+// Vale pro POST /manual e pra decidir se a tela mostra o botão. Confirmar sessão já
+// rastreada (POST /confirmar) NÃO passa por aqui — isso todo consultor continua fazendo.
+function podeLancarManual(role: string, contexto: { departamentosGerenciados: number[] }): boolean {
+  return role === "admin" || contexto.departamentosGerenciados.length > 0;
 }
 
 // Uma RAT Digitada por consultor+proposta — reaproveita se já existir uma (do CaxHub OU
@@ -178,13 +193,70 @@ async function confirmarSessao(
   return { status: 201, body: { ratItemId: ratItem.id, ratId: rat.id } };
 }
 
-// Atividades do próprio consultor logado, já confirmadas pelo Senior (seqati != null,
-// exigido por confirmarSessao) — alimenta o select do apontamento manual.
+// GET /consultores — por quem o usuário pode lançar apontamento manual: ele mesmo e, se
+// for Líder Técnico, os consultores dos departamentos que gerencia.
+//
+// Não reaproveita GET /rats/opcoes-filtro de propósito: aquela lista é derivada das RATs
+// visíveis, então um consultor que ainda não tem RAT nenhuma não apareceria — justamente
+// o caso em que o gestor precisa lançar o primeiro apontamento dele.
+apontamentosRouter.get("/consultores", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    // Admin não tem departamento gerenciado por definição, mas pode lançar por qualquer um
+    // (podeExecutarAcao devolve true pra ele) — então recebe a lista inteira de consultores.
+    const doTime =
+      role === "admin"
+        ? await prisma.consultor.findMany({ where: { codfor: { not: null } } })
+        : await consultoresDosDepartamentos(contexto.departamentosGerenciados);
+
+    const porCodfor = new Map<number, string>();
+    // O próprio usuário entra sempre: gestor também aponta o tempo dele.
+    if (contexto.consultor?.codfor != null) {
+      porCodfor.set(contexto.consultor.codfor, nomeConsultor(contexto.consultor));
+    }
+    for (const c of doTime) {
+      // codfor nulo não tem como se ligar a atividade nenhuma — deixar na lista faria o
+      // gestor escolher um nome que nunca listaria atividades.
+      if (c.codfor != null) porCodfor.set(c.codfor, nomeConsultor(c));
+    }
+
+    res.json({
+      // A tela usa isso pra decidir se mostra o botão "+ Apontamento manual" — quem decide
+      // é o servidor, que é quem também recusa o POST.
+      podeLancarManual: podeLancarManual(role, contexto),
+      consultores: [...porCodfor.entries()]
+        .map(([codfor, nome]) => ({ codfor, nome }))
+        .sort((a, b) => a.nome.localeCompare(b.nome)),
+    });
+  } catch (error) {
+    handleError(res, error, "consultores");
+  }
+});
+
+// Atividades já confirmadas pelo Senior (seqati != null, exigido por confirmarSessao) —
+// alimenta o select do apontamento manual.
+//
+// Sem `codfor`, são as do próprio usuário (comportamento de sempre). Com `codfor`, as
+// daquele consultor — filtradas pelo MESMO predicado que o POST /manual vai aplicar, pra
+// que a lista nunca ofereça uma atividade que o lançamento recusaria.
 apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
-    const codfor = ctx?.contexto.consultor?.codfor;
-    if (!codfor) {
+    if (!ctx) {
+      res.json({ atividades: [] });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    const codforPedido = Number(req.query.codfor);
+    const codfor = Number.isFinite(codforPedido) ? codforPedido : contexto.consultor?.codfor;
+    if (codfor == null) {
       res.json({ atividades: [] });
       return;
     }
@@ -194,18 +266,40 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
       orderBy: { id: "desc" },
     });
     const chavesItem = atividades.map((a) => ({ codemp: a.codemp, codpro: a.codpro, seqite: a.seqite }));
-    const itens = chavesItem.length > 0 ? await prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : [];
+    const chavesProposta = [...new Set(atividades.map((a) => `${a.codemp}-${a.codpro}`))].map((chave) => {
+      const [codemp, codpro] = chave.split("-").map(Number);
+      return { codemp, codpro };
+    });
+
+    const [itens, propostas] = await Promise.all([
+      chavesItem.length > 0 ? prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : Promise.resolve([]),
+      // Cliente é o que dá sentido ao agrupamento por proposta no seletor da tela —
+      // número de proposta sozinho não identifica o projeto pra quem lança pelo time.
+      chavesProposta.length > 0
+        ? prisma.proposta.findMany({ where: { OR: chavesProposta }, include: { cliente: true } })
+        : Promise.resolve([]),
+    ]);
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
+    const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
 
     res.json({
-      atividades: atividades.map((a) => {
-        const item = itemPorChave.get(`${a.codemp}-${a.codpro}-${a.seqite}`);
-        return {
-          id: a.id,
-          codpro: a.codpro,
-          itemDescricao: item?.despro ?? null,
-        };
-      }),
+      atividades: atividades
+        .map((a) => {
+          const item = itemPorChave.get(`${a.codemp}-${a.codpro}-${a.seqite}`);
+          // `depexe` do item é o que governa a permissão (não o departamento do consultor)
+          // — mesma origem usada por confirmarSessao.
+          if (item?.depexe == null) return null;
+          if (!podeExecutarAcao(role, contexto, "lancarApontamento", { depexe: item.depexe, codfor })) return null;
+          const proposta = propostaPorChave.get(`${a.codemp}-${a.codpro}`);
+          return {
+            id: a.id,
+            codpro: a.codpro,
+            seqite: a.seqite,
+            itemDescricao: item.despro ?? null,
+            cliente: proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : null,
+          };
+        })
+        .filter((a): a is NonNullable<typeof a> => a !== null),
     });
   } catch (error) {
     handleError(res, error, "minhas-atividades");
@@ -323,6 +417,12 @@ apontamentosRouter.post("/manual", async (req: AuthenticatedRequest, res) => {
     const ctx = await contextoDoUsuario(req);
     if (!ctx) {
       res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeLancarManual(ctx.role, ctx.contexto)) {
+      res.status(403).json({
+        error: "Apontamento manual é restrito a gestor de departamento — registre o tempo movendo o card no quadro",
+      });
       return;
     }
 
@@ -528,6 +628,16 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
     }
     if (sessao.ratItem.rat.sitrat !== 9) {
       res.status(400).json({ error: "A RAT deste apontamento não está mais Digitada — não é possível editar" });
+      return;
+    }
+    // Envio em voo: o job já leu o RatItem pra montar o payload, então uma edição agora
+    // não chegaria ao Senior — a observação local ficaria diferente da registrada lá.
+    // Mesmo espírito da guarda do DELETE logo abaixo.
+    const envioEmVoo = await prisma.sincronizacaoPendente.findFirst({
+      where: { tipo: "criar_apontamento", atividadeId: sessao.atividadeId, status: "enviando" },
+    });
+    if (envioEmVoo) {
+      res.status(409).json({ error: "Envio ao Senior em andamento — aguarde para editar" });
       return;
     }
 

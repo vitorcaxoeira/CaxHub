@@ -1,6 +1,7 @@
 import { DndContext, DragEndEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
-import { formatHoras } from "../../utils/horas";
+import { formatHorasCompacto } from "../../lib/cronograma";
 import { Avatar } from "../ui/Avatar";
+import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { toneBadge, priproTone } from "../ui/badges";
 import { IconePlay, IconeStop } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
@@ -94,6 +95,25 @@ interface KanbanBoardProps {
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
 
+// Chip de metadado do card (departamento executor, data prevista): pílula discreta,
+// alinhada à direita. Definido num lugar só porque são dois usos que precisam ficar
+// visualmente idênticos — se divergirem, o card fica desalinhado.
+const CHIP_META = "rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[9.5px] text-muted";
+
+// A partir de quanto do previsto o consumo já é "alerta". O Cronograma não tem esse
+// conceito — os alertas dele (estadoAlertaItem) são estouros booleanos do orçamento do
+// item, sem noção de proximidade — então o limiar nasce aqui. 80% é a convenção usual de
+// "chegando no limite"; mudar é uma linha.
+const LIMIAR_ALERTA_CONSUMO = 0.8;
+
+// Escalada de cor do consumo de horas, usada em conjunto pela barra e pelo percentual —
+// as duas leituras têm que contar a mesma história.
+function tomConsumo(avanco: number): { barra: string; texto: string } {
+  if (avanco > 1) return { barra: "bg-destructive", texto: "font-semibold text-destructive" };
+  if (avanco >= LIMIAR_ALERTA_CONSUMO) return { barra: "bg-warning", texto: "font-semibold text-warning" };
+  return { barra: "bg-primary", texto: "" };
+}
+
 const corBorda: Record<string, string> = {
   neutral: "border-t-muted",
   warning: "border-t-warning",
@@ -125,6 +145,17 @@ function DraggableCard({
   const cronometro = useCronometro(atividade.sessaoAtualInicio);
   const habilitaIniciar = podeIniciar(atividade);
   const habilitaParar = podeParar(atividade);
+
+  // Onde a atividade está: o nó da EAP tem precedência porque é mais específico que o
+  // item (um item pode ter vários nós); sem estrutura, o item é o contexto que sobra.
+  const contexto = atividade.estruturaNome ?? atividade.itemDescricao;
+
+  // Consumo do tempo previsto. As duas grandezas vêm em minutos do backend. Sem previsto
+  // não há proporção pra mostrar — o card exibe só o realizado e omite a barra.
+  const previsto = atividade.qtdhorPrevisto ?? 0;
+  const temPrevisto = previsto > 0;
+  const avanco = temPrevisto ? atividade.horasRealizadas / previsto : 0;
+  const tom = tomConsumo(avanco);
 
   function abrirDetalhe() {
     onAbrirDetalhe(atividade.id, {
@@ -177,14 +208,27 @@ function DraggableCard({
       <p className="mt-1 truncate text-[12px] text-muted" title={atividade.cliente}>
         {atividade.cliente}
       </p>
-      {atividade.itemDescricao && (
-        <p className="mt-1 truncate text-[11px] text-muted" title={atividade.itemDescricao}>
-          {atividade.itemDescricao}
-        </p>
-      )}
-      {atividade.estruturaNome && (
-        <span className={`mt-1 inline-block rounded px-1.5 py-0.5 font-mono text-[9.5px] ${toneBadge.neutral}`}>
-          {atividade.estruturaNome}
+      {/* Uma caixa só: o nó da EAP quando a atividade está numa estrutura, senão a
+          descrição do item de proposta. Antes eram dois elementos, e em proposta cujo nó
+          tem o mesmo nome do item o texto aparecia duplicado no card. Trunca porque a
+          descrição do item é bem mais longa que um nome de nó. */}
+      {contexto && (
+        <span
+          // Duas linhas SEMPRE ocupadas: `line-clamp-2` corta na segunda com reticências e
+          // o `min-h` garante o espaço mesmo com texto curto, então a caixa tem a mesma
+          // altura em todos os cards e as colunas do quadro ficam alinhadas. A conta do
+          // min-h: 2 linhas de 13px + py-0.5 (2px em cima e embaixo), porque o
+          // box-sizing border-box do Tailwind faz o min-h incluir o padding.
+          //
+          // Classes escritas à mão em vez de `toneBadge.neutral` de propósito: aquele token
+          // é compartilhado com os badges de prioridade e com as situações de pedido em
+          // Mercado, e o fundo aqui é mais suave (bg-muted/8) que o dos badges. Também não
+          // daria pra sobrepor a classe depois do token — com a mesma especificidade quem
+          // vence é a ordem no CSS gerado, não a ordem no atributo class.
+          className="mt-1 line-clamp-2 min-h-[30px] rounded bg-muted/8 px-1.5 py-0.5 font-mono text-[9.5px] leading-[13px] text-muted"
+          title={contexto}
+        >
+          {contexto}
         </span>
       )}
       <div className="mt-2 flex items-center gap-1.5">
@@ -195,21 +239,52 @@ function DraggableCard({
           </span>
         )}
         <Avatar nome={atividade.consultorNome} fotoUrl={atividade.consultorFotoUrl} size="xs" />
-        <p className="truncate text-[12px] text-foreground">{atividade.consultorNome}</p>
+        {/* min-w-0: item flex tem min-width auto e se recusa a encolher abaixo do próprio
+            conteúdo, então sem isso o `truncate` não reticencia e o nome longo estoura a
+            largura do card. */}
+        <p className="min-w-0 truncate text-[12px] text-foreground">{atividade.consultorNome}</p>
         {emAndamento && cronometro && (
           <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-success">{cronometro}</span>
         )}
       </div>
-      <p className="text-[11px] text-muted">{atividade.depexeLabel}</p>
-      <div className="mt-2 flex items-center justify-between font-mono text-[11px] tabular-nums text-muted">
-        <span>{atividade.qtdhorPrevisto != null ? formatHoras(atividade.qtdhorPrevisto / 60) : "—"}</span>
-        {atividade.dataPrevistaFim && (
-          <span className={atrasada ? "font-semibold text-destructive" : ""}>
-            {atrasada ? "Atrasado · " : ""}
-            {dateFormatter.format(new Date(atividade.dataPrevistaFim))}
-          </span>
-        )}
+      {/* Realizado x previsto reaproveitando o formatador e o indicador do Cronograma (ver
+          components/cronograma/LinhaNo.tsx). A cor, porém, tem escalada de três estados
+          aqui (ver tomConsumo) — na árvore do Cronograma são só dois, âmbar a partir do
+          estouro. Divergência deliberada: no quadro o card é o lugar onde se acompanha o
+          consumo no dia a dia, então avisar ANTES de estourar tem valor; lá o alerta vive
+          no orçamento do item, que é outra conversa. */}
+      <div className="mt-2 flex items-baseline justify-between gap-2 font-mono text-[11px] tabular-nums text-muted">
+        <span>
+          {formatHorasCompacto(atividade.horasRealizadas)}
+          {temPrevisto && ` / ${formatHorasCompacto(previsto)}`}
+        </span>
+        {temPrevisto && <span className={tom.texto}>{Math.round(avanco * 100)}%</span>}
       </div>
+      {temPrevisto && <IndicadorProgresso avanco={avanco} cor={tom.barra} alturaPx={3} className="mt-1" />}
+      {/* Linha de metadados: departamento à esquerda, data prevista à direita. O
+          departamento saiu da linha do avatar porque lá ele disputava espaço com o
+          cronômetro — agora o cronômetro tem aquela linha só pra ele. O departamento é
+          quem trunca; a data é curta e de largura fixa (shrink-0), e o `ml-auto` nela
+          garante o alinhamento à direita mesmo quando não há departamento pra empurrá-la. */}
+      {(atividade.depexeLabel || atividade.dataPrevistaFim) && (
+        <div className="mt-1.5 flex items-center justify-between gap-1.5">
+          {atividade.depexeLabel && (
+            <span className={`min-w-0 truncate ${CHIP_META}`} title={atividade.depexeLabel}>
+              {atividade.depexeLabel}
+            </span>
+          )}
+          {atividade.dataPrevistaFim && (
+            <span
+              className={`ml-auto shrink-0 tabular-nums ${CHIP_META} ${
+                atrasada ? "border-destructive/40 bg-destructive/10 font-semibold text-destructive" : ""
+              }`}
+            >
+              {atrasada ? "Atrasado · " : ""}
+              {dateFormatter.format(new Date(atividade.dataPrevistaFim))}
+            </span>
+          )}
+        </div>
+      )}
       <div className="mt-2 flex gap-1.5">
         {(EXIBIR_AMBOS_BOTOES || habilitaIniciar) && (
           <button
