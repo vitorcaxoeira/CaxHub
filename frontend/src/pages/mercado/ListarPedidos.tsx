@@ -1,10 +1,11 @@
 import axios from "axios";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { toneBadge, type Tone } from "../../components/ui/badges";
+import { MultiSelectColumnFilter, VALOR_VAZIO } from "../../components/ui/MultiSelectColumnFilter";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useToast } from "../../components/ui/Toast";
 import { PedidosDashboard, PedidosIndicadoresData } from "../../components/mercado/PedidosDashboard";
@@ -48,6 +49,97 @@ interface ClienteGrupo {
   nome: string;
   quantidade: number;
   valorLiquido: number;
+}
+
+// Linha enxuta de GET /pedidos/por-cliente/indice — um registro por pedido do filtro
+// atual, só com o necessário pra filtrar por coluna e recalcular os totais de cada
+// accordion. A linha completa continua vindo sob demanda ao expandir o cliente.
+interface PedidoIndice {
+  chave: string;
+  codcli: number;
+  vlrliq: number | null;
+  numrat: string | null;
+  consultorNome: string | null;
+  propostaCodpro: number | null;
+  propostaCodlev2: number | null;
+  propostaModproLabel: string | null;
+  propostaSitproLabel: string | null;
+  faturamentoLabel: string | null;
+}
+
+const COLUNAS_FILTRAVEIS = ["rat", "consultor", "proposta", "modalidade", "situacao", "faturamento"] as const;
+type ColunaFiltravel = (typeof COLUNAS_FILTRAVEIS)[number];
+
+const TITULO_COLUNA: Record<ColunaFiltravel, string> = {
+  rat: "RAT",
+  consultor: "Consultor",
+  proposta: "Proposta",
+  modalidade: "Mod. Prop.",
+  situacao: "Sit. Prop.",
+  faturamento: "Faturamento",
+};
+
+const FILTROS_COLUNA_VAZIOS: Record<ColunaFiltravel, string[]> = {
+  rat: [],
+  consultor: [],
+  proposta: [],
+  modalidade: [],
+  situacao: [],
+  faturamento: [],
+};
+
+// Campos que o índice e a linha completa têm em comum — é o que permite um predicado só
+// servir aos dois. Se divergirem, a contagem do cabeçalho não bate com as linhas.
+type LinhaFiltravel = Pick<
+  PedidoRow,
+  "numrat" | "consultorNome" | "propostaCodpro" | "propostaCodlev2" | "propostaModproLabel" | "propostaSitproLabel" | "faturamentoLabel"
+>;
+
+// Texto da coluna Proposta tratado como UM valor ("8519 → 8454" é um valor distinto, não
+// dois). Deriva do mesmo par de campos que a célula renderiza, então filtro e tela nunca
+// discordam. codlev2 = 0 não é referência real — mesma regra já usada na renderização.
+function rotuloProposta(linha: LinhaFiltravel): string {
+  if (linha.propostaCodpro == null) return VALOR_VAZIO;
+  const temRelacionada = linha.propostaCodlev2 != null && linha.propostaCodlev2 !== 0;
+  return temRelacionada ? `${linha.propostaCodpro} → ${linha.propostaCodlev2}` : String(linha.propostaCodpro);
+}
+
+function valorDaColuna(linha: LinhaFiltravel, coluna: ColunaFiltravel): string {
+  switch (coluna) {
+    case "rat":
+      return linha.numrat ?? VALOR_VAZIO;
+    case "consultor":
+      return linha.consultorNome ?? VALOR_VAZIO;
+    case "proposta":
+      return rotuloProposta(linha);
+    case "modalidade":
+      return linha.propostaModproLabel ?? VALOR_VAZIO;
+    case "situacao":
+      return linha.propostaSitproLabel ?? VALOR_VAZIO;
+    case "faturamento":
+      return linha.faturamentoLabel ?? VALOR_VAZIO;
+  }
+}
+
+// OU dentro da mesma coluna, E entre colunas diferentes. Coluna sem seleção não filtra.
+function passaFiltrosColuna(linha: LinhaFiltravel, filtros: Record<ColunaFiltravel, string[]>): boolean {
+  return COLUNAS_FILTRAVEIS.every((coluna) => {
+    const selecionados = filtros[coluna];
+    return selecionados.length === 0 || selecionados.includes(valorDaColuna(linha, coluna));
+  });
+}
+
+// Ordena numericamente quando os dois lados são número (RAT, Proposta) e alfabeticamente
+// no resto; "(Vazio)" sempre por último, pra não poluir o topo da lista.
+function ordenarValores(valores: string[]): string[] {
+  return valores.sort((a, b) => {
+    if (a === VALOR_VAZIO) return 1;
+    if (b === VALOR_VAZIO) return -1;
+    const na = Number(a);
+    const nb = Number(b);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+    return a.localeCompare(b, "pt-BR");
+  });
 }
 
 const SITPED_OPCOES: MultiSelectOption<number>[] = [
@@ -216,6 +308,41 @@ function LinhaPedido({
   );
 }
 
+// Cabeçalho da sub-tabela de dentro do accordion — mais compacto que o TH_CLASS da
+// tabela de fora, e sem fundo próprio.
+const TH_SUB_CLASS = "py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted";
+
+// Cabeçalho com funil. O `<th>` da sub-tabela se repete a cada accordion aberto, então o
+// componente recebe a seleção de fora — todos os funis da mesma coluna leem e escrevem o
+// mesmo estado, e abrir outro cliente não perde o filtro.
+function CabecalhoFiltravel({
+  coluna,
+  className,
+  opcoes,
+  selecionados,
+  onChange,
+}: {
+  coluna: ColunaFiltravel;
+  className?: string;
+  opcoes: string[];
+  selecionados: string[];
+  onChange: (selecionados: string[]) => void;
+}) {
+  return (
+    <th className={`${TH_SUB_CLASS} ${className ?? ""}`}>
+      <span className="inline-flex items-center whitespace-nowrap">
+        {TITULO_COLUNA[coluna]}
+        <MultiSelectColumnFilter
+          titulo={TITULO_COLUNA[coluna]}
+          opcoes={opcoes}
+          selecionados={selecionados}
+          onChange={onChange}
+        />
+      </span>
+    </th>
+  );
+}
+
 export function ListarPedidos() {
   const toast = useToast();
   const [visao, setVisao] = useState<Visao>("lista");
@@ -234,6 +361,10 @@ export function ListarPedidos() {
   // decisão do usuário, não existe valor "Digitado" no domínio real LSitPed.
   const [sitpedFiltro, setSitpedFiltro] = useState<number[]>([1, 2, 9]);
   const [modproFiltro, setModproFiltro] = useState<number[]>([]);
+  // Emissão: "yyyy-mm-dd" ou "" (formato nativo do <input type="date">). Sem debounce
+  // porque o input só emite a data completa — não há estado intermediário meio digitado.
+  const [datemiDe, setDatemiDe] = useState("");
+  const [datemiAte, setDatemiAte] = useState("");
 
   const [page, setPage] = useState(1);
   const [pedidos, setPedidos] = useState<PedidoRow[]>([]);
@@ -241,8 +372,13 @@ export function ListarPedidos() {
   const [loading, setLoading] = useState(true);
 
   const [pageCliente, setPageCliente] = useState(1);
-  const [clientes, setClientes] = useState<ClienteGrupo[]>([]);
-  const [totalClientes, setTotalClientes] = useState(0);
+  // Índice de TODOS os pedidos do filtro atual (ver GET /pedidos/por-cliente/indice).
+  // Os grupos da aba passam a ser derivados dele, não de uma chamada agregada: só assim
+  // dá pra recalcular Qtd./Valor de cada accordion depois do filtro de coluna e esconder
+  // cliente que ficou sem resultado.
+  const [indice, setIndice] = useState<PedidoIndice[]>([]);
+  const [nomesClientes, setNomesClientes] = useState<Record<number, string>>({});
+  const [filtrosColuna, setFiltrosColuna] = useState<Record<ColunaFiltravel, string[]>>(FILTROS_COLUNA_VAZIOS);
   const [loadingClientes, setLoadingClientes] = useState(true);
   const [clientesExpandidos, setClientesExpandidos] = useState<Set<number>>(new Set());
   const [itensPorCliente, setItensPorCliente] = useState<Record<number, PedidoRow[] | "carregando" | "erro">>({});
@@ -268,6 +404,8 @@ export function ListarPedidos() {
       codpro: codproDebounced || undefined,
       sitped: sitpedFiltro.length > 0 ? sitpedFiltro.join(",") : undefined,
       modpro: modproFiltro.length > 0 ? modproFiltro.join(",") : undefined,
+      datemiDe: datemiDe || undefined,
+      datemiAte: datemiAte || undefined,
     };
   }
 
@@ -289,12 +427,10 @@ export function ListarPedidos() {
   function carregarPorCliente() {
     setLoadingClientes(true);
     axios
-      .get("/api/pedidos/por-cliente", {
-        params: { ...paramsFiltros(), page: pageCliente, pageSize: PAGE_SIZE },
-      })
+      .get("/api/pedidos/por-cliente/indice", { params: paramsFiltros() })
       .then(({ data }) => {
-        setClientes(data.clientes);
-        setTotalClientes(data.total);
+        setIndice(data.pedidos);
+        setNomesClientes(Object.fromEntries((data.clientes as { codcli: number; nome: string }[]).map((c) => [c.codcli, c.nome])));
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar clientes"))
@@ -324,24 +460,111 @@ export function ListarPedidos() {
   useEffect(() => {
     if (visao === "lista") carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, page]);
+  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, datemiDe, datemiAte, page]);
 
+  // Sem `pageCliente` nas dependências: a aba Por Cliente carrega o índice inteiro do
+  // filtro de uma vez e pagina no cliente, porque o filtro de coluna tem que ser aplicado
+  // antes de fatiar as páginas.
   useEffect(() => {
     if (visao === "cliente") carregarPorCliente();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, pageCliente]);
+  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, datemiDe, datemiAte]);
 
   // Digitar ou trocar filtro reseta as duas paginações pra página 1 (senão a busca pode
   // "sumir" numa página que não existe mais) e colapsa qualquer cliente expandido — o
   // cache de itens dele reflete o filtro antigo, ficaria inconsistente com a contagem
-  // nova do grupo.
+  // nova do grupo. Os filtros de coluna também zeram: os valores que a pessoa marcou
+  // podem nem existir no recorte novo, e aí a tela ficaria vazia sem explicação.
   useEffect(() => {
     setPage(1);
     setPageCliente(1);
     setClientesExpandidos(new Set());
     setItensPorCliente({});
+    setFiltrosColuna(FILTROS_COLUNA_VAZIOS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro]);
+  }, [clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, datemiDe, datemiAte]);
+
+  const indicePorCliente = useMemo(() => {
+    const mapa = new Map<number, PedidoIndice[]>();
+    for (const p of indice) {
+      const lista = mapa.get(p.codcli);
+      if (lista) lista.push(p);
+      else mapa.set(p.codcli, [p]);
+    }
+    return mapa;
+  }, [indice]);
+
+  // Opções de cada funil saem SÓ dos pedidos daquele cliente. O funil vive dentro do
+  // accordion, então oferecer valores de outros clientes só produziria seleção que esvazia
+  // a lista — e é o que tornava a coluna RAT impraticável (11 mil valores no geral contra
+  // ~130 dentro de um cliente).
+  //
+  // Dentro do cliente, vêm dos pedidos dele SEM os filtros de coluna aplicados: senão
+  // marcar um valor faria os outros sumirem da lista e não daria pra ajustar a seleção.
+  //
+  // Calculado só para quem está expandido — é o único lugar que renderiza funil, e assim
+  // não se paga por 265 clientes pra usar um.
+  const opcoesPorCliente = useMemo(() => {
+    const mapa = new Map<number, Record<ColunaFiltravel, string[]>>();
+    for (const codcli of clientesExpandidos) {
+      const linhas = indicePorCliente.get(codcli) ?? [];
+      const porColuna = {} as Record<ColunaFiltravel, string[]>;
+      for (const coluna of COLUNAS_FILTRAVEIS) {
+        porColuna[coluna] = ordenarValores([...new Set(linhas.map((l) => valorDaColuna(l, coluna)))]);
+      }
+      mapa.set(codcli, porColuna);
+    }
+    return mapa;
+  }, [clientesExpandidos, indicePorCliente]);
+
+  const temFiltroColuna = COLUNAS_FILTRAVEIS.some((c) => filtrosColuna[c].length > 0);
+
+  // Alcance da sincronização global: quem o BACKEND vai sincronizar. Ele só conhece os
+  // filtros da barra — os de coluna são client-side —, então este número ignora os funis
+  // de propósito, pra não prometer um recorte que o disparo não faz.
+  const totalClientesFiltro = useMemo(() => new Set(indice.map((p) => p.codcli)).size, [indice]);
+
+  const indiceFiltrado = useMemo(
+    () => (temFiltroColuna ? indice.filter((p) => passaFiltrosColuna(p, filtrosColuna)) : indice),
+    [indice, filtrosColuna, temFiltroColuna]
+  );
+
+  // Grupos recalculados a partir do índice já filtrado: Qtd. e Valor Líquido de cada
+  // accordion refletem só os pedidos visíveis. Cliente que ficou sem nenhum pedido
+  // simplesmente não entra na lista — some da tela, mesmo tratamento que a aba já dá
+  // quando um filtro da barra não casa com ninguém ("Nenhum cliente encontrado"), em vez
+  // de deixar linha com contagem 0 que não abre nada.
+  const grupos = useMemo<ClienteGrupo[]>(() => {
+    const porCliente = new Map<number, { quantidade: number; valorLiquido: number }>();
+    for (const p of indiceFiltrado) {
+      const bucket = porCliente.get(p.codcli) ?? { quantidade: 0, valorLiquido: 0 };
+      bucket.quantidade += 1;
+      bucket.valorLiquido += p.vlrliq ?? 0;
+      porCliente.set(p.codcli, bucket);
+    }
+    return [...porCliente.entries()]
+      .map(([codcli, bucket]) => ({ codcli, nome: nomesClientes[codcli] ?? String(codcli), ...bucket }))
+      .sort((a, b) => b.valorLiquido - a.valorLiquido);
+  }, [indiceFiltrado, nomesClientes]);
+
+  // Paginação passou a ser client-side: o filtro de coluna precisa ser aplicado ANTES de
+  // paginar, senão a página 1 mostraria os clientes de sempre com contagens filtradas.
+  const clientes = useMemo(
+    () => grupos.slice((pageCliente - 1) * PAGE_SIZE, pageCliente * PAGE_SIZE),
+    [grupos, pageCliente]
+  );
+
+  function limparFiltrosColuna() {
+    setFiltrosColuna(FILTROS_COLUNA_VAZIOS);
+    setPageCliente(1);
+  }
+
+  function alterarFiltroColuna(coluna: ColunaFiltravel, selecionados: string[]) {
+    setFiltrosColuna((atual) => ({ ...atual, [coluna]: selecionados }));
+    // Mesma razão de resetar página nos filtros da barra: o resultado pode ter menos
+    // páginas que a atual.
+    setPageCliente(1);
+  }
 
   function carregarItensCliente(codcli: number) {
     setItensPorCliente((i) => ({ ...i, [codcli]: "carregando" }));
@@ -550,19 +773,54 @@ export function ListarPedidos() {
             labelTodos="Todas as modalidades"
             labelSufixo="modalidades"
           />
-          {/* Ação global da aba Por Cliente: alcança TODOS os clientes do filtro (as
-              outras páginas também), por isso o contador vem de totalClientes e não do
-              tamanho da página. */}
+          {/* Emissão: os dois limites são independentes — preencher só um já filtra
+              (a partir de / até). O `max`/`min` cruzado impede escolher um intervalo
+              invertido, que só retornaria lista vazia. */}
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-muted">Emissão</span>
+            <input
+              type="date"
+              value={datemiDe}
+              max={datemiAte || undefined}
+              onChange={(e) => setDatemiDe(e.target.value)}
+              title="Emitidos a partir desta data"
+              className="bg-transparent text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <span className="text-sm text-muted">–</span>
+            <input
+              type="date"
+              value={datemiAte}
+              min={datemiDe || undefined}
+              onChange={(e) => setDatemiAte(e.target.value)}
+              title="Emitidos até esta data"
+              className="bg-transparent text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {(datemiDe || datemiAte) && (
+              <button
+                onClick={() => {
+                  setDatemiDe("");
+                  setDatemiAte("");
+                }}
+                title="Limpar o período"
+                className="text-sm leading-none text-muted hover:text-foreground"
+              >
+                ×
+              </button>
+            )}
+          </div>
+          {/* Ação global da aba Por Cliente: alcança TODOS os clientes do filtro da barra
+              (as outras páginas também), por isso o contador vem de totalClientesFiltro e
+              não do tamanho da página nem do recorte dos funis. */}
           {visao === "cliente" && (
             <button
               onClick={sincronizarFiltro}
-              disabled={sincronizandoFiltro || loadingClientes || totalClientes === 0}
-              title="Puxa do Senior os pedidos de todos os clientes que batem com os filtros atuais, incluindo os das próximas páginas"
+              disabled={sincronizandoFiltro || loadingClientes || totalClientesFiltro === 0}
+              title="Puxa do Senior os pedidos de todos os clientes que batem com os filtros da barra, incluindo os das próximas páginas (os filtros de coluna não entram nesta ação)"
               className="ml-auto rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {sincronizandoFiltro
                 ? "Sincronizando com o ERP..."
-                : `Sinc. ERP — ${totalClientes} cliente${totalClientes === 1 ? "" : "s"} do filtro`}
+                : `Sinc. ERP — ${totalClientesFiltro} cliente${totalClientesFiltro === 1 ? "" : "s"} do filtro`}
             </button>
           )}
         </div>
@@ -657,13 +915,40 @@ export function ListarPedidos() {
       {visao === "cliente" && (
         <div className="overflow-hidden rounded-lg border border-border bg-surface">
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+            {/* table-fixed + colgroup em vez de deixar o browser dimensionar pelo conteúdo:
+                a largura sai do colgroup e ponto, sem depender de como cada engine concilia
+                width/max-width numa célula. Cliente ganha 44rem (cabe a maior razão social
+                da base: 75 caracteres, quase toda em caixa alta), Ações o suficiente pro
+                "Sinc. ERP", e as duas colunas sem largura dividem toda a sobra em partes
+                iguais — é isso que espalha Qtd. Pedidos e Valor Líquido. */}
+            <table className="w-full table-fixed border-collapse">
+              <colgroup>
+                <col className="w-[44rem]" />
+                <col />
+                <col />
+                <col className="w-[7rem]" />
+              </colgroup>
               <thead>
                 <tr>
-                  <th className={TH_CLASS}>Cliente</th>
-                  <th className={TH_CLASS_RIGHT}>Qtd. Pedidos</th>
-                  <th className={TH_CLASS_RIGHT}>Valor Líquido</th>
-                  <th className={TH_CLASS_RIGHT}>Ações</th>
+                  <th className={TH_CLASS}>
+                    <span className="inline-flex items-center gap-2">
+                      Cliente
+                      {/* Só aparece com algum funil ativo: os funis ficam dentro dos
+                          accordions, então sem isto não haveria como zerar tudo com um
+                          clique nem perceber que sobrou filtro num cliente já colapsado. */}
+                      {temFiltroColuna && (
+                        <button
+                          onClick={limparFiltrosColuna}
+                          className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium normal-case tracking-normal text-primary hover:bg-primary/20"
+                        >
+                          Limpar filtros
+                        </button>
+                      )}
+                    </span>
+                  </th>
+                  <th className={`${TH_CLASS_RIGHT} whitespace-nowrap`}>Qtd. Pedidos</th>
+                  <th className={`${TH_CLASS_RIGHT} whitespace-nowrap`}>Valor Líquido</th>
+                  <th className={`${TH_CLASS_RIGHT} whitespace-nowrap`}>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -678,7 +963,13 @@ export function ListarPedidos() {
                 {!loadingClientes &&
                   clientes.map((c) => {
                     const expandida = clientesExpandidos.has(c.codcli);
-                    const itens = itensPorCliente[c.codcli];
+                    const cache = itensPorCliente[c.codcli];
+                    // Mesmo predicado do índice, agora sobre a linha completa: o que a
+                    // pessoa vê aberto bate exatamente com a Qtd. do cabeçalho.
+                    const itens =
+                      Array.isArray(cache) && temFiltroColuna
+                        ? cache.filter((p) => passaFiltrosColuna(p, filtrosColuna))
+                        : cache;
                     const sincronizando = sincronizandoClientes.has(c.codcli);
                     return (
                       <Fragment key={c.codcli}>
@@ -688,7 +979,10 @@ export function ListarPedidos() {
                             expandida ? "border-t border-primary bg-primary/5" : "border-t border-border/60 hover:bg-surface-2"
                           }`}
                         >
-                          <td className={`max-w-0 px-[7px] py-[10px] ${expandida ? "border-l border-primary" : ""}`}>
+                          {/* Sem width aqui: com table-fixed quem manda é o colgroup, e a
+                              célula já tem largura definida — é o que faz o truncate do
+                              nome cortar em 44rem em vez de esticar a tabela. */}
+                          <td className={`px-[7px] py-[10px] ${expandida ? "border-l border-primary" : ""}`}>
                             <p className="flex items-center gap-2 truncate whitespace-nowrap text-sm font-semibold text-foreground" title={c.nome}>
                               <span className="shrink-0 text-muted">{expandida ? "▾" : "▸"}</span>
                               <span className="truncate">{c.nome}</span>
@@ -737,24 +1031,23 @@ export function ListarPedidos() {
                                         <th className="py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                           Situação
                                         </th>
-                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                                          Rat
-                                        </th>
-                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                                          Consultor
-                                        </th>
-                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                                          Proposta
-                                        </th>
-                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                                          Mod. Prop.
-                                        </th>
-                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                                          Sit. Prop.
-                                        </th>
-                                        <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted xl:table-cell">
-                                          Faturamento
-                                        </th>
+                                        {(["rat", "consultor", "proposta", "modalidade", "situacao"] as const).map((coluna) => (
+                                          <CabecalhoFiltravel
+                                            key={coluna}
+                                            coluna={coluna}
+                                            className="hidden lg:table-cell"
+                                            opcoes={opcoesPorCliente.get(c.codcli)?.[coluna] ?? []}
+                                            selecionados={filtrosColuna[coluna]}
+                                            onChange={(v) => alterarFiltroColuna(coluna, v)}
+                                          />
+                                        ))}
+                                        <CabecalhoFiltravel
+                                          coluna="faturamento"
+                                          className="hidden xl:table-cell"
+                                          opcoes={opcoesPorCliente.get(c.codcli)?.faturamento ?? []}
+                                          selecionados={filtrosColuna.faturamento}
+                                          onChange={(v) => alterarFiltroColuna("faturamento", v)}
+                                        />
                                         <th className="hidden py-[4px] pr-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted xl:table-cell">
                                           Cond. Pgto
                                         </th>
@@ -799,7 +1092,7 @@ export function ListarPedidos() {
           <Pagination
             page={pageCliente}
             pageSize={PAGE_SIZE}
-            total={totalClientes}
+            total={grupos.length}
             loading={loadingClientes}
             onPageChange={setPageCliente}
             label="clientes"

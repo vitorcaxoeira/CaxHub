@@ -95,6 +95,17 @@ interface FiltrosPedidos {
   buscaCodpro: string;
   sitpedFiltro: number[];
   modproFiltro: number[];
+  datemiDe: Date | null;
+  datemiAte: Date | null;
+}
+
+// Data de emissão vem do <input type="date"> como "yyyy-mm-dd". Comparada em UTC de
+// propósito: `datemi` é `@db.Date`, então o Prisma devolve meia-noite UTC — montar a data
+// no fuso do servidor deslocaria o limite e deixaria o pedido do próprio dia de fora.
+function lerData(valor: unknown): Date | null {
+  if (typeof valor !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(valor)) return null;
+  const data = new Date(`${valor}T00:00:00.000Z`);
+  return Number.isNaN(data.getTime()) ? null : data;
 }
 
 // Number("") é 0 (não NaN) — sem essa guarda, ausência do filtro viraria [0] e
@@ -119,6 +130,8 @@ function lerFiltros(req: import("express").Request): FiltrosPedidos {
     buscaCodpro: typeof req.query.codpro === "string" ? req.query.codpro.trim() : "",
     sitpedFiltro: lerFiltroMultiSelect(req.query.sitped),
     modproFiltro: lerFiltroMultiSelect(req.query.modpro),
+    datemiDe: lerData(req.query.datemiDe),
+    datemiAte: lerData(req.query.datemiAte),
   };
 }
 
@@ -156,6 +169,16 @@ function aplicarFiltros(
   }
   if (filtros.sitpedFiltro.length > 0) {
     resultado = resultado.filter((p) => filtros.sitpedFiltro.includes(p.sitped));
+  }
+  // Intervalo fechado dos dois lados: quem digita 27/07 a 27/07 espera ver os pedidos
+  // emitidos em 27/07. Cada limite funciona sozinho — só "de", só "até", ou os dois.
+  if (filtros.datemiDe) {
+    const de = filtros.datemiDe;
+    resultado = resultado.filter((p) => p.datemi >= de);
+  }
+  if (filtros.datemiAte) {
+    const ate = filtros.datemiAte;
+    resultado = resultado.filter((p) => p.datemi <= ate);
   }
   return resultado;
 }
@@ -303,11 +326,11 @@ pedidosRouter.get("/", async (req, res) => {
   }
 });
 
-// Clientes que batem com os filtros atuais, agregados e ordenados por valor líquido
-// somado (maior primeiro) — sem paginação. Usado tanto por GET /por-cliente (que pagina
-// o resultado) quanto por POST /sincronizar (que precisa da lista INTEIRA de codclis do
-// filtro, não só a da página visível).
-async function resolverGruposPorCliente(req: import("express").Request) {
+// Pedidos que passam nos filtros da barra da tela, já com os vínculos resolvidos. É a
+// base comum de GET /por-cliente/indice e POST /sincronizar — os dois TÊM que enxergar
+// exatamente o mesmo conjunto, senão o contador do botão de sincronizar não bate com o
+// que a tela mostra.
+async function resolverPedidosFiltrados(req: import("express").Request) {
   const pedidosTodos = await prisma.pedido.findMany({ where: { removidoEmSenior: null } });
 
   const codclisUnicos = [...new Set(pedidosTodos.map((p) => p.codcli))];
@@ -315,13 +338,23 @@ async function resolverGruposPorCliente(req: import("express").Request) {
   const clientePorCodcli = new Map(clientes.map((c) => [c.codcli, c]));
 
   const filtros = lerFiltros(req);
-  let pedidosFiltrados = aplicarFiltros(pedidosTodos, filtros, clientePorCodcli);
+  let pedidos = aplicarFiltros(pedidosTodos, filtros, clientePorCodcli);
 
   // Mesmo motivo de GET /: precisa da RAT/Proposta resolvida pra filtrar por Nro.
   // Proposta e Modalidade.
-  const { ratPorChave, propostaPorChave } = await resolverRatEProposta(pedidosFiltrados);
-  pedidosFiltrados = filtrarPorProposta(pedidosFiltrados, filtros.buscaCodpro, ratPorChave, propostaPorChave);
-  pedidosFiltrados = filtrarPorModalidade(pedidosFiltrados, filtros.modproFiltro, ratPorChave, propostaPorChave);
+  const { ratPorChave, propostaPorChave, consultorPorCodfor } = await resolverRatEProposta(pedidos);
+  pedidos = filtrarPorProposta(pedidos, filtros.buscaCodpro, ratPorChave, propostaPorChave);
+  pedidos = filtrarPorModalidade(pedidos, filtros.modproFiltro, ratPorChave, propostaPorChave);
+
+  return { pedidos, clientePorCodcli, ratPorChave, propostaPorChave, consultorPorCodfor };
+}
+
+// Clientes que batem com os filtros atuais, agregados e ordenados por valor líquido
+// somado (maior primeiro) — sem paginação. Usado por POST /sincronizar, que precisa da
+// lista INTEIRA de codclis do filtro, não só a da página visível. A tela agrega por conta
+// própria a partir do índice, porque os filtros de coluna são client-side.
+async function resolverGruposPorCliente(req: import("express").Request) {
+  const { pedidos: pedidosFiltrados, clientePorCodcli } = await resolverPedidosFiltrados(req);
 
   const porClienteMap = new Map<number, { quantidade: number; valorLiquido: number }>();
   for (const p of pedidosFiltrados) {
@@ -339,18 +372,56 @@ async function resolverGruposPorCliente(req: import("express").Request) {
     .sort((a, b) => b.valorLiquido - a.valorLiquido);
 }
 
-// GET /por-cliente — mesmos filtros de GET /, mas agrupado por cliente, ordenado por
-// valor líquido somado (maior primeiro). Paginação é por cliente, não por pedido.
-pedidosRouter.get("/por-cliente", async (req, res) => {
+// GET /por-cliente/indice — índice ENXUTO de todos os pedidos que passam nos filtros da
+// barra, para a aba "Por Cliente" filtrar por coluna no navegador.
+//
+// Por que existe: a aba carrega os itens de um cliente só quando o accordion é expandido,
+// então o browser não tem como saber os valores distintos de uma coluna, nem recalcular
+// "Qtd. Pedidos"/"Valor Líquido" de cada grupo, nem esconder cliente que ficou sem
+// resultado. Esse índice dá exatamente isso e nada mais.
+//
+// Só os campos usados para filtrar e somar — a linha completa continua vindo de
+// /por-cliente/:codcli/itens ao expandir. Medido em produção: a resposta completa dos
+// pedidos daria 7,7 MB, este índice dá 1,7 MB.
+//
+// `codpro`/`codlev2` vão crus, não como rótulo pronto: quem monta o texto da coluna
+// Proposta é o frontend, e derivar nos dois lugares abriria espaço pra divergirem — aí o
+// filtro deixaria de casar com a linha exibida.
+pedidosRouter.get("/por-cliente/indice", async (req, res) => {
   try {
-    const grupos = await resolverGruposPorCliente(req);
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
-    const inicioPagina = (page - 1) * pageSize;
+    const { pedidos, clientePorCodcli, ratPorChave, propostaPorChave, consultorPorCodfor } =
+      await resolverPedidosFiltrados(req);
 
-    res.json({ total: grupos.length, clientes: grupos.slice(inicioPagina, inicioPagina + pageSize) });
+    const codclisPresentes = [...new Set(pedidos.map((p) => p.codcli))];
+
+    res.json({
+      // Nome do cliente vem à parte, uma vez por cliente — repetir em cada pedido
+      // engordaria o índice à toa (são 265 clientes pra 12 mil pedidos).
+      clientes: codclisPresentes.map((codcli) => {
+        const cliente = clientePorCodcli.get(codcli);
+        return { codcli, nome: cliente ? `${cliente.codcli} - ${cliente.nomcli}` : String(codcli) };
+      }),
+      pedidos: pedidos.map((p) => {
+        const rat = p.numrat != null ? ratPorChave.get(`${p.codemp}-${Number(p.numrat)}`) : undefined;
+        const proposta = rat?.codpro != null ? propostaPorChave.get(`${rat.codemp}-${rat.codpro}`) : undefined;
+        const consultor = rat ? consultorPorCodfor.get(rat.codfor) : undefined;
+        return {
+          // Mesma chave da linha completa, pra casar índice e linha exibida.
+          chave: `${p.codemp}-${p.codfil}-${p.numped}`,
+          codcli: p.codcli,
+          vlrliq: p.vlrliq != null ? Number(p.vlrliq) : null,
+          numrat: p.numrat != null ? p.numrat.toString() : null,
+          consultorNome: rat ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`) : null,
+          propostaCodpro: rat?.codpro ?? null,
+          propostaCodlev2: proposta?.codlev2 ?? null,
+          propostaModproLabel: proposta ? modproLabel(proposta.modpro) : null,
+          propostaSitproLabel: proposta ? sitproLabel(proposta.sitpro) : null,
+          faturamentoLabel: proposta ? forfatLabel(proposta.forfat) : null,
+        };
+      }),
+    });
   } catch (error) {
-    handleError(res, error, "por-cliente");
+    handleError(res, error, "indice-por-cliente");
   }
 });
 
