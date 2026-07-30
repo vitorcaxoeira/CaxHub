@@ -38,10 +38,15 @@ interface RatItemRow {
 // codemp). `codpro` (presente nos dois lados) desempata em todos os casos encontrados,
 // por isso o casamento usa (codemp, numrat, codpro) em vez da chave natural "oficial"
 // (que exigiria numprj/codfpj, não disponíveis nesta tabela).
-async function executarUpsert(query: string): Promise<void> {
+// Devolve os `seqrat` que a origem trouxe. Quem chama por RAT específica usa isso pra
+// descobrir o que NÃO voltou — item apagado no Senior simplesmente não vem na consulta,
+// e é assim que a desvinculação em POST /rats/:id/sincronizar identifica o que reintegrar.
+async function executarUpsert(query: string): Promise<number[]> {
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrat"])) as RatItemRow[];
+  const seqratsVistos: number[] = [];
 
   for (const row of rows) {
+    seqratsVistos.push(row.seqrat);
     const rat = await prisma.rat.findFirst({
       where: { codemp: row.codemp, numrat: row.numrat, codpro: row.codpro ?? null },
     });
@@ -74,6 +79,8 @@ async function executarUpsert(query: string): Promise<void> {
       create: data,
     });
   }
+
+  return seqratsVistos;
 }
 
 export async function runRatItemSync(desde?: Date): Promise<void> {
@@ -92,10 +99,15 @@ export async function runRatItemSync(desde?: Date): Promise<void> {
 // "Meus Apontamentos" (ver POST /rats/:id/sincronizar), sempre depois de
 // runRatSyncPorNumrat (RatItem.ratId depende do Rat já existir). Propaga erro pro
 // chamador, diferente de runRatItemSync — ver comentário equivalente em ratSync.ts.
-export async function runRatItemSyncPorNumrat(codemp: number, numrat: number): Promise<void> {
+// Devolve os `seqrat` que existem no Senior pra essa RAT — o chamador usa pra desvincular
+// localmente o que foi apagado lá (ver POST /rats/:id/sincronizar).
+export async function runRatItemSyncPorNumrat(codemp: number, numrat: number): Promise<number[]> {
   const query = `${BASE_QUERY} WHERE USU_CODEMP = ${codemp} AND USU_NUMRAT = ${numrat}`;
-  await executarUpsert(query);
-  await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
+  const seqratsVistos = await executarUpsert(query);
+  await prisma.syncLog.create({
+    data: { jobName: JOB_NAME, query, status: "success", message: `${seqratsVistos.length} item(ns) no Senior` },
+  });
+  return seqratsVistos;
 }
 
 // O agendamento automático sempre roda completo (sem "desde") — o modo incremental só é

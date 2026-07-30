@@ -205,6 +205,16 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeSenior,
     resumo: (e) => `Enviou ${rotuloEntidade(e)} ao Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
   },
+  RAT_ITEM_DESVINCULADO_SENIOR: {
+    tone: "warning",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => {
+      const seqrats = Array.isArray(e.metadata?.seqratsDesvinculados) ? e.metadata.seqratsDesvinculados : [];
+      const quantos = seqrats.length;
+      return `${quantos} apontamento(s) apagado(s) no Senior — vínculo removido pra reintegrar (${rotuloEntidade(e)})`;
+    },
+  },
 };
 
 const CONFIG_PADRAO: ConfigEvento = {

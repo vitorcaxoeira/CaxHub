@@ -1,8 +1,9 @@
 import axios from "axios";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { formatHoras } from "../../utils/horas";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { Spinner } from "../../components/ui/Spinner";
 import { Pagination } from "../../components/ui/Pagination";
 import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { ModalEditarDescricao } from "../../components/projetos/ModalEditarDescricao";
@@ -64,6 +65,14 @@ interface RatItemRow {
   desati: string | null;
   confirmadoNoSenior: boolean;
   editavel: boolean;
+  // Motivo da última recusa do Senior. Preenchido = a integração falhou e há o que reenviar.
+  envioErro: string | null;
+  // Identidade no Senior — preenchida quando o apontamento foi registrado no ERP. É o
+  // que trava editar/excluir, então a tela precisa mostrar por quê.
+  numrat: number | null;
+  seqrat: number | null;
+  // Estado do envio ao ERP: pendente | enviando | enviado | bloqueado | null.
+  envioStatus: string | null;
 }
 
 interface ConsultorFiltro {
@@ -91,6 +100,86 @@ function formatHoraDoDia(minutosDesdeMeiaNoite: number): string {
 
 const PAGE_SIZE_RATS = 30;
 
+// Estado da integração daquele apontamento com o Senior, na própria coluna de ação.
+// A ordem vai do mais definitivo pro mais transitório:
+//   registrado -> mostra a RAT (e não há mais o que fazer, nem excluir nem editar);
+//   falhou     -> mostra o erro do ERP e oferece reenviar;
+//   em voo     -> spinner, e o "Excluir" NÃO aparece (o backend recusaria de todo jeito,
+//                 porque só libera desfazer enquanto a pendência está "pendente");
+//   nada disso -> "Excluir", que é o estado normal de um apontamento ainda não enviado.
+function AcaoIntegracao({
+  item,
+  reenviando,
+  onReenviar,
+  onExcluir,
+}: {
+  item: RatItemRow;
+  reenviando: boolean;
+  onReenviar: () => void;
+  onExcluir: () => void;
+}) {
+  if (item.confirmadoNoSenior) {
+    return (
+      <span
+        className="font-mono text-[11px] text-success"
+        title={`Registrado no Senior — RAT ${item.numrat}, sequência ${item.seqrat}. Não é mais possível editar nem excluir.`}
+      >
+        RAT {item.numrat}/{item.seqrat}
+      </span>
+    );
+  }
+
+  const emVoo = reenviando || item.envioStatus === "enviando" || (item.envioStatus === "pendente" && !item.envioErro);
+  if (emVoo) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[11px] text-muted">
+        <Spinner className="h-3 w-3" />
+        integrando...
+      </span>
+    );
+  }
+
+  // "pendente" com erro = falhou e vai tentar de novo sozinho no cron; "bloqueado" =
+  // esgotou as tentativas. Nos dois casos o consultor consegue forçar agora.
+  if (item.envioErro) {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <span className="text-[11px] text-destructive" title={item.envioErro}>
+          falha no envio
+        </span>
+        <button onClick={onReenviar} className="text-[11px] text-primary hover:underline">
+          Reenviar
+        </button>
+      </span>
+    );
+  }
+
+  // Não registrado e sem envio em curso: ou nunca foi enviado, ou foi desvinculado porque
+  // apagaram o apontamento no Senior (ver desvincularItensAusentesNoSenior no backend).
+  // Nos dois casos o envio é manual — nada é reintegrado sem o consultor pedir, porque a
+  // exclusão do outro lado pode ter sido intencional.
+  const podeEnviar = item.envioStatus == null || item.envioStatus === "enviado";
+  return (
+    <span className="inline-flex items-center gap-2">
+      {podeEnviar && (
+        <button
+          onClick={onReenviar}
+          className="text-[11px] text-primary hover:underline"
+          title="Registrar este apontamento no Senior"
+        >
+          Enviar
+        </button>
+      )}
+      {item.editavel && item.sessaoId != null && (
+        <button onClick={onExcluir} className="text-[11px] text-destructive hover:underline">
+          Excluir
+        </button>
+      )}
+      {!podeEnviar && !item.editavel && <span className="text-[11px] text-muted">—</span>}
+    </span>
+  );
+}
+
 const selectClass =
   "rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -105,6 +194,12 @@ const selectClass =
 // recebendo apontamentos de qualquer dia até o gestor do departamento (ou admin) a
 // aprovar. Consultor comum só vê as próprias RATs; gestor/admin ganham um seletor pra
 // ver as de quem eles gerenciam.
+// Acompanhamento do envio ao ERP depois de confirmar: ~20s no total. O envio costuma
+// levar poucos segundos; passando disso, o cron de 15 min assume e a tela avisa que
+// segue em andamento em vez de mentir um desfecho.
+const ENVIO_INTERVALO_MS = 1500;
+const ENVIO_MAX_TENTATIVAS = 13;
+
 export function MeusApontamentos() {
   const navigate = useNavigate();
   const [sessoes, setSessoes] = useState<SessaoPendente[]>([]);
@@ -191,6 +286,96 @@ export function MeusApontamentos() {
     setPageRats(1);
   }
 
+  // Apontamentos com reenvio disparado agora — mantém o spinner na linha entre o clique e
+  // a primeira resposta do acompanhamento.
+  const [reenviando, setReenviando] = useState<Set<number>>(new Set());
+  // Resultado informativo do "Sinc. ERP" (ex.: itens desvinculados). Separado de `erro`
+  // porque não é falha — é o sync tendo encontrado divergência e resolvido.
+  const [avisoSinc, setAvisoSinc] = useState<string | null>(null);
+
+  // Timers do acompanhamento, cancelados ao sair da tela pra não bater em endpoint depois
+  // que o componente já saiu.
+  const timersEnvioRef = useRef<number[]>([]);
+  useEffect(() => {
+    const timers = timersEnvioRef;
+    return () => timers.current.forEach((t) => window.clearTimeout(t));
+  }, []);
+
+  // Escreve o estado do envio direto no item já carregado, em vez de recarregar a RAT
+  // inteira: é o que faz a célula de ação mudar sozinha (spinner -> RAT n/seq, ou -> erro)
+  // sem piscar a tabela.
+  function atualizarEnvioDoItem(
+    ratId: number,
+    ratItemId: number,
+    dados: { status: string; numrat: number | null; seqrat: number | null; erro: string | null }
+  ) {
+    setItensPorRat((atual) => {
+      const itens = atual[ratId];
+      if (!Array.isArray(itens)) return atual;
+      return {
+        ...atual,
+        [ratId]: itens.map((i) =>
+          i.id !== ratItemId
+            ? i
+            : {
+                ...i,
+                envioStatus: dados.status,
+                envioErro: dados.erro,
+                numrat: dados.numrat,
+                seqrat: dados.seqrat,
+                confirmadoNoSenior: dados.status === "registrado",
+                // Registrado no Senior deixa de ser editável na hora — o backend recusa
+                // tanto editar quanto excluir a partir daí.
+                editavel: dados.status === "registrado" ? false : i.editavel,
+              }
+        ),
+      };
+    });
+  }
+
+  // O apontamento é enviado ao Senior em segundo plano, então a releitura que acontece
+  // logo após confirmar sempre pega o item ainda na fila. Isto aqui é o que fecha o ciclo:
+  // pergunta de tempos em tempos como foi e reflete na linha, até haver desfecho.
+  function acompanharEnvio(ratItemId: number, ratId: number, tentativa = 0) {
+    const timer = window.setTimeout(async () => {
+      let concluido = false;
+      try {
+        const { data } = await axios.get(`/api/apontamentos/envio/${ratItemId}`);
+        atualizarEnvioDoItem(ratId, ratItemId, data);
+        // Registrado é definitivo; bloqueado e "falhou mas vai retentar" já têm erro pra
+        // mostrar, então em ambos vale parar de perguntar e deixar o Reenviar na mão do
+        // consultor.
+        concluido = data.status === "registrado" || data.status === "bloqueado" || Boolean(data.erro);
+      } catch {
+        // Falha de rede no acompanhamento é transitória — tenta de novo no próximo tick.
+      }
+
+      if (concluido) return;
+      if (tentativa + 1 < ENVIO_MAX_TENTATIVAS) {
+        acompanharEnvio(ratItemId, ratId, tentativa + 1);
+      }
+      // Estourou o tempo sem desfecho: a linha fica no spinner e o cron de 15 min assume.
+      // Recarregar a RAT depois mostra o resultado.
+    }, ENVIO_INTERVALO_MS);
+    timersEnvioRef.current.push(timer);
+  }
+
+  async function reenviarAoSenior(ratItemId: number, ratId: number) {
+    setReenviando((atual) => new Set(atual).add(ratItemId));
+    try {
+      await axios.post(`/api/apontamentos/envio/${ratItemId}/reenviar`);
+      acompanharEnvio(ratItemId, ratId);
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao reenviar o apontamento ao ERP");
+    } finally {
+      setReenviando((atual) => {
+        const proximo = new Set(atual);
+        proximo.delete(ratItemId);
+        return proximo;
+      });
+    }
+  }
+
   async function confirmar(sessaoId: number) {
     setConfirmando(sessaoId);
     // Cai pra observacao (pré-preenchida ao sair de "Em Andamento", ver Atividades.tsx)
@@ -203,6 +388,8 @@ export function MeusApontamentos() {
       carregar();
       carregarRats();
       if (data?.ratId != null) expandirEAtualizarRat(data.ratId);
+      // O envio ao ERP roda em segundo plano; a linha do apontamento mostra o andamento.
+      if (data?.ratItemId != null && data?.ratId != null) acompanharEnvio(data.ratItemId, data.ratId);
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao confirmar apontamento");
     } finally {
@@ -238,6 +425,9 @@ export function MeusApontamentos() {
       carregar();
       carregarRats();
       if (data?.ratId != null) expandirEAtualizarRat(data.ratId);
+      // Mesmo caminho da confirmação de sessão (a rota /manual reusa confirmarSessao),
+      // então o envio ao ERP também roda em segundo plano e precisa ser acompanhado.
+      if (data?.ratItemId != null && data?.ratId != null) acompanharEnvio(data.ratItemId, data.ratId);
     } catch (err: any) {
       setErroManual(err.response?.data?.error ?? "Falha ao lançar apontamento");
     } finally {
@@ -290,12 +480,22 @@ export function MeusApontamentos() {
 
   async function sincronizarErp(rat: RatRow) {
     setSincronizando(rat.id);
+    setAvisoSinc(null);
     try {
-      await axios.post(`/api/rats/${rat.id}/sincronizar`);
+      const { data } = await axios.post(`/api/rats/${rat.id}/sincronizar`);
       carregarRats();
       if (itensPorRat[rat.id]) {
-        const { data } = await axios.get(`/api/rats/${rat.id}/itens`);
-        setItensPorRat((i) => ({ ...i, [rat.id]: data.itens }));
+        const { data: itensData } = await axios.get(`/api/rats/${rat.id}/itens`);
+        setItensPorRat((i) => ({ ...i, [rat.id]: itensData.itens }));
+      }
+      // Apontamento apagado no Senior perde o vínculo aqui e volta a poder ser enviado —
+      // isso precisa ser dito, senão o item muda de estado sem explicação nenhuma.
+      if (data?.desvinculados > 0) {
+        const seqrats = (data.seqratsDesvinculados ?? []).join(", ");
+        setAvisoSinc(
+          `${data.desvinculados} apontamento(s) não existem mais no Senior (sequência ${seqrats}) — ` +
+            `o vínculo foi removido e eles podem ser enviados de novo pela ação "Enviar".`
+        );
       }
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao sincronizar com o ERP");
@@ -341,6 +541,15 @@ export function MeusApontamentos() {
         <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {erro}
         </p>
+      )}
+
+      {avisoSinc && (
+        <div className="mb-4 flex items-start justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-sm text-foreground">
+          <span>{avisoSinc}</span>
+          <button onClick={() => setAvisoSinc(null)} className="flex-none text-[11px] text-muted hover:text-foreground">
+            fechar
+          </button>
+        </div>
       )}
 
       <div className="space-y-8">
@@ -705,14 +914,12 @@ export function MeusApontamentos() {
                                             {item.itemDescricao ?? "—"}
                                           </td>
                                           <td className="py-1.5 text-right">
-                                            {item.editavel && item.sessaoId != null && (
-                                              <button
-                                                onClick={() => excluirApontamento(item.sessaoId!, rat.id)}
-                                                className="text-[11px] text-destructive hover:underline"
-                                              >
-                                                Excluir
-                                              </button>
-                                            )}
+                                            <AcaoIntegracao
+                                              item={item}
+                                              reenviando={reenviando.has(item.id)}
+                                              onReenviar={() => reenviarAoSenior(item.id, rat.id)}
+                                              onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
+                                            />
                                           </td>
                                         </tr>
                                       ))}

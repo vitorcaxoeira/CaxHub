@@ -236,6 +236,26 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
 
     const souDono = contexto.consultor?.codfor === rat.codfor;
 
+    // Estado do envio ao Senior, pra tela conseguir explicar por que um item deixou de
+    // ser editável (ver sync/outboxSenior.ts). A fila é indexada por atividade, e o
+    // apontamento correspondente vive dentro do payload — daí o casamento em memória.
+    const atividadeIds = [...new Set(itens.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
+    const pendencias =
+      atividadeIds.length > 0
+        ? await prisma.sincronizacaoPendente.findMany({
+            where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIds } },
+            orderBy: { id: "desc" },
+          })
+        : [];
+    const envioPorRatItem = new Map<number, { status: string; erro: string | null }>();
+    for (const pendencia of pendencias) {
+      const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
+      // orderBy id desc + "só o primeiro vence" = fica o envio mais recente de cada item.
+      if (Number.isFinite(ratItemId) && !envioPorRatItem.has(ratItemId)) {
+        envioPorRatItem.set(ratItemId, { status: pendencia.status, erro: pendencia.ultimoErro });
+      }
+    }
+
     res.json({
       itens: itens.map((item) => {
         const propostaItem =
@@ -253,6 +273,14 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           desati: item.desati,
           confirmadoNoSenior: item.numrat != null,
           editavel: souDono && item.numrat == null && rat.sitrat === 9,
+          // Identidade atribuída pelo Senior — só existe depois do registro.
+          numrat: item.numrat,
+          seqrat: item.seqrat,
+          // pendente | enviando | enviado | bloqueado | null (sem registro na fila).
+          envioStatus: envioPorRatItem.get(item.id)?.status ?? null,
+          // Motivo da última recusa do Senior, quando houve — é o que a tela mostra no
+          // hover de "falha no envio".
+          envioErro: envioPorRatItem.get(item.id)?.erro ?? null,
         };
       }),
     });
@@ -355,6 +383,76 @@ ratsRouter.patch("/:id/aprovar", async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// Apontamentos que TINHAM identidade no Senior mas não voltaram na consulta = foram
+// apagados lá. Aqui a lógica é oposta à de Pedidos (onde sumir do ERP vira "removido" e a
+// linha desaparece das telas): o apontamento é um registro de trabalho que aconteceu de
+// verdade, nascido no CaxHub, então o local é a fonte da verdade. Some do ERP, o certo é
+// **desvincular** (limpar numrat/seqrat) pra poder reintegrar, nunca apagar.
+//
+// Nada é reenviado automaticamente: a exclusão pode ter sido intencional do outro lado,
+// então quem decide é o consultor, pelo botão "Enviar" que reaparece na linha.
+async function desvincularItensAusentesNoSenior(
+  rat: { id: number; codemp: number; codpro: number | null; numrat: number | null },
+  seqratsNoSenior: number[],
+  req: AuthenticatedRequest
+): Promise<number[]> {
+  const ausentes = await prisma.ratItem.findMany({
+    where: {
+      ratId: rat.id,
+      numrat: { not: null },
+      // Lista vazia (nenhum item voltou) tem que significar "todos ausentes" — por isso o
+      // notIn só entra quando há algo pra excluir da busca.
+      seqrat: seqratsNoSenior.length > 0 ? { not: null, notIn: seqratsNoSenior } : { not: null },
+    },
+    select: { id: true, seqrat: true },
+  });
+  if (ausentes.length === 0) return [];
+
+  const seqrats = ausentes.map((i) => i.seqrat as number);
+  const ids = ausentes.map((i) => i.id);
+
+  await prisma.$transaction([
+    prisma.ratItem.updateMany({
+      where: { id: { in: ids } },
+      // datreg também sai: era a data de registro NO SENIOR, e esse registro não existe mais.
+      data: { numrat: null, seqrat: null, datreg: null },
+    }),
+    criarEventoAuditoria({
+      origem: "tela",
+      usuarioId: req.user!.userId,
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.numrat}`,
+      eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_DESVINCULADO_SENIOR,
+      alteracoes: null,
+      metadata: { seqratsDesvinculados: seqrats, ratItemIds: ids },
+      correlationId: req.correlationId!,
+    }),
+  ]);
+
+  // A pendência de envio antiga ficou obsoleta: ela diz "enviado", mas o registro que ela
+  // criou não existe mais no ERP. Removê-la devolve o apontamento ao estado limpo de
+  // "confirmado localmente, nunca enviado" — o que também destrava o Excluir, que recusa
+  // desfazer quando existe pendência em qualquer status diferente de "pendente".
+  const atividadesDosItens = await prisma.atividadeSessaoExecucao.findMany({
+    where: { ratItemId: { in: ids } },
+    select: { atividadeId: true, ratItemId: true },
+  });
+  for (const sessao of atividadesDosItens) {
+    const pendencias = await prisma.sincronizacaoPendente.findMany({
+      where: { tipo: "criar_apontamento", atividadeId: sessao.atividadeId },
+    });
+    const obsoletas = pendencias.filter((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === sessao.ratItemId);
+    if (obsoletas.length > 0) {
+      await prisma.sincronizacaoPendente.deleteMany({ where: { id: { in: obsoletas.map((p) => p.id) } } });
+    }
+  }
+
+  return seqrats;
+}
+
 // POST /:id/sincronizar — "Sinc. ERP": puxa de novo o cabeçalho e os itens dessa RAT
 // específica do Senior (filtrado por numrat, ver runRatSyncPorNumrat/
 // runRatItemSyncPorNumrat), pra quando o consultor sabe que algo mudou lá e não quer
@@ -386,16 +484,19 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    let seqratsNoSenior: number[];
     try {
       await runRatSyncPorNumrat(rat.codemp, rat.numrat);
-      await runRatItemSyncPorNumrat(rat.codemp, rat.numrat);
+      seqratsNoSenior = await runRatItemSyncPorNumrat(rat.codemp, rat.numrat);
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : String(syncError);
       res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
       return;
     }
 
-    res.json({ ok: true });
+    const desvinculados = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
+
+    res.json({ ok: true, desvinculados: desvinculados.length, seqratsDesvinculados: desvinculados });
   } catch (error) {
     handleError(res, error, "sincronizar");
   }

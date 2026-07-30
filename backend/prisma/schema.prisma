@@ -683,8 +683,13 @@ model SincronizacaoPendente {
   atividade    AtividadeConsultor @relation(fields: [atividadeId], references: [id])
   tipo         String             @db.VarChar(40)
   payload      Json
-  // pendente | enviado | bloqueado (bloqueado = excedeu o número máximo de tentativas,
-  // precisa de intervenção manual — ver reprocessar() em outboxSenior.ts)
+  // pendente | enviando | enviado | bloqueado
+  //   enviando  = requisição em voo. Existe pra fechar a janela em que o consultor
+  //               conseguiria excluir o apontamento com o envio a caminho (o DELETE de
+  //               routes/apontamentos.ts só libera enquanto está "pendente").
+  //   bloqueado = excedeu o número máximo de tentativas, precisa de intervenção manual
+  //               (ver reprocessar() em outboxSenior.ts).
+  // Tipo sem operação publicada no Senior fica "pendente" sem consumir tentativa.
   status       String             @default("pendente") @db.VarChar(20)
   tentativas   Int                @default(0)
   ultimoErro   String?

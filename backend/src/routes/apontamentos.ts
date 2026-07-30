@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
-import { enfileirar } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
 // rastreou (ver AtividadeSessaoExecucao / PATCH /atividades/:id/mover) e confirma —
@@ -149,7 +149,7 @@ async function confirmarSessao(
     data: { confirmada: true, ratItemId: ratItem.id },
   });
 
-  await enfileirar(atividade.id, "criar_apontamento", {
+  const pendenciaId = await enfileirar(atividade.id, "criar_apontamento", {
     ratItemId: ratItem.id,
     ratId: rat.id,
     seqati: atividade.seqati?.toString() ?? null,
@@ -165,6 +165,14 @@ async function confirmarSessao(
     codfor: rat.codfor,
     codcli: rat.codcli,
     depexe: item.depexe,
+  });
+
+  // Envia pro Senior em segundo plano, sem segurar a resposta: o consultor não deveria
+  // esperar o ERP pra ver o apontamento confirmado na tela, e o estado do envio aparece
+  // no próximo carregamento. O cron de 15 min continua como rede de segurança pro que
+  // falhar aqui — mesmo padrão "fire and forget" de syncErp.ts e POST /pedidos/sincronizar.
+  processarFilaSincronizacao({ apenasId: pendenciaId }).catch((erro) => {
+    console.error("[apontamentos] envio imediato ao Senior falhou:", erro instanceof Error ? erro.message : erro);
   });
 
   return { status: 201, body: { ratItemId: ratItem.id, ratId: rat.id } };
@@ -326,6 +334,159 @@ apontamentosRouter.post("/manual", async (req: AuthenticatedRequest, res) => {
     res.status(status).json(body);
   } catch (error) {
     handleError(res, error, "manual");
+  }
+});
+
+// Localiza o apontamento e a pendência de envio dele, garantindo que pertence ao
+// consultor logado. Compartilhado pelas duas rotas de envio abaixo.
+//
+// O casamento pendência -> apontamento é o mesmo de GET /rats/:id/itens: a fila é
+// indexada por atividade e o `ratItemId` vive dentro do payload.
+async function carregarEnvioDoApontamento(ratItemId: number, codfor: number) {
+  const ratItem = await prisma.ratItem.findUnique({ where: { id: ratItemId }, include: { rat: true, sessoes: true } });
+  if (!ratItem || ratItem.rat.codfor !== codfor) return null;
+
+  const atividadeId = ratItem.sessoes[0]?.atividadeId;
+  const pendencia =
+    atividadeId != null
+      ? (
+          await prisma.sincronizacaoPendente.findMany({
+            where: { tipo: "criar_apontamento", atividadeId },
+            orderBy: { id: "desc" },
+          })
+        ).find((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === ratItemId)
+      : undefined;
+
+  return { ratItem, pendencia };
+}
+
+// GET /envio/:ratItemId — estado do envio de UM apontamento ao Senior.
+//
+// Existe pra tela conseguir acompanhar o que acontece depois de confirmar: o envio roda
+// em segundo plano e leva alguns segundos, então a releitura que o front faz na hora da
+// confirmação sempre pega o item ainda na fila. Sem isso, o consultor confirma e nunca
+// fica sabendo se chegou ao ERP.
+apontamentosRouter.get("/envio/:ratItemId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ratItemId = Number(req.params.ratItemId);
+    if (!Number.isFinite(ratItemId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    const codfor = ctx?.contexto.consultor?.codfor;
+    if (!codfor) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+
+    const envio = await carregarEnvioDoApontamento(ratItemId, codfor);
+    if (!envio) {
+      res.status(404).json({ error: "Apontamento não encontrado" });
+      return;
+    }
+    const { ratItem, pendencia } = envio;
+
+    // `numrat` preenchido é a fonte da verdade do registro, não o status da fila: é ele
+    // que trava edição e exclusão, e ele pode ter sido preenchido por outro caminho
+    // (reconciliação com o ERP, ou o ratSync trazendo a RAT de volta).
+    if (ratItem.numrat != null) {
+      res.json({ status: "registrado", numrat: ratItem.numrat, seqrat: ratItem.seqrat, erro: null });
+      return;
+    }
+
+    res.json({
+      status: pendencia?.status ?? "desconhecido",
+      numrat: null,
+      seqrat: null,
+      erro: pendencia?.ultimoErro ?? null,
+    });
+  } catch (error) {
+    handleError(res, error, "envio-status");
+  }
+});
+
+// POST /envio/:ratItemId/reenviar — nova tentativa de registrar o apontamento no Senior,
+// disparada pelo próprio consultor quando o envio falhou.
+//
+// Seguro contra duplicata: `enviarApontamento` consulta o ERP antes de todo envio, então
+// se o registro já existir de uma tentativa cuja resposta se perdeu, ele apenas reconcilia
+// e grava numrat/seqrat em vez de gravar de novo.
+apontamentosRouter.post("/envio/:ratItemId/reenviar", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ratItemId = Number(req.params.ratItemId);
+    if (!Number.isFinite(ratItemId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    const codfor = ctx?.contexto.consultor?.codfor;
+    if (!codfor) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+
+    const envio = await carregarEnvioDoApontamento(ratItemId, codfor);
+    if (!envio) {
+      res.status(404).json({ error: "Apontamento não encontrado" });
+      return;
+    }
+    const { ratItem, pendencia } = envio;
+
+    if (ratItem.numrat != null) {
+      res.status(400).json({ error: "Apontamento já registrado no Senior — nada a reenviar" });
+      return;
+    }
+    if (pendencia?.status === "enviando") {
+      res.status(409).json({ error: "Envio já em andamento" });
+      return;
+    }
+
+    const atividadeId = ratItem.sessoes[0]?.atividadeId;
+    if (atividadeId == null) {
+      res.status(400).json({ error: "Apontamento sem sessão de execução vinculada — não dá pra enviar" });
+      return;
+    }
+
+    let pendenciaId: number;
+    if (pendencia) {
+      // Volta a zero: sem isso um item já "bloqueado" (tentativas esgotadas) continuaria
+      // de fora da varredura da fila.
+      await prisma.sincronizacaoPendente.update({
+        where: { id: pendencia.id },
+        data: { status: "pendente", tentativas: 0, ultimoErro: null },
+      });
+      pendenciaId = pendencia.id;
+    } else {
+      // Sem pendência = apontamento desvinculado porque foi apagado no Senior (ver
+      // desvincularItensAusentesNoSenior em routes/rats.ts, que remove a pendência
+      // obsoleta). Enfileira de novo pra reintegrar.
+      pendenciaId = await enfileirar(atividadeId, "criar_apontamento", {
+        ratItemId: ratItem.id,
+        ratId: ratItem.ratId,
+        seqati: ratItem.seqati?.toString() ?? null,
+        codemp: ratItem.codemp,
+        codpro: ratItem.codpro,
+        seqite: ratItem.seqite,
+        codfas: ratItem.codfas,
+        datati: ratItem.datati,
+        horini: ratItem.horini,
+        horfim: ratItem.horfim,
+        desati: ratItem.desati,
+        ratNovo: ratItem.rat.numrat == null,
+        codfor: ratItem.rat.codfor,
+        codcli: ratItem.rat.codcli,
+        depexe: ratItem.rat.depexe,
+      });
+    }
+
+    processarFilaSincronizacao({ apenasId: pendenciaId }).catch((erro) => {
+      console.error("[apontamentos] reenvio ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+    });
+
+    res.status(202).json({ status: "reenviando" });
+  } catch (error) {
+    handleError(res, error, "reenviar-envio");
   }
 });
 

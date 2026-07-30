@@ -52,8 +52,14 @@ export const EVENTOS_AUDITORIA = {
   USUARIO_AVATAR_ALTERADO: "USUARIO_AVATAR_ALTERADO",
   USUARIO_AVATAR_REMOVIDO: "USUARIO_AVATAR_REMOVIDO",
 
-  // Aprovação de RAT (backend/src/routes/rats.ts) — só muda sitrat dentro do CaxHub,
-  // sem reflexo no Senior ainda (não há canal de escrita de volta, ver ratSync.ts).
+  // Aprovação de RAT (backend/src/routes/rats.ts) — só muda sitrat dentro do CaxHub. O
+  // canal de escrita pro Senior hoje só registra apontamento (`registrarAtividades`, ver
+  // soap/client.ts); não há operação de aprovação de RAT, então isso não reflete lá.
   RAT_APROVADA: "RAT_APROVADA",
+
+  // Apontamento que existia no Senior e não voltou mais na consulta (foi apagado lá): o
+  // vínculo numrat/seqrat é limpo pra permitir reintegrar. Ver
+  // desvincularItensAusentesNoSenior em backend/src/routes/rats.ts.
+  RAT_ITEM_DESVINCULADO_SENIOR: "RAT_ITEM_DESVINCULADO_SENIOR",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];
