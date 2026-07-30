@@ -78,9 +78,17 @@ export async function runSqlViaSoap(query: string, options: RunSqlOptions = {}):
     return [];
   }
 
-  // O conteúdo dentro do base64 vem em Latin-1/Windows-1252 (não UTF-8) —
-  // decodificar como utf-8 corrompe acentos (ex.: "Aliança" virava "Alian�a").
-  const json = Buffer.from(result.pmJsonResponse, "base64").toString("latin1");
+  // O conteúdo dentro do base64 vem em Windows-1252, não UTF-8 — decodificar como utf-8
+  // corrompe acentos (ex.: "Aliança" virava "Alian�a").
+  //
+  // E NÃO é Latin-1, embora se pareça: os dois só coincidem de 0xA0 pra cima. Na faixa
+  // 0x80–0x9F o Windows-1252 tem pontuação (travessão, aspas curvas, bullet, reticências)
+  // onde o Latin-1 tem caracteres de controle. Decodificar como "latin1" — como se fazia
+  // aqui até 30/07/2026 — transformava todo travessão num controle invisível, que aparecia
+  // como quadradinho na tela; 543 registros ficaram assim antes de alguém notar (ver a
+  // migration 20260730_reparo_encoding_windows1252). `TextDecoder` resolve sem dependência
+  // nova: o Node 18+ já vem com ICU completo.
+  const json = new TextDecoder("windows-1252").decode(Buffer.from(result.pmJsonResponse, "base64"));
   return JSON.parse(json);
 }
 
