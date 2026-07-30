@@ -1,5 +1,5 @@
 import axios from "axios";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AtividadeKanban, ColunaKanban, DetalheInfo, KanbanBoard } from "../../components/projetos/KanbanBoard";
 import { AtividadesTable, FiltrosAtividades } from "../../components/projetos/AtividadesTable";
@@ -78,6 +78,14 @@ export function Atividades() {
   const [departamentos, setDepartamentos] = useState<OpcaoFiltro[]>([]);
   const [prioridades, setPrioridades] = useState<OpcaoFiltro[]>([]);
   const [consultores, setConsultores] = useState<OpcaoFiltro[]>([]);
+  // O padrão do filtro de consultor (só eu, ou sem recorte se sou gestor) vem do backend,
+  // junto das opções — é lá que mora a definição de "gestor". Enquanto ele não chega o
+  // GET /api/atividades fica segurado: disparar antes traria o quadro de todo mundo por
+  // uma fração de segundo, pra logo depois encolher pro meu.
+  const [padraoResolvido, setPadraoResolvido] = useState(false);
+  // A URL manda no padrão: chegar em /projetos/atividades?codfor=... (link compartilhado,
+  // voltar de um detalhe) tem que preservar a seleção. Lido uma vez, na montagem.
+  const urlTinhaCodfor = useRef(searchParams.get("codfor") !== null);
   const [atividades, setAtividades] = useState<AtividadeKanban[]>([]);
   const [total, setTotal] = useState(0);
   const [kpis, setKpis] = useState<KpisAtividades | null>(null);
@@ -175,22 +183,27 @@ export function Atividades() {
   }
 
   useEffect(() => {
-    Promise.all([axios.get("/api/atividades/quadro-colunas"), axios.get("/api/atividades/opcoes-filtro")]).then(
-      ([colunasRes, opcoesRes]) => {
+    Promise.all([axios.get("/api/atividades/quadro-colunas"), axios.get("/api/atividades/opcoes-filtro")])
+      .then(([colunasRes, opcoesRes]) => {
         setColunas(colunasRes.data.colunas);
         setDepartamentos(opcoesRes.data.departamentos);
         setPrioridades(opcoesRes.data.prioridades);
         setConsultores(opcoesRes.data.consultores);
-      }
-    );
+        const padrao: number[] = opcoesRes.data.consultorPadrao ?? [];
+        if (!urlTinhaCodfor.current && padrao.length > 0) atualizarFiltros({ codfor: padrao.join(",") });
+      })
+      // `finally`, não `then`: se as opções falharem o padrão não vem, mas a lista ainda
+      // tem que carregar — segurar pra sempre deixaria a tela vazia por causa de um filtro.
+      .finally(() => setPadraoResolvido(true));
     carregarIndicadores();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
+    if (!padraoResolvido) return;
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, buscaDebounced, depexe, colunaId, pripro, codfor, atrasada, situacao, page]);
+  }, [padraoResolvido, visao, buscaDebounced, depexe, colunaId, pripro, codfor, atrasada, situacao, page]);
 
   async function executarMovimentacao(atividadeId: number, novaColunaId: number, observacao: string | null) {
     const anterior = atividades;

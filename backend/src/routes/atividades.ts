@@ -6,8 +6,14 @@ import crypto from "crypto";
 import multer from "multer";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { depexeLabel, priproLabel, DEPEXE_LABELS, PRIPRO_LABELS } from "../domain/propostasDominio";
-import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
+import {
+  depexeLabel,
+  priproLabel,
+  DEPEXE_LABELS,
+  PRIPRO_LABELS,
+  SITPRO_ATIVIDADES_VISIVEIS,
+} from "../domain/propostasDominio";
+import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos } from "../domain/contextoProjeto";
 import { criarNotificacao, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
 import { enfileirar } from "../sync/outboxSenior";
@@ -220,6 +226,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
       // Sem item/proposta correspondente (órfão) — não dá pra saber departamento/cliente, não exibe.
       if (depexe == null || !proposta) return null;
 
+      // Recorte por situação da proposta. Aqui, e não em cada rota, pra valer de uma vez
+      // no quadro, na lista, no calendário, na timeline, nos KPIs e nos indicadores.
+      if (proposta.sitpro == null || !SITPRO_ATIVIDADES_VISIVEIS.includes(proposta.sitpro)) return null;
+
       if (!podeExecutarAcao(role, contexto, "visualizar", { depexe, codfor: a.codfor })) return null;
 
       const consultor = consultorPorCodfor.get(a.codfor);
@@ -394,19 +404,44 @@ atividadesRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) =>
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
-    // Consultores derivados do mesmo recorte de visibilidade da listagem/indicadores —
-    // não do time de um departamento específico (isso é `/alocacao/consultores-elegiveis`,
-    // que serve pra escolher quem RECEBE uma alocação nova, não pra filtrar quem já tem
-    // atividade visível). Considera todo `visiveis` (não só backlog), pra incluir quem só
-    // tem atividade concluída.
-    const visiveis = await carregarAtividadesVisiveis(ctx.role, ctx.contexto);
+    const { contexto, role } = ctx;
+    // "Gestor" aqui é o mesmo Líder Técnico derivado de DepartamentoGestor que o resto do
+    // módulo usa — não um papel (Role). Admin entra junto por ver o módulo inteiro.
+    const ehGestor = role === "admin" || contexto.departamentosGerenciados.length > 0;
+
     const consultoresPorCodfor = new Map<number, string>();
-    for (const v of visiveis) consultoresPorCodfor.set(v.codfor, v.consultorNome);
+    // Colegas de departamento: quem divide time comigo mais quem está nos departamentos
+    // que eu gerencio. Vem do cadastro, não das atividades — um colega que ainda não tem
+    // nenhuma atividade precisa aparecer no filtro do mesmo jeito.
+    const meusDepartamentos = [...new Set([...contexto.departamentosTime, ...contexto.departamentosGerenciados])];
+    if (role !== "admin") {
+      for (const c of await consultoresDosDepartamentos(meusDepartamentos)) {
+        if (c.codfor != null) consultoresPorCodfor.set(c.codfor, c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`);
+      }
+      // Eu mesmo: estar num DepartamentoTime não é garantido (gestor costuma só gerenciar),
+      // e o filtro tem que oferecer no mínimo o próprio usuário.
+      const eu = contexto.consultor;
+      if (eu?.codfor != null) consultoresPorCodfor.set(eu.codfor, eu.nomcom ?? eu.nomfor ?? `Fornecedor ${eu.codfor}`);
+    }
+
+    // Admin, e quem não está em departamento nenhum, cairia num filtro vazio. Nesses casos
+    // a lista volta a ser derivada das atividades visíveis (todo `visiveis`, não só o
+    // backlog, pra incluir quem só tem atividade concluída).
+    if (consultoresPorCodfor.size === 0) {
+      const visiveis = await carregarAtividadesVisiveis(role, contexto);
+      for (const v of visiveis) consultoresPorCodfor.set(v.codfor, v.consultorNome);
+    }
+
     const consultores = [...consultoresPorCodfor.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
 
-    res.json({ departamentos, prioridades, consultores });
+    // Seleção inicial da tela: quem não é gestor abre vendo só as próprias atividades —
+    // hoje o quadro abre com o de todo mundo. Gestor abre sem recorte, com o time inteiro.
+    const meuCodfor = contexto.consultor?.codfor ?? null;
+    const consultorPadrao = !ehGestor && meuCodfor != null ? [meuCodfor] : [];
+
+    res.json({ departamentos, prioridades, consultores, consultorPadrao, ehGestor });
   } catch (error) {
     handleError(res, error, "opcoes-filtro");
   }
@@ -433,7 +468,13 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
     const filtroDepexe = parseIntParam(req.query.depexe);
     const filtroColunaId = parseIntParam(req.query.colunaId);
     const filtroPripro = parseIntParam(req.query.pripro);
-    const filtroCodfor = parseIntParam(req.query.codfor);
+    // Lista separada por vírgula ("134,207") — o seletor da tela é multi-seleção. Number("")
+    // é 0, não NaN, então sem a guarda de string vazia um filtro ausente viraria [0] e
+    // esconderia todas as atividades. Mesmo padrão de rats.ts e de Mercado > Pedidos.
+    const filtroCodfors = (typeof req.query.codfor === "string" ? req.query.codfor : "")
+      .split(",")
+      .map((v) => Number(v.trim()))
+      .filter((v) => Number.isFinite(v) && v !== 0);
     const somenteAtrasadas = req.query.atrasada === "true";
     const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
     const page = parseIntParam(req.query.page);
@@ -464,7 +505,7 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
       .filter((item) => filtroDepexe === null || item.depexe === filtroDepexe)
       .filter((item) => filtroColunaId === null || item.colunaId === filtroColunaId)
       .filter((item) => filtroPripro === null || item.pripro === filtroPripro)
-      .filter((item) => filtroCodfor === null || item.codfor === filtroCodfor)
+      .filter((item) => filtroCodfors.length === 0 || filtroCodfors.includes(item.codfor))
       .filter((item) => !somenteAtrasadas || item.atrasada)
       .filter((item) => !busca || item.cliente.toLowerCase().includes(busca) || String(item.codpro).includes(busca))
       .filter((item) => {

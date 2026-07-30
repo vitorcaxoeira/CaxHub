@@ -25,6 +25,15 @@ export const SITPRO_EM_DECISAO = [1, 2, 3];
 // então contar só ele subestima a conversão em ordens de grandeza (testado com dado
 // real: 60 vs 3.299 propostas) — sempre usar os 3 juntos.
 export const SITPRO_GANHAS = [4, 7, 8];
+
+// Situações de proposta cuja atividade aparece em Gestão de Projetos. Recorte de negócio
+// definido pelo usuário, NÃO derivado dos conjuntos acima — vale pra todas as visões
+// (quadro, lista, calendário, timeline) e também pros KPIs e indicadores, que saem da
+// mesma base; um KPI contando atividade que o quadro não mostra estaria errado.
+//
+// 4=Aprovada e 7=Em Execução: a proposta já foi ganha e o trabalho ainda está de pé.
+// 8=Executada fica de fora de propósito — projeto encerrado sai do quadro.
+export const SITPRO_ATIVIDADES_VISIVEIS = [4, 7];
 export const SITPRO_PERDIDAS = [5, 6];
 export const SITPRO_DECIDIDAS = [4, 5, 6, 7, 8];
 

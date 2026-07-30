@@ -1,10 +1,20 @@
 import { ColunaKanban } from "./KanbanBoard";
+import { MultiSelectDropdown } from "../ui/MultiSelectDropdown";
 import type { SituacaoKpi } from "./IndicadoresProjetos";
 import type { FiltrosAtividades } from "./AtividadesTable";
 
 interface OpcaoFiltro {
   value: number;
   label: string;
+}
+
+// "134,207" -> [134, 207]. Exportado porque a tela precisa da mesma leitura pra decidir
+// se já existe seleção vinda da URL antes de aplicar o padrão.
+export function lerCodfors(valor: string): number[] {
+  return valor
+    .split(",")
+    .map((v) => Number(v.trim()))
+    .filter((v) => Number.isFinite(v) && v !== 0);
 }
 
 const SITUACAO_KPI_LABEL: Record<SituacaoKpi, string> = {
@@ -73,14 +83,15 @@ export function AtividadesFiltros({
           </option>
         ))}
       </select>
-      <select value={filtros.codfor} onChange={(e) => onFiltros({ codfor: e.target.value })} className={selectClass}>
-        <option value="">Todos os consultores</option>
-        {consultores.map((c) => (
-          <option key={c.value} value={c.value}>
-            {c.label}
-          </option>
-        ))}
-      </select>
+      {/* codfor viaja como "134,207" (string) porque é o formato que já vai pra URL e pro
+          backend; a conversão pra lista vive só aqui, na borda do componente. */}
+      <MultiSelectDropdown
+        opcoes={consultores}
+        selecionados={lerCodfors(filtros.codfor)}
+        onChange={(valores) => onFiltros({ codfor: valores.join(",") })}
+        labelTodos="Todos os consultores"
+        labelSufixo="consultores"
+      />
       {situacaoKpi ? (
         <button
           onClick={onLimparKpi}
