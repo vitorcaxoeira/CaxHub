@@ -1,5 +1,6 @@
 import { DndContext, DragEndEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { formatHorasCompacto } from "../../lib/cronograma";
+import { tomConsumo } from "../../lib/consumoHoras";
 import { Avatar } from "../ui/Avatar";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { toneBadge, priproTone } from "../ui/badges";
@@ -99,20 +100,6 @@ const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
 // alinhada à direita. Definido num lugar só porque são dois usos que precisam ficar
 // visualmente idênticos — se divergirem, o card fica desalinhado.
 const CHIP_META = "rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[9.5px] text-muted";
-
-// A partir de quanto do previsto o consumo já é "alerta". O Cronograma não tem esse
-// conceito — os alertas dele (estadoAlertaItem) são estouros booleanos do orçamento do
-// item, sem noção de proximidade — então o limiar nasce aqui. 80% é a convenção usual de
-// "chegando no limite"; mudar é uma linha.
-const LIMIAR_ALERTA_CONSUMO = 0.8;
-
-// Escalada de cor do consumo de horas, usada em conjunto pela barra e pelo percentual —
-// as duas leituras têm que contar a mesma história.
-function tomConsumo(avanco: number): { barra: string; texto: string } {
-  if (avanco > 1) return { barra: "bg-destructive", texto: "font-semibold text-destructive" };
-  if (avanco >= LIMIAR_ALERTA_CONSUMO) return { barra: "bg-warning", texto: "font-semibold text-warning" };
-  return { barra: "bg-primary", texto: "" };
-}
 
 const corBorda: Record<string, string> = {
   neutral: "border-t-muted",

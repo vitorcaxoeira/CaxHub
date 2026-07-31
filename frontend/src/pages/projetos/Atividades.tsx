@@ -17,7 +17,6 @@ import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 type Visao = "quadro" | "lista" | "calendario" | "timeline" | "workload";
 const VISOES: Visao[] = ["quadro", "lista", "calendario", "timeline", "workload"];
 const SITUACOES_VALIDAS: SituacaoKpi[] = ["backlog", "atrasadas", "concluidas"];
-const PAGE_SIZE = 25;
 
 interface OpcaoFiltro {
   value: number;
@@ -163,9 +162,10 @@ export function Atividades() {
           codfor: codfor || undefined,
           atrasada: atrasada || undefined,
           situacao: situacao || undefined,
-          // Só a visão "lista" pagina — as demais precisam do conjunto completo já filtrado.
-          page: visao === "lista" ? page : undefined,
-          pageSize: visao === "lista" ? PAGE_SIZE : undefined,
+          // Nenhuma visão pagina no servidor: a Lista agrupa por proposta + consultor e
+          // pagina por GRUPO, então precisa do conjunto completo — paginar por atividade
+          // partiria um grupo ao meio entre duas páginas. As demais visões sempre
+          // precisaram do conjunto inteiro.
         },
       })
       .then(({ data }) => {
