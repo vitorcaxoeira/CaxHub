@@ -40,24 +40,79 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
   return { user, contexto, role: req.user!.role as string };
 }
 
-// Departamentos que o usuário pode gerenciar nesta área — admin gerencia todos os
-// existentes em PropostaItem; Líder Técnico só os que gerencia; qualquer outro papel, nenhum.
+// Departamentos que o usuário pode gerenciar nesta área — Líder Técnico só os que
+// gerencia; qualquer outro papel, nenhum. Admin recebe a união dos depexe distintos das
+// DUAS tabelas: o escopo padrão da tela olha Proposta.depexe e o de compartilhadas olha
+// PropostaItem.depexe, então tirar só de uma delas deixaria admin sem enxergar propostas
+// de um departamento que não aparece na outra.
 async function departamentosPermitidos(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
   if (role === "admin") {
-    const distintos = await prisma.propostaItem.findMany({
-      where: { depexe: { not: null } },
-      distinct: ["depexe"],
-      select: { depexe: true },
-    });
-    return distintos.map((d) => d.depexe as number);
+    const [deItens, dePropostas] = await Promise.all([
+      prisma.propostaItem.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
+      prisma.proposta.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
+    ]);
+    return [...new Set([...deItens, ...dePropostas].map((d) => d.depexe as number))];
   }
   return contexto.departamentosGerenciados;
 }
 
+// ---------------------------------------------------------------------------------
+// Escopo da tela de Alocação: quais propostas o gestor enxerga.
+//
+// São DOIS caminhos, e o campo consultado é diferente em cada um:
+//
+//   próprias      -> Proposta.depexe está nos meus departamentos. É a lista padrão.
+//   compartilhada -> Proposta.depexe é de OUTRO departamento, mas algum PropostaItem
+//                    dela está num dos meus. Só aparece com o filtro ligado.
+//
+// Os dois são disjuntos de propósito: uma proposta própria nunca é "compartilhada". A
+// leitura inclusiva (qualquer proposta com item meu) foi medida e devolve exatamente a
+// mesma lista do padrão para os gestores reais — o filtro não filtraria nada.
+//
+// Uma vez que a proposta entra, ela entra INTEIRA: todos os itens aparecem e os
+// agregados somam a proposta toda, não só a fatia do meu departamento. Ver/alocar são
+// coisas diferentes — a permissão de alocar continua por item (podeExecutarAcao com o
+// depexe DO ITEM), então item de outro departamento aparece somente-leitura.
+// ---------------------------------------------------------------------------------
+
+type OrigemEscopo = "propria" | "compartilhada";
+
+// Classifica uma proposta contra os departamentos informados. `null` = fora do escopo.
+function origemDaProposta(
+  propostaDepexe: number | null,
+  depexesDosItens: Set<number>,
+  permitidos: number[]
+): OrigemEscopo | null {
+  if (propostaDepexe != null && permitidos.includes(propostaDepexe)) return "propria";
+  for (const dep of depexesDosItens) if (permitidos.includes(dep)) return "compartilhada";
+  return null;
+}
+
+// Guarda de acesso das rotas de detalhe (itens, consultores, cronograma). Mesma regra da
+// lista, para não haver proposta que aparece na listagem e dá 403 ao abrir.
+async function podeVerProposta(permitidos: number[], codemp: number, codpro: number): Promise<boolean> {
+  if (permitidos.length === 0) return false;
+  const [proposta, itens] = await Promise.all([
+    prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } }, select: { depexe: true } }),
+    prisma.propostaItem.findMany({ where: { codemp, codpro, depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
+  ]);
+  if (!proposta) return false;
+  const depsItens = new Set(itens.map((i) => i.depexe as number));
+  return origemDaProposta(proposta.depexe, depsItens, permitidos) != null;
+}
+
 // Ações no nível da proposta inteira (pasta raiz, agrupar/soltar item) não têm um único
 // depexe pra checar contra podeExecutarAcao — uma pasta raiz pode reunir itens de
-// departamentos diferentes. Autoriza quem gerencia pelo menos um departamento presente
-// nos itens desta proposta específica (mesmo espírito de ACOES_LIDER_TECNICO).
+// departamentos diferentes. Vale a mesma regra de escopo da listagem: quem enxerga a
+// proposta organiza a estrutura dela.
+//
+// Antes olhava só os itens, e isso virou um beco sem saída com o escopo novo: existem 6
+// propostas cujo Proposta.depexe é de um departamento que não aparece em nenhum item
+// dela (ex.: 1-8605, de Consultoria HCM, com todos os itens em Consultoria ERP). O dono
+// passaria a vê-la como própria e não poderia fazer NADA nela.
+//
+// Organizar a estrutura não é alocar: distribuir horas para um consultor continua sendo
+// decidido item a item por podeExecutarAcao, com o depexe DO ITEM.
 async function podeGerenciarProposta(
   role: string,
   contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>,
@@ -65,20 +120,13 @@ async function podeGerenciarProposta(
   codpro: number
 ): Promise<boolean> {
   const permitidos = await departamentosPermitidos(role, contexto);
-  if (permitidos.length === 0) return false;
-  const itensDaProposta = await prisma.propostaItem.findMany({
-    where: { codemp, codpro, depexe: { not: null } },
-    distinct: ["depexe"],
-    select: { depexe: true },
-  });
-  return itensDaProposta.some((i) => permitidos.includes(i.depexe as number));
+  return podeVerProposta(permitidos, codemp, codpro);
 }
 
 // Controle sempre por proposta (uma proposta pode ter muitos itens — misturar tudo
 // num feed único de itens fica ruim de gerenciar). Esta lista é o ponto de entrada:
-// uma linha por proposta, com o total de horas/alocado agregado só sobre os itens nos
-// departamentos permitidos ao usuário (uma proposta pode ter itens de outros deptos,
-// que não entram nesse agregado nem aparecem na tela de detalhe).
+// uma linha por proposta, com Total/Alocado/Saldo agregados sobre a proposta INTEIRA,
+// incluindo itens de outros departamentos (ver o bloco de escopo no topo do arquivo).
 alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
@@ -107,10 +155,40 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 25));
 
-    const itens = await prisma.propostaItem.findMany({
-      where: { depexe: { in: depexesConsultados } },
+    // Parte das PROPOSTAS alocáveis, não dos itens: o escopo padrão agora é
+    // Proposta.depexe. São ~260 linhas na base inteira, então carregar todas e
+    // classificar em memória é mais simples (e mais barato) que duas queries com OR
+    // gigante — mesmo padrão já usado nas outras rotas deste arquivo.
+    const propostas = await prisma.proposta.findMany({
+      where: { sitpro: { in: SITPRO_ALOCAVEL } },
+      include: { cliente: true },
     });
-    if (itens.length === 0) {
+    const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
+
+    // TODOS os itens dessas propostas, sem recorte de departamento: quem decide se a
+    // proposta entra é o classificador abaixo; uma vez dentro, ela entra inteira.
+    const itens = propostas.length
+      ? await prisma.propostaItem.findMany({
+          where: { OR: propostas.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
+        })
+      : [];
+
+    const depexesPorProposta = new Map<string, Set<number>>();
+    for (const item of itens) {
+      if (item.depexe == null) continue;
+      const chave = `${item.codemp}-${item.codpro}`;
+      if (!depexesPorProposta.has(chave)) depexesPorProposta.set(chave, new Set());
+      depexesPorProposta.get(chave)!.add(item.depexe);
+    }
+
+    const origemPorProposta = new Map<string, OrigemEscopo>();
+    for (const p of propostas) {
+      const chave = `${p.codemp}-${p.codpro}`;
+      const origem = origemDaProposta(p.depexe, depexesPorProposta.get(chave) ?? new Set(), depexesConsultados);
+      if (origem) origemPorProposta.set(chave, origem);
+    }
+
+    if (origemPorProposta.size === 0) {
       const kpiZerado = { quantidade: 0, horas: 0 };
       res.json({
         rows: [],
@@ -125,18 +203,6 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       });
       return;
     }
-
-    const chavesProposta = [...new Set(itens.map((i) => `${i.codemp}-${i.codpro}`))];
-    const propostas = await prisma.proposta.findMany({
-      where: {
-        OR: chavesProposta.map((chave) => {
-          const [codemp, codpro] = chave.split("-").map(Number);
-          return { codemp, codpro };
-        }),
-      },
-      include: { cliente: true },
-    });
-    const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
 
     const alocacoes = await prisma.atividadeConsultor.findMany({
       where: { sitreg: "A", OR: itens.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })) },
@@ -156,43 +222,48 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       sitpro: number | null;
       propostaDepexe: number | null;
       propostaModpro: number | null;
+      origem: OrigemEscopo;
       totalItens: number;
       qtdhorTotal: number;
       horasAlocadas: number;
     }
+    // Semeia pelas PROPOSTAS do escopo (não pelos itens) — só assim a proposta existe
+    // no mapa antes de se saber se ela tem item, o que torna a exclusão das vazias uma
+    // decisão explícita lá embaixo em vez de efeito colateral do laço.
     const porProposta = new Map<string, Agregado>();
+    for (const [chaveProposta, origem] of origemPorProposta) {
+      const proposta = propostaPorChave.get(chaveProposta)!;
+      porProposta.set(chaveProposta, {
+        codemp: proposta.codemp,
+        codpro: proposta.codpro,
+        numprj: proposta.numprj,
+        cliente: `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}`,
+        despro: proposta.despro,
+        sitpro: proposta.sitpro,
+        propostaDepexe: proposta.depexe,
+        propostaModpro: proposta.modpro,
+        origem,
+        totalItens: 0,
+        qtdhorTotal: 0,
+        horasAlocadas: 0,
+      });
+    }
+    // Sem recorte por item.depexe: se a proposta está no escopo, TODOS os itens dela
+    // entram no agregado — Total/Alocado/Saldo passam a ser os da proposta inteira, e
+    // não mais a fatia do departamento de quem está olhando.
     for (const item of itens) {
-      const proposta = propostaPorChave.get(`${item.codemp}-${item.codpro}`);
-      if (!proposta || item.depexe == null) continue;
-      if (proposta.sitpro == null || !SITPRO_ALOCAVEL.includes(proposta.sitpro)) continue;
-
-      const chaveProposta = `${item.codemp}-${item.codpro}`;
-      if (!porProposta.has(chaveProposta)) {
-        porProposta.set(chaveProposta, {
-          codemp: item.codemp,
-          codpro: item.codpro,
-          numprj: proposta.numprj,
-          cliente: `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}`,
-          despro: proposta.despro,
-          sitpro: proposta.sitpro,
-          propostaDepexe: proposta.depexe,
-          propostaModpro: proposta.modpro,
-          totalItens: 0,
-          qtdhorTotal: 0,
-          horasAlocadas: 0,
-        });
-      }
-      const agregado = porProposta.get(chaveProposta)!;
+      const agregado = porProposta.get(`${item.codemp}-${item.codpro}`);
+      if (!agregado) continue;
       agregado.totalItens += 1;
       agregado.qtdhorTotal += item.qtdhor ?? 0;
       agregado.horasAlocadas += alocadoPorItem.get(`${item.codemp}-${item.codpro}-${item.seqite}`) ?? 0;
     }
-
-    // "Compartilhada" = a proposta pertence (Proposta.depexe, o depto "dono" dela no
-    // Senior) a outro departamento, mas tem pelo menos um item no(s) departamento(s)
-    // que o usuário gerencia de verdade — ou seja, item emprestado pro time dele.
-    // Usa departamentosGerenciados (não `permitidos`, que pra admin vira "todos").
-    const meusDepartamentos = contexto.departamentosGerenciados;
+    // Proposta sem item nenhum sai da lista: não há o que alocar nela, e ela só ocuparia
+    // linha com tudo zerado. São 11 na base local — todas recém-aprovadas, ainda sem
+    // itens sincronizados do Senior.
+    for (const [chave, agregado] of porProposta) {
+      if (agregado.totalItens === 0) porProposta.delete(chave);
+    }
 
     // KPIs sempre por proposta (nunca por item) e sempre com quantidade + total de horas
     // juntos no mesmo card — refletem o escopo de departamento(s) selecionado, mas não os
@@ -209,8 +280,12 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     const totalmenteAlocadas = todasPropostas.filter(
       (a) => a.qtdhorTotal > 0 && a.qtdhorTotal - a.horasAlocadas <= 0
     );
+    // "Compartilhada" agora vem da classificação de escopo, não de recomparar o depexe:
+    // é proposta de OUTRO departamento que entrou porque tem item no meu. Antes o corte
+    // usava departamentosGerenciados, que para admin é vazio — e com isso as 248
+    // propostas dele caíam todas neste KPI.
     const compartilhadasEmAberto = todasPropostas.filter(
-      (a) => a.propostaDepexe != null && !meusDepartamentos.includes(a.propostaDepexe) && a.qtdhorTotal - a.horasAlocadas > 0
+      (a) => a.origem === "compartilhada" && a.qtdhorTotal - a.horasAlocadas > 0
     );
     const somaHoras = (lista: Agregado[], campo: (a: Agregado) => number) =>
       lista.reduce((soma, a) => soma + campo(a), 0);
@@ -240,10 +315,13 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       totalmenteAlocadas,
       compartilhadasEmAberto,
     };
+    // Sem o filtro ligado a lista mostra só as PRÓPRIAS; ligado, só as compartilhadas.
+    // Os dois conjuntos são disjuntos, então o checkbox alterna entre eles em vez de
+    // somar — é o que dá sentido ao rótulo "Compartilhadas com meu departamento".
     const baseFiltrada = situacao
       ? porSituacao[situacao]
       : todasPropostas
-          .filter((a) => !compartilhadas || a.propostaDepexe == null || !meusDepartamentos.includes(a.propostaDepexe))
+          .filter((a) => (compartilhadas ? a.origem === "compartilhada" : a.origem === "propria"))
           .filter((a) => !apenasComSaldo || a.qtdhorTotal - a.horasAlocadas > 0);
 
     let linhas = baseFiltrada.map((a) => ({
@@ -304,9 +382,15 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
     }
     const { contexto, role } = ctx;
     const permitidos = await departamentosPermitidos(role, contexto);
+    if (!(await podeVerProposta(permitidos, codemp, codpro))) {
+      res.json({ consultores: [] });
+      return;
+    }
 
+    // Todos os itens da proposta, sem recorte de departamento: o resumo por consultor do
+    // accordion tem que bater com o Alocado da linha, que agora é o da proposta inteira.
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro, depexe: { in: permitidos } },
+      where: { codemp, codpro },
       select: { codemp: true, codpro: true, seqite: true },
     });
     if (itens.length === 0) {
@@ -346,9 +430,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
   }
 });
 
-// Detalhe de uma proposta: todos os itens dela (nos departamentos permitidos) já com
-// as alocações de cada um — a "aba 2" (item x consultor x fase) fica embutida por item
-// em vez de ser uma grade solta que obriga cruzar pelo número de sequência.
+// Detalhe de uma proposta: TODOS os itens dela, de qualquer departamento, já com as
+// alocações de cada um — a "aba 2" (item x consultor x fase) fica embutida por item
+// em vez de ser uma grade solta que obriga cruzar pelo número de sequência. Item fora
+// dos meus departamentos vem com podeAlocar/podeEditar false: aparece, não se mexe.
 alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: AuthenticatedRequest, res) => {
   try {
     const codemp = Number(req.params.codemp);
@@ -372,12 +457,19 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
       return;
     }
 
+    // Proposta no escopo entra inteira: todos os itens, inclusive os de outro
+    // departamento. Eles vêm somente-leitura — `podeAlocar` abaixo continua sendo
+    // decidido pelo depexe DO ITEM.
+    if (!(await podeVerProposta(permitidos, codemp, codpro))) {
+      res.status(403).json({ error: "Sem acesso a esta proposta" });
+      return;
+    }
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro, depexe: { in: permitidos } },
+      where: { codemp, codpro },
       orderBy: { seqite: "asc" },
     });
     if (itens.length === 0) {
-      res.status(403).json({ error: "Sem itens desta proposta nos seus departamentos" });
+      res.status(404).json({ error: "Proposta sem itens" });
       return;
     }
 
@@ -676,12 +768,17 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
       return;
     }
 
+    // Mesma regra da lista e do /itens: proposta no escopo aparece com todos os itens.
+    if (!(await podeVerProposta(permitidos, codemp, codpro))) {
+      res.status(403).json({ error: "Sem acesso a esta proposta" });
+      return;
+    }
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro, depexe: { in: permitidos } },
+      where: { codemp, codpro },
       orderBy: { seqite: "asc" },
     });
     if (itens.length === 0) {
-      res.status(403).json({ error: "Sem itens desta proposta nos seus departamentos" });
+      res.status(404).json({ error: "Proposta sem itens" });
       return;
     }
 
