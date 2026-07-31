@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 export function Login() {
-  const [email, setEmail] = useState("admin@caxhub.local");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const { login } = useAuth();
@@ -34,6 +34,9 @@ export function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               type="email"
+              autoComplete="username"
+              autoFocus
+              placeholder="seu.email@empresa.com"
               required
               className="w-full rounded-md border border-border bg-surface px-3 py-2.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
@@ -44,6 +47,7 @@ export function Login() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               type="password"
+              autoComplete="current-password"
               required
               className="w-full rounded-md border border-border bg-surface px-3 py-2.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
