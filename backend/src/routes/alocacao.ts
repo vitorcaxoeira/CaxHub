@@ -856,12 +856,15 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
             select: { atividadeId: true, inicio: true, fim: true },
           })
         : [];
-    const minutosRealizadosPorAtividadeId = new Map<number, number>();
+    // Mesmo cuidado de domain/tetoAtividade.ts: soma em milissegundos e arredonda uma vez
+    // por atividade, senao sessao de menos de 30s conta zero.
+    const msRealizadosPorAtividadeId = new Map<number, number>();
     for (const s of sessoesNaoConfirmadas) {
       if (s.fim == null) continue;
-      const minutos = Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000);
-      minutosRealizadosPorAtividadeId.set(s.atividadeId, (minutosRealizadosPorAtividadeId.get(s.atividadeId) ?? 0) + minutos);
+      msRealizadosPorAtividadeId.set(s.atividadeId, (msRealizadosPorAtividadeId.get(s.atividadeId) ?? 0) + (s.fim.getTime() - s.inicio.getTime()));
     }
+    const minutosRealizadosPorAtividadeId = new Map<number, number>();
+    for (const [id, ms] of msRealizadosPorAtividadeId) minutosRealizadosPorAtividadeId.set(id, Math.round(ms / 60000));
     function horasRealizadasDaAlocacao(a: (typeof alocacoes)[number]): number {
       return (a.seqati != null ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) + (minutosRealizadosPorAtividadeId.get(a.id) ?? 0);
     }

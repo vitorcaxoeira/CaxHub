@@ -145,6 +145,9 @@ function IndicadorSessao({ row }: { row: AtividadeRow }) {
 // Realizado / previsto com o percentual colorido pela escala compartilhada com o card do
 // Quadro. Sem previsto não há proporção: mostra só o realizado e omite o percentual —
 // mesma regra do KanbanBoard.
+//
+// O sufixo "h" não é decoração: o cronômetro da linha fica ao lado em H:MM:SS, e sem a
+// unidade o "32:29" daqui é lido como 32min29s.
 function ConsumoHoras({ realizado, previsto }: { realizado: number; previsto: number }) {
   const temPrevisto = previsto > 0;
   const avanco = temPrevisto ? realizado / previsto : 0;
@@ -153,7 +156,7 @@ function ConsumoHoras({ realizado, previsto }: { realizado: number; previsto: nu
     <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap font-mono text-[12px] tabular-nums text-muted">
       <span>
         {formatHorasCompacto(realizado)}
-        {temPrevisto && ` / ${formatHorasCompacto(previsto)}`}
+        {temPrevisto && ` / ${formatHorasCompacto(previsto)}`} h
       </span>
       {temPrevisto && <span className={tom.texto}>{Math.round(avanco * 100)}%</span>}
     </span>

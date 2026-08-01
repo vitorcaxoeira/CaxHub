@@ -38,11 +38,17 @@ export async function realizadoDaAtividade(atividade: Pick<AtividadeConsultor, "
       : Promise.resolve([]),
   ]);
 
-  let minutos = 0;
+  // Acumula em MILISSEGUNDOS e arredonda UMA vez, no total. Arredondar sessão a sessão
+  // descartava até 30s de cada uma, e zerava por completo as de menos de 30s: três starts
+  // curtos somavam 0 minuto. Agora três sessões de 25s somam 1 minuto, como deve ser.
+  let milissegundos = 0;
   for (const s of sessoes) {
     if (s.fim == null) continue;
-    minutos += Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000);
+    milissegundos += s.fim.getTime() - s.inicio.getTime();
   }
+  // RatItem já vem em minutos inteiros (horini/horfim são a granularidade do Senior), então
+  // entra como está — não há segundo a preservar aqui.
+  let minutos = Math.round(milissegundos / 60000);
   for (const r of ratItens) {
     if (r.horini == null || r.horfim == null) continue;
     minutos += r.horfim - r.horini;

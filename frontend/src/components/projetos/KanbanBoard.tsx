@@ -267,10 +267,13 @@ function DraggableCard({
           estouro. Divergência deliberada: no quadro o card é o lugar onde se acompanha o
           consumo no dia a dia, então avisar ANTES de estourar tem valor; lá o alerta vive
           no orçamento do item, que é outra conversa. */}
+      {/* O sufixo "h" não é decoração: uma linha acima está o cronômetro em H:MM:SS, e
+          sem a unidade o "32:29" daqui é lido como 32min29s — foi exatamente o que
+          aconteceu. Os dois formatos convivem no mesmo card e precisam se distinguir. */}
       <div className="mt-2 flex items-baseline justify-between gap-2 font-mono text-[11px] tabular-nums text-muted">
         <span>
           {formatHorasCompacto(realizado)}
-          {temPrevisto && ` / ${formatHorasCompacto(previsto)}`}
+          {temPrevisto && ` / ${formatHorasCompacto(previsto)}`} h
         </span>
         {temPrevisto && <span className={tom.texto}>{Math.round(avanco * 100)}%</span>}
       </div>
