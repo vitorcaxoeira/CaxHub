@@ -63,6 +63,10 @@ export interface AtividadeKanban {
   estruturaNome: string | null;
   estruturaPercentual: number | null;
   podeVerCronograma: boolean;
+  // Instante em que a sessao aberta precisa parar (teto de horas ou fim do expediente) e
+  // o motivo. Nulos quando nao ha sessao aberta ou nada limita ela.
+  sessaoLimite: string | null;
+  sessaoLimiteMotivo: string | null;
   // Excedente autorizado pelo gestor, em minutos. O teto de apontamento do card e
   // qtdhorPrevisto + este valor.
   horasExcedentes: number;
@@ -136,7 +140,7 @@ function DraggableCard({
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: 20 } : undefined;
   const atrasada = atividade.atrasada;
   const emAndamento = atividade.coluna?.nome === RAIA_EM_ANDAMENTO;
-  const cronometro = useCronometro(atividade.sessaoAtualInicio);
+  const { texto: cronometro, atingiuLimite } = useCronometro(atividade.sessaoAtualInicio, atividade.sessaoLimite);
   const habilitaIniciar = podeIniciar(atividade);
   const habilitaParar = podeParar(atividade);
 
@@ -243,7 +247,13 @@ function DraggableCard({
             largura do card. */}
         <p className="min-w-0 truncate text-[12px] text-foreground">{atividade.consultorNome}</p>
         {emAndamento && cronometro && (
-          <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-success">{cronometro}</span>
+          <span
+            className={`ml-auto shrink-0 font-mono text-[11px] tabular-nums ${atingiuLimite ? "font-semibold text-destructive" : "text-success"}`}
+            title={atingiuLimite ? "Limite atingido — a execução está sendo encerrada" : undefined}
+          >
+            {cronometro}
+            {atingiuLimite && " ⏹"}
+          </span>
         )}
       </div>
       {/* Realizado x previsto reaproveitando o formatador e o indicador do Cronograma (ver

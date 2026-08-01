@@ -205,16 +205,68 @@ export function Atividades() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [padraoResolvido, visao, buscaDebounced, depexe, colunaId, pripro, codfor, atrasada, situacao, page]);
 
+  // Baixa imediata da sessão que atingiu o limite (teto de horas ou fim do expediente).
+  // Sem isto o card fica visivelmente correndo além do que vai contar até a varredura
+  // passar, de 5 em 5 minutos — a varredura continua existindo como rede de segurança pra
+  // quem fechou o navegador, e grava exatamente o mesmo instante.
+  //
+  // UM efeito pra todas as atividades, e não um por card: com N cards vencidos, um por
+  // card dispararia N requisições concorrentes e cada `carregar()` remontaria a lista no
+  // meio das outras. O tique é de 30s porque o instante gravado não depende de quando a
+  // baixa sai — só a percepção na tela.
+  const encerramentosDisparados = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const vencidas = () =>
+      atividades.filter((a) => a.sessaoAtualInicio && a.sessaoLimite && new Date(a.sessaoLimite).getTime() <= Date.now());
+
+    async function encerrarVencidas() {
+      for (const a of vencidas()) {
+        // Chave inclui o início da sessão: uma sessão NOVA na mesma atividade precisa
+        // poder ser encerrada de novo mais tarde.
+        const chave = `${a.id}-${a.sessaoAtualInicio}`;
+        if (encerramentosDisparados.current.has(chave)) continue;
+        encerramentosDisparados.current.add(chave);
+        try {
+          const { data } = await axios.post(`/api/atividades/${a.id}/encerrar-automatico`);
+          if (data?.encerrada) {
+            toast.mostrar(`Proposta ${a.codpro}: ${data.mensagem}`, "warning");
+            carregar();
+            carregarIndicadores();
+          }
+        } catch {
+          // 409 = o servidor recalculou e ainda não venceu (relógio do navegador
+          // adiantado). Libera a chave pra tentar de novo no próximo tique.
+          encerramentosDisparados.current.delete(chave);
+        }
+      }
+    }
+
+    encerrarVencidas();
+    const intervalo = setInterval(encerrarVencidas, 30_000);
+    return () => clearInterval(intervalo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atividades]);
+
   async function executarMovimentacao(atividadeId: number, novaColunaId: number, observacao: string | null) {
     const anterior = atividades;
     setAtividades((atual) => atual.map((a) => (a.id === atividadeId ? { ...a, colunaId: novaColunaId } : a)));
     try {
-      await axios.patch(`/api/atividades/${atividadeId}/mover`, { colunaId: novaColunaId, observacao: observacao || undefined });
+      const { data } = await axios.patch(`/api/atividades/${atividadeId}/mover`, {
+        colunaId: novaColunaId,
+        observacao: observacao || undefined,
+      });
+      // Só vem preenchido quando o card ENTROU em execução perto do teto (ver
+      // avaliarEntradaEmExecucao) — arrastar pra qualquer outra raia nunca avisa.
+      if (data?.aviso) toast.mostrar(data.aviso, "warning");
       carregar();
       carregarIndicadores();
     } catch (err: any) {
       setAtividades(anterior);
-      setErro(err.response?.data?.error ?? "Falha ao mover atividade");
+      // Teto estourado volta 409 e é o caso mais provável aqui — o toast dá mais destaque
+      // que a faixa de erro do topo, que passa despercebida depois de arrastar um card.
+      const mensagem = err.response?.data?.error ?? "Falha ao mover atividade";
+      if (err.response?.status === 409) toast.mostrar(mensagem, "destructive");
+      else setErro(mensagem);
     }
   }
 
@@ -254,6 +306,9 @@ export function Atividades() {
           "warning"
         );
       }
+      // Teto de horas perto do fim: a atividade iniciou, mas o consultor precisa saber
+      // agora — descobrir só na hora de confirmar o apontamento seria tarde.
+      if (data.aviso) toast.mostrar(data.aviso, "warning");
       carregar();
       carregarIndicadores();
     } catch (err: any) {

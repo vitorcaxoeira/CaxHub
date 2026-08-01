@@ -21,6 +21,9 @@ import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "
 import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS, CAMPOS_AUDITADOS_EXCEDENTE } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { avaliarEntradaEmExecucao } from "../domain/tetoAtividade";
+import { diaSemanaDaSessao } from "../domain/jornadaConsultor";
+import { limiteDaSessaoAberta, MENSAGEM_MOTIVO, MotivoLimite } from "../domain/limiteSessao";
 import {
   RAIA_A_FAZER,
   RAIA_EM_ANDAMENTO,
@@ -212,6 +215,34 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   // máximo 1 por atividade (a regra de start/stop garante isso), então um Map simples.
   const sessaoAbertaPorAtividadeId = new Map(sessoesAbertas.map((s) => [s.atividadeId, s.inicio]));
 
+  // Até quando cada sessão aberta pode contar — é o instante em que o cronômetro do card
+  // trava e a tela pede a baixa, sem esperar a varredura de 5 em 5 minutos.
+  //
+  // Calculado só pras sessões abertas (raramente mais que um punhado), fora do Promise.all
+  // acima porque depende de `atividades` e da jornada de quem está executando. Usa a MESMA
+  // função da varredura (limiteDaSessaoAberta): se divergissem, o cronômetro travaria numa
+  // hora e o servidor fecharia em outra.
+  const limitePorAtividadeId = new Map<number, { instante: string; motivo: string }>();
+  if (sessoesAbertas.length > 0) {
+    const atividadePorId = new Map(atividades.map((a) => [a.id, a]));
+    const codforsExecutando = [
+      ...new Set(sessoesAbertas.map((s) => atividadePorId.get(s.atividadeId)?.codfor).filter((c): c is number => c != null)),
+    ];
+    const jornadas =
+      codforsExecutando.length > 0
+        ? await prisma.jornadaConsultor.findMany({ where: { codfor: { in: codforsExecutando } } })
+        : [];
+    const jornadaPorChave = new Map(jornadas.map((j) => [`${j.codemp}-${j.codfor}-${j.diaSemana}`, j]));
+
+    for (const sessao of sessoesAbertas) {
+      const atividade = atividadePorId.get(sessao.atividadeId);
+      if (!atividade) continue;
+      const jornada = jornadaPorChave.get(`${atividade.codemp}-${atividade.codfor}-${diaSemanaDaSessao(sessao.inicio)}`) ?? null;
+      const limite = await limiteDaSessaoAberta(sessao.inicio, atividade, jornada);
+      if (limite) limitePorAtividadeId.set(atividade.id, { instante: limite.instante.toISOString(), motivo: limite.motivo });
+    }
+  }
+
   // Realizado por ITEM (soma de todas as atividades do item, mesmo padrão de
   // alocadoPorItem) — usado no orçamento do item (contratado x distribuído x realizado);
   // diferente de `horasRealizadas` por atividade, exposto à parte pra uso futuro (ex.:
@@ -290,6 +321,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         // Início da sessão em aberto (fim: null) — presente só quando a atividade está
         // "Em Andamento" agora; o cronômetro do frontend conta a partir deste timestamp.
         sessaoAtualInicio: sessaoAbertaPorAtividadeId.get(a.id)?.toISOString() ?? null,
+        // Instante em que esta sessão precisa parar, e por quê. Nulo quando nada a limita
+        // (atividade sem alocação e consultor sem jornada).
+        sessaoLimite: limitePorAtividadeId.get(a.id)?.instante ?? null,
+        sessaoLimiteMotivo: limitePorAtividadeId.get(a.id)?.motivo ?? null,
         estruturaAtividadeId: a.estruturaAtividadeId,
         estruturaNome: noEstrutura?.nome ?? null,
         estruturaPercentual: noEstrutura?.percentualConcluido ?? null,
@@ -631,6 +666,18 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    // Mesma regra de teto do botão Iniciar, e pelo mesmo motivo: arrastar o card pra uma
+    // raia que conta como execução abre sessão igual. Sem isto o bloqueio do Iniciar teria
+    // uma porta dos fundos a um arrasto de distância.
+    //
+    // Só quando ENTRA em execução: tirar o card de lá pra qualquer outra raia continua
+    // livre, senão uma atividade estourada ficaria presa em "Em Andamento".
+    const entradaEmExecucao = colunaNova.contaComoExecucao ? await avaliarEntradaEmExecucao(atividade) : null;
+    if (entradaEmExecucao && !entradaEmExecucao.permitida) {
+      res.status(409).json({ error: entradaEmExecucao.mensagem, teto: entradaEmExecucao.teto, saldo: entradaEmExecucao.saldo });
+      return;
+    }
+
     // Sessão de execução: sair de qualquer coluna fecha a sessão aberta (se houver);
     // entrar numa coluna marcada como "em execução" abre uma nova. Lógica compartilhada
     // com POST /:id/start e /:id/stop — ver backend/src/domain/execucaoAtividade.ts.
@@ -676,7 +723,7 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    res.json({ id, colunaId: colunaIdNovo });
+    res.json({ id, colunaId: colunaIdNovo, aviso: entradaEmExecucao?.mensagem ?? null });
   } catch (error) {
     handleError(res, error, "mover");
   }
@@ -731,6 +778,15 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
     // frontend só desabilita o botão; quem garante de verdade é o servidor.
     if (!podeIniciar(colunaAtual?.nome)) {
       res.status(409).json({ error: `Atividade não está em "${RAIA_A_FAZER}" — não pode ser iniciada agora.` });
+      return;
+    }
+
+    // Teto de horas: bloqueia se já foi consumido, avisa se está perto. O aviso volta no
+    // 200 (campo `aviso`) em vez de virar erro — perto do teto ainda é trabalho válido, e
+    // interromper o consultor aqui só o faria começar sem registrar.
+    const entrada = await avaliarEntradaEmExecucao(atividade);
+    if (!entrada.permitida) {
+      res.status(409).json({ error: entrada.mensagem, teto: entrada.teto, saldo: entrada.saldo });
       return;
     }
 
@@ -811,9 +867,96 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
       colunaId: colunaEmAndamento.id,
       sessaoInicio: agora.toISOString(),
       pausada: pausada ? { id: pausada.id, titulo: `Proposta ${pausada.codpro}` } : null,
+      aviso: entrada.mensagem,
     });
   } catch (error) {
     handleError(res, error, "start");
+  }
+});
+
+// Baixa imediata de uma sessão que atingiu o limite, disparada pela tela quando o
+// cronômetro do card chega lá. Existe pra não esperar até 5 minutos pela varredura com o
+// card visivelmente correndo além do que vai contar.
+//
+// Registrada como parada AUTOMÁTICA (sem usuário, origem "job"), exatamente como o cron:
+// quem está com a tela aberta pode ser o gestor olhando o quadro, não o consultor — pôr o
+// nome dele na auditoria diria que ele parou a atividade de outra pessoa.
+//
+// O CLIENTE NÃO DECIDE NADA: ele só avisa que acha que venceu, e o servidor recalcula. Um
+// relógio adiantado no navegador encerraria sessões antes da hora.
+atividadesRouter.post("/:id/encerrar-automatico", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeParaExecucao(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const { atividade, colunaAtual } = resolvido;
+
+    const sessao = await prisma.atividadeSessaoExecucao.findFirst({ where: { atividadeId: id, fim: null } });
+    // Sem sessão aberta não é erro: duas abas podem disparar ao mesmo tempo, e a segunda
+    // chega depois da primeira já ter fechado.
+    if (!sessao) {
+      res.json({ id, encerrada: false, motivo: "sem sessão aberta" });
+      return;
+    }
+
+    const jornada = await prisma.jornadaConsultor.findUnique({
+      where: {
+        codemp_codfor_diaSemana: {
+          codemp: atividade.codemp,
+          codfor: atividade.codfor,
+          diaSemana: diaSemanaDaSessao(sessao.inicio),
+        },
+      },
+    });
+    const limite = await limiteDaSessaoAberta(sessao.inicio, atividade, jornada);
+    if (!limite) {
+      res.status(409).json({ error: "Esta sessão não tem limite — nada a encerrar" });
+      return;
+    }
+    if (limite.instante.getTime() > Date.now()) {
+      res.status(409).json({
+        error: "A sessão ainda não atingiu o limite",
+        limite: limite.instante.toISOString(),
+      });
+      return;
+    }
+
+    const colunaAFazer = await prisma.quadroColuna.findFirst({ where: { nome: RAIA_A_FAZER } });
+    if (!colunaAFazer) {
+      res.status(500).json({ error: `Raia "${RAIA_A_FAZER}" não configurada no quadro` });
+      return;
+    }
+
+    const { operacoes } = await montarOperacoesMovimentacao({
+      atividade,
+      colunaAnterior: colunaAtual,
+      colunaNova: colunaAFazer,
+      usuarioId: null,
+      origemSessao: "manual",
+      correlationId: req.correlationId!,
+      agora: limite.instante,
+      origemEvento: "job",
+      motivoParada: limite.motivo,
+    });
+    await prisma.$transaction(operacoes);
+
+    res.json({
+      id,
+      encerrada: true,
+      motivo: limite.motivo,
+      mensagem: MENSAGEM_MOTIVO[limite.motivo as MotivoLimite],
+      fim: limite.instante.toISOString(),
+    });
+  } catch (error) {
+    handleError(res, error, "encerrar-automatico");
   }
 });
 

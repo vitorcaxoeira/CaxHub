@@ -66,6 +66,53 @@ export async function saldoDaAtividade(
   return { teto, realizado, saldo: teto - realizado };
 }
 
+// A partir de quanto do teto consumido a entrada em execução já vem com aviso. 80% é o
+// mesmo limiar que colore a barra do card em âmbar (frontend/src/lib/consumoHoras.ts) —
+// se divergissem, o card ficaria amarelo sem avisar nada, ou avisaria com a barra azul.
+export const LIMIAR_AVISO_TETO = 0.8;
+
+export interface EntradaEmExecucao {
+  // false = o teto já foi consumido; a atividade não pode entrar em execução.
+  permitida: boolean;
+  // Presente quando há algo a dizer: o motivo do bloqueio, ou o aviso de que está perto.
+  mensagem: string | null;
+  saldo: number;
+  teto: number;
+}
+
+// Decide se uma atividade pode ENTRAR em execução, e com que recado. Vale tanto pro botão
+// Iniciar quanto pro arrasto do card pra uma raia que conta como execução — os dois abrem
+// sessão, então os dois têm que responder igual.
+//
+// Atividade sem teto (nada alocado) passa sem aviso: barrar aqui impediria de trabalhar
+// numa atividade ainda não dimensionada, que é justamente quando se descobre o tamanho.
+export async function avaliarEntradaEmExecucao(
+  atividade: Pick<AtividadeConsultor, "id" | "seqati" | "qtdhor" | "horasExcedentes">
+): Promise<EntradaEmExecucao> {
+  const { teto, realizado, saldo } = await saldoDaAtividade(atividade);
+  if (teto <= 0) return { permitida: true, mensagem: null, saldo, teto };
+
+  if (saldo <= 0) {
+    return {
+      permitida: false,
+      mensagem: `Esta atividade já consumiu o teto de ${formatarMinutos(teto)} (alocado + excedentes) — ${formatarMinutos(realizado)} realizados. Peça ao gestor pra liberar horas excedentes antes de continuar.`,
+      saldo,
+      teto,
+    };
+  }
+
+  if (realizado / teto >= LIMIAR_AVISO_TETO) {
+    return {
+      permitida: true,
+      mensagem: `Restam ${formatarMinutos(saldo)} de ${formatarMinutos(teto)} nesta atividade. Se precisar de mais tempo, solicite horas excedentes ao gestor.`,
+      saldo,
+      teto,
+    };
+  }
+
+  return { permitida: true, mensagem: null, saldo, teto };
+}
+
 // "20:30" a partir de minutos — usado nas mensagens de bloqueio, que precisam dizer o
 // número exato pra pessoa conseguir ajustar o horário e caber no saldo.
 export function formatarMinutos(minutos: number): string {

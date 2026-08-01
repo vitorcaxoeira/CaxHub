@@ -121,7 +121,7 @@ interface AtividadesTableProps {
 
 function IndicadorSessao({ row }: { row: AtividadeRow }) {
   const emAndamento = row.coluna?.nome === RAIA_EM_ANDAMENTO;
-  const cronometro = useCronometro(row.sessaoAtualInicio);
+  const { texto: cronometro, atingiuLimite } = useCronometro(row.sessaoAtualInicio, row.sessaoLimite);
   if (!emAndamento) return null;
   return (
     <span className="ml-1.5 inline-flex items-center gap-1.5 align-middle">
@@ -129,7 +129,14 @@ function IndicadorSessao({ row }: { row: AtividadeRow }) {
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
         <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
       </span>
-      {cronometro && <span className="font-mono text-[10.5px] tabular-nums text-success">{cronometro}</span>}
+      {cronometro && (
+        <span
+          className={`font-mono text-[10.5px] tabular-nums ${atingiuLimite ? "font-semibold text-destructive" : "text-success"}`}
+          title={atingiuLimite ? "Limite atingido — a execução está sendo encerrada" : undefined}
+        >
+          {cronometro}
+        </span>
+      )}
     </span>
   );
 }
