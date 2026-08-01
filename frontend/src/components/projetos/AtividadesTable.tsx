@@ -64,6 +64,9 @@ const TH_SUB_CLASS = "py-[3px] pr-2 text-left font-mono text-[10px] font-medium 
 // Agrupa por codemp+codpro+codfor e soma as horas. `codemp` entra na chave porque codpro
 // só é único dentro da empresa. Previsto nulo conta como zero — é atividade sem
 // planejamento, não atividade de zero hora prevista, mas para a soma dá no mesmo.
+//
+// `previsto` aqui é o TETO (alocado + excedente autorizado): é contra ele que o
+// apontamento é barrado, então é ele que a barra e o percentual têm que medir.
 function agrupar(rows: AtividadeRow[]): GrupoAtividades[] {
   const mapa = new Map<string, GrupoAtividades>();
   for (const row of rows) {
@@ -84,7 +87,7 @@ function agrupar(rows: AtividadeRow[]): GrupoAtividades[] {
       mapa.set(chave, grupo);
     }
     grupo.atividades.push(row);
-    grupo.previsto += row.qtdhorPrevisto ?? 0;
+    grupo.previsto += (row.qtdhorPrevisto ?? 0) + row.horasExcedentes;
     grupo.realizado += row.horasRealizadas ?? 0;
   }
   // Proposta mais recente primeiro. Cheguei a ordenar por maior consumo, que parecia mais
@@ -349,7 +352,7 @@ export function AtividadesTable({
                                         </div>
                                       </td>
                                       <td className="whitespace-nowrap py-1.5 pr-2 text-right">
-                                        <ConsumoHoras realizado={row.horasRealizadas} previsto={row.qtdhorPrevisto ?? 0} />
+                                        <ConsumoHoras realizado={row.horasRealizadas} previsto={(row.qtdhorPrevisto ?? 0) + row.horasExcedentes} />
                                       </td>
                                       {/* Atraso comunicado só pela cor — o "· Atrasado"
                                           repetia em texto o que o vermelho já diz. */}
@@ -417,6 +420,9 @@ export function AtividadesTable({
                                                 horasRealizadas: row.horasRealizadas,
                                                 estruturaPercentual: row.estruturaPercentual,
                                                 podeVerCronograma: row.podeVerCronograma,
+                                                qtdhorPrevisto: row.qtdhorPrevisto,
+                                                horasExcedentes: row.horasExcedentes,
+                                                podeAutorizarExcedente: row.podeAutorizarExcedente,
                                               })
                                             }
                                             className="text-sm text-primary hover:underline"

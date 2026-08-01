@@ -105,6 +105,10 @@ interface AtividadeDetalheDados {
   estruturaNome: string | null;
   estruturaPercentual: number | null;
   podeVerCronograma: boolean;
+  // Opcionais porque esta tela monta o objeto a partir de outra rota, que pode não trazer
+  // os dois — o painel trata a ausência como "sem excedente".
+  qtdhorPrevisto?: number | null;
+  horasExcedentes?: number;
 }
 
 const dataCurtaFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" });
@@ -1170,6 +1174,11 @@ export function MeusApontamentos() {
           estruturaNome={detalheAtividade.estruturaNome}
           estruturaPercentual={detalheAtividade.estruturaPercentual}
           podeVerCronograma={detalheAtividade.podeVerCronograma}
+          qtdhorPrevisto={detalheAtividade.qtdhorPrevisto ?? null}
+          horasExcedentes={detalheAtividade.horasExcedentes ?? 0}
+          // Painel em modo leitura: aqui é o consultor olhando o próprio apontamento, e
+          // ele nunca autoriza as próprias horas excedentes.
+          podeAutorizarExcedente={false}
           onClose={() => setDetalheAtividade(null)}
         />
       )}

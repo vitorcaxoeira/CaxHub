@@ -539,6 +539,15 @@ model AtividadeConsultor {
   seqite Int
   codfor Int
   qtdhor Int?
+  /// Horas excedentes autorizadas pelo gestor, em minutos (mesma unidade de qtdhor).
+  /// Conceito só do CaxHub, sem equivalente no Senior — por isso NÃO é tocado pelo sync
+  /// (ver atividadeConsultorSync.ts, que lista as colunas que sobrescreve).
+  ///
+  /// Existe pra o planejado nunca ser falseado: quando 20h não bastam, a saída antes era
+  /// editar `qtdhor` e perder o registro de que o planejado era 20h. O teto de apontamento
+  /// passa a ser `qtdhor + horasExcedentes`; a distribuição do item continua conferida só
+  /// contra `qtdhor`, então o excedente aparece como estouro real no cronograma.
+  horasExcedentes Int @default(0)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
   sitreg String?      @db.VarChar(1)
   datger DateTime?    @db.Date

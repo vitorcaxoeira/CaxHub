@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { orcamentoDeTotais, formatHorasCompacto, descreverSaldoDistribuicao } from "../../lib/cronograma";
+import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 import { toneBadge } from "../ui/badges";
 import { HistoricoContextual } from "../auditoria/HistoricoContextual";
 
@@ -49,6 +50,15 @@ interface AtividadeDetalheProps {
   estruturaNome: string | null;
   estruturaPercentual: number | null;
   podeVerCronograma: boolean;
+  // Horas da PRÓPRIA alocação (não do item): o previsto e o excedente que o gestor
+  // autorizou por cima dele. Juntos formam o teto de apontamento da atividade.
+  qtdhorPrevisto: number | null;
+  horasExcedentes: number;
+  // Só o gestor do departamento autoriza excedente — o consultor não libera as próprias
+  // horas. Vem do backend junto do card (podeVerCronograma usa a mesma origem).
+  podeAutorizarExcedente: boolean;
+  // Avisa a tela pra recarregar os cards depois de mudar o excedente, que altera o teto.
+  onExcedenteAlterado?: () => void;
   onClose: () => void;
 }
 
@@ -86,6 +96,10 @@ export function AtividadeDetalhe({
   estruturaNome,
   estruturaPercentual,
   podeVerCronograma,
+  qtdhorPrevisto,
+  horasExcedentes,
+  podeAutorizarExcedente,
+  onExcedenteAlterado,
   onClose,
 }: AtividadeDetalheProps) {
   const navigate = useNavigate();
@@ -104,6 +118,28 @@ export function AtividadeDetalhe({
   const [inicioPlanejado, setInicioPlanejado] = useState(paraInputDate(dataPrevistaInicio));
   const [fimPlanejado, setFimPlanejado] = useState(paraInputDate(dataPrevistaFim));
   const [salvandoPlanejamento, setSalvandoPlanejamento] = useState(false);
+  const [excedenteInput, setExcedenteInput] = useState(minutosParaInputHoras(horasExcedentes));
+  const [salvandoExcedente, setSalvandoExcedente] = useState(false);
+  const [erroExcedente, setErroExcedente] = useState<string | null>(null);
+
+  async function salvarExcedente() {
+    const minutos = horasParaMinutos(excedenteInput);
+    if (minutos == null || minutos < 0) {
+      setErroExcedente("Informe as horas no formato H:MM (ou 0 para remover).");
+      return;
+    }
+    setSalvandoExcedente(true);
+    setErroExcedente(null);
+    try {
+      await axios.patch(`/api/atividades/${atividadeId}/horas-excedentes`, { horasExcedentes: minutos });
+      onExcedenteAlterado?.();
+    } catch (err) {
+      const axiosErr = err as { response?: { data?: { error?: string } } };
+      setErroExcedente(axiosErr.response?.data?.error ?? "Falha ao salvar as horas excedentes");
+    } finally {
+      setSalvandoExcedente(false);
+    }
+  }
   const [planejamentoSalvo, setPlanejamentoSalvo] = useState(false);
 
   function carregar() {
@@ -246,6 +282,55 @@ export function AtividadeDetalhe({
             <p className="text-sm text-muted">Carregando...</p>
           ) : (
             <div className="space-y-6">
+              {/* Teto de apontamento DESTA alocação — separado do "Contexto do item"
+                  abaixo, que fala do item da proposta inteiro. É aqui que o gestor libera
+                  horas excedentes quando o planejado não bastou, sem falsear o planejado. */}
+              <section>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Teto de apontamento</p>
+                <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5">
+                  <p className="font-mono text-[11.5px] text-muted">
+                    Alocado {formatHorasCompacto(qtdhorPrevisto ?? 0, 2)}
+                    {horasExcedentes > 0 && (
+                      <>
+                        {" + excedente "}
+                        <span className="text-warning">{formatHorasCompacto(horasExcedentes, 2)}</span>
+                      </>
+                    )}
+                    {" = teto "}
+                    <span className="text-foreground">{formatHorasCompacto((qtdhorPrevisto ?? 0) + horasExcedentes, 2)}</span>
+                  </p>
+
+                  {podeAutorizarExcedente ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <label htmlFor="excedente" className="text-[12px] text-muted">
+                        Horas excedentes
+                      </label>
+                      <input
+                        id="excedente"
+                        value={excedenteInput}
+                        onChange={(e) => setExcedenteInput(e.target.value)}
+                        placeholder="0:00"
+                        className="w-24 rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      />
+                      <button
+                        onClick={salvarExcedente}
+                        disabled={salvandoExcedente}
+                        className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {salvandoExcedente ? "Salvando..." : "Salvar"}
+                      </button>
+                      {erroExcedente && <span className="text-[12px] text-destructive">{erroExcedente}</span>}
+                    </div>
+                  ) : (
+                    horasExcedentes === 0 && (
+                      <p className="mt-1 text-[11.5px] text-muted">
+                        Precisa de mais horas? Peça ao gestor do departamento pra autorizar excedentes.
+                      </p>
+                    )
+                  )}
+                </div>
+              </section>
+
               <section>
                 <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Contexto do item</p>
                 <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5">

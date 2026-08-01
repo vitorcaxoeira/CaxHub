@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos } from "../domain/contextoProjeto";
+import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
@@ -133,6 +134,33 @@ async function confirmarSessao(
   const fim = ajustes.ajusteFim ? new Date(ajustes.ajusteFim) : sessao.fim;
   if (!(fim.getTime() > inicio.getTime())) {
     return { status: 400, body: { error: "O fim precisa ser depois do início" } };
+  }
+
+  // Teto de apontamento = alocado + excedentes autorizados. Vale pro gestor também: pra
+  // lançar acima do teto ele aumenta o campo de excedentes antes, e aí fica registrado
+  // quem autorizou e quanto — que é o ponto de ter o campo.
+  //
+  // O `realizado` desconta esta sessão porque ela ainda não está confirmada e, portanto,
+  // já entra na conta como "sessão não confirmada". Sem isso a duração seria contada duas
+  // vezes e o bloqueio dispararia com metade do saldo consumido.
+  const duracao = Math.round((fim.getTime() - inicio.getTime()) / 60000);
+  const { teto, realizado } = await saldoDaAtividade(atividade);
+  const duracaoAtualDaSessao = Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000);
+  const realizadoSemEsta = realizado - duracaoAtualDaSessao;
+  if (teto > 0 && realizadoSemEsta + duracao > teto) {
+    const disponivel = teto - realizadoSemEsta;
+    return {
+      status: 409,
+      body: {
+        error:
+          disponivel > 0
+            ? `Apontamento de ${formatarMinutos(duracao)} excede o teto da atividade. Saldo disponível: ${formatarMinutos(disponivel)} (alocado + excedentes: ${formatarMinutos(teto)}). Ajuste o horário ou peça ao gestor pra liberar horas excedentes.`
+            : `A atividade já consumiu todo o teto de ${formatarMinutos(teto)} (alocado + excedentes). Peça ao gestor pra liberar horas excedentes antes de apontar.`,
+        teto,
+        realizado: realizadoSemEsta,
+        disponivel,
+      },
+    };
   }
 
   const rat = await buscarOuCriarRatRascunho(atividade, atividade.codfor, item.depexe, inicio);

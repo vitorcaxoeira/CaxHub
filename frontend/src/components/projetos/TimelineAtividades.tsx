@@ -111,6 +111,9 @@ export function TimelineAtividades({ atividades, onAbrirDetalhe }: TimelineAtivi
                           horasRealizadas: atividade.horasRealizadas,
                           estruturaPercentual: atividade.estruturaPercentual,
                           podeVerCronograma: atividade.podeVerCronograma,
+                                                qtdhorPrevisto: atividade.qtdhorPrevisto,
+                                                horasExcedentes: atividade.horasExcedentes,
+                                                podeAutorizarExcedente: atividade.podeAutorizarExcedente,
                         })
                       }
                       title={`${atividade.cliente} · ${atividade.depexeLabel}`}

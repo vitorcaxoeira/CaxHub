@@ -519,6 +519,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
               codfor: a.codfor,
               consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${a.codfor}`,
               qtdhor: a.qtdhor,
+              horasExcedentes: a.horasExcedentes,
               fasid: a.fasid,
               faseDes: a.fase.fasdes,
               dataPrevistaInicio: a.dataPrevistaInicio,
@@ -898,6 +899,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
           codfor: a.codfor,
           consultorNome: consultorPorCodfor.get(a.codfor)?.nomcom ?? consultorPorCodfor.get(a.codfor)?.nomfor ?? `Fornecedor ${a.codfor}`,
           qtdhor: a.qtdhor,
+          horasExcedentes: a.horasExcedentes,
           fasid: a.fasid,
           faseDes: a.fase.fasdes,
           dataPrevistaInicio: a.dataPrevistaInicio,
@@ -1912,6 +1914,19 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
       return;
     }
 
+    // Horas excedentes NÃO passam por validarSaldo de propósito: elas são justamente a
+    // autorização pra estourar o contratado do item. Confrontá-las com o saldo do item
+    // recriaria o teto que elas existem pra furar.
+    //
+    // Ausente no body = mantém o valor gravado, pra uma tela que edita só horas/datas não
+    // zerar o excedente sem querer.
+    const horasExcedentesBody = req.body?.horasExcedentes;
+    const horasExcedentes = horasExcedentesBody === undefined ? null : Number(horasExcedentesBody);
+    if (horasExcedentes !== null && (!Number.isFinite(horasExcedentes) || horasExcedentes < 0)) {
+      res.status(400).json({ error: "horasExcedentes precisa ser um número maior ou igual a zero" });
+      return;
+    }
+
     const saldo = await validarSaldo(atividade.codemp, atividade.codpro, atividade.seqite, qtdhor, {
       ignorarAtividadeId: id,
       estruturaAtividadeId: atividade.estruturaAtividadeId ?? undefined,
@@ -1935,9 +1950,18 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
       correlationId,
     };
 
-    const diffHoras = diffCampos(CAMPOS_AUDITADOS_ALOCACAO, atividade, paraDiff({ qtdhor }));
+    const camposAlterados = horasExcedentes !== null ? { qtdhor, horasExcedentes } : { qtdhor };
+    const diffHoras = diffCampos(CAMPOS_AUDITADOS_ALOCACAO, atividade, paraDiff(camposAlterados));
     const operacoes: Prisma.PrismaPromise<unknown>[] = [
-      prisma.atividadeConsultor.update({ where: { id }, data: { qtdhor, dataPrevistaInicio, dataPrevistaFim } }),
+      prisma.atividadeConsultor.update({
+        where: { id },
+        data: {
+          qtdhor,
+          dataPrevistaInicio,
+          dataPrevistaFim,
+          ...(horasExcedentes !== null ? { horasExcedentes } : {}),
+        },
+      }),
     ];
     if (diffHoras.algumaMudanca) {
       operacoes.push(
@@ -1965,7 +1989,7 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
       dataPrevistaFim: dataPrevistaFim?.toISOString() ?? null,
     });
 
-    res.json({ id, qtdhor, dataPrevistaInicio, dataPrevistaFim });
+    res.json({ id, qtdhor, horasExcedentes: horasExcedentes ?? atividade.horasExcedentes, dataPrevistaInicio, dataPrevistaFim });
   } catch (error) {
     handleError(res, error, "editar-alocacao");
   }

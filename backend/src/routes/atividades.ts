@@ -13,13 +13,13 @@ import {
   PRIPRO_LABELS,
   SITPRO_ATIVIDADES_VISIVEIS,
 } from "../domain/propostasDominio";
-import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos } from "../domain/contextoProjeto";
+import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos, gerenciaDepartamento } from "../domain/contextoProjeto";
 import { criarNotificacao, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
 import { enfileirar } from "../sync/outboxSenior";
-import { criarEventosDeData } from "../audit/registrarEvento";
-import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
-import { ENTIDADES_AUDITORIA } from "../audit/taxonomia";
+import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
+import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS, CAMPOS_AUDITADOS_EXCEDENTE } from "../audit/camposAuditados";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import {
   RAIA_A_FAZER,
@@ -267,6 +267,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         consultorFotoUrl: consultor?.usuariosCaxHub[0]?.fotoUrl ?? null,
         codfor: a.codfor,
         qtdhorPrevisto: a.qtdhor,
+        // Excedente autorizado pelo gestor. Vai separado do previsto de propósito: o card
+        // mostra o teto somado (previsto + excedente) mas precisa saber a parcela extra
+        // pra sinalizar que aquele número já não é o planejado original.
+        horasExcedentes: a.horasExcedentes,
         // Derivado de `coluna` (e não de `a.colunaId`) pra não haver como os dois
         // divergirem — o card renderiza por `coluna` e o drag-and-drop compara por este id.
         colunaId: coluna?.id ?? null,
@@ -292,7 +296,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         // Mesma regra de acesso da Alocação (departamentosPermitidos/podeGerenciarProposta
         // em alocacao.ts) — evita mandar um consultor comum pra rota do cronograma, que
         // devolveria 403 por não gerenciar o departamento.
-        podeVerCronograma: role === "admin" || contexto.departamentosGerenciados.includes(depexe),
+        podeVerCronograma: gerenciaDepartamento(role, contexto, depexe),
+        // Mesma regra do cronograma, nome próprio: liberar horas acima do planejado é
+        // decisão de gestor, e o dono da atividade não autoriza as próprias horas.
+        podeAutorizarExcedente: gerenciaDepartamento(role, contexto, depexe),
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -883,6 +890,74 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
 });
 
 // ---------- Planejamento (datas previstas de início/fim, pra Timeline/Gantt) ----------
+// Horas excedentes autorizadas pelo gestor. Endpoint próprio, e não o PATCH /alocacoes/:id
+// da Alocação, por dois motivos: aquele exige `qtdhor` no body (o planejado, que aqui não
+// deve ser tocado) e enfileira um `editar_atividade` pro Senior — e horas excedentes são
+// campo só do CaxHub, sem equivalente lá, então não há o que enviar.
+//
+// A permissão é explicitamente "gerencia o departamento", NÃO podeExecutarAcao("editar"):
+// desde a mudança de 31/07/2026 a ação `editar` também é liberada pro dono da atividade,
+// e o consultor autorizar o próprio excedente esvaziaria o controle.
+atividadesRouter.patch("/:id/horas-excedentes", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    const horasExcedentes = Number(req.body?.horasExcedentes);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    if (!Number.isFinite(horasExcedentes) || horasExcedentes < 0) {
+      res.status(400).json({ error: "horasExcedentes precisa ser um número maior ou igual a zero (em minutos)" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const { atividade, depexe } = resolvido;
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role, user } = ctx;
+    if (!gerenciaDepartamento(role, contexto, depexe)) {
+      res.status(403).json({ error: "Só o gestor do departamento pode autorizar horas excedentes" });
+      return;
+    }
+
+    const diff = diffCampos(CAMPOS_AUDITADOS_EXCEDENTE, atividade, paraDiff({ horasExcedentes }));
+    const operacoes: Prisma.PrismaPromise<unknown>[] = [
+      prisma.atividadeConsultor.update({ where: { id }, data: { horasExcedentes } }),
+    ];
+    if (diff.algumaMudanca) {
+      operacoes.push(
+        criarEventoAuditoria({
+          origem: "tela",
+          usuarioId: user.id,
+          codemp: atividade.codemp,
+          codpro: atividade.codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+          entidadeId: entidadeIdAtividade(id),
+          entidadeRotulo: `Alocação — Item ${atividade.seqite} da Proposta ${atividade.codemp}/${atividade.codpro}`,
+          correlationId: req.correlationId!,
+          eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_ALTERADA,
+          alteracoes: diff.alteracoes,
+          metadata: null,
+        })
+      );
+    }
+    await prisma.$transaction(operacoes);
+
+    res.json({ id, horasExcedentes, teto: (atividade.qtdhor ?? 0) + horasExcedentes });
+  } catch (error) {
+    handleError(res, error, "horas-excedentes");
+  }
+});
+
 atividadesRouter.patch("/:id/planejamento", async (req: AuthenticatedRequest, res) => {
   try {
     const id = Number(req.params.id);

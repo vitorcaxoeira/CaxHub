@@ -63,6 +63,10 @@ export interface AtividadeKanban {
   estruturaNome: string | null;
   estruturaPercentual: number | null;
   podeVerCronograma: boolean;
+  // Excedente autorizado pelo gestor, em minutos. O teto de apontamento do card e
+  // qtdhorPrevisto + este valor.
+  horasExcedentes: number;
+  podeAutorizarExcedente: boolean;
 }
 
 export interface DetalheInfo {
@@ -81,6 +85,9 @@ export interface DetalheInfo {
   estruturaNome: string | null;
   estruturaPercentual: number | null;
   podeVerCronograma: boolean;
+  qtdhorPrevisto: number | null;
+  horasExcedentes: number;
+  podeAutorizarExcedente: boolean;
 }
 
 interface KanbanBoardProps {
@@ -137,9 +144,11 @@ function DraggableCard({
   // item (um item pode ter vários nós); sem estrutura, o item é o contexto que sobra.
   const contexto = atividade.estruturaNome ?? atividade.itemDescricao;
 
-  // Consumo do tempo previsto. As duas grandezas vêm em minutos do backend. Sem previsto
-  // não há proporção pra mostrar — o card exibe só o realizado e omite a barra.
-  const previsto = atividade.qtdhorPrevisto ?? 0;
+  // Consumo medido contra o TETO (alocado + excedente autorizado), não contra o alocado
+  // puro: é o teto que limita o apontamento, então é contra ele que o card tem que
+  // avisar. Todas as grandezas vêm em minutos do backend. Sem teto não há proporção — o
+  // card exibe só o realizado e omite a barra.
+  const previsto = (atividade.qtdhorPrevisto ?? 0) + atividade.horasExcedentes;
   const temPrevisto = previsto > 0;
   const avanco = temPrevisto ? atividade.horasRealizadas / previsto : 0;
   const tom = tomConsumo(avanco);
@@ -161,6 +170,9 @@ function DraggableCard({
       estruturaNome: atividade.estruturaNome,
       estruturaPercentual: atividade.estruturaPercentual,
       podeVerCronograma: atividade.podeVerCronograma,
+      qtdhorPrevisto: atividade.qtdhorPrevisto,
+      horasExcedentes: atividade.horasExcedentes,
+      podeAutorizarExcedente: atividade.podeAutorizarExcedente,
     });
   }
 

@@ -34,13 +34,25 @@ export interface ContextoMovimentacao {
   atividade: AtividadeConsultor;
   colunaAnterior: QuadroColuna | null;
   colunaNova: QuadroColuna;
-  usuarioId: number;
+  // Nulo só na parada automática, que não nasce de uma ação de ninguém. Tanto o histórico
+  // de movimentação quanto o evento de auditoria já aceitam usuário nulo.
+  usuarioId: number | null;
   // Fonte da sessão de execução aberta/fechada (AtividadeSessaoExecucao.origem) — não
   // confundir com o `origem` do evento de auditoria (sempre "tela" aqui: as duas fontes
   // nascem de uma ação do usuário numa tela, seja arrastar o card ou clicar Iniciar/Parar).
   origemSessao: "movimentacao_kanban" | "manual";
   correlationId: string;
+  // Instante do fechamento da sessão aberta (e da abertura da nova, quando a coluna conta
+  // como execução). É `Date` e não "agora implícito" justamente porque a parada
+  // automática precisa fechar num instante do PASSADO — o limite de teto ou o fim do
+  // expediente — e não na hora em que a varredura percebeu.
   agora: Date;
+  // Origem do evento de auditoria. Só a parada automática usa "job"; toda ação nascida de
+  // uma tela deixa o padrão.
+  origemEvento?: "tela" | "job";
+  // Texto livre gravado no metadata do evento de parada — usado pela varredura pra
+  // registrar POR QUE parou (teto ou expediente).
+  motivoParada?: string;
   // Texto capturado na hora de fechar a sessão (modal "O que foi feito?" ao mover o
   // card pra fora de "Em Andamento" ou clicar Parar) — pré-preenche a Descrição em
   // Meus Apontamentos. Nunca preenchido na auto-pausa de POST /:id/start.
@@ -60,7 +72,7 @@ export interface ResultadoMovimentacao {
 // chama decide quando/como executar (um array próprio, ou combinado com outra chamada
 // desta mesma função, ex.: pausar uma atividade pra iniciar outra na mesma transação).
 export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Promise<ResultadoMovimentacao> {
-  const { atividade, colunaAnterior, colunaNova, usuarioId, origemSessao, correlationId, agora, observacaoFechamento } = ctx;
+  const { atividade, colunaAnterior, colunaNova, usuarioId, origemSessao, correlationId, agora, observacaoFechamento, origemEvento, motivoParada } = ctx;
 
   const sessaoAbertaAntes = await prisma.atividadeSessaoExecucao.findFirst({
     where: { atividadeId: atividade.id, fim: null },
@@ -72,7 +84,7 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
   const entidadeId = entidadeIdAtividade(atividade.id);
   const entidadeRotulo = `Atividade — Proposta ${atividade.codpro}`;
   const ctxEvento = {
-    origem: "tela" as const,
+    origem: origemEvento ?? ("tela" as const),
     usuarioId,
     codemp: atividade.codemp,
     codpro: atividade.codpro,
@@ -121,6 +133,7 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
               coluna: colunaAnterior?.nome ?? null,
               duracaoMinutos: duracaoSessaoFechadaMin,
               observacao: observacaoFechamento ?? null,
+              motivo: motivoParada ?? null,
             },
           }),
         ]

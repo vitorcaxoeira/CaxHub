@@ -105,6 +105,9 @@ export function CalendarioAtividades({ atividades, onAbrirDetalhe }: CalendarioA
                         horasRealizadas: a.horasRealizadas,
                         estruturaPercentual: a.estruturaPercentual,
                         podeVerCronograma: a.podeVerCronograma,
+                                                qtdhorPrevisto: a.qtdhorPrevisto,
+                                                horasExcedentes: a.horasExcedentes,
+                                                podeAutorizarExcedente: a.podeAutorizarExcedente,
                       })
                     }
                     title={`${a.cliente} · ${a.depexeLabel}`}

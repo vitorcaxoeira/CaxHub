@@ -1,0 +1,15 @@
+-- Horas excedentes autorizadas pelo gestor numa alocação, em MINUTOS (mesma unidade de
+-- qtdhor).
+--
+-- Por que uma coluna nova em vez de somar em qtdhor: qtdhor é o planejado, e o pedido é
+-- justamente que "uma atividade de 20 horas nunca seja alterada". Somando ali, a
+-- informação de que o planejado era 20h desapareceria no momento em que ela deixasse de
+-- bastar — e é essa diferença que interessa medir depois.
+--
+-- Default 0 e NOT NULL: o teto vira `qtdhor + horasExcedentes` em toda leitura, e um NULL
+-- no meio dessa soma zeraria o teto inteiro (NULL + 20 = NULL em SQL). Zero é o valor
+-- correto pra toda a base existente — ninguém tem excedente autorizado ainda.
+--
+-- Coluna do CaxHub, sem equivalente no Senior: o atividadeConsultorSync não a menciona,
+-- então o sync diário não a sobrescreve.
+ALTER TABLE "atividades_consultor" ADD COLUMN "horasExcedentes" INTEGER NOT NULL DEFAULT 0;

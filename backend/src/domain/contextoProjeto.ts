@@ -72,6 +72,14 @@ export async function codforsDoTime(role: string, contexto: ContextoConsultor): 
   return codfors;
 }
 
+// "Sou o gestor DESTE departamento" — a pergunta que não passa por podeExecutarAcao.
+// Existe porque `editar` deixou de servir pra isso: desde 31/07/2026 ela também é
+// liberada pro dono da atividade, e há decisões que só o gestor pode tomar (autorizar
+// horas excedentes, abrir o cronograma da proposta).
+export function gerenciaDepartamento(role: string, contexto: ContextoConsultor, depexe: number): boolean {
+  return role === "admin" || contexto.departamentosGerenciados.includes(depexe);
+}
+
 export type AcaoProjeto =
   | "visualizar"
   | "criar"

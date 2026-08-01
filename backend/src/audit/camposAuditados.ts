@@ -31,6 +31,16 @@ export const CAMPOS_AUDITADOS_PROPOSTA_ITEM: Record<string, string> = {
 // CAMPOS_AUDITADOS_ATIVIDADE_DATAS) — dispara ALOCACAO_ALTERADA quando muda.
 export const CAMPOS_AUDITADOS_ALOCACAO: Record<string, string> = {
   qtdhor: "Horas Alocadas",
+  // Auditado desde a origem: é uma autorização de gasto acima do contratado, então quem
+  // liberou e quanto precisa ficar rastreável.
+  horasExcedentes: "Horas Excedentes",
+};
+
+// Só o excedente. Existe porque `diffCampos` trata campo ausente no objeto novo como
+// "mudou para null": usar o mapa completo num endpoint que altera SÓ o excedente gravava
+// um "Horas Alocadas: 270000 -> null" que nunca aconteceu.
+export const CAMPOS_AUDITADOS_EXCEDENTE: Record<string, string> = {
+  horasExcedentes: "Horas Excedentes",
 };
 
 // dataPrevistaInicio/dataPrevistaFim de AtividadeConsultor — diferente de diffCampos

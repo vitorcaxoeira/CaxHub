@@ -432,6 +432,11 @@ export function Atividades() {
           estruturaNome={detalhe.estruturaNome}
           estruturaPercentual={detalhe.estruturaPercentual}
           podeVerCronograma={detalhe.podeVerCronograma}
+          qtdhorPrevisto={detalhe.qtdhorPrevisto}
+          horasExcedentes={detalhe.horasExcedentes}
+          podeAutorizarExcedente={detalhe.podeAutorizarExcedente}
+          // Mudar o excedente muda o teto do card, então a lista/quadro recarrega.
+          onExcedenteAlterado={carregar}
           onClose={() => setDetalhe(null)}
         />
       )}
