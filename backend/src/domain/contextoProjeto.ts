@@ -125,5 +125,24 @@ export function podeExecutarAcao(
     return false;
   }
 
+  // Atividade alocada PRA MIM, em departamento que não é meu. Antes caía no `false`
+  // abaixo: o consultor recebia a alocação e não conseguia nem ver a atividade, muito
+  // menos iniciar. Alocar é justamente o ato de dizer "essa pessoa vai executar isso",
+  // então o vínculo com o executor vale mesmo quando o item é de outro departamento
+  // (medido em 30/07/2026: 4 das 101 atividades de um consultor caíam nesse buraco).
+  //
+  // Libera só o que o executor precisa pra trabalhar — as mesmas quatro ações que o ramo
+  // de `departamentosTime` já dá pro dono da atividade. Aprovar, criar e excluir seguem
+  // sendo de quem gerencia o departamento.
+  // `> 0` não é paranoia: várias chamadas de alocacao.ts passam `codfor: 0` como sentinela
+  // de "não se aplica a um consultor específico" (ações de estrutura do item). Sem esta
+  // guarda, um Consultor que viesse do Senior com codfor 0 casaria com todas elas e
+  // ganharia `editar` em item de qualquer departamento. Hoje o menor codfor da base é 2,
+  // então é uma trava preventiva.
+  const meuCodfor = contexto.consultor?.codfor;
+  if (meuCodfor != null && meuCodfor > 0 && meuCodfor === atividade.codfor) {
+    return acao === "visualizar" || acao === "mover" || acao === "editar" || acao === "lancarApontamento";
+  }
+
   return false;
 }
