@@ -140,7 +140,7 @@ function DraggableCard({
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: 20 } : undefined;
   const atrasada = atividade.atrasada;
   const emAndamento = atividade.coluna?.nome === RAIA_EM_ANDAMENTO;
-  const { texto: cronometro, atingiuLimite } = useCronometro(atividade.sessaoAtualInicio, atividade.sessaoLimite);
+  const { texto: cronometro, atingiuLimite, decorridoMinutos } = useCronometro(atividade.sessaoAtualInicio, atividade.sessaoLimite);
   const habilitaIniciar = podeIniciar(atividade);
   const habilitaParar = podeParar(atividade);
 
@@ -154,7 +154,12 @@ function DraggableCard({
   // card exibe só o realizado e omite a barra.
   const previsto = (atividade.qtdhorPrevisto ?? 0) + atividade.horasExcedentes;
   const temPrevisto = previsto > 0;
-  const avanco = temPrevisto ? atividade.horasRealizadas / previsto : 0;
+  // Realizado EXIBIDO = o consolidado do backend + o tempo que esta correndo agora. O
+  // backend nao inclui a sessao aberta (ver useCronometro), entao sem esta soma o card
+  // ficava parado enquanto o cronometro subia -- que foi exatamente o que se notou: 24
+  // minutos de execucao com o realizado marcando 0:00.
+  const realizado = atividade.horasRealizadas + decorridoMinutos;
+  const avanco = temPrevisto ? realizado / previsto : 0;
   const tom = tomConsumo(avanco);
 
   function abrirDetalhe() {
@@ -264,7 +269,7 @@ function DraggableCard({
           no orçamento do item, que é outra conversa. */}
       <div className="mt-2 flex items-baseline justify-between gap-2 font-mono text-[11px] tabular-nums text-muted">
         <span>
-          {formatHorasCompacto(atividade.horasRealizadas)}
+          {formatHorasCompacto(realizado)}
           {temPrevisto && ` / ${formatHorasCompacto(previsto)}`}
         </span>
         {temPrevisto && <span className={tom.texto}>{Math.round(avanco * 100)}%</span>}

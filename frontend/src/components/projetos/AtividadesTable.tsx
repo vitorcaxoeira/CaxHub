@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Avatar } from "../ui/Avatar";
 import { Pagination } from "../ui/Pagination";
@@ -8,6 +8,7 @@ import { Spinner } from "../ui/Spinner";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { formatHorasCompacto } from "../../lib/cronograma";
 import { tomConsumo } from "../../lib/consumoHoras";
+import { realizadoExibido } from "../../lib/sessaoEmCurso";
 import { useCronometro } from "../../hooks/useCronometro";
 import {
   EXIBIR_AMBOS_BOTOES,
@@ -67,7 +68,7 @@ const TH_SUB_CLASS = "py-[3px] pr-2 text-left font-mono text-[10px] font-medium 
 //
 // `previsto` aqui é o TETO (alocado + excedente autorizado): é contra ele que o
 // apontamento é barrado, então é ele que a barra e o percentual têm que medir.
-function agrupar(rows: AtividadeRow[]): GrupoAtividades[] {
+function agrupar(rows: AtividadeRow[], agora: number): GrupoAtividades[] {
   const mapa = new Map<string, GrupoAtividades>();
   for (const row of rows) {
     const chave = `${row.codemp}-${row.codpro}-${row.codfor}`;
@@ -88,7 +89,7 @@ function agrupar(rows: AtividadeRow[]): GrupoAtividades[] {
     }
     grupo.atividades.push(row);
     grupo.previsto += (row.qtdhorPrevisto ?? 0) + row.horasExcedentes;
-    grupo.realizado += row.horasRealizadas ?? 0;
+    grupo.realizado += realizadoExibido(row, agora);
   }
   // Proposta mais recente primeiro. Cheguei a ordenar por maior consumo, que parecia mais
   // útil, mas o percentual é ilimitado e a base tem previsto irrisório em proposta antiga:
@@ -185,7 +186,16 @@ export function AtividadesTable({
   const navigate = useNavigate();
   const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
 
-  const grupos = useMemo(() => agrupar(rows), [rows]);
+  // Um relógio pra tabela inteira, e não um por linha: o realizado exibido soma o tempo da
+  // sessão em curso, e ele precisa subir sozinho. Tique de 30s porque aqui a granularidade
+  // é o minuto — os segundos ficam no cronômetro do IndicadorSessao, que tem o próprio.
+  const [agora, setAgora] = useState(() => Date.now());
+  useEffect(() => {
+    const intervalo = setInterval(() => setAgora(Date.now()), 30_000);
+    return () => clearInterval(intervalo);
+  }, []);
+
+  const grupos = useMemo(() => agrupar(rows, agora), [rows, agora]);
   // Paginação por GRUPO, client-side. Paginar por atividade no servidor partiria um grupo
   // ao meio entre duas páginas — por isso Atividades.tsx parou de mandar page/pageSize.
   const gruposPagina = useMemo(() => grupos.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [grupos, page]);
@@ -359,7 +369,7 @@ export function AtividadesTable({
                                         </div>
                                       </td>
                                       <td className="whitespace-nowrap py-1.5 pr-2 text-right">
-                                        <ConsumoHoras realizado={row.horasRealizadas} previsto={(row.qtdhorPrevisto ?? 0) + row.horasExcedentes} />
+                                        <ConsumoHoras realizado={realizadoExibido(row, agora)} previsto={(row.qtdhorPrevisto ?? 0) + row.horasExcedentes} />
                                       </td>
                                       {/* Atraso comunicado só pela cor — o "· Atrasado"
                                           repetia em texto o que o vermelho já diz. */}
