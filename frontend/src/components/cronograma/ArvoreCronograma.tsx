@@ -3,10 +3,12 @@ import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from "
 import {
   achatarArvore,
   agregarHoras,
+  agregarOrcado,
   calcularOrcamentoItem,
   derivarStatus,
   estadoAlertaItem,
   filtrarPreservandoAncestrais,
+  larguraColunaHorasPx,
   OrcamentoItem,
   StatusNo,
 } from "../../lib/cronograma";
@@ -16,7 +18,6 @@ import { LinhaNo } from "./LinhaNo";
 import { LinhaNovaAtividade } from "./LinhaNovaAtividade";
 import { DrawerAtividade } from "./DrawerAtividade";
 import { DestinoMover } from "./MenuAcoesNo";
-import { LegendaOrcamento } from "./LegendaOrcamento";
 import { ModalAlocarConsultores } from "./ModalAlocarConsultores";
 
 const FILTROS_VAZIOS: FiltrosCronograma = {
@@ -91,7 +92,6 @@ export function ArvoreCronograma({
   const [expandidos, setExpandidos] = useState<Set<number>>(() => carregarExpansaoSalva(projetoId));
   const [busca, setBusca] = useState("");
   const [filtros, setFiltros] = useState<FiltrosCronograma>(FILTROS_VAZIOS);
-  const [visao, setVisao] = useState<"lista" | "gantt">("lista");
   const [selecionadoId, setSelecionadoId] = useState<number | null>(null);
   const [drawerNoId, setDrawerNoId] = useState<number | null>(null);
   const [erroAcao, setErroAcao] = useState<string | null>(null);
@@ -108,6 +108,8 @@ export function ArvoreCronograma({
 
   const achatada = useMemo(() => achatarArvore(nos), [nos]);
   const agregados = useMemo(() => agregarHoras(nos), [nos]);
+  // Horas contratadas do item, propagadas pra cima: pasta raiz soma os itens que agrupa.
+  const orcadoPorId = useMemo(() => agregarOrcado(nos), [nos]);
   const statusPorId = useMemo(() => derivarStatus(nos), [nos]);
 
   const porId = useMemo(() => new Map(nos.map((n) => [n.id, n])), [nos]);
@@ -291,14 +293,6 @@ export function ArvoreCronograma({
 
   function alternarExpandirTudo() {
     setExpandidos(tudoExpandido ? new Set() : new Set(idsComFilhos));
-  }
-
-  async function renomear(no: NoCronogramaCompleto, nome: string) {
-    try {
-      await atualizarNo(no.id, { nome });
-    } catch (err) {
-      setErroAcao((err as Error).message);
-    }
   }
 
   async function duplicar(no: NoCronogramaCompleto) {
@@ -566,12 +560,14 @@ export function ArvoreCronograma({
     elementos.push(
       <LinhaNo
         key={no.id}
+        podeGerenciarProposta={podeGerenciarProposta}
         no={no}
         profundidade={no.profundidade}
         temFilhos={(filhosDe.get(no.id)?.length ?? 0) > 0}
         expandido={expandidos.has(no.id)}
         statusEfetivo={statusPorId.get(no.id) ?? "nao_iniciada"}
         agregado={agregados.get(no.id) ?? { horasPrevistas: 0, horasRealizadas: 0, avanco: 0 }}
+        orcado={orcadoPorId.get(no.id) ?? 0}
         orcamento={orcamentosPorId.get(no.id)}
         contagemDescendentes={contagemDescendentesPorId.get(no.id) ?? 0}
         selecionado={selecionadoId === no.id}
@@ -579,7 +575,6 @@ export function ArvoreCronograma({
         onToggleExpandir={() => alternarExpandir(no.id)}
         onSelecionar={() => setSelecionadoId(no.id)}
         onAbrirDrawer={() => setDrawerNoId(no.id)}
-        onRenomear={(nome) => renomear(no, nome)}
         onDuplicar={() => duplicar(no)}
         onMoverPara={(parentId) => moverPara(no, parentId)}
         onSoltar={no.tipo === "item" ? () => soltarItem(no) : undefined}
@@ -631,8 +626,6 @@ export function ArvoreCronograma({
           responsaveisDisponiveis={responsaveisDisponiveis}
           filtros={filtros}
           onFiltrosChange={setFiltros}
-          visao={visao}
-          onVisaoChange={setVisao}
           onNovaPastaRaiz={podeGerenciarProposta ? criarPastaRaiz : undefined}
           resumoAlertas={resumoAlertas}
         />
@@ -652,9 +645,7 @@ export function ArvoreCronograma({
           </div>
         )}
 
-        {visao === "gantt" ? (
-          <div className="p-10 text-center text-sm text-muted">Visão Gantt em breve.</div>
-        ) : loading ? (
+        {loading ? (
           <div className="space-y-0">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="flex h-9 items-center gap-2 border-b border-border/50 px-4">
@@ -666,17 +657,25 @@ export function ArvoreCronograma({
           </div>
         ) : (
           <div>
-            <LegendaOrcamento className="border-b border-border px-4 py-2" />
             <div className="flex items-center gap-2 border-b border-border bg-surface-2 py-2 pl-[14px] pr-3">
               <span className="w-4 flex-none" />
               <span className="flex-1 font-mono text-[11px] font-medium uppercase tracking-wider text-muted">Estrutura</span>
-              <span className="hidden w-[22px] flex-none md:block" />
-              <span
-                className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
-                style={{ width: `${2 * (larguraHoras + 3) + 4}ch` }}
-              >
-                Horas
+              {/* Rótulos das colunas estáticas da linha de item — as larguras têm que
+                  bater com as de LinhaNo, senão o cabeçalho descola do conteúdo. */}
+              {/* Um rótulo pra vaga compartilhada: item mostra o departamento executor,
+                  atividade mostra o responsável. */}
+              <span className="hidden w-[168px] flex-none font-mono text-[11px] font-medium uppercase tracking-wider text-muted sm:block">
+                Depto. / Resp.
               </span>
+              {["Orçado", "Realizado", "Alocado"].map((rotulo) => (
+                <span
+                  key={rotulo}
+                  className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
+                  style={{ width: larguraColunaHorasPx(larguraHoras) }}
+                >
+                  {rotulo}
+                </span>
+              ))}
               <span className="hidden w-[110px] flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block">
                 Período
               </span>

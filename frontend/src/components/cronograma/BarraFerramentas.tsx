@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { autoUpdate, flip, FloatingPortal, offset, shift, useClick, useDismiss, useFloating, useInteractions } from "@floating-ui/react";
 import { StatusNo } from "../../lib/cronograma";
 import { MultiSelectDropdown } from "../ui/MultiSelectDropdown";
 
@@ -36,8 +37,6 @@ interface BarraFerramentasProps {
   responsaveisDisponiveis: { codfor: number; nome: string }[];
   filtros: FiltrosCronograma;
   onFiltrosChange: (filtros: FiltrosCronograma) => void;
-  visao: "lista" | "gantt";
-  onVisaoChange: (visao: "lista" | "gantt") => void;
   // Cria pasta raiz (agrupa itens da proposta entre si) — ausente = usuário sem
   // permissão pra gerenciar a proposta inteira (ver podeGerenciarProposta no backend).
   onNovaPastaRaiz?: () => void;
@@ -52,29 +51,28 @@ export function BarraFerramentas({
   responsaveisDisponiveis,
   filtros,
   onFiltrosChange,
-  visao,
-  onVisaoChange,
   onNovaPastaRaiz,
   resumoAlertas,
 }: BarraFerramentasProps) {
   const [buscaLocal, setBuscaLocal] = useState(buscaInicial);
   const [filtrosAbertos, setFiltrosAbertos] = useState(false);
-  const popoverRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { refs, floatingStyles, context } = useFloating({
+    open: filtrosAbertos,
+    onOpenChange: setFiltrosAbertos,
+    placement: "bottom-start",
+    strategy: "fixed",
+    whileElementsMounted: autoUpdate,
+    middleware: [offset(4), flip(), shift({ padding: 8 })],
+  });
+  const { getReferenceProps, getFloatingProps } = useInteractions([useClick(context), useDismiss(context)]);
 
   function alterarBusca(valor: string) {
     setBuscaLocal(valor);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => onBuscaChange(valor), 250);
   }
-
-  useEffect(() => {
-    function aoClicarFora(evento: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(evento.target as Node)) setFiltrosAbertos(false);
-    }
-    document.addEventListener("mousedown", aoClicarFora);
-    return () => document.removeEventListener("mousedown", aoClicarFora);
-  }, []);
 
   const filtrosAtivos =
     filtros.status.length > 0 ||
@@ -123,17 +121,28 @@ export function BarraFerramentas({
         {tudoExpandido ? "Recolher tudo" : "Expandir tudo"}
       </button>
 
-      <div className="relative flex-none" ref={popoverRef}>
+      <div className="flex-none">
         <button
-          onClick={() => setFiltrosAbertos((atual) => !atual)}
+          ref={refs.setReference}
+          {...getReferenceProps()}
           className={`rounded-md border px-3 py-1.5 text-[12.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             filtrosAtivos ? "border-primary text-primary" : "border-border text-muted hover:bg-surface-2 hover:text-foreground"
           }`}
         >
           Filtros{filtrosAtivos ? " ●" : ""}
         </button>
+        {/* FloatingPortal: o card da árvore é `overflow-hidden` (pra recortar os cantos
+            arredondados da tabela), e isso vira contexto de recorte — o popover
+            posicionado com `absolute` saía cortado pela metade. Mesma solução do
+            DropdownMenu e do filtro de coluna de Pedidos. */}
         {filtrosAbertos && (
-          <div className="absolute left-0 top-full z-20 mt-1 w-72 space-y-3 rounded-md border border-border bg-surface p-3 shadow-lg">
+          <FloatingPortal>
+          <div
+            ref={refs.setFloating}
+            style={floatingStyles}
+            {...getFloatingProps()}
+            className="z-popover w-72 space-y-3 rounded-md border border-border bg-surface p-3 shadow-lg"
+          >
             <div>
               <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">Status</p>
               <MultiSelectDropdown
@@ -182,6 +191,7 @@ export function BarraFerramentas({
               Realizado acima do previsto
             </label>
           </div>
+          </FloatingPortal>
         )}
       </div>
 
@@ -207,20 +217,6 @@ export function BarraFerramentas({
         </button>
       )}
 
-      <div className="ml-auto flex flex-none rounded-md border border-border p-0.5">
-        <button
-          onClick={() => onVisaoChange("lista")}
-          className={`rounded px-3 py-1 text-[12.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${visao === "lista" ? "bg-primary text-primary-foreground" : "text-muted hover:text-foreground"}`}
-        >
-          Lista
-        </button>
-        <button
-          onClick={() => onVisaoChange("gantt")}
-          className={`rounded px-3 py-1 text-[12.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${visao === "gantt" ? "bg-primary text-primary-foreground" : "text-muted hover:text-foreground"}`}
-        >
-          Gantt
-        </button>
-      </div>
     </div>
   );
 }

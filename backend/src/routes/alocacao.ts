@@ -1376,8 +1376,13 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/itens/:seqite/posicao", async (r
       return;
     }
     const { contexto, role } = ctx;
-    if (!podeExecutarAcao(role, contexto, "mover", { depexe: item.depexe, codfor: 0 })) {
-      res.status(403).json({ error: "Sem permissão para mover este item" });
+    // Regra de proposta, não de item: arrastar um item aqui só o agrupa/desagrupa de uma
+    // pasta raiz — é organização da estrutura, igual a criar a pasta, e não distribui
+    // hora nenhuma. Com o escopo novo o gestor enxerga a proposta inteira, então travar
+    // por item.depexe deixava os itens de outro departamento imóveis no meio da árvore,
+    // sem como organizá-los. Alocar continua item a item.
+    if (!(await podeGerenciarProposta(role, contexto, codemp, codpro))) {
+      res.status(403).json({ error: "Sem permissão para organizar a estrutura desta proposta" });
       return;
     }
 

@@ -16,7 +16,9 @@ interface MenuAcoesNoProps {
   // Item de proposta: nunca é uma linha real (vem do Senior, virtual) — não dá pra
   // renomear/duplicar/excluir por aqui, só agrupar/soltar de uma pasta raiz.
   ehItem?: boolean;
-  onRenomear: () => void;
+  // Abre o painel de edição do nó. Virou item de menu porque o clique na linha passou a
+  // expandir quando o nó tem filhos — sem isto não haveria como editar uma pasta cheia.
+  onEditar?: () => void;
   onDuplicar: () => void;
   onMoverPara: (parentId: number) => void;
   onSoltar?: () => void;
@@ -33,7 +35,7 @@ export function MenuAcoesNo({
   contagemDescendentes,
   destinosPossiveis,
   ehItem = false,
-  onRenomear,
+  onEditar,
   onDuplicar,
   onMoverPara,
   onSoltar,
@@ -74,7 +76,9 @@ export function MenuAcoesNo({
           <>
             {!ehItem && (
               <>
-                <DropdownMenu.Item onSelect={onRenomear}>Renomear</DropdownMenu.Item>
+                {/* "Renomear" saiu: o painel de edição já tem o campo de nome, então a
+                    edição inline era um segundo caminho pro mesmo campo. */}
+                {onEditar && <DropdownMenu.Item onSelect={onEditar}>Editar</DropdownMenu.Item>}
                 <DropdownMenu.Item onSelect={onDuplicar}>Duplicar</DropdownMenu.Item>
               </>
             )}

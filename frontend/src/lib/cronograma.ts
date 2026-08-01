@@ -267,6 +267,47 @@ function derivarOrcamento(horasContratadas: number, horasDistribuidas: number, h
 // Só faz sentido pra nó tipo="item" (é o único nível com horasContratadas próprio —
 // pasta nunca tem teto, só soma). O chamador decide quando chamar; a função não valida
 // o tipo pra não duplicar a checagem que já existe em quem monta a árvore.
+// Largura das três colunas numéricas do cronograma (Orçado/Realizado/Alocado), em px.
+//
+// Em px, e não em "ch" como antes: o cabeçalho é 11px e as linhas são 12px, então o mesmo
+// número de "ch" dava larguras diferentes nos dois e as colunas não alinhavam. O piso de
+// 96px vem do maior RÓTULO ("Realizado" em 11px mono com tracking-wider), que na prática
+// é sempre maior que o número — sem ele os rótulos se sobrepunham no cabeçalho. O termo
+// com `larguraHoras` só entra em cena numa proposta com muitos dígitos de hora.
+export function larguraColunaHorasPx(larguraHoras: number): number {
+  return Math.max(96, (larguraHoras + 4) * 8);
+}
+
+// Orçado = horas contratadas do item da proposta (PropostaItem.qtdhor, que chega no nó
+// como `horasPrevistas`). Sobe na hierarquia: pasta raiz mostra a soma dos itens que
+// agrupa.
+//
+// Não confundir com o `horasPrevistas` de uma ATIVIDADE, que é hora distribuída pra um
+// consultor — outra grandeza. Por isso a recursão para no nó do tipo "item": o que existe
+// abaixo dele é distribuição, e somar as duas coisas dobraria o número. É a mesma
+// distinção que calcularOrcamentoItem faz entre contratado e distribuído.
+export function agregarOrcado(nos: NoCronograma[]): Map<number, number> {
+  const filhosDe = porPai(nos);
+  const resultado = new Map<number, number>();
+
+  function calcular(no: NoCronograma): number {
+    const existente = resultado.get(no.id);
+    if (existente !== undefined) return existente;
+
+    let total = 0;
+    if (no.tipo === "item") {
+      total = no.horasPrevistas ?? 0;
+    } else if (no.tipo === "pasta") {
+      for (const filho of filhosDe.get(no.id) ?? []) total += calcular(filho);
+    }
+    resultado.set(no.id, total);
+    return total;
+  }
+
+  for (const no of nos) calcular(no);
+  return resultado;
+}
+
 export function calcularOrcamentoItem(item: NoCronograma, agregados: Map<number, HorasAgregadas>): OrcamentoItem {
   return derivarOrcamento(item.horasPrevistas ?? 0, somarDistribuidas(item, agregados), somarRealizadas(item, agregados));
 }

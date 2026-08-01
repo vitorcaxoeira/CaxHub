@@ -49,7 +49,7 @@ export function LinhaNovaAtividade({ pastaNome, profundidade, onCriar, abrirAuto
     return (
       <button
         onClick={() => setEditando(true)}
-        className="flex min-h-8 w-full items-center gap-2 border-b border-border/50 py-1.5 pr-3 text-left text-[13px] text-muted hover:bg-surface-2 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="flex min-h-7 w-full items-center gap-2 border-b border-border/50 py-1 pr-3 text-left text-[13px] text-muted hover:bg-surface-2 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         style={{ paddingLeft: paddingEsquerda }}
       >
         ＋ Nova atividade em {pastaNome}…
@@ -58,7 +58,7 @@ export function LinhaNovaAtividade({ pastaNome, profundidade, onCriar, abrirAuto
   }
 
   return (
-    <div className="border-b border-border/50 py-1.5 pr-3" style={{ paddingLeft: paddingEsquerda }}>
+    <div className="border-b border-border/50 py-1 pr-3" style={{ paddingLeft: paddingEsquerda }}>
       <div className="flex items-center gap-2">
         <input
           ref={inputRef}

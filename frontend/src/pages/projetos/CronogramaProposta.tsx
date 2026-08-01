@@ -1,10 +1,11 @@
 import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { agregarHoras, formatHorasCompacto, larguraHorasProposta, somarOrcamentos } from "../../lib/cronograma";
+import { tomConsumo } from "../../lib/consumoHoras";
 import { useCronograma } from "../../hooks/useCronograma";
 import { ArvoreCronograma } from "../../components/cronograma/ArvoreCronograma";
 import { IndicadorProgresso } from "../../components/cronograma/IndicadorProgresso";
-import { RodapeOrcamento } from "../../components/cronograma/RodapeOrcamento";
+import { KpisCronograma } from "../../components/cronograma/KpisCronograma";
 
 const toneBadge: Record<string, string> = {
   success: "bg-success/15 text-success",
@@ -21,22 +22,17 @@ export function CronogramaProposta() {
   const navigate = useNavigate();
   const { proposta, nos, loading, erro, recarregar, atualizarNo, criarNo, excluirNo, duplicarNo, moverItem } = useCronograma(codemp, codpro);
 
-  const avancoGeral = useMemo(() => {
-    const agregados = agregarHoras(nos);
-    const raizes = nos.filter((n) => n.tipo === "item");
-    let horasPrevistas = 0;
-    let horasRealizadas = 0;
-    for (const raiz of raizes) {
-      const agregado = agregados.get(raiz.id);
-      if (!agregado) continue;
-      horasPrevistas += agregado.horasPrevistas;
-      horasRealizadas += agregado.horasRealizadas;
-    }
-    const avanco = horasPrevistas > 0 ? horasRealizadas / horasPrevistas : 0;
-    return { horasPrevistas, horasRealizadas, avanco };
-  }, [nos]);
-
   const orcamentoTotal = useMemo(() => somarOrcamentos(nos.filter((n) => n.tipo === "item"), agregarHoras(nos)), [nos]);
+
+  // Avanço da proposta = Realizado sobre ORÇADO (o contratado), não sobre o Alocado.
+  // Antes era sobre o alocado, o que respondia "quanto do planejado já foi feito" e podia
+  // marcar 100% com metade do contrato ainda por distribuir. Sobre o orçado ele responde
+  // "quanto do contrato já foi consumido", que é a leitura que os KPIs logo abaixo dão.
+  //
+  // `consumoReal` já vem de somarOrcamentos com guarda contra divisão por zero, e a cor
+  // sai do mesmo tomConsumo do card do Quadro — azul, âmbar a partir de 80%, vermelho
+  // acima de 100%.
+  const tomAvanco = tomConsumo(orcamentoTotal.consumoReal);
   // Largura de dígitos de hora usada por TODA a tela (árvore, drawer, rodapé) — calculada
   // uma vez aqui a partir do total da proposta (ver larguraHorasProposta) e propagada por
   // prop, pra que os números de horas fiquem alinhados entre item/pasta/atividade
@@ -64,14 +60,23 @@ export function CronogramaProposta() {
               </p>
             </div>
             <div className="flex-none text-right">
-              <p className="font-mono text-2xl font-semibold tabular-nums text-foreground">{Math.round(avancoGeral.avanco * 100)}%</p>
+              <p className={`font-mono text-2xl font-semibold tabular-nums ${tomAvanco.texto || "text-foreground"}`}>
+                {Math.round(orcamentoTotal.consumoReal * 100)}%
+              </p>
               <p className="font-mono text-[12px] tabular-nums text-muted">
-                {formatHorasCompacto(avancoGeral.horasRealizadas, larguraHoras)} / {formatHorasCompacto(avancoGeral.horasPrevistas, larguraHoras)}
+                {formatHorasCompacto(orcamentoTotal.horasRealizadas, larguraHoras)} /{" "}
+                {formatHorasCompacto(orcamentoTotal.horasContratadas, larguraHoras)}
               </p>
             </div>
           </div>
-          <IndicadorProgresso avanco={avancoGeral.avanco} alturaPx={4} className="mt-3" />
+          <IndicadorProgresso avanco={orcamentoTotal.consumoReal} cor={tomAvanco.barra} alturaPx={4} className="mt-3" />
         </div>
+      )}
+
+      {/* Placar antes da árvore: é o resumo que responde "como está a proposta" e tem que
+          estar visível na abertura, sem depender de rolar até o fim de uma EAP longa. */}
+      {!loading && !erro && nos.some((n) => n.tipo === "item") && (
+        <KpisCronograma totais={orcamentoTotal} larguraHoras={larguraHoras} />
       )}
 
       <ArvoreCronograma
@@ -90,10 +95,6 @@ export function CronogramaProposta() {
         podeGerenciarProposta={proposta?.podeGerenciarProposta ?? false}
         larguraHoras={larguraHoras}
       />
-
-      {!loading && !erro && nos.some((n) => n.tipo === "item") && (
-        <RodapeOrcamento totais={orcamentoTotal} larguraHoras={larguraHoras} />
-      )}
     </div>
   );
 }
