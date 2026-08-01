@@ -22,6 +22,7 @@ import { usersRouter } from "./routes/users";
 import { sincronizacaoRouter } from "./routes/sincronizacao";
 import { syncErpRouter } from "./routes/syncErp";
 import { alocacaoRouter } from "./routes/alocacao";
+import { jornadasRouter } from "./routes/jornadas";
 import { propostaVisualizacaoRouter } from "./routes/propostaVisualizacao";
 import { auditoriaRouter } from "./routes/auditoria";
 import { attachCorrelationId } from "./audit/correlationId";
@@ -86,6 +87,7 @@ app.use("/users", usersRouter);
 app.use("/sincronizacao", sincronizacaoRouter);
 app.use("/sync-erp", syncErpRouter);
 app.use("/alocacao", alocacaoRouter);
+app.use("/jornadas", jornadasRouter);
 app.use("/proposta-visualizacao", propostaVisualizacaoRouter);
 app.use("/auditoria", auditoriaRouter);
 

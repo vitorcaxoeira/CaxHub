@@ -18,6 +18,7 @@ import { FluxoCaixa } from "./pages/financeiro/FluxoCaixa";
 import { Historico } from "./pages/financeiro/Historico";
 import { Propostas } from "./pages/projetos/Propostas";
 import { Atividades } from "./pages/projetos/Atividades";
+import { Jornadas } from "./pages/projetos/Jornadas";
 import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
 import { Auditoria } from "./pages/auditoria/Auditoria";
@@ -52,6 +53,7 @@ export default function App() {
               <Route path="/projetos/atividades" element={<Atividades />} />
               <Route path="/projetos/apontamentos" element={<MeusApontamentos />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />
+              <Route path="/projetos/jornadas" element={<Jornadas />} />
               <Route path="/projetos/auditoria" element={<Auditoria />} />
               <Route path="/projetos/alocacao/:codemp/:codpro" element={<AlocacaoPropostaDetalhe />} />
               <Route path="/projetos/alocacao/:codemp/:codpro/cronograma" element={<CronogramaProposta />} />

@@ -34,6 +34,7 @@ model User {
   anexosAtividade        AtividadeAnexo[]
   notificacoes           Notificacao[]
   auditEventos           AuditEvento[]
+  jornadasDefinidas      JornadaConsultor[]
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -519,6 +520,40 @@ model DepartamentoTime {
 
   @@id([codemp, depexe, codusu])
   @@map("departamento_time")
+}
+
+// Jornada de trabalho de um consultor, por dia da semana. Conceito só do CaxHub, sem
+// equivalente no Senior — quem mantém é o gestor do departamento do consultor.
+//
+// Serve a um propósito só: dizer até que horas uma sessão de execução aberta pode contar.
+// Card esquecido "Em Andamento" na sexta à noite fecharia contando o fim de semana
+// inteiro; com a jornada, a varredura recorta no fim do expediente daquele dia.
+//
+// Horários em MINUTOS desde a meia-noite (mesma convenção de RatItem.horini/horfim), e em
+// hora de parede de São Paulo — nunca UTC. Ver dominio/fusoBrasil.ts: o container de
+// produção roda em UTC-0 e o de desenvolvimento em UTC-3, então comparar com o relógio do
+// servidor erraria por 3 horas em produção.
+//
+// Cada período é opcional e independente: quem não trabalha à tarde deixa a tarde nula, e
+// quem não trabalha no dia deixa os quatro nulos. Consultor SEM jornada cadastrada não
+// sofre parada por expediente — só pelo teto de horas.
+model JornadaConsultor {
+  codemp Int
+  codfor Int
+  /// 0=domingo, 1=segunda ... 6=sábado (mesma numeração de Date.getUTCDay).
+  diaSemana Int
+
+  manhaInicio Int?
+  manhaFim    Int?
+  tardeInicio Int?
+  tardeFim    Int?
+
+  atualizadoEm DateTime @updatedAt
+  atualizadoPor Int?
+  usuario      User?    @relation(fields: [atualizadoPor], references: [id], onDelete: SetNull)
+
+  @@id([codemp, codfor, diaSemana])
+  @@map("jornada_consultor")
 }
 
 // Espelho local da tabela USU_TE077ATI do Senior ERP (Distribuição Atividades por
