@@ -65,7 +65,16 @@ export function ModalAlocarConsultores({
   const [loadingConsultores, setLoadingConsultores] = useState(true);
   const [erroConsultores, setErroConsultores] = useState<string | null>(null);
 
-  const [marcados, setMarcados] = useState<Record<number, boolean>>({});
+  // Departamento cuja lista esta a vista. Comeca no do item, mas pode apontar pra
+  // qualquer um com time -- ver o seletor abaixo.
+  const [depexeSelecionado, setDepexeSelecionado] = useState<number | null>(item.depexe);
+  const [departamentos, setDepartamentos] = useState<{ depexe: number; label: string }[]>([]);
+
+  // Selecao ACUMULADA, guardando o consultor inteiro e nao um booleano. Trocar de
+  // departamento troca a lista carregada; se a selecao dependesse dela, quem escolhesse
+  // duas pessoas de ERP e fosse pro HCM veria o total voltar a zero e salvaria so as de
+  // HCM -- em silencio. Montar time misto e justamente o objetivo do seletor.
+  const [marcados, setMarcados] = useState<Record<number, ConsultorElegivel>>({});
   const [horasInput, setHorasInput] = useState<Record<number, string>>({});
 
   const [destinoTipo, setDestinoTipo] = useState<DestinoModal>("item");
@@ -78,13 +87,20 @@ export function ModalAlocarConsultores({
   const ehItem = no.tipo === "item";
 
   useEffect(() => {
-    if (item.depexe == null) {
+    axios
+      .get("/api/alocacao/departamentos-com-time")
+      .then(({ data }) => setDepartamentos(data.departamentos))
+      .catch(() => setDepartamentos([]));
+  }, []);
+
+  useEffect(() => {
+    if (depexeSelecionado == null) {
       setLoadingConsultores(false);
       return;
     }
     setLoadingConsultores(true);
     axios
-      .get("/api/alocacao/consultores-elegiveis", { params: { depexe: item.depexe } })
+      .get("/api/alocacao/consultores-elegiveis", { params: { depexe: depexeSelecionado } })
       .then(({ data }) => {
         setConsultores(data.consultores);
         setErroConsultores(null);
@@ -92,7 +108,7 @@ export function ModalAlocarConsultores({
       .catch((err) => setErroConsultores(err.response?.data?.error ?? "Falha ao carregar consultores do departamento"))
       .finally(() => setLoadingConsultores(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.depexe]);
+  }, [depexeSelecionado]);
 
   const pastasFilhasDoItem = useMemo(
     () => nos.filter((n) => n.tipo === "pasta" && n.parentId === item.id).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
@@ -103,15 +119,22 @@ export function ModalAlocarConsultores({
   const saldoLivreMinutos = orcamentoItem.saldoDistribuicao;
   const saldoDescrito = useMemo(() => descreverSaldoDistribuicao(orcamentoItem, larguraHoras), [orcamentoItem, larguraHoras]);
 
-  const marcadosList = useMemo(() => (consultores ?? []).filter((c) => marcados[c.codfor]), [consultores, marcados]);
+  // Do estado acumulado, nao da lista carregada: e o que faz o total e o payload
+  // incluirem quem foi escolhido em outro departamento.
+  const marcadosList = useMemo(() => Object.values(marcados), [marcados]);
   const totalMinutos = useMemo(
     () => marcadosList.reduce((soma, c) => soma + (horasParaMinutos(horasInput[c.codfor] ?? "") ?? 0), 0),
     [marcadosList, horasInput]
   );
   const excedeSaldo = totalMinutos > saldoLivreMinutos;
 
-  function alternarMarcado(codfor: number) {
-    setMarcados((atual) => ({ ...atual, [codfor]: !atual[codfor] }));
+  function alternarMarcado(consultor: ConsultorElegivel) {
+    setMarcados((atual) => {
+      const proximo = { ...atual };
+      if (proximo[consultor.codfor]) delete proximo[consultor.codfor];
+      else proximo[consultor.codfor] = consultor;
+      return proximo;
+    });
   }
 
   function distribuirIgual() {
@@ -240,9 +263,30 @@ export function ModalAlocarConsultores({
           </div>
         )}
 
-        {item.depexe == null ? (
+        {/* O seletor fica FORA da arvore de estados abaixo, e de proposito: se ele so
+            aparecesse junto da lista carregada, escolher um departamento vazio o faria
+            sumir e prenderia a pessoa sem como voltar. */}
+        {departamentos.length > 0 && (
+          <label className="block">
+            <span className="mb-1 block text-[11.5px] font-medium text-muted">Departamento</span>
+            <select
+              value={depexeSelecionado ?? ""}
+              onChange={(e) => setDepexeSelecionado(e.target.value === "" ? null : Number(e.target.value))}
+              className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {departamentos.map((d) => (
+                <option key={d.depexe} value={d.depexe}>
+                  {d.label}
+                  {d.depexe === item.depexe ? " (do item)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {depexeSelecionado == null ? (
           <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning">
-            Item sem departamento de execução definido.
+            Item sem departamento de execução definido — escolha um departamento acima.
           </p>
         ) : loadingConsultores ? (
           <div className="flex items-center justify-center py-8">
@@ -252,12 +296,20 @@ export function ModalAlocarConsultores({
           <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">{erroConsultores}</p>
         ) : (consultores?.length ?? 0) === 0 ? (
           <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning">
-            Nenhum consultor cadastrado no time do departamento {item.depexeLabel}.
+            Nenhum consultor no time de {departamentos.find((d) => d.depexe === depexeSelecionado)?.label ?? "departamento"} — escolha outro acima.
           </p>
         ) : (
           <div>
             <div className="mb-1.5 flex items-center justify-between">
-              <p className="text-[11.5px] font-medium text-muted">Consultores do time · {item.depexeLabel}</p>
+              <p className="text-[11.5px] font-medium text-muted">
+                Consultores do time
+                {/* Contador da selecao ACUMULADA: quem escolheu gente em outro
+                    departamento nao ve esses nomes na lista a vista, e sem isto perderia
+                    de vista o que ja marcou. */}
+                {marcadosList.length > 0 && (
+                  <span className="ml-1.5 text-primary">· {marcadosList.length} selecionado{marcadosList.length === 1 ? "" : "s"}</span>
+                )}
+              </p>
               <button
                 type="button"
                 onClick={distribuirIgual}
@@ -278,7 +330,7 @@ export function ModalAlocarConsultores({
                     <input
                       type="checkbox"
                       checked={check}
-                      onChange={() => alternarMarcado(c.codfor)}
+                      onChange={() => alternarMarcado(c)}
                       className="h-4 w-4 flex-none accent-primary"
                     />
                     <Avatar nome={c.nome} fotoUrl={c.fotoUrl} size="sm" />

@@ -61,6 +61,23 @@ export async function consultoresDosDepartamentos(depexes: number[]): Promise<Co
   });
 }
 
+// Departamentos que têm alguém no time. É o universo de onde se escolhe gente pra
+// trabalhar — diferente da lista estática de DEPEXE_LABELS, que inclui departamento sem
+// ninguém dentro, e diferente da tabela Consultor, que espelha o cadastro de FORNECEDORES
+// do Senior e traz muito mais nome que time.
+//
+// Consumido pela lista de consultores da Jornada e pelo seletor de departamento do modal
+// de alocação — se cada tela derivasse por conta própria, uma ofereceria departamento que
+// a outra não reconhece.
+export async function departamentosComTime(): Promise<number[]> {
+  const registros = await prisma.departamentoTime.findMany({
+    where: { sitreg: "A" },
+    distinct: ["depexe"],
+    select: { depexe: true },
+  });
+  return registros.map((r) => r.depexe);
+}
+
 // Codfors por quem o usuário pode olhar/lançar como "time": os consultores dos
 // departamentos que ele gerencia mais ele próprio. `null` = sem restrição (admin).
 export async function codforsDoTime(role: string, contexto: ContextoConsultor): Promise<Set<number> | null> {

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
-import { resolverContextoConsultor, podeExecutarAcao } from "../domain/contextoProjeto";
+import { resolverContextoConsultor, podeExecutarAcao, departamentosComTime } from "../domain/contextoProjeto";
 import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
 import { enfileirar } from "../sync/outboxSenior";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
@@ -535,6 +535,33 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
   }
 });
 
+// Departamentos que o seletor do modal de alocação oferece: os que têm alguém no time.
+// Não é a lista estática de DEPEXE_LABELS, que traria departamento sem ninguém pra
+// escolher — abrir um desses só mostraria uma lista vazia.
+alocacaoRouter.get("/departamentos-com-time", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const permitidos = await departamentosPermitidos(ctx.role, ctx.contexto);
+    if (permitidos.length === 0) {
+      res.status(403).json({ error: "Sem departamentos para gerenciar" });
+      return;
+    }
+
+    const depexes = await departamentosComTime();
+    res.json({
+      departamentos: depexes
+        .map((depexe) => ({ depexe, label: depexeLabel(depexe) }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR")),
+    });
+  } catch (error) {
+    handleError(res, error, "departamentos-com-time");
+  }
+});
+
 alocacaoRouter.get("/consultores-elegiveis", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
@@ -548,9 +575,16 @@ alocacaoRouter.get("/consultores-elegiveis", async (req: AuthenticatedRequest, r
       res.status(400).json({ error: "depexe é obrigatório" });
       return;
     }
+    // Não exige permissão sobre o departamento CONSULTADO, só que o usuário gerencie
+    // algum. Isto aqui é uma lista de nomes pra escolher quem vai trabalhar; quem autoriza
+    // criar a atividade é o `alocar-lote`, que continua checando o depexe DO ITEM.
+    //
+    // Antes travava no departamento do item, e isso deixava sem saída o gestor de um
+    // departamento pequeno: o item de Processo Interno, com um único consultor, não tinha
+    // a quem alocar dentro da própria tela.
     const permitidos = await departamentosPermitidos(role, contexto);
-    if (!permitidos.includes(depexe)) {
-      res.status(403).json({ error: "Sem permissão sobre este departamento" });
+    if (permitidos.length === 0) {
+      res.status(403).json({ error: "Sem departamentos para gerenciar" });
       return;
     }
 

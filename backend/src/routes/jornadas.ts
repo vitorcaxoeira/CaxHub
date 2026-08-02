@@ -4,6 +4,7 @@ import { prisma } from "../db/prisma";
 import {
   resolverContextoConsultor,
   consultoresDosDepartamentos,
+  departamentosComTime,
   gerenciaDepartamento,
 } from "../domain/contextoProjeto";
 
@@ -39,12 +40,7 @@ async function consultoresGerenciados(role: string, contexto: Awaited<ReturnType
     // `Consultor` espelha o cadastro de fornecedores do Senior, então "todo consultor ativo
     // com codfor" trazia 116 nomes onde só 46 são gente de time; o resto é fornecedor e
     // quem saiu dos times. Jornada de trabalho é conceito de quem executa atividade.
-    const departamentos = await prisma.departamentoTime.findMany({
-      where: { sitreg: "A" },
-      distinct: ["depexe"],
-      select: { depexe: true },
-    });
-    return consultoresDosDepartamentos(departamentos.map((d) => d.depexe));
+    return consultoresDosDepartamentos(await departamentosComTime());
   }
   return consultoresDosDepartamentos(contexto.departamentosGerenciados);
 }
