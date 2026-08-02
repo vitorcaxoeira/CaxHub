@@ -13,6 +13,7 @@ import { WorkloadConsultores } from "../../components/projetos/WorkloadConsultor
 import { useToast } from "../../components/ui/Toast";
 import { RAIA_A_FAZER, RAIA_EM_ANDAMENTO } from "../../lib/atividade-acoes";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { EVENTO_SESSAO_ALTERADA } from "../../components/projetos/VigiaFimDeJornada";
 
 type Visao = "quadro" | "lista" | "calendario" | "timeline" | "workload";
 const VISOES: Visao[] = ["quadro", "lista", "calendario", "timeline", "workload"];
@@ -204,6 +205,20 @@ export function Atividades() {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [padraoResolvido, visao, buscaDebounced, depexe, colunaId, pripro, codfor, atrasada, situacao, page]);
+
+  // O VigiaFimDeJornada vive no AppShell e não compartilha estado com esta tela. Quando
+  // ele prorroga ou encerra uma sessão, o card aqui ainda está com o `sessaoLimite`
+  // antigo — e o cronômetro fica congelado no limite vencido mesmo depois do consultor
+  // confirmar que ia trabalhar mais. Este ouvinte é o que destrava.
+  useEffect(() => {
+    function recarregar() {
+      carregar();
+      carregarIndicadores();
+    }
+    window.addEventListener(EVENTO_SESSAO_ALTERADA, recarregar);
+    return () => window.removeEventListener(EVENTO_SESSAO_ALTERADA, recarregar);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Baixa imediata da sessão que atingiu o limite (teto de horas ou fim do expediente).
   // Sem isto o card fica visivelmente correndo além do que vai contar até a varredura

@@ -28,6 +28,16 @@ interface SessaoVigiada {
 
 const INTERVALO_CONSULTA_MS = 30_000;
 
+// O vigia mora no AppShell e a lista de atividades mora numa rota — não há estado
+// compartilhado entre eles. Sem este aviso, prorrogar atualizava só o vigia: o card
+// continuava com o `sessaoLimite` antigo e o cronômetro seguia congelado no limite
+// vencido, mesmo depois do consultor confirmar que ia trabalhar mais 15 minutos.
+export const EVENTO_SESSAO_ALTERADA = "caxhub:sessao-alterada";
+
+function avisarSessaoAlterada() {
+  window.dispatchEvent(new CustomEvent(EVENTO_SESSAO_ALTERADA));
+}
+
 function formatarContagem(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
@@ -83,6 +93,7 @@ export function VigiaFimDeJornada() {
         const { data } = await axios.post(`/api/atividades/${sessao.atividadeId}/encerrar-automatico`, { imediato });
         if (data?.encerrada) toast.mostrar(`Proposta ${sessao.codpro}: ${data.mensagem}`, "warning");
         setSessao(null);
+        avisarSessaoAlterada();
       } catch {
         // O servidor recalculou e recusou — deixa o vigia tentar de novo no próximo tique.
         encerrando.current = null;
@@ -105,8 +116,10 @@ export function VigiaFimDeJornada() {
     try {
       await axios.post(`/api/atividades/${sessao.atividadeId}/prorrogar-expediente`, { minutos });
       toast.mostrar(`Execução prorrogada por ${minutos} minutos.`, "neutral");
-      // Recarrega o limite: o vigia volta a perguntar quando o tempo novo vencer.
+      // Recarrega o limite: o vigia volta a perguntar quando o tempo novo vencer. O aviso
+      // e o que destrava o cronometro do card, que ainda esta com o limite antigo.
       await consultar();
+      avisarSessaoAlterada();
     } catch (err: any) {
       toast.mostrar(err.response?.data?.error ?? "Falha ao prorrogar a execução", "destructive");
       await consultar();
