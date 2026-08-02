@@ -35,7 +35,16 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
 // elas divergiriam.
 async function consultoresGerenciados(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
   if (role === "admin") {
-    return prisma.consultor.findMany({ where: { codfor: { not: null }, sitfor: "A" } });
+    // Admin alcança todo departamento QUE TEM TIME — não a tabela de consultores inteira.
+    // `Consultor` espelha o cadastro de fornecedores do Senior, então "todo consultor ativo
+    // com codfor" trazia 116 nomes onde só 46 são gente de time; o resto é fornecedor e
+    // quem saiu dos times. Jornada de trabalho é conceito de quem executa atividade.
+    const departamentos = await prisma.departamentoTime.findMany({
+      where: { sitreg: "A" },
+      distinct: ["depexe"],
+      select: { depexe: true },
+    });
+    return consultoresDosDepartamentos(departamentos.map((d) => d.depexe));
   }
   return consultoresDosDepartamentos(contexto.departamentosGerenciados);
 }
