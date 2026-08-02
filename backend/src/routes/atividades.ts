@@ -22,7 +22,7 @@ import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS, CAMPOS_AUDITADOS_EXCEDENTE } from "..
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { avaliarEntradaEmExecucao } from "../domain/tetoAtividade";
-import { diaSemanaDaSessao } from "../domain/jornadaConsultor";
+import { diaSemanaDaSessao, limitePorExpediente } from "../domain/jornadaConsultor";
 import { limiteDaSessaoAberta, prazoDeEncerramento, MENSAGEM_MOTIVO, MotivoLimite } from "../domain/limiteSessao";
 import {
   RAIA_A_FAZER,
@@ -932,6 +932,12 @@ atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, r
         // ali não há pergunta a fazer.
         prazoResposta: limite ? prazoDeEncerramento(limite).toISOString() : null,
         prorrogavel: limite?.motivo === "fora_do_expediente",
+        // A sessão NASCEU fora do expediente (limitePorExpediente devolve o próprio início
+        // quando não há período válido depois dele). Muda o texto do alerta: "o expediente
+        // terminou" é falso pra quem começou às 22h de um sábado — ali o recado é que a
+        // atividade está sendo iniciada fora do horário.
+        iniciouForaDoExpediente:
+          limitePorExpediente(sessao.inicio, jornada)?.getTime() === sessao.inicio.getTime(),
         opcoesProrrogacao: OPCOES_PRORROGACAO_MIN,
       },
     });
@@ -1091,6 +1097,11 @@ atividadesRouter.post("/:id/encerrar-automatico", async (req: AuthenticatedReque
       agora: limite.instante,
       origemEvento: "job",
       motivoParada: limite.motivo,
+      // Só chega preenchido no encerramento PEDIDO ("Encerrar agora" no alerta), onde há
+      // alguém pra descrever o que fez. Encerramento por silêncio e varredura não têm
+      // autor, então vão sem texto — a sessão vira pendência e o consultor descreve na
+      // hora de confirmar, como qualquer outra.
+      observacaoFechamento: typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null,
     });
     await prisma.$transaction(operacoes);
 

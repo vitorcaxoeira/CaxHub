@@ -23,6 +23,8 @@ interface SessaoVigiada {
   motivo: "teto_atingido" | "fora_do_expediente" | null;
   prazoResposta: string | null;
   prorrogavel: boolean;
+  /** A sessão nasceu fora do expediente — muda o texto: nada "terminou", ela começou fora. */
+  iniciouForaDoExpediente: boolean;
   opcoesProrrogacao: number[];
 }
 
@@ -34,7 +36,7 @@ const INTERVALO_CONSULTA_MS = 30_000;
 // vencido, mesmo depois do consultor confirmar que ia trabalhar mais 15 minutos.
 export const EVENTO_SESSAO_ALTERADA = "caxhub:sessao-alterada";
 
-function avisarSessaoAlterada() {
+export function avisarSessaoAlterada() {
   window.dispatchEvent(new CustomEvent(EVENTO_SESSAO_ALTERADA));
 }
 
@@ -47,6 +49,10 @@ export function VigiaFimDeJornada() {
   const [sessao, setSessao] = useState<SessaoVigiada | null>(null);
   const [minutos, setMinutos] = useState(15);
   const [enviando, setEnviando] = useState(false);
+  // Passo 2 do alerta: quem clica "Encerrar agora" descreve o que fez, igual ao Parar
+  // normal. O encerramento por silencio nao passa por aqui -- nao ha quem digite.
+  const [descrevendo, setDescrevendo] = useState(false);
+  const [observacao, setObservacao] = useState("");
   const [agora, setAgora] = useState(() => Date.now());
   const toast = useToast();
   // Evita disparar o encerramento duas vezes pra mesma sessão enquanto a consulta seguinte
@@ -66,7 +72,14 @@ export function VigiaFimDeJornada() {
   useEffect(() => {
     consultar();
     const intervalo = setInterval(consultar, INTERVALO_CONSULTA_MS);
-    return () => clearInterval(intervalo);
+    // Iniciar uma atividade fora do expediente tem de abrir o alerta NA HORA, nao no
+    // proximo tique de 30s: o limite ja nasce vencido e o consultor ficaria olhando um
+    // cronometro travado sem entender por que.
+    window.addEventListener(EVENTO_SESSAO_ALTERADA, consultar);
+    return () => {
+      clearInterval(intervalo);
+      window.removeEventListener(EVENTO_SESSAO_ALTERADA, consultar);
+    };
   }, [consultar]);
 
   // Relógio de 1s só enquanto há sessão vigiada — é o que faz a contagem regressiva andar.
@@ -83,16 +96,21 @@ export function VigiaFimDeJornada() {
   const restante = prazoMs != null ? prazoMs - agora : 0;
 
   const encerrar = useCallback(
-    async (imediato: boolean) => {
+    async (imediato: boolean, texto?: string) => {
       if (!sessao) return;
       const chave = `${sessao.atividadeId}-${sessao.inicio}`;
       if (encerrando.current === chave) return;
       encerrando.current = chave;
       setEnviando(true);
       try {
-        const { data } = await axios.post(`/api/atividades/${sessao.atividadeId}/encerrar-automatico`, { imediato });
+        const { data } = await axios.post(`/api/atividades/${sessao.atividadeId}/encerrar-automatico`, {
+          imediato,
+          observacao: texto,
+        });
         if (data?.encerrada) toast.mostrar(`Proposta ${sessao.codpro}: ${data.mensagem}`, "warning");
         setSessao(null);
+        setDescrevendo(false);
+        setObservacao("");
         avisarSessaoAlterada();
       } catch {
         // O servidor recalculou e recusou — deixa o vigia tentar de novo no próximo tique.
@@ -130,6 +148,47 @@ export function VigiaFimDeJornada() {
 
   if (!sessao || !perguntando) return null;
 
+  // Passo 2 — descrever o que foi feito antes de encerrar, igual ao Parar normal.
+  if (descrevendo) {
+    return (
+      <Modal open onClose={() => setDescrevendo(false)} title="O que foi feito?" subtitulo={`Proposta ${sessao.codpro}`}>
+        <div className="space-y-4 p-4">
+          <textarea
+            autoFocus
+            value={observacao}
+            onChange={(e) => setObservacao(e.target.value)}
+            rows={3}
+            placeholder="Descreva rapidamente o que foi realizado (opcional)..."
+            className="w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={() => setDescrevendo(false)}
+              disabled={enviando}
+              className="rounded-md border border-border px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+            >
+              Voltar
+            </button>
+            <button
+              onClick={() => encerrar(true, observacao.trim())}
+              disabled={enviando}
+              className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {enviando && <Spinner className="h-3.5 w-3.5" />}
+              Encerrar execução
+            </button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  // "o expediente terminou" seria falso pra quem começou às 22h de um sábado — ali nada
+  // terminou, a atividade é que nasceu fora do horário.
+  const subtitulo = sessao.iniciouForaDoExpediente
+    ? `Proposta ${sessao.codpro} — esta atividade está sendo iniciada FORA do seu expediente.`
+    : `Proposta ${sessao.codpro} — o expediente terminou e a execução será encerrada.`;
+
   return (
     <Modal
       open
@@ -137,13 +196,13 @@ export function VigiaFimDeJornada() {
       // poucos minutos), então precisa de uma resposta explícita.
       onClose={() => {}}
       title="Você ainda está trabalhando?"
-      subtitulo={`Proposta ${sessao.codpro} — o expediente terminou e a execução será encerrada.`}
+      subtitulo={subtitulo}
     >
       <div className="space-y-4 p-4">
         <p className="text-sm text-muted">
           Sem resposta em{" "}
           <span className="font-mono font-semibold tabular-nums text-destructive">{formatarContagem(restante)}</span>, a
-          execução é encerrada e o tempo registrado até o fim do expediente.
+          execução é encerrada{sessao.iniciouForaDoExpediente ? " sem tempo registrado" : " e o tempo registrado até o fim do expediente"}.
         </p>
 
         <label className="block">
@@ -164,7 +223,7 @@ export function VigiaFimDeJornada() {
 
         <div className="flex items-center justify-end gap-2">
           <button
-            onClick={() => encerrar(true)}
+            onClick={() => setDescrevendo(true)}
             disabled={enviando}
             className="rounded-md border border-border px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
           >

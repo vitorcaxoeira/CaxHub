@@ -13,7 +13,7 @@ import { WorkloadConsultores } from "../../components/projetos/WorkloadConsultor
 import { useToast } from "../../components/ui/Toast";
 import { RAIA_A_FAZER, RAIA_EM_ANDAMENTO } from "../../lib/atividade-acoes";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
-import { EVENTO_SESSAO_ALTERADA } from "../../components/projetos/VigiaFimDeJornada";
+import { EVENTO_SESSAO_ALTERADA, avisarSessaoAlterada } from "../../components/projetos/VigiaFimDeJornada";
 
 type Visao = "quadro" | "lista" | "calendario" | "timeline" | "workload";
 const VISOES: Visao[] = ["quadro", "lista", "calendario", "timeline", "workload"];
@@ -333,6 +333,9 @@ export function Atividades() {
       // Teto de horas perto do fim: a atividade iniciou, mas o consultor precisa saber
       // agora — descobrir só na hora de confirmar o apontamento seria tarde.
       if (data.aviso) toast.mostrar(data.aviso, "warning");
+      // Iniciar fora do expediente cria uma sessao cujo limite ja nasce vencido: o vigia
+      // precisa consultar AGORA pra abrir o alerta, em vez de so no proximo tique de 30s.
+      avisarSessaoAlterada();
       carregar();
       carregarIndicadores();
     } catch (err: any) {
