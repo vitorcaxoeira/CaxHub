@@ -2,7 +2,14 @@ import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
-import { resolverContextoConsultor, podeExecutarAcao, departamentosComTime } from "../domain/contextoProjeto";
+import {
+  resolverContextoConsultor,
+  podeExecutarAcao,
+  departamentosComTime,
+  gerenciaDepartamento,
+  AcaoProjeto,
+  ContextoConsultor,
+} from "../domain/contextoProjeto";
 import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
 import { enfileirar } from "../sync/outboxSenior";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
@@ -121,6 +128,72 @@ async function podeGerenciarProposta(
 ): Promise<boolean> {
   const permitidos = await departamentosPermitidos(role, contexto);
   return podeVerProposta(permitidos, codemp, codpro);
+}
+
+// Decisão sobre UM item da proposta — criar/editar/excluir estrutura e alocação. Ponto
+// único: antes cada rota chamava podeExecutarAcao solta com o depexe do item, e a regra
+// abaixo teria de ser repetida em nove lugares.
+//
+// Além do departamento DO ITEM, vale o departamento DA PROPOSTA (02/08/2026): quem
+// gerencia o departamento dono da proposta alcança todos os itens dela, inclusive os de
+// outro departamento. É como o Senior já se comporta — na proposta 1-8480 (Processo
+// Interno) os itens de Desenvolvimento, Administrativo e HCM já vieram de lá com alocação
+// do gestor da proposta, e o CaxHub mostrava essas linhas enquanto proibia criar novas.
+//
+// `gerenciaDepartamento` já resolve admin sozinha — não repetir a checagem de papel aqui.
+function podeMexerNoItem(
+  role: string,
+  contexto: ContextoConsultor,
+  acao: AcaoProjeto,
+  itemDepexe: number | null,
+  propostaDepexe: number | null,
+  codfor = 0
+): boolean {
+  if (itemDepexe == null) return false;
+  if (podeExecutarAcao(role, contexto, acao, { depexe: itemDepexe, codfor })) return true;
+  return propostaDepexe != null && gerenciaDepartamento(role, contexto, propostaDepexe);
+}
+
+async function depexeDaProposta(codemp: number, codpro: number): Promise<number | null> {
+  const p = await prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } }, select: { depexe: true } });
+  return p?.depexe ?? null;
+}
+
+// Departamentos de onde se pode tirar consultor para um item: o do item mais os que o
+// usuário gerencia. Fonte única do seletor do modal (que só oferece estes), da validação
+// de `consultores-elegiveis` e da checagem de time das duas rotas de criação — se
+// divergissem, o modal voltaria a oferecer nome que o salvar recusa.
+//
+// Só entram departamentos COM time: um departamento vazio no seletor abriria uma lista sem
+// ninguém, e na checagem de criação não muda nada (não há quem casar).
+async function departamentosAlocaveisNoItem(
+  role: string,
+  contexto: ContextoConsultor,
+  itemDepexe: number | null
+): Promise<number[]> {
+  const comTime = new Set(await departamentosComTime());
+  const permitidos = await departamentosPermitidos(role, contexto);
+  const candidatos = new Set<number>(permitidos);
+  if (itemDepexe != null) candidatos.add(itemDepexe);
+  return [...candidatos].filter((d) => comTime.has(d));
+}
+
+// codusu de quem pode ser alocado no item. Trabalha em codusu (e não codfor) porque é o
+// que DepartamentoTime guarda; a conversão BigInt->Number é obrigatória, os dois campos
+// têm tipos diferentes no schema.
+async function codususAlocaveisNoItem(
+  role: string,
+  contexto: ContextoConsultor,
+  codemp: number,
+  itemDepexe: number | null
+): Promise<Set<number>> {
+  const depexes = await departamentosAlocaveisNoItem(role, contexto, itemDepexe);
+  if (depexes.length === 0) return new Set();
+  const time = await prisma.departamentoTime.findMany({
+    where: { codemp, depexe: { in: depexes }, sitreg: "A" },
+    select: { codusu: true },
+  });
+  return new Set(time.map((t) => Number(t.codusu)));
 }
 
 // Controle sempre por proposta (uma proposta pode ter muitos itens — misturar tudo
@@ -458,8 +531,8 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
     }
 
     // Proposta no escopo entra inteira: todos os itens, inclusive os de outro
-    // departamento. Eles vêm somente-leitura — `podeAlocar` abaixo continua sendo
-    // decidido pelo depexe DO ITEM.
+    // departamento. Ver e alocar seguem sendo coisas diferentes — `podeAlocar` abaixo é
+    // decidido item a item (pelo depexe do item OU pelo da proposta, ver podeMexerNoItem).
     if (!(await podeVerProposta(permitidos, codemp, codpro))) {
       res.status(403).json({ error: "Sem acesso a esta proposta" });
       return;
@@ -511,7 +584,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
           qtdhorItem: item.qtdhor,
           horasAlocadas,
           saldo,
-          podeAlocar: item.depexe != null && podeExecutarAcao(role, contexto, "criar", { depexe: item.depexe, codfor: 0 }),
+          podeAlocar: podeMexerNoItem(role, contexto, "criar", item.depexe, proposta.depexe),
           alocacoes: alocacoesDoItem.map((a) => {
             const consultor = consultorPorCodfor.get(a.codfor);
             return {
@@ -535,30 +608,47 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
   }
 });
 
-// Departamentos que o seletor do modal de alocação oferece: os que têm alguém no time.
-// Não é a lista estática de DEPEXE_LABELS, que traria departamento sem ninguém pra
-// escolher — abrir um desses só mostraria uma lista vazia.
-alocacaoRouter.get("/departamentos-com-time", async (req: AuthenticatedRequest, res) => {
+// Departamentos que o seletor do modal de alocação oferece. Depende do ITEM, não só do
+// usuário: é o departamento do item mais os que o usuário gerencia — exatamente o conjunto
+// que as rotas de criação aceitam (ver departamentosAlocaveisNoItem). Oferecer mais que
+// isso é o defeito que o seletor tinha ao nascer: a tela deixava escolher e o salvar
+// recusava com 400.
+alocacaoRouter.get("/itens/:codemp/:codpro/:seqite/departamentos-alocaveis", async (req: AuthenticatedRequest, res) => {
   try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    const seqite = Number(req.params.seqite);
+    if (![codemp, codpro, seqite].every(Number.isFinite)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+
     const ctx = await contextoDoUsuario(req);
     if (!ctx) {
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
-    const permitidos = await departamentosPermitidos(ctx.role, ctx.contexto);
+    const { contexto, role } = ctx;
+    const permitidos = await departamentosPermitidos(role, contexto);
     if (permitidos.length === 0) {
       res.status(403).json({ error: "Sem departamentos para gerenciar" });
       return;
     }
 
-    const depexes = await departamentosComTime();
+    const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+    if (!item) {
+      res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+
+    const depexes = await departamentosAlocaveisNoItem(role, contexto, item.depexe);
     res.json({
       departamentos: depexes
         .map((depexe) => ({ depexe, label: depexeLabel(depexe) }))
         .sort((a, b) => a.label.localeCompare(b.label, "pt-BR")),
     });
   } catch (error) {
-    handleError(res, error, "departamentos-com-time");
+    handleError(res, error, "departamentos-alocaveis");
   }
 });
 
@@ -571,24 +661,33 @@ alocacaoRouter.get("/consultores-elegiveis", async (req: AuthenticatedRequest, r
     }
     const { contexto, role } = ctx;
     const depexe = Number(req.query.depexe);
-    if (!Number.isFinite(depexe)) {
-      res.status(400).json({ error: "depexe é obrigatório" });
+    const codemp = Number(req.query.codemp);
+    const codpro = Number(req.query.codpro);
+    const seqite = Number(req.query.seqite);
+    if (![depexe, codemp, codpro, seqite].every(Number.isFinite)) {
+      res.status(400).json({ error: "depexe, codemp, codpro e seqite são obrigatórios" });
       return;
     }
-    // Não exige permissão sobre o departamento CONSULTADO, só que o usuário gerencie
-    // algum. Isto aqui é uma lista de nomes pra escolher quem vai trabalhar; quem autoriza
-    // criar a atividade é o `alocar-lote`, que continua checando o depexe DO ITEM.
-    //
-    // Antes travava no departamento do item, e isso deixava sem saída o gestor de um
-    // departamento pequeno: o item de Processo Interno, com um único consultor, não tinha
-    // a quem alocar dentro da própria tela.
     const permitidos = await departamentosPermitidos(role, contexto);
     if (permitidos.length === 0) {
       res.status(403).json({ error: "Sem departamentos para gerenciar" });
       return;
     }
 
-    const codemp = contexto.consultor?.codemp ?? 1;
+    // Valida o departamento consultado contra o MESMO conjunto que a criação aceita. Sem
+    // isto a rota volta a oferecer nomes que o `alocar-lote` recusa — e o usuário só
+    // descobre no botão de salvar.
+    const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+    if (!item) {
+      res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+    const alocaveis = await departamentosAlocaveisNoItem(role, contexto, item.depexe);
+    if (!alocaveis.includes(depexe)) {
+      res.status(403).json({ error: "Não é possível alocar consultores deste departamento neste item" });
+      return;
+    }
+
     const integrantes = await prisma.departamentoTime.findMany({ where: { codemp, depexe, sitreg: "A" } });
     const codusuList = integrantes.map((i) => Number(i.codusu));
     const consultoresDoTime =
@@ -971,7 +1070,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
         depexe: item.depexe,
         depexeLabel: depexeLabel(item.depexe),
         qtdhorItem: item.qtdhor,
-        podeEditar: item.depexe != null && podeExecutarAcao(role, contexto, "criar", { depexe: item.depexe, codfor: 0 }),
+        podeEditar: podeMexerNoItem(role, contexto, "criar", item.depexe, proposta.depexe),
         // Pasta raiz onde este item foi agrupado, ou null se estiver solto (padrão —
         // comportamento de sempre, direto na raiz da árvore da proposta).
         parentId: posicaoPorSeqite.get(item.seqite) ?? null,
@@ -1054,7 +1153,7 @@ alocacaoRouter.post("/estrutura", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    if (!podeExecutarAcao(role, contexto, "criar", { depexe: item.depexe, codfor: 0 })) {
+    if (!podeMexerNoItem(role, contexto, "criar", item.depexe, await depexeDaProposta(codemp, codpro))) {
       res.status(403).json({ error: "Sem permissão para editar a estrutura deste departamento" });
       return;
     }
@@ -1152,7 +1251,7 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
         res.status(404).json({ error: "Item de proposta não encontrado" });
         return;
       }
-      if (!podeExecutarAcao(role, contexto, "editar", { depexe: item.depexe, codfor: 0 })) {
+      if (!podeMexerNoItem(role, contexto, "editar", item.depexe, await depexeDaProposta(no.codemp, no.codpro))) {
         res.status(403).json({ error: "Sem permissão para editar a estrutura deste departamento" });
         return;
       }
@@ -1317,7 +1416,7 @@ alocacaoRouter.delete("/estrutura/:id", async (req: AuthenticatedRequest, res) =
         res.status(404).json({ error: "Item de proposta não encontrado" });
         return;
       }
-      if (!podeExecutarAcao(role, contexto, "excluir", { depexe: item.depexe, codfor: 0 })) {
+      if (!podeMexerNoItem(role, contexto, "excluir", item.depexe, await depexeDaProposta(no.codemp, no.codpro))) {
         res.status(403).json({ error: "Sem permissão para editar a estrutura deste departamento" });
         return;
       }
@@ -1510,22 +1609,21 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
     }
     const { user, contexto, role } = ctx;
 
-    if (!podeExecutarAcao(role, contexto, "criar", { depexe: item.depexe, codfor })) {
+    if (!podeMexerNoItem(role, contexto, "criar", item.depexe, proposta.depexe, codfor)) {
       res.status(403).json({ error: "Sem permissão para alocar neste departamento" });
       return;
     }
 
-    const integranteTime = await prisma.departamentoTime.findFirst({
-      where: { codemp, depexe: item.depexe, sitreg: "A" },
-    });
+    // O consultor precisa ser de um dos departamentos alocáveis no item — o do item ou um
+    // que eu gerencie (ver departamentosAlocaveisNoItem). Antes exigia o time do item, e
+    // era isso que impedia o dono da proposta de pôr o próprio pessoal num item de outro
+    // departamento.
     const consultorAlvo = await prisma.consultor.findFirst({ where: { codemp, codfor } });
-    const ehDoTime =
-      consultorAlvo != null &&
-      (await prisma.departamentoTime.findFirst({
-        where: { codemp, depexe: item.depexe, codusu: BigInt(consultorAlvo.codusu), sitreg: "A" },
-      })) != null;
-    if (!integranteTime || !ehDoTime) {
-      res.status(400).json({ error: "Consultor não faz parte do time deste departamento" });
+    const codususPermitidos = await codususAlocaveisNoItem(role, contexto, codemp, item.depexe);
+    if (!consultorAlvo || !codususPermitidos.has(consultorAlvo.codusu)) {
+      res.status(400).json({
+        error: "Consultor não está no time do departamento do item nem em nenhum que você gerencia",
+      });
       return;
     }
 
@@ -1702,7 +1800,7 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
     }
     const { user, contexto, role } = ctx;
 
-    if (!podeExecutarAcao(role, contexto, "criar", { depexe: item.depexe, codfor: 0 })) {
+    if (!podeMexerNoItem(role, contexto, "criar", item.depexe, proposta.depexe)) {
       res.status(403).json({ error: "Sem permissão para alocar neste departamento" });
       return;
     }
@@ -1725,8 +1823,8 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
       }
     }
 
-    // Consultor precisa existir, estar ativo E integrar o time do departamento do item —
-    // mesma checagem de POST .../alocacoes, aplicada a cada linha do lote.
+    // Consultor precisa existir, estar ativo E ser de um departamento alocável neste item
+    // — mesma checagem de POST .../alocacoes, aplicada a cada linha do lote.
     const codforsAtivos = await prisma.consultor.findMany({
       where: { codemp, codfor: { in: [...codforsUnicos] }, sitfor: "A" },
     });
@@ -1736,12 +1834,13 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
       res.status(400).json({ error: `Consultor(es) não encontrado(s) ou inativo(s): ${faltantes.join(", ")}` });
       return;
     }
-    const timeDoDepartamento = await prisma.departamentoTime.findMany({ where: { codemp, depexe: item.depexe, sitreg: "A" } });
-    const codususDoTime = new Set(timeDoDepartamento.map((t) => Number(t.codusu)));
-    const foraDoTime = codforsAtivos.filter((c) => !codususDoTime.has(c.codusu));
+    const codususPermitidos = await codususAlocaveisNoItem(role, contexto, codemp, item.depexe);
+    const foraDoTime = codforsAtivos.filter((c) => !codususPermitidos.has(c.codusu));
     if (foraDoTime.length > 0) {
       res.status(400).json({
-        error: `Consultor(es) fora do time do departamento: ${foraDoTime.map((c) => c.nomcom ?? c.nomfor ?? c.codfor).join(", ")}`,
+        error: `Consultor(es) fora do time do departamento do item e dos que você gerencia: ${foraDoTime
+          .map((c) => c.nomcom ?? c.nomfor ?? c.codfor)
+          .join(", ")}`,
       });
       return;
     }
@@ -1913,7 +2012,11 @@ async function carregarAlocacaoComDepexe(id: number) {
     where: { codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite } },
   });
   if (!item || item.depexe == null) return null;
-  return { atividade, depexe: item.depexe };
+  // O depexe da proposta vem junto porque editar/excluir uma alocação decide pela MESMA
+  // regra que criar (podeMexerNoItem). Sem ele o dono da proposta criaria a alocação num
+  // item de outro departamento e depois não conseguiria corrigir as horas nem removê-la.
+  const propostaDepexe = await depexeDaProposta(atividade.codemp, atividade.codpro);
+  return { atividade, depexe: item.depexe, propostaDepexe };
 }
 
 alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) => {
@@ -1946,7 +2049,7 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
     }
     const { contexto, role } = ctx;
 
-    if (!podeExecutarAcao(role, contexto, "editar", { depexe, codfor: atividade.codfor })) {
+    if (!podeMexerNoItem(role, contexto, "editar", depexe, resolvido.propostaDepexe, atividade.codfor)) {
       res.status(403).json({ error: "Sem permissão para editar esta alocação" });
       return;
     }
@@ -2054,7 +2157,7 @@ alocacaoRouter.delete("/alocacoes/:id", async (req: AuthenticatedRequest, res) =
     }
     const { contexto, role } = ctx;
 
-    if (!podeExecutarAcao(role, contexto, "excluir", { depexe, codfor: atividade.codfor })) {
+    if (!podeMexerNoItem(role, contexto, "excluir", depexe, resolvido.propostaDepexe, atividade.codfor)) {
       res.status(403).json({ error: "Sem permissão para remover esta alocação" });
       return;
     }

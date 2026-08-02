@@ -86,21 +86,36 @@ export function ModalAlocarConsultores({
 
   const ehItem = no.tipo === "item";
 
+  // A lista depende do item: e o departamento dele mais os que eu gerencio, que e
+  // exatamente o que as rotas de criacao aceitam. Oferecer mais faria a tela deixar
+  // escolher e o salvar recusar.
   useEffect(() => {
+    if (item.seqite == null) return;
     axios
-      .get("/api/alocacao/departamentos-com-time")
-      .then(({ data }) => setDepartamentos(data.departamentos))
+      .get(`/api/alocacao/itens/${codemp}/${codpro}/${item.seqite}/departamentos-alocaveis`)
+      .then(({ data }) => {
+        const lista: { depexe: number; label: string }[] = data.departamentos;
+        setDepartamentos(lista);
+        // O departamento do item nao entra na lista quando nao tem ninguem no time. Sem
+        // este ajuste o <select> ficaria mostrando a primeira opcao enquanto o estado
+        // apontava pra outra coisa, e a busca de consultores levaria 403.
+        setDepexeSelecionado((atual) =>
+          atual != null && lista.some((d) => d.depexe === atual) ? atual : lista[0]?.depexe ?? null
+        );
+      })
       .catch(() => setDepartamentos([]));
-  }, []);
+  }, [codemp, codpro, item.seqite]);
 
   useEffect(() => {
-    if (depexeSelecionado == null) {
+    if (depexeSelecionado == null || item.seqite == null) {
       setLoadingConsultores(false);
       return;
     }
     setLoadingConsultores(true);
     axios
-      .get("/api/alocacao/consultores-elegiveis", { params: { depexe: depexeSelecionado } })
+      .get("/api/alocacao/consultores-elegiveis", {
+        params: { depexe: depexeSelecionado, codemp, codpro, seqite: item.seqite },
+      })
       .then(({ data }) => {
         setConsultores(data.consultores);
         setErroConsultores(null);
@@ -108,7 +123,7 @@ export function ModalAlocarConsultores({
       .catch((err) => setErroConsultores(err.response?.data?.error ?? "Falha ao carregar consultores do departamento"))
       .finally(() => setLoadingConsultores(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [depexeSelecionado]);
+  }, [depexeSelecionado, codemp, codpro, item.seqite]);
 
   const pastasFilhasDoItem = useMemo(
     () => nos.filter((n) => n.tipo === "pasta" && n.parentId === item.id).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
