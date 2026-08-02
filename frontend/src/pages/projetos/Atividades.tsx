@@ -216,8 +216,17 @@ export function Atividades() {
   // baixa sai — só a percepção na tela.
   const encerramentosDisparados = useRef<Set<string>>(new Set());
   useEffect(() => {
+    // SÓ teto de horas. O limite de expediente passou a ser tratado pelo VigiaFimDeJornada,
+    // que pergunta antes de encerrar; se este efeito continuasse pegando expediente,
+    // encerraria a sessão sem esperar a resposta, competindo com o vigia.
     const vencidas = () =>
-      atividades.filter((a) => a.sessaoAtualInicio && a.sessaoLimite && new Date(a.sessaoLimite).getTime() <= Date.now());
+      atividades.filter(
+        (a) =>
+          a.sessaoAtualInicio &&
+          a.sessaoLimite &&
+          a.sessaoLimiteMotivo === "teto_atingido" &&
+          new Date(a.sessaoLimite).getTime() <= Date.now()
+      );
 
     async function encerrarVencidas() {
       for (const a of vencidas()) {

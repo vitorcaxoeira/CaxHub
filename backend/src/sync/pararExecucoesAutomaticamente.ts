@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { RAIA_A_FAZER, colunaEfetiva, montarOperacoesMovimentacao } from "../domain/execucaoAtividade";
 import { diaSemanaDaSessao } from "../domain/jornadaConsultor";
-import { limiteDaSessaoAberta } from "../domain/limiteSessao";
+import { limiteDaSessaoAberta, prazoDeEncerramento } from "../domain/limiteSessao";
 import { randomUUID } from "crypto";
 
 // Fecha sozinha a sessão de execução que passou de algum limite. Existe porque uma sessão
@@ -57,8 +57,11 @@ export async function pararExecucoesAutomaticamente(agora: Date = new Date()): P
     const atividade = sessao.atividade;
 
     const jornada = jornadaPorChave.get(`${atividade.codemp}-${atividade.codfor}-${diaSemanaDaSessao(sessao.inicio)}`) ?? null;
-    const limiteSessao = await limiteDaSessaoAberta(sessao.inicio, atividade, jornada);
-    if (!limiteSessao || limiteSessao.instante.getTime() > agora.getTime()) continue;
+    const limiteSessao = await limiteDaSessaoAberta(sessao, atividade, jornada);
+    if (!limiteSessao) continue;
+    // Expediente tem tolerancia: e a janela em que o consultor e perguntado se ainda esta
+    // trabalhando. Teto encerra no instante -- ali nao ha o que responder.
+    if (prazoDeEncerramento(limiteSessao).getTime() > agora.getTime()) continue;
 
     const { instante: limite, motivo } = limiteSessao;
     try {

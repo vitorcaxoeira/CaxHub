@@ -23,7 +23,7 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { avaliarEntradaEmExecucao } from "../domain/tetoAtividade";
 import { diaSemanaDaSessao } from "../domain/jornadaConsultor";
-import { limiteDaSessaoAberta, MENSAGEM_MOTIVO, MotivoLimite } from "../domain/limiteSessao";
+import { limiteDaSessaoAberta, prazoDeEncerramento, MENSAGEM_MOTIVO, MotivoLimite } from "../domain/limiteSessao";
 import {
   RAIA_A_FAZER,
   RAIA_EM_ANDAMENTO,
@@ -153,7 +153,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
     atividadeIds.length > 0
       ? prisma.atividadeSessaoExecucao.findMany({
           where: { atividadeId: { in: atividadeIds }, fim: null },
-          select: { atividadeId: true, inicio: true },
+          // expedienteProrrogadoAte entra aqui porque o limite depende dela: sem a
+          // prorrogacao o card continuaria travando o cronometro no fim do expediente
+          // mesmo depois do consultor confirmar que segue trabalhando.
+          select: { atividadeId: true, inicio: true, expedienteProrrogadoAte: true },
         })
       : Promise.resolve([]),
     idsEstrutura.length > 0
@@ -241,7 +244,7 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
       const atividade = atividadePorId.get(sessao.atividadeId);
       if (!atividade) continue;
       const jornada = jornadaPorChave.get(`${atividade.codemp}-${atividade.codfor}-${diaSemanaDaSessao(sessao.inicio)}`) ?? null;
-      const limite = await limiteDaSessaoAberta(sessao.inicio, atividade, jornada);
+      const limite = await limiteDaSessaoAberta(sessao, atividade, jornada);
       if (limite) limitePorAtividadeId.set(atividade.id, { instante: limite.instante.toISOString(), motivo: limite.motivo });
     }
   }
@@ -877,6 +880,138 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// Opções de prorrogação oferecidas no alerta de fim de jornada: de 15 em 15 minutos até
+// 2 horas. Validadas no servidor e não só no <select> — o valor chega pelo body.
+const OPCOES_PRORROGACAO_MIN = [15, 30, 45, 60, 75, 90, 105, 120];
+
+// Sessão aberta do consultor LOGADO, com o limite e o prazo de resposta. Endpoint enxuto
+// de propósito: é consultado a cada 30s pelo vigia que roda em qualquer tela, e puxar o
+// payload inteiro de GET /atividades (centenas de KB) pra isso seria desproporcional.
+atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const meuCodfor = ctx.contexto.consultor?.codfor;
+    // Usuário sem Consultor vinculado não executa atividade nenhuma — nada a vigiar.
+    if (meuCodfor == null) {
+      res.json({ sessao: null });
+      return;
+    }
+
+    const sessao = await prisma.atividadeSessaoExecucao.findFirst({
+      where: { fim: null, atividade: { codfor: meuCodfor } },
+      include: { atividade: true },
+    });
+    if (!sessao) {
+      res.json({ sessao: null });
+      return;
+    }
+
+    const jornada = await prisma.jornadaConsultor.findUnique({
+      where: {
+        codemp_codfor_diaSemana: {
+          codemp: sessao.atividade.codemp,
+          codfor: sessao.atividade.codfor,
+          diaSemana: diaSemanaDaSessao(sessao.inicio),
+        },
+      },
+    });
+    const limite = await limiteDaSessaoAberta(sessao, sessao.atividade, jornada);
+
+    res.json({
+      sessao: {
+        atividadeId: sessao.atividade.id,
+        codpro: sessao.atividade.codpro,
+        inicio: sessao.inicio.toISOString(),
+        limite: limite?.instante.toISOString() ?? null,
+        motivo: limite?.motivo ?? null,
+        // Até quando o alerta espera resposta. Igual ao limite quando o motivo é teto —
+        // ali não há pergunta a fazer.
+        prazoResposta: limite ? prazoDeEncerramento(limite).toISOString() : null,
+        prorrogavel: limite?.motivo === "fora_do_expediente",
+        opcoesProrrogacao: OPCOES_PRORROGACAO_MIN,
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "minha-sessao-aberta");
+  }
+});
+
+// "Ainda estou trabalhando": empurra o fim do expediente desta sessão pelo tempo escolhido.
+//
+// Só o DONO da atividade prorroga. Um gestor com o quadro aberto não responde "estou
+// trabalhando" pelo consultor — e é justamente por isso que o alerta também só aparece
+// pra quem executa.
+atividadesRouter.post("/:id/prorrogar-expediente", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    const minutos = Number(req.body?.minutos);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    if (!OPCOES_PRORROGACAO_MIN.includes(minutos)) {
+      res.status(400).json({ error: `minutos precisa ser um de: ${OPCOES_PRORROGACAO_MIN.join(", ")}` });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+
+    const sessao = await prisma.atividadeSessaoExecucao.findFirst({
+      where: { atividadeId: id, fim: null },
+      include: { atividade: true },
+    });
+    if (!sessao) {
+      res.status(409).json({ error: "Não há sessão em andamento nesta atividade" });
+      return;
+    }
+    if (ctx.contexto.consultor?.codfor !== sessao.atividade.codfor) {
+      res.status(403).json({ error: "Só quem está executando a atividade pode prorrogar o expediente" });
+      return;
+    }
+
+    const jornada = await prisma.jornadaConsultor.findUnique({
+      where: {
+        codemp_codfor_diaSemana: {
+          codemp: sessao.atividade.codemp,
+          codfor: sessao.atividade.codfor,
+          diaSemana: diaSemanaDaSessao(sessao.inicio),
+        },
+      },
+    });
+    const limite = await limiteDaSessaoAberta(sessao, sessao.atividade, jornada);
+    if (!limite || limite.motivo !== "fora_do_expediente") {
+      res.status(409).json({ error: "Esta sessão não está limitada pelo expediente — não há o que prorrogar" });
+      return;
+    }
+    // Passou da tolerância: a sessão já vai ser encerrada (ou já foi). Prorrogar aqui
+    // ressuscitaria tempo que ninguém confirmou estar trabalhando.
+    if (prazoDeEncerramento(limite).getTime() <= Date.now()) {
+      res.status(409).json({ error: "O prazo para responder já passou — a execução será encerrada" });
+      return;
+    }
+
+    // Conta a partir do LIMITE, não de agora: quem responde no minuto 4 dos 5 de
+    // tolerância ganha os 15 minutos cheios a partir do fim do expediente, não 19.
+    const novoLimite = new Date(limite.instante.getTime() + minutos * 60_000);
+    await prisma.atividadeSessaoExecucao.update({
+      where: { id: sessao.id },
+      data: { expedienteProrrogadoAte: novoLimite },
+    });
+
+    res.json({ id, prorrogadoAte: novoLimite.toISOString(), minutos });
+  } catch (error) {
+    handleError(res, error, "prorrogar-expediente");
+  }
+});
+
 // Baixa imediata de uma sessão que atingiu o limite, disparada pela tela quando o
 // cronômetro do card chega lá. Existe pra não esperar até 5 minutos pela varredura com o
 // card visivelmente correndo além do que vai contar.
@@ -919,15 +1054,23 @@ atividadesRouter.post("/:id/encerrar-automatico", async (req: AuthenticatedReque
         },
       },
     });
-    const limite = await limiteDaSessaoAberta(sessao.inicio, atividade, jornada);
+    const limite = await limiteDaSessaoAberta(sessao, atividade, jornada);
     if (!limite) {
       res.status(409).json({ error: "Esta sessão não tem limite — nada a encerrar" });
       return;
     }
-    if (limite.instante.getTime() > Date.now()) {
+    // Expediente tem tolerância — é a janela em que o alerta espera resposta. Só depois
+    // dela a sessão pode ser encerrada. Teto não tem: encerra no instante.
+    //
+    // A exceção é o encerramento PEDIDO ("Encerrar agora" no alerta): aí o consultor já
+    // respondeu, não há o que esperar.
+    const imediato = req.body?.imediato === true;
+    const prazo = imediato ? limite.instante : prazoDeEncerramento(limite);
+    if (prazo.getTime() > Date.now()) {
       res.status(409).json({
         error: "A sessão ainda não atingiu o limite",
         limite: limite.instante.toISOString(),
+        prazoResposta: prazo.toISOString(),
       });
       return;
     }

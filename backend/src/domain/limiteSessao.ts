@@ -1,4 +1,4 @@
-import { AtividadeConsultor, JornadaConsultor } from "@prisma/client";
+import { AtividadeConsultor, AtividadeSessaoExecucao, JornadaConsultor } from "@prisma/client";
 import { realizadoDaAtividade, tetoDaAtividade } from "./tetoAtividade";
 import { limitePorExpediente } from "./jornadaConsultor";
 
@@ -33,16 +33,29 @@ async function limitePorTeto(
   return new Date(inicioSessao.getTime() + Math.max(0, saldo) * 60_000);
 }
 
+// Tolerância entre o fim do expediente e o encerramento de fato: a janela em que o
+// consultor é perguntado se ainda está trabalhando. Só vale pro expediente — teto de horas
+// encerra no instante, porque ali não há o que responder, as horas acabaram.
+export const TOLERANCIA_RESPOSTA_MIN = 5;
+
 // Vale o MENOR dos dois limites — quem chegar primeiro para a sessão. Cada um pode estar
 // ausente: sem alocação não há teto, sem jornada cadastrada não há expediente. `null` =
 // nada limita esta sessão.
 export async function limiteDaSessaoAberta(
-  inicioSessao: Date,
+  sessao: Pick<AtividadeSessaoExecucao, "inicio" | "expedienteProrrogadoAte">,
   atividade: Pick<AtividadeConsultor, "id" | "seqati" | "qtdhor" | "horasExcedentes">,
   jornada: JornadaConsultor | null
 ): Promise<LimiteSessao | null> {
+  const inicioSessao = sessao.inicio;
   const porTeto = await limitePorTeto(inicioSessao, atividade);
-  const porExpediente = limitePorExpediente(inicioSessao, jornada);
+
+  // Prorrogação empurra SÓ o expediente. O consultor confirma "ainda estou trabalhando" e
+  // ganha o tempo que escolheu; o teto segue onde estava, porque estender aquele limite é
+  // autorização do gestor, não declaração de quem executa.
+  const fimDoPeriodo = limitePorExpediente(inicioSessao, jornada);
+  const prorrogado = sessao.expedienteProrrogadoAte;
+  const porExpediente =
+    prorrogado != null && (fimDoPeriodo == null || prorrogado.getTime() > fimDoPeriodo.getTime()) ? prorrogado : fimDoPeriodo;
 
   if (porTeto == null && porExpediente == null) return null;
   if (porTeto == null) return { instante: porExpediente!, motivo: "fora_do_expediente" };
@@ -54,6 +67,14 @@ export async function limiteDaSessaoAberta(
   return porTeto.getTime() <= porExpediente.getTime()
     ? { instante: porTeto, motivo: "teto_atingido" }
     : { instante: porExpediente, motivo: "fora_do_expediente" };
+}
+
+// Instante a partir do qual a sessão pode ser encerrada de fato. Para o expediente é o
+// limite mais a tolerância — a janela em que o alerta espera resposta; para o teto é o
+// próprio limite.
+export function prazoDeEncerramento(limite: LimiteSessao): Date {
+  if (limite.motivo !== "fora_do_expediente") return limite.instante;
+  return new Date(limite.instante.getTime() + TOLERANCIA_RESPOSTA_MIN * 60_000);
 }
 
 export const MENSAGEM_MOTIVO: Record<MotivoLimite, string> = {

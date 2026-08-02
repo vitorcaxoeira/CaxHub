@@ -1,0 +1,13 @@
+-- Prorrogação do expediente numa sessão de execução.
+--
+-- Ao bater o fim da jornada, a sessão deixa de ser encerrada direto: o consultor é
+-- perguntado se ainda está trabalhando e, confirmando, escolhe por quanto tempo continuar.
+-- Esta coluna guarda até quando ele prorrogou.
+--
+-- Precisa ser persistido, e não estado de tela: a varredura que encerra sessão esquecida
+-- roda no servidor e não pode fechar uma sessão que acabou de ser prorrogada; e a
+-- prorrogação tem de sobreviver a um F5 ou a uma troca de aba.
+--
+-- Nulável de propósito: nulo = nunca prorrogada, que é o estado de toda sessão existente e
+-- de toda sessão nova. Não há valor a preencher retroativamente.
+ALTER TABLE "atividade_sessoes_execucao" ADD COLUMN "expedienteProrrogadoAte" TIMESTAMP(3);

@@ -789,6 +789,15 @@ model AtividadeSessaoExecucao {
   /// "movimentacao_kanban" (hoje) | "manual" (Start/Stop futuro)
   origem String @db.VarChar(20)
 
+  /// Até quando o consultor prorrogou o expediente desta sessão, respondendo "ainda estou
+  /// trabalhando" ao alerta de fim de jornada. Nulo = nunca prorrogada.
+  ///
+  /// Persistido, e não estado de tela, por dois motivos: a varredura roda no servidor e
+  /// não pode encerrar uma sessão que acabou de ser prorrogada, e a prorrogação tem de
+  /// sobreviver a um F5. Só afeta o limite de EXPEDIENTE — o teto de horas continua duro,
+  /// senão o consultor liberaria por conta própria horas que só o gestor autoriza.
+  expedienteProrrogadoAte DateTime?
+
   // true quando o consultor já revisou a sessão e ela virou um RatItem de verdade —
   // a partir daí, "horas realizadas" passa a contar via RatItem, não mais via sessão
   // (ver GET /apontamentos/sessoes-pendentes), pra não somar a mesma hora duas vezes.

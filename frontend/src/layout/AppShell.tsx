@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
+import { VigiaFimDeJornada } from "../components/projetos/VigiaFimDeJornada";
 
 export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -15,6 +16,9 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      {/* Fora do <main> de proposito: e um vigia de fundo que acompanha o consultor em
+          qualquer rota, nao conteudo de tela. Ver VigiaFimDeJornada. */}
+      <VigiaFimDeJornada />
     </div>
   );
 }
