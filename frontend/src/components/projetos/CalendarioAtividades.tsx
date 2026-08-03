@@ -108,6 +108,7 @@ export function CalendarioAtividades({ atividades, onAbrirDetalhe }: CalendarioA
                                                 qtdhorPrevisto: a.qtdhorPrevisto,
                                                 horasExcedentes: a.horasExcedentes,
                                                 podeAutorizarExcedente: a.podeAutorizarExcedente,
+                                                podeSolicitarExcedente: a.podeSolicitarExcedente,
                       })
                     }
                     title={`${a.cliente} · ${a.depexeLabel}`}

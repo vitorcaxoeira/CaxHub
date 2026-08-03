@@ -341,6 +341,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         // Mesma regra do cronograma, nome próprio: liberar horas acima do planejado é
         // decisão de gestor, e o dono da atividade não autoriza as próprias horas.
         podeAutorizarExcedente: gerenciaDepartamento(role, contexto, depexe),
+        // O outro lado: pedir horas é ato de quem executa. `> 0` porque codfor 0 circula
+        // como sentinela de "não se aplica a um consultor" (ver alocacao.ts).
+        podeSolicitarExcedente:
+          contexto.consultor?.codfor != null && contexto.consultor.codfor > 0 && contexto.consultor.codfor === a.codfor,
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);

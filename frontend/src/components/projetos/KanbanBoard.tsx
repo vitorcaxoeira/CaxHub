@@ -71,6 +71,7 @@ export interface AtividadeKanban {
   // qtdhorPrevisto + este valor.
   horasExcedentes: number;
   podeAutorizarExcedente: boolean;
+  podeSolicitarExcedente: boolean;
 }
 
 export interface DetalheInfo {
@@ -92,6 +93,7 @@ export interface DetalheInfo {
   qtdhorPrevisto: number | null;
   horasExcedentes: number;
   podeAutorizarExcedente: boolean;
+  podeSolicitarExcedente: boolean;
 }
 
 interface KanbanBoardProps {
@@ -182,6 +184,7 @@ function DraggableCard({
       qtdhorPrevisto: atividade.qtdhorPrevisto,
       horasExcedentes: atividade.horasExcedentes,
       podeAutorizarExcedente: atividade.podeAutorizarExcedente,
+      podeSolicitarExcedente: atividade.podeSolicitarExcedente,
     });
   }
 

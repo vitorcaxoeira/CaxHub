@@ -1179,6 +1179,7 @@ export function MeusApontamentos() {
           // Painel em modo leitura: aqui é o consultor olhando o próprio apontamento, e
           // ele nunca autoriza as próprias horas excedentes.
           podeAutorizarExcedente={false}
+          podeSolicitarExcedente={false}
           onClose={() => setDetalheAtividade(null)}
         />
       )}

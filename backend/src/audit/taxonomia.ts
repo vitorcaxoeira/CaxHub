@@ -32,6 +32,15 @@ export const EVENTOS_AUDITORIA = {
   DATA_INCLUIDA: "DATA_INCLUIDA",
   DATA_ALTERADA: "DATA_ALTERADA",
 
+  // Pedido de horas excedentes e a decisão do gestor. Gravados sob a entidade ALOCACAO
+  // (entidadeId = id da AtividadeConsultor), NÃO sob uma entidade própria: podeVerEntidade
+  // em routes/auditoria.ts só libera o histórico contextual do consultor para
+  // ["atividade", "alocacao", "kanban_card"], então uma entidade nova ficaria invisível
+  // justamente pra quem pediu as horas.
+  EXCEDENTE_SOLICITADO: "EXCEDENTE_SOLICITADO",
+  EXCEDENTE_APROVADO: "EXCEDENTE_APROVADO",
+  EXCEDENTE_REPROVADO: "EXCEDENTE_REPROVADO",
+
   KANBAN_RAIA_ALTERADA: "KANBAN_RAIA_ALTERADA",
 
   // Ciclo de vida de execução — nascem de PATCH /atividades/:id/mover, a partir de

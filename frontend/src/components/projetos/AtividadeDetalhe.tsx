@@ -40,6 +40,28 @@ interface HistoricoItem {
   movidoEm: string;
 }
 
+export interface SolicitacaoExcedente {
+  id: number;
+  atividadeId: number;
+  status: "pendente" | "aprovada" | "reprovada";
+  horasSolicitadas: number;
+  horasAprovadas: number | null;
+  motivo: string;
+  observacaoDecisao: string | null;
+  criadoEm: string;
+  decididoEm: string | null;
+  solicitanteNome: string;
+  decisorNome: string | null;
+  codemp: number;
+  codpro: number;
+  seqite: number;
+  depexe: number | null;
+  depexeLabel: string;
+  qtdhor: number | null;
+  horasExcedentesAtuais: number;
+  podeDecidir: boolean;
+}
+
 interface AtividadeDetalheProps {
   atividadeId: number;
   titulo: string;
@@ -62,6 +84,7 @@ interface AtividadeDetalheProps {
   // Só o gestor do departamento autoriza excedente — o consultor não libera as próprias
   // horas. Vem do backend junto do card (podeVerCronograma usa a mesma origem).
   podeAutorizarExcedente: boolean;
+  podeSolicitarExcedente: boolean;
   // Avisa a tela pra recarregar os cards depois de mudar o excedente, que altera o teto.
   onExcedenteAlterado?: () => void;
   onClose: () => void;
@@ -104,6 +127,7 @@ export function AtividadeDetalhe({
   qtdhorPrevisto,
   horasExcedentes,
   podeAutorizarExcedente,
+  podeSolicitarExcedente,
   onExcedenteAlterado,
   onClose,
 }: AtividadeDetalheProps) {
@@ -126,6 +150,47 @@ export function AtividadeDetalhe({
   const [excedenteInput, setExcedenteInput] = useState(minutosParaInputHoras(horasExcedentes));
   const [salvandoExcedente, setSalvandoExcedente] = useState(false);
   const [erroExcedente, setErroExcedente] = useState<string | null>(null);
+
+  // Solicitação de horas excedentes — o outro lado do campo acima: quem executa pede, o
+  // gestor decide no painel de Horas Excedentes.
+  const [solicitacoes, setSolicitacoes] = useState<SolicitacaoExcedente[]>([]);
+  const [abrindoSolicitacao, setAbrindoSolicitacao] = useState(false);
+  const [horasSolicitadasInput, setHorasSolicitadasInput] = useState("");
+  const [motivoSolicitacao, setMotivoSolicitacao] = useState("");
+  const [enviandoSolicitacao, setEnviandoSolicitacao] = useState(false);
+  const [erroSolicitacao, setErroSolicitacao] = useState<string | null>(null);
+  const pendente = solicitacoes.find((s) => s.status === "pendente") ?? null;
+  const ultimaDecidida = solicitacoes.find((s) => s.status !== "pendente") ?? null;
+
+  async function enviarSolicitacao() {
+    const minutos = horasParaMinutos(horasSolicitadasInput);
+    if (minutos == null) {
+      setErroSolicitacao("Informe as horas no formato H:MM (ex.: 4:00).");
+      return;
+    }
+    if (motivoSolicitacao.trim() === "") {
+      setErroSolicitacao("Descreva o motivo — é o que o gestor lê pra decidir.");
+      return;
+    }
+    setEnviandoSolicitacao(true);
+    setErroSolicitacao(null);
+    try {
+      await axios.post("/api/solicitacoes-excedente", {
+        atividadeId,
+        horasSolicitadas: minutos,
+        motivo: motivoSolicitacao.trim(),
+      });
+      setAbrindoSolicitacao(false);
+      setHorasSolicitadasInput("");
+      setMotivoSolicitacao("");
+      carregar();
+    } catch (err) {
+      const axiosErr = err as { response?: { data?: { error?: string } } };
+      setErroSolicitacao(axiosErr.response?.data?.error ?? "Falha ao enviar a solicitação");
+    } finally {
+      setEnviandoSolicitacao(false);
+    }
+  }
 
   async function salvarExcedente() {
     const minutos = horasParaMinutos(excedenteInput);
@@ -154,12 +219,16 @@ export function AtividadeDetalhe({
       axios.get(`/api/atividades/${atividadeId}/checklist`),
       axios.get(`/api/atividades/${atividadeId}/anexos`),
       axios.get(`/api/atividades/${atividadeId}/historico`),
+      // Quem não é nem executor nem gestor da atividade leva 403 aqui — a lista fica
+      // vazia e o resto do drawer segue carregando normalmente.
+      axios.get(`/api/solicitacoes-excedente/atividade/${atividadeId}`).catch(() => ({ data: { solicitacoes: [] } })),
     ])
-      .then(([c, ch, a, h]) => {
+      .then(([c, ch, a, h, s]) => {
         setComentarios(c.data.comentarios);
         setChecklist(ch.data.itens);
         setAnexos(a.data.anexos);
         setHistorico(h.data.historico);
+        setSolicitacoes(s.data.solicitacoes);
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar"))
@@ -325,6 +394,74 @@ export function AtividadeDetalhe({
                         {salvandoExcedente ? "Salvando..." : "Salvar"}
                       </button>
                       {erroExcedente && <span className="text-[12px] text-destructive">{erroExcedente}</span>}
+                    </div>
+                  ) : podeSolicitarExcedente ? (
+                    <div className="mt-2">
+                      {pendente ? (
+                        <p className="rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[12px] text-warning">
+                          Solicitação de {formatHorasCompacto(pendente.horasSolicitadas, 2)} aguardando o gestor desde{" "}
+                          {dateTimeFormatter.format(new Date(pendente.criadoEm))}.
+                        </p>
+                      ) : abrindoSolicitacao ? (
+                        <div className="space-y-2 rounded-md border border-border bg-surface px-2.5 py-2">
+                          <div className="flex items-center gap-2">
+                            <label htmlFor="horas-solicitadas" className="text-[12px] text-muted">
+                              Horas necessárias
+                            </label>
+                            <input
+                              id="horas-solicitadas"
+                              autoFocus
+                              value={horasSolicitadasInput}
+                              onChange={(e) => setHorasSolicitadasInput(e.target.value)}
+                              placeholder="4:00"
+                              className="w-24 rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                          </div>
+                          <textarea
+                            value={motivoSolicitacao}
+                            onChange={(e) => setMotivoSolicitacao(e.target.value)}
+                            rows={3}
+                            placeholder="Por que estas horas são necessárias?"
+                            className="w-full resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          />
+                          {erroSolicitacao && <p className="text-[12px] text-destructive">{erroSolicitacao}</p>}
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => setAbrindoSolicitacao(false)}
+                              disabled={enviandoSolicitacao}
+                              className="rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              onClick={enviarSolicitacao}
+                              disabled={enviandoSolicitacao}
+                              className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                            >
+                              {enviandoSolicitacao ? "Enviando..." : "Enviar solicitação"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setAbrindoSolicitacao(true)}
+                          className="rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted hover:bg-surface-2 hover:text-foreground"
+                        >
+                          Solicitar horas excedentes
+                        </button>
+                      )}
+
+                      {/* A última decisão fica à vista mesmo depois de aprovada: é onde a
+                          pessoa confere quanto saiu, que pode ser menos do que pediu. */}
+                      {!pendente && ultimaDecidida && (
+                        <p className="mt-1.5 text-[11.5px] text-muted">
+                          {ultimaDecidida.decisorNome}{" "}
+                          {ultimaDecidida.status === "aprovada"
+                            ? `aprovou ${formatHorasCompacto(ultimaDecidida.horasAprovadas ?? 0, 2)} das ${formatHorasCompacto(ultimaDecidida.horasSolicitadas, 2)} solicitadas`
+                            : `reprovou o pedido de ${formatHorasCompacto(ultimaDecidida.horasSolicitadas, 2)}`}
+                          {ultimaDecidida.observacaoDecisao && ` — "${ultimaDecidida.observacaoDecisao}"`}
+                        </p>
+                      )}
                     </div>
                   ) : (
                     horasExcedentes === 0 && (

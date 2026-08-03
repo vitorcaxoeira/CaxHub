@@ -35,6 +35,8 @@ model User {
   notificacoes           Notificacao[]
   auditEventos           AuditEvento[]
   jornadasDefinidas      JornadaConsultor[]
+  excedentesSolicitados  SolicitacaoHorasExcedentes[] @relation("excedenteSolicitante")
+  excedentesDecididos    SolicitacaoHorasExcedentes[] @relation("excedenteDecisor")
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -611,6 +613,7 @@ model AtividadeConsultor {
   notificacoes            Notificacao[]
   sincronizacoesPendentes SincronizacaoPendente[]
   sessoesExecucao         AtividadeSessaoExecucao[]
+  solicitacoesExcedente   SolicitacaoHorasExcedentes[]
 
   // Quando a proposta está em modo "estrutura" (ver PropostaModoAlocacao), a alocação
   // aponta pro nó-folha da EAP em vez de só pro item — fica nulo no modo "item" (o
@@ -941,6 +944,48 @@ model AtividadeComentario {
   user      User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@map("atividade_comentarios")
+}
+
+// Pedido de horas excedentes feito por quem executa a atividade, e a decisão do gestor do
+// departamento — dado 100% do CaxHub.
+//
+// Pedido e decisão vivem em colunas SEPARADAS de propósito: `horasSolicitadas` e `motivo`
+// nunca são reescritos, então o que foi pedido continua legível mesmo quando o gestor
+// libera uma quantidade diferente. Não precisa de tabela de histórico à parte pra isso.
+//
+// O teto da atividade continua saindo de AtividadeConsultor.horasExcedentes (ver
+// domain/tetoAtividade.ts) — aprovar SOMA lá. Esta tabela é a papelada, não o cálculo:
+// duas fontes de verdade pro mesmo teto divergiriam no primeiro ajuste manual do gestor.
+model SolicitacaoHorasExcedentes {
+  id               Int      @id @default(autoincrement())
+  atividadeId      Int
+  // Nulo só depois de o usuário ser excluído (SetNull abaixo) — nasce sempre preenchido.
+  solicitanteId    Int?
+  // Minutos pedidos. Imutável.
+  horasSolicitadas Int
+  // Imutável.
+  motivo           String   @db.VarChar(1000)
+  criadoEm         DateTime @default(now())
+
+  // pendente | aprovada | reprovada
+  status            String    @default("pendente") @db.VarChar(20)
+  decididoPorId     Int?
+  decididoEm        DateTime?
+  // Minutos efetivamente liberados — pode diferir do pedido. Nulo enquanto pendente.
+  horasAprovadas    Int?
+  observacaoDecisao String?   @db.VarChar(1000)
+
+  atividade   AtividadeConsultor @relation(fields: [atividadeId], references: [id], onDelete: Cascade)
+  // SetNull, como comentário e histórico: a papelada sobrevive à exclusão de quem pediu
+  // ou decidiu.
+  solicitante User?              @relation("excedenteSolicitante", fields: [solicitanteId], references: [id], onDelete: SetNull)
+  decididoPor User?              @relation("excedenteDecisor", fields: [decididoPorId], references: [id], onDelete: SetNull)
+
+  @@index([atividadeId])
+  @@index([status])
+  // O índice único parcial que impede dois pendentes na mesma atividade não cabe aqui —
+  // Prisma não expressa `WHERE`. Vai em SQL cru na migration.
+  @@map("solicitacoes_horas_excedentes")
 }
 
 // Itens de checklist de uma atividade — dado 100% do CaxHub.

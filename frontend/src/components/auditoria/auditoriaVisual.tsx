@@ -155,7 +155,39 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     tone: "neutral",
     rotuloGrupo: "Alocação",
     icone: IconeEdicao,
-    resumo: (e) => `Alterou as horas alocadas — ${rotuloEntidade(e)}`,
+    // O resumo era fixo em "as horas alocadas", e a mesma rota também grava mudança de
+    // horas EXCEDENTES — o evento dizia a coisa errada metade das vezes. Agora sai do que
+    // realmente veio em `alteracoes`.
+    resumo: (e) => {
+      const campos = Object.keys(e.alteracoes ?? {});
+      const oQue =
+        campos.length === 0
+          ? "a alocação"
+          : campos.length === 1 && campos[0] === "horasExcedentes"
+            ? "as horas excedentes"
+            : campos.length === 1 && campos[0] === "qtdhor"
+              ? "as horas alocadas"
+              : "as horas alocadas e as excedentes";
+      return `Alterou ${oQue} — ${rotuloEntidade(e)}`;
+    },
+  },
+  EXCEDENTE_SOLICITADO: {
+    tone: "warning",
+    rotuloGrupo: "Horas Excedentes",
+    icone: IconeCriacao,
+    resumo: (e) => `Solicitou horas excedentes — ${rotuloEntidade(e)}`,
+  },
+  EXCEDENTE_APROVADO: {
+    tone: "success",
+    rotuloGrupo: "Horas Excedentes",
+    icone: IconeCriacao,
+    resumo: (e) => `Aprovou horas excedentes — ${rotuloEntidade(e)}`,
+  },
+  EXCEDENTE_REPROVADO: {
+    tone: "destructive",
+    rotuloGrupo: "Horas Excedentes",
+    icone: IconeRemocao,
+    resumo: (e) => `Reprovou o pedido de horas excedentes — ${rotuloEntidade(e)}`,
   },
   ALOCACAO_REMOVIDA: {
     tone: "destructive",

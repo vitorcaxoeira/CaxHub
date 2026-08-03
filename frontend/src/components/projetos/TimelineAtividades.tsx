@@ -114,6 +114,7 @@ export function TimelineAtividades({ atividades, onAbrirDetalhe }: TimelineAtivi
                                                 qtdhorPrevisto: atividade.qtdhorPrevisto,
                                                 horasExcedentes: atividade.horasExcedentes,
                                                 podeAutorizarExcedente: atividade.podeAutorizarExcedente,
+                                                podeSolicitarExcedente: atividade.podeSolicitarExcedente,
                         })
                       }
                       title={`${atividade.cliente} · ${atividade.depexeLabel}`}
