@@ -1,9 +1,31 @@
 import axios from "axios";
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { useToast } from "../../components/ui/Toast";
-import { SolicitacaoExcedente } from "../../components/projetos/AtividadeDetalhe";
+import { AtividadeDetalhe, SolicitacaoExcedente } from "../../components/projetos/AtividadeDetalhe";
 import { formatHoras, horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
+
+// Cabeçalho da atividade devolvido por GET /atividades/:id/detalhe — os mesmos campos que
+// o painel consome, igual ao que Meus Apontamentos já faz pra abrir o drawer sem ter o
+// card à mão.
+interface AtividadeDetalheDados {
+  id: number;
+  codemp: number;
+  codpro: number;
+  numprj: number | null;
+  dataPrevistaInicio: string | null;
+  dataPrevistaFim: string | null;
+  itemDescricao: string | null;
+  itemQtdhor: number | null;
+  itemAlocado: number;
+  itemRealizado: number;
+  estruturaNome: string | null;
+  estruturaPercentual: number | null;
+  podeVerCronograma: boolean;
+  qtdhorPrevisto: number | null;
+  horasExcedentes: number;
+  podeAutorizarExcedente: boolean;
+  podeSolicitarExcedente: boolean;
+}
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
@@ -35,6 +57,19 @@ export function HorasExcedentes() {
   const [horasAprovadasInput, setHorasAprovadasInput] = useState("");
   const [observacao, setObservacao] = useState("");
   const [enviando, setEnviando] = useState(false);
+
+  // Atividade aberta em painel lateral, por cima desta tela.
+  const [atividadeAberta, setAtividadeAberta] = useState<AtividadeDetalheDados | null>(null);
+
+  async function abrirAtividade(atividadeId: number) {
+    try {
+      const { data } = await axios.get(`/api/atividades/${atividadeId}/detalhe`);
+      setAtividadeAberta(data.atividade);
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      toast.mostrar(mensagem ?? "Não foi possível abrir esta atividade", "destructive");
+    }
+  }
 
   const carregar = useCallback(() => {
     setLoading(true);
@@ -135,14 +170,16 @@ export function HorasExcedentes() {
                 <span className="text-[12.5px] text-muted">
                   · Proposta {s.codpro} · Item {String(s.seqite).padStart(2, "0")} · {s.depexeLabel}
                 </span>
-                {/* Abre o painel da atividade direto, sem depender dos filtros da tela de
-                    Atividades — a de um pedido quase nunca está na página atual dela. */}
-                <Link
-                  to={`/projetos/atividades?atividade=${s.atividadeId}`}
+                {/* Abre o painel AQUI, sem navegar: quem decide está no meio de uma fila
+                    de pedidos, e ir pra tela de Atividades carregaria quadro, KPIs e
+                    filtros inteiros só pra mostrar um painel lateral — e na volta o
+                    filtro e a rolagem deste painel já teriam se perdido. */}
+                <button
+                  onClick={() => abrirAtividade(s.atividadeId)}
                   className="text-[12.5px] font-medium text-primary hover:underline"
                 >
-                  Ver atividade →
-                </Link>
+                  Ver atividade
+                </button>
                 <span className="ml-auto font-mono text-[12.5px] text-muted">
                   {dateTimeFormatter.format(new Date(s.criadoEm))}
                 </span>
@@ -230,6 +267,36 @@ export function HorasExcedentes() {
             </div>
           ))}
         </div>
+      )}
+
+      {/* O mesmo painel que abre ao clicar no card do quadro. `podeEditar` false: aqui o
+          gestor veio conferir o que aconteceu na atividade antes de decidir, não editar
+          planejamento nem checklist. */}
+      {atividadeAberta && (
+        <AtividadeDetalhe
+          atividadeId={atividadeAberta.id}
+          titulo={`Proposta ${atividadeAberta.codpro} · Projeto ${atividadeAberta.numprj ?? "—"}`}
+          podeEditar={false}
+          dataPrevistaInicio={atividadeAberta.dataPrevistaInicio}
+          dataPrevistaFim={atividadeAberta.dataPrevistaFim}
+          codemp={atividadeAberta.codemp}
+          codpro={atividadeAberta.codpro}
+          itemDescricao={atividadeAberta.itemDescricao}
+          itemQtdhor={atividadeAberta.itemQtdhor}
+          itemAlocado={atividadeAberta.itemAlocado}
+          itemRealizado={atividadeAberta.itemRealizado}
+          estruturaNome={atividadeAberta.estruturaNome}
+          estruturaPercentual={atividadeAberta.estruturaPercentual}
+          podeVerCronograma={atividadeAberta.podeVerCronograma}
+          qtdhorPrevisto={atividadeAberta.qtdhorPrevisto}
+          horasExcedentes={atividadeAberta.horasExcedentes}
+          // O campo direto do gestor continua valendo aqui — é a outra forma de liberar
+          // horas, e mexer nele muda o teto que esta tela mostra, então o painel recarrega.
+          podeAutorizarExcedente={atividadeAberta.podeAutorizarExcedente}
+          podeSolicitarExcedente={atividadeAberta.podeSolicitarExcedente}
+          onExcedenteAlterado={carregar}
+          onClose={() => setAtividadeAberta(null)}
+        />
       )}
     </div>
   );
