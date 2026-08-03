@@ -189,6 +189,24 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeRemocao,
     resumo: (e) => `Reprovou o pedido de horas excedentes — ${rotuloEntidade(e)}`,
   },
+  APONTAMENTO_SOLICITADO: {
+    tone: "warning",
+    rotuloGrupo: "Apontamento",
+    icone: IconeCriacao,
+    resumo: (e) => `Solicitou apontamento avulso — ${rotuloEntidade(e)}`,
+  },
+  APONTAMENTO_APROVADO: {
+    tone: "success",
+    rotuloGrupo: "Apontamento",
+    icone: IconeCriacao,
+    resumo: (e) => `Aprovou apontamento avulso — ${rotuloEntidade(e)}`,
+  },
+  APONTAMENTO_REPROVADO: {
+    tone: "destructive",
+    rotuloGrupo: "Apontamento",
+    icone: IconeRemocao,
+    resumo: (e) => `Reprovou o apontamento avulso — ${rotuloEntidade(e)}`,
+  },
   ALOCACAO_REMOVIDA: {
     tone: "destructive",
     rotuloGrupo: "Alocação",

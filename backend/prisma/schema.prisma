@@ -37,6 +37,8 @@ model User {
   jornadasDefinidas      JornadaConsultor[]
   excedentesSolicitados  SolicitacaoHorasExcedentes[] @relation("excedenteSolicitante")
   excedentesDecididos    SolicitacaoHorasExcedentes[] @relation("excedenteDecisor")
+  apontamentosSolicitados SolicitacaoApontamento[]    @relation("apontamentoSolicitante")
+  apontamentosDecididos   SolicitacaoApontamento[]    @relation("apontamentoDecisor")
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -614,6 +616,7 @@ model AtividadeConsultor {
   sincronizacoesPendentes SincronizacaoPendente[]
   sessoesExecucao         AtividadeSessaoExecucao[]
   solicitacoesExcedente   SolicitacaoHorasExcedentes[]
+  solicitacoesApontamento SolicitacaoApontamento[]
 
   // Quando a proposta está em modo "estrutura" (ver PropostaModoAlocacao), a alocação
   // aponta pro nó-folha da EAP em vez de só pro item — fica nulo no modo "item" (o
@@ -894,6 +897,9 @@ model RatItem {
 
   @@unique([codemp, numrat, seqrat])
   @@index([seqati])
+  // A checagem de conflito de horário de um apontamento avulso consulta por data em ~86 mil
+  // linhas a cada pedido enviado (ver domain/conflitoApontamento.ts).
+  @@index([datati])
   @@map("rat_itens")
 }
 
@@ -986,6 +992,54 @@ model SolicitacaoHorasExcedentes {
   // O índice único parcial que impede dois pendentes na mesma atividade não cabe aqui —
   // Prisma não expressa `WHERE`. Vai em SQL cru na migration.
   @@map("solicitacoes_horas_excedentes")
+}
+
+// Pedido de apontamento avulso: tempo que o consultor trabalhou sem mover o card de raia,
+// e que por isso não virou AtividadeSessaoExecucao na hora — dado 100% do CaxHub.
+//
+// Enquanto pendente NÃO conta como realizado em lugar nenhum: a sessão só nasce na
+// aprovação (ver routes/solicitacoesApontamento.ts). É o que faz "só vira apontamento
+// depois que o gestor aprovou" ser verdade no dado, e não só na tela.
+//
+// Solicitado e aprovado em colunas separadas, como em SolicitacaoHorasExcedentes: o gestor
+// pode corrigir horário e descrição, e o que foi pedido continua legível.
+model SolicitacaoApontamento {
+  id            Int  @id @default(autoincrement())
+  atividadeId   Int
+  // Nulo só depois de o usuário ser excluído (SetNull abaixo).
+  solicitanteId Int?
+
+  // IMUTÁVEIS.
+  inicioSolicitado DateTime
+  fimSolicitado    DateTime
+  // Por que este tempo ficou de fora do Start/Stop.
+  motivo           String   @db.VarChar(1000)
+  // O trabalho realizado — vira RatItem.desati na aprovação.
+  descricao        String   @db.VarChar(1000)
+  criadoEm         DateTime @default(now())
+
+  // pendente | aprovada | reprovada
+  status            String    @default("pendente") @db.VarChar(20)
+  decididoPorId     Int?
+  decididoEm        DateTime?
+  // O que o gestor efetivamente gravou. Nulos enquanto pendente e quando reprovada.
+  inicioAprovado    DateTime?
+  fimAprovado       DateTime?
+  descricaoAprovada String?   @db.VarChar(1000)
+  observacaoDecisao String?   @db.VarChar(1000)
+  // Sessão nascida da aprovação — a ponte pro RatItem e pro envio ao Senior.
+  sessaoId          Int?
+
+  atividade   AtividadeConsultor @relation(fields: [atividadeId], references: [id], onDelete: Cascade)
+  solicitante User?              @relation("apontamentoSolicitante", fields: [solicitanteId], references: [id], onDelete: SetNull)
+  decididoPor User?              @relation("apontamentoDecisor", fields: [decididoPorId], references: [id], onDelete: SetNull)
+
+  @@index([atividadeId])
+  @@index([status])
+  // Sem índice único de "um pendente por atividade" (diferente das horas excedentes):
+  // vários pedidos na mesma atividade, em dias diferentes, são legítimos. Quem impede
+  // duplicata é a checagem de sobreposição, que também olha os pendentes.
+  @@map("solicitacoes_apontamento")
 }
 
 // Itens de checklist de uma atividade — dado 100% do CaxHub.

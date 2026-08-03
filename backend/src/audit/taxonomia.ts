@@ -41,6 +41,13 @@ export const EVENTOS_AUDITORIA = {
   EXCEDENTE_APROVADO: "EXCEDENTE_APROVADO",
   EXCEDENTE_REPROVADO: "EXCEDENTE_REPROVADO",
 
+  // Apontamento avulso: tempo trabalhado sem mover o card, pedido pelo consultor e
+  // decidido pelo gestor. Mesma escolha de entidade dos eventos de excedente, aqui sob
+  // ATIVIDADE — o que se registra é execução, não distribuição de horas.
+  APONTAMENTO_SOLICITADO: "APONTAMENTO_SOLICITADO",
+  APONTAMENTO_APROVADO: "APONTAMENTO_APROVADO",
+  APONTAMENTO_REPROVADO: "APONTAMENTO_REPROVADO",
+
   KANBAN_RAIA_ALTERADA: "KANBAN_RAIA_ALTERADA",
 
   // Ciclo de vida de execução — nascem de PATCH /atividades/:id/mover, a partir de

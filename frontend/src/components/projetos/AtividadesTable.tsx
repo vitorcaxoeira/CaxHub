@@ -443,7 +443,7 @@ export function AtividadesTable({
                                                 qtdhorPrevisto: row.qtdhorPrevisto,
                                                 horasExcedentes: row.horasExcedentes,
                                                 podeAutorizarExcedente: row.podeAutorizarExcedente,
-                                                podeSolicitarExcedente: row.podeSolicitarExcedente,
+                                                souOExecutor: row.souOExecutor,
                                               })
                                             }
                                             className="text-sm text-primary hover:underline"

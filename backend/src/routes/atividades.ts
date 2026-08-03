@@ -343,7 +343,7 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         podeAutorizarExcedente: gerenciaDepartamento(role, contexto, depexe),
         // O outro lado: pedir horas é ato de quem executa. `> 0` porque codfor 0 circula
         // como sentinela de "não se aplica a um consultor" (ver alocacao.ts).
-        podeSolicitarExcedente:
+        souOExecutor:
           contexto.consultor?.codfor != null && contexto.consultor.codfor > 0 && contexto.consultor.codfor === a.codfor,
       };
     })

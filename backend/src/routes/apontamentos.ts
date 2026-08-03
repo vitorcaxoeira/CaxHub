@@ -3,6 +3,7 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos } from "../domain/contextoProjeto";
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
+import { paraHoraBrasil } from "../domain/fusoBrasil";
 import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
@@ -25,8 +26,21 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
   return { user, contexto, role: req.user!.role as string };
 }
 
+// RatItem.horini/horfim são minutos desde a meia-noite em hora de PAREDE brasileira, e
+// datati é o dia dessa mesma parede — os dois viajam pro Senior.
+//
+// Usava getHours()/toDateString(), que leem o relógio do servidor: correto em
+// desenvolvimento (UTC-3) e errado por 3 horas em produção (container em UTC-0), onde uma
+// execução das 09:00 às 11:00 seria gravada como 12:00–14:00, e uma das 21:00 cairia no
+// dia seguinte. Ver domain/fusoBrasil.ts.
 function minutosDesdeMeiaNoite(data: Date): number {
-  return data.getHours() * 60 + data.getMinutes();
+  return paraHoraBrasil(data).minutosDoDia;
+}
+
+// Dia brasileiro do instante, como meia-noite UTC — o formato que @db.Date espera.
+function diaBrasilComoData(data: Date): Date {
+  const { ano, mes, dia } = paraHoraBrasil(data);
+  return new Date(Date.UTC(ano, mes - 1, dia));
 }
 
 function nomeConsultor(c: { codfor: number | null; nomcom: string | null; nomfor: string | null }): string {
@@ -85,7 +99,7 @@ async function buscarOuCriarRatRascunho(
       codfpj: proposta?.codfpj ?? null,
       codpro: atividade.codpro,
       codcli: proposta?.codcli ?? null,
-      datemi: new Date(dataSessao.toDateString()),
+      datemi: diaBrasilComoData(dataSessao),
       sitrat: 9, // Digitado — rascunho local, ainda não confirmado no Senior
       depexe,
       origemCaxHub: true,
@@ -175,7 +189,7 @@ async function confirmarSessao(
       seqite: atividade.seqite,
       codfas: atividade.fasid,
       seqati: atividade.seqati,
-      datati: new Date(inicio.toDateString()),
+      datati: diaBrasilComoData(inicio),
       horini: minutosDesdeMeiaNoite(inicio),
       horfim: minutosDesdeMeiaNoite(fim),
       // Sem fallback pro despro do item de propósito: a RAT só pode ser aprovada quando
@@ -415,9 +429,44 @@ apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => 
   }
 });
 
-// Fallback pra lançar tempo sem uma sessão automática correspondente (trabalho feito
-// fora do CaxHub, ou esqueceu de mover o card) — cria a sessão já fechada e confirma
-// no mesmo passo.
+// Lança tempo sem uma sessão automática correspondente: cria a sessão já fechada e confirma
+// no mesmo passo, o que gera o RatItem e enfileira o envio ao Senior.
+//
+// Exportada porque a aprovação de uma solicitação avulsa do consultor precisa exatamente
+// disto (ver routes/solicitacoesApontamento.ts) — duplicar a sequência criaria dois
+// caminhos de gravação de apontamento pra manter em sincronia.
+//
+// A sessão só nasce aqui: enquanto a solicitação está pendente não existe sessão nenhuma, e
+// é isso que faz "só conta como apontamento depois de aprovado" valer no dado.
+export async function registrarApontamentoAvulso(
+  atividadeId: number,
+  inicio: Date,
+  fim: Date,
+  descricao: string | undefined,
+  ctx: NonNullable<Awaited<ReturnType<typeof contextoDoUsuario>>>
+): Promise<{ status: number; body: Record<string, unknown>; sessaoId?: number }> {
+  const atividade = await prisma.atividadeConsultor.findUnique({ where: { id: atividadeId } });
+  if (!atividade) return { status: 404, body: { error: "Atividade não encontrada" } };
+
+  const colunaAtual = atividade.colunaId
+    ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } })
+    : await prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } });
+  if (!colunaAtual) return { status: 400, body: { error: "Quadro Kanban sem colunas configuradas" } };
+
+  const sessao = await prisma.atividadeSessaoExecucao.create({
+    data: { atividadeId, colunaId: colunaAtual.id, inicio, fim, origem: "manual" },
+  });
+
+  const resultado = await confirmarSessao(sessao.id, { descricao }, ctx);
+  // confirmarSessao recusa por teto, permissão ou item inexistente DEPOIS da sessão criada.
+  // Deixá-la aí somaria ao realizado da atividade um apontamento que não foi aceito.
+  if (resultado.status >= 400) {
+    await prisma.atividadeSessaoExecucao.delete({ where: { id: sessao.id } });
+    return resultado;
+  }
+  return { ...resultado, sessaoId: sessao.id };
+}
+
 apontamentosRouter.post("/manual", async (req: AuthenticatedRequest, res) => {
   try {
     const atividadeId = Number(req.body?.atividadeId);
@@ -425,20 +474,6 @@ apontamentosRouter.post("/manual", async (req: AuthenticatedRequest, res) => {
     const fim = req.body?.fim ? new Date(req.body.fim) : null;
     if (!Number.isFinite(atividadeId) || !inicio || !fim) {
       res.status(400).json({ error: "atividadeId, inicio e fim são obrigatórios" });
-      return;
-    }
-
-    const atividade = await prisma.atividadeConsultor.findUnique({ where: { id: atividadeId } });
-    if (!atividade) {
-      res.status(404).json({ error: "Atividade não encontrada" });
-      return;
-    }
-
-    const colunaAtual = atividade.colunaId
-      ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } })
-      : await prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } });
-    if (!colunaAtual) {
-      res.status(400).json({ error: "Quadro Kanban sem colunas configuradas" });
       return;
     }
 
@@ -454,11 +489,7 @@ apontamentosRouter.post("/manual", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    const sessao = await prisma.atividadeSessaoExecucao.create({
-      data: { atividadeId, colunaId: colunaAtual.id, inicio, fim, origem: "manual" },
-    });
-
-    const { status, body } = await confirmarSessao(sessao.id, { descricao: req.body?.descricao }, ctx);
+    const { status, body } = await registrarApontamentoAvulso(atividadeId, inicio, fim, req.body?.descricao, ctx);
     res.status(status).json(body);
   } catch (error) {
     handleError(res, error, "manual");

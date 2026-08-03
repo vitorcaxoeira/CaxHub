@@ -517,7 +517,7 @@ export function Atividades() {
           qtdhorPrevisto={detalhe.qtdhorPrevisto}
           horasExcedentes={detalhe.horasExcedentes}
           podeAutorizarExcedente={detalhe.podeAutorizarExcedente}
-          podeSolicitarExcedente={detalhe.podeSolicitarExcedente}
+          souOExecutor={detalhe.souOExecutor}
           // Mudar o excedente muda o teto do card, então a lista/quadro recarrega.
           onExcedenteAlterado={carregar}
           onClose={() => setDetalhe(null)}
