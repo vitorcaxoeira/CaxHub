@@ -36,6 +36,8 @@ interface PedidoObservacao {
   novaColunaId?: number; // presente só quando tipo === "mover"
   tipo: "mover" | "parar";
   titulo: string;
+  // Descrição da atividade, pra abrir o campo já preenchido. Vem do servidor na linha.
+  descricaoPadrao: string | null;
 }
 
 interface FiltrosPatch {
@@ -299,7 +301,13 @@ export function Atividades() {
   function moverAtividade(atividadeId: number, novaColunaId: number) {
     const alvo = atividades.find((a) => a.id === atividadeId);
     if (alvo?.coluna?.nome === RAIA_EM_ANDAMENTO && alvo.colunaId !== novaColunaId) {
-      setPedidoObservacao({ atividadeId, novaColunaId, tipo: "mover", titulo: `Proposta ${alvo.codpro}` });
+      setPedidoObservacao({
+        atividadeId,
+        novaColunaId,
+        tipo: "mover",
+        titulo: `Proposta ${alvo.codpro}`,
+        descricaoPadrao: alvo.descricaoPadrao,
+      });
       return;
     }
     executarMovimentacao(atividadeId, novaColunaId, null);
@@ -381,7 +389,12 @@ export function Atividades() {
   // sempre pede a observação antes de parar de verdade.
   function pararAtividade(atividadeId: number) {
     const alvo = atividades.find((a) => a.id === atividadeId);
-    setPedidoObservacao({ atividadeId, tipo: "parar", titulo: `Proposta ${alvo?.codpro ?? atividadeId}` });
+    setPedidoObservacao({
+      atividadeId,
+      tipo: "parar",
+      titulo: `Proposta ${alvo?.codpro ?? atividadeId}`,
+      descricaoPadrao: alvo?.descricaoPadrao ?? null,
+    });
   }
 
   function resolverPedidoObservacao(observacao: string | null) {
@@ -527,6 +540,7 @@ export function Atividades() {
       {pedidoObservacao && (
         <ModalObservacaoAtividade
           titulo={pedidoObservacao.titulo}
+          descricaoPadrao={pedidoObservacao.descricaoPadrao}
           onConfirmar={(texto) => resolverPedidoObservacao(texto || null)}
           onFechar={() => resolverPedidoObservacao(null)}
         />

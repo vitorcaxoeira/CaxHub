@@ -222,10 +222,14 @@ async function confirmarSessao(
       datati: diaBrasilComoData(inicio),
       horini: minutosDesdeMeiaNoite(inicio),
       horfim: minutosDesdeMeiaNoite(fim),
-      // Sem fallback pro despro do item de propósito: a RAT só pode ser aprovada quando
-      // TODO item tiver observação preenchida (ver PATCH /rats/:id/aprovar) — se
-      // caísse pro despro genérico automaticamente, esse gate nunca bloquearia nada de
-      // verdade. A descrição do item continua visível na tela como contexto à parte.
+      // Sem fallback AQUI porque a herança já aconteceu antes: desde 03/08/2026 toda
+      // parada grava a descrição da atividade na sessão quando ninguém digita nada (ver
+      // descricaoPadraoDaAtividade em domain/execucaoAtividade.ts), e é ela que chega neste
+      // campo pela tela de confirmação.
+      //
+      // Consequência assumida: o gate de PATCH /rats/:id/aprovar, que exige observação em
+      // todo item, na prática deixa de barrar — a observação quase nunca fica vazia. Foi
+      // decisão do Vitor, pedindo que a descrição fosse herdada sempre.
       desati: ajustes.descricao?.trim() || null,
       origemCaxHub: true,
     },

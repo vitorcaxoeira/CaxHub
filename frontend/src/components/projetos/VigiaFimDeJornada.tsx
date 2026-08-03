@@ -26,6 +26,8 @@ interface SessaoVigiada {
   /** A sessão nasceu fora do expediente — muda o texto: nada "terminou", ela começou fora. */
   iniciouForaDoExpediente: boolean;
   opcoesProrrogacao: number[];
+  /** Descrição da atividade — abre o "O que foi feito?" já preenchido. */
+  descricaoPadrao: string | null;
 }
 
 const INTERVALO_CONSULTA_MS = 30_000;
@@ -223,7 +225,11 @@ export function VigiaFimDeJornada() {
 
         <div className="flex items-center justify-end gap-2">
           <button
-            onClick={() => setDescrevendo(true)}
+            onClick={() => {
+              // Abre já com a descrição da atividade, igual ao modal de parar no quadro.
+              setObservacao(sessao.descricaoPadrao ?? "");
+              setDescrevendo(true);
+            }}
             disabled={enviando}
             className="rounded-md border border-border px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
           >

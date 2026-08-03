@@ -3,16 +3,22 @@ import { Modal } from "../ui/Modal";
 
 interface ModalObservacaoAtividadeProps {
   titulo: string;
+  // Descrição da atividade, vinda do servidor (ver descricaoPadraoDaAtividade). Abre o
+  // campo já preenchido — é o mesmo texto que a parada automática grava sozinha.
+  descricaoPadrao?: string | null;
   onConfirmar: (observacao: string) => void;
   onFechar: () => void;
 }
 
 // Abre ao sair de "Em Andamento" (mover o card ou clicar Parar, ver Atividades.tsx) —
-// texto opcional, sempre pré-preenche a Descrição em Meus Apontamentos depois. Fechar de
-// qualquer jeito (Esc, backdrop, "Pular") NÃO cancela a movimentação, que já aconteceu/
-// foi confirmada pelo usuário antes deste modal abrir — só decide se leva texto junto.
-export function ModalObservacaoAtividade({ titulo, onConfirmar, onFechar }: ModalObservacaoAtividadeProps) {
-  const [texto, setTexto] = useState("");
+// pré-preenche a Descrição em Meus Apontamentos depois. Fechar de qualquer jeito (Esc,
+// backdrop, "Pular") NÃO cancela a movimentação, que já aconteceu/foi confirmada pelo
+// usuário antes deste modal abrir — só decide se leva texto junto.
+//
+// Vem com a descrição da atividade já escrita: o que a pessoa editar prevalece, e "Pular"
+// deixa a herança acontecer do lado do servidor de qualquer forma.
+export function ModalObservacaoAtividade({ titulo, descricaoPadrao, onConfirmar, onFechar }: ModalObservacaoAtividadeProps) {
+  const [texto, setTexto] = useState(descricaoPadrao ?? "");
 
   return (
     <Modal open onClose={onFechar} title="O que foi feito?" subtitulo={titulo}>

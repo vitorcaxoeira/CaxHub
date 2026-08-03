@@ -30,6 +30,48 @@ export function podeParar(nomeColunaAtual: string | null | undefined): boolean {
   return nomeColunaAtual === RAIA_EM_ANDAMENTO;
 }
 
+// Tamanho de AtividadeSessaoExecucao.observacao e de RatItem.desati — o texto passa pelos
+// dois. `despro` chega a 1.833 caracteres na base (19 itens passam de 1.000), então sem o
+// corte o insert quebraria justamente nos maiores.
+const LIMITE_OBSERVACAO = 1000;
+
+// Descrição que a atividade "empresta" pra observação de uma parada: a mais específica que
+// existir. O nome do nó no cronograma descreve a atividade em si; o `despro` descreve o
+// item da proposta inteiro, e é o que sobra quando a proposta não usa estrutura — medido em
+// 03/08/2026, só 771 das 2.259 atividades ativas têm nó, então o segundo caminho é o comum.
+//
+// Uma função só porque três lugares dependem da MESMA resposta: o modal que abre
+// pré-preenchido, o vigia de fim de jornada e a herança da parada automática. Se cada um
+// derivasse por conta própria, a tela ofereceria um texto e o servidor gravaria outro.
+export async function descricaoPadraoDaAtividade(
+  atividade: Pick<AtividadeConsultor, "codemp" | "codpro" | "seqite" | "estruturaAtividadeId">
+): Promise<string | null> {
+  if (atividade.estruturaAtividadeId != null) {
+    const no = await prisma.estruturaAtividade.findUnique({
+      where: { id: atividade.estruturaAtividadeId },
+      select: { nome: true },
+    });
+    if (no?.nome?.trim()) return no.nome.trim().slice(0, LIMITE_OBSERVACAO);
+  }
+  const item = await prisma.propostaItem.findUnique({
+    where: {
+      codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite },
+    },
+    select: { despro: true },
+  });
+  const despro = item?.despro?.trim();
+  return despro ? despro.slice(0, LIMITE_OBSERVACAO) : null;
+}
+
+// Mesma escolha, sem ir ao banco — pra quem já tem os dois valores em mãos (a listagem de
+// atividades monta os dois no mesmo `map`).
+export function escolherDescricaoPadrao(estruturaNome: string | null, itemDescricao: string | null): string | null {
+  const nome = estruturaNome?.trim();
+  if (nome) return nome.slice(0, LIMITE_OBSERVACAO);
+  const descricao = itemDescricao?.trim();
+  return descricao ? descricao.slice(0, LIMITE_OBSERVACAO) : null;
+}
+
 export interface ContextoMovimentacao {
   atividade: AtividadeConsultor;
   colunaAnterior: QuadroColuna | null;
@@ -55,7 +97,11 @@ export interface ContextoMovimentacao {
   motivoParada?: string;
   // Texto capturado na hora de fechar a sessão (modal "O que foi feito?" ao mover o
   // card pra fora de "Em Andamento" ou clicar Parar) — pré-preenche a Descrição em
-  // Meus Apontamentos. Nunca preenchido na auto-pausa de POST /:id/start.
+  // Meus Apontamentos.
+  //
+  // Vazio ou ausente NÃO deixa a sessão em branco: cai na descrição da atividade (ver
+  // descricaoPadraoDaAtividade). É o que cobre a auto-pausa de POST /:id/start e todas as
+  // paradas automáticas, onde não há ninguém pra digitar.
   observacaoFechamento?: string | null;
 }
 
@@ -81,6 +127,14 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
     ? Math.round((agora.getTime() - sessaoAbertaAntes.inicio.getTime()) / 60000)
     : null;
 
+  // Observação vazia herda a descrição da atividade. Vale pra TODA parada — a automática
+  // (fim de expediente, teto, varredura, auto-pausa ao iniciar outra) não tem ninguém pra
+  // digitar, e era ali que a sessão fechava em branco. Consulta o banco só quando há
+  // sessão aberta pra fechar e não veio texto.
+  const observacaoDaSessao =
+    observacaoFechamento?.trim() ||
+    (sessaoAbertaAntes ? await descricaoPadraoDaAtividade(atividade) : null);
+
   const entidadeId = entidadeIdAtividade(atividade.id);
   const entidadeRotulo = `Atividade — Proposta ${atividade.codpro}`;
   const ctxEvento = {
@@ -104,7 +158,7 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
     }),
     prisma.atividadeSessaoExecucao.updateMany({
       where: { atividadeId: atividade.id, fim: null },
-      data: { fim: agora, ...(observacaoFechamento ? { observacao: observacaoFechamento } : {}) },
+      data: { fim: agora, ...(observacaoDaSessao ? { observacao: observacaoDaSessao } : {}) },
     }),
     ...(colunaNova.contaComoExecucao
       ? [
@@ -132,7 +186,7 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
             metadata: {
               coluna: colunaAnterior?.nome ?? null,
               duracaoMinutos: duracaoSessaoFechadaMin,
-              observacao: observacaoFechamento ?? null,
+              observacao: observacaoDaSessao,
               motivo: motivoParada ?? null,
             },
           }),

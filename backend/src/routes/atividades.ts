@@ -28,6 +28,8 @@ import {
   RAIA_A_FAZER,
   RAIA_EM_ANDAMENTO,
   colunaEfetiva,
+  descricaoPadraoDaAtividade,
+  escolherDescricaoPadrao,
   montarOperacoesMovimentacao,
   podeIniciar,
   podeParar,
@@ -334,6 +336,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         estruturaAtividadeId: a.estruturaAtividadeId,
         estruturaNome: noEstrutura?.nome ?? null,
         estruturaPercentual: noEstrutura?.percentualConcluido ?? null,
+        // Texto com que o modal "O que foi feito?" abre preenchido ao parar. Sai do
+        // servidor, e não de um `estruturaNome ?? itemDescricao` no front, porque é a MESMA
+        // escolha que a parada automática grava — em dois lugares elas divergiriam.
+        descricaoPadrao: escolherDescricaoPadrao(noEstrutura?.nome ?? null, item?.despro ?? null),
         // Mesma regra de acesso da Alocação (departamentosPermitidos/podeGerenciarProposta
         // em alocacao.ts) — evita mandar um consultor comum pra rota do cronograma, que
         // devolveria 403 por não gerenciar o departamento.
@@ -943,6 +949,9 @@ atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, r
         iniciouForaDoExpediente:
           limitePorExpediente(sessao.inicio, jornada)?.getTime() === sessao.inicio.getTime(),
         opcoesProrrogacao: OPCOES_PRORROGACAO_MIN,
+        // Pré-preenche o "O que foi feito?" do "Encerrar agora" — mesma origem do modal de
+        // parada no quadro e da herança da parada automática.
+        descricaoPadrao: await descricaoPadraoDaAtividade(sessao.atividade),
       },
     });
   } catch (error) {
