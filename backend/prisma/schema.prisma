@@ -897,17 +897,27 @@ model RatItem {
 // Histórico de movimentação de atividades entre colunas do Kanban — dado 100% do
 // CaxHub, usado tanto como auditoria quanto de base pra futuras automações por
 // mudança de status (fase posterior, não implementada ainda).
+// Linha do tempo da atividade. Nasceu só com movimentação de coluna (daí o nome e o
+// @@map, mantidos pra não renomear tabela em produção sem ganho funcional), mas desde
+// 03/08/2026 também recebe fatos que não movem o card — hoje a liberação de horas
+// excedentes pelo gestor. Por isso `colunaNovaId` é opcional: um evento desses não tem
+// coluna de destino, e forçar uma inventaria uma movimentação que não aconteceu.
 model AtividadeHistoricoMovimentacao {
   id               Int      @id @default(autoincrement())
   atividadeId      Int
   colunaAnteriorId Int?
-  colunaNovaId     Int
+  colunaNovaId     Int?
   userId           Int?
   movidoEm         DateTime @default(now())
+  // "movimentacao" (o de sempre) ou o nome do fato registrado, ex. "horas_excedentes".
+  tipo             String   @default("movimentacao") @db.VarChar(40)
+  // Texto pronto pra exibir, só nos eventos que não são movimentação — a frase de uma
+  // movimentação continua sendo montada na tela a partir dos nomes das colunas.
+  descricao        String?  @db.VarChar(300)
 
   atividade      AtividadeConsultor @relation(fields: [atividadeId], references: [id], onDelete: Cascade)
   colunaAnterior QuadroColuna?      @relation("colunaAnterior", fields: [colunaAnteriorId], references: [id])
-  colunaNova     QuadroColuna       @relation("colunaNova", fields: [colunaNovaId], references: [id])
+  colunaNova     QuadroColuna?      @relation("colunaNova", fields: [colunaNovaId], references: [id])
   // SetNull (não Cascade) de propósito: a movimentação é histórico/auditoria — se o
   // usuário for excluído depois, o registro de "quem moveu" fica em branco, mas a
   // movimentação em si continua existindo.

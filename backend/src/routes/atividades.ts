@@ -14,14 +14,14 @@ import {
   SITPRO_ATIVIDADES_VISIVEIS,
 } from "../domain/propostasDominio";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos, gerenciaDepartamento } from "../domain/contextoProjeto";
-import { criarNotificacao, notificarGestoresDoDepartamento } from "../domain/notificacoes";
+import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
 import { enfileirar } from "../sync/outboxSenior";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS, CAMPOS_AUDITADOS_EXCEDENTE } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
-import { avaliarEntradaEmExecucao } from "../domain/tetoAtividade";
+import { avaliarEntradaEmExecucao, formatarMinutos } from "../domain/tetoAtividade";
 import { diaSemanaDaSessao, limitePorExpediente } from "../domain/jornadaConsultor";
 import { limiteDaSessaoAberta, prazoDeEncerramento, MENSAGEM_MOTIVO, MotivoLimite } from "../domain/limiteSessao";
 import {
@@ -1230,6 +1230,25 @@ atividadesRouter.patch("/:id/horas-excedentes", async (req: AuthenticatedRequest
     }
 
     const diff = diffCampos(CAMPOS_AUDITADOS_EXCEDENTE, atividade, paraDiff({ horasExcedentes }));
+    const anterior = atividade.horasExcedentes;
+    // UMA frase pro histórico e pra notificação. Se fossem duas, um dia divergiriam — e a
+    // pessoa leria uma coisa no sino e outra na atividade sobre o mesmo fato.
+    //
+    // Começa em minúscula porque os dois lugares a emendam depois do nome de quem fez,
+    // igual à frase de movimentação ("Fulano moveu de X para Y").
+    //
+    // Liberar, reduzir e zerar são fatos diferentes: avisar "liberou 1:00" quando o gestor
+    // baixou o teto de 4:00 pra 1:00 diria o contrário do que aconteceu — e é justamente a
+    // mudança que mais afeta quem está executando.
+    const fato =
+      horasExcedentes === 0
+        ? `removeu as horas excedentes (eram ${formatarMinutos(anterior)})`
+        : anterior === 0
+          ? `liberou ${formatarMinutos(horasExcedentes)} de horas excedentes`
+          : horasExcedentes > anterior
+            ? `aumentou as horas excedentes de ${formatarMinutos(anterior)} para ${formatarMinutos(horasExcedentes)}`
+            : `reduziu as horas excedentes de ${formatarMinutos(anterior)} para ${formatarMinutos(horasExcedentes)}`;
+
     const operacoes: Prisma.PrismaPromise<unknown>[] = [
       prisma.atividadeConsultor.update({ where: { id }, data: { horasExcedentes } }),
     ];
@@ -1247,10 +1266,26 @@ atividadesRouter.patch("/:id/horas-excedentes", async (req: AuthenticatedRequest
           eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_ALTERADA,
           alteracoes: diff.alteracoes,
           metadata: null,
+        }),
+        // Na mesma transação do update: a linha do tempo da atividade não pode registrar
+        // uma liberação que não chegou a acontecer.
+        prisma.atividadeHistoricoMovimentacao.create({
+          data: { atividadeId: id, tipo: "horas_excedentes", descricao: fato, userId: user.id },
         })
       );
     }
     await prisma.$transaction(operacoes);
+
+    // Fora da transação, como as demais notificações do módulo: falha de notificação não
+    // pode desfazer a autorização que o gestor acabou de dar.
+    if (diff.algumaMudanca) {
+      await notificarConsultorDaAtividade(
+        atividade,
+        "horas_excedentes",
+        `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}`,
+        user.id
+      );
+    }
 
     res.json({ id, horasExcedentes, teto: (atividade.qtdhor ?? 0) + horasExcedentes });
   } catch (error) {
@@ -1350,8 +1385,11 @@ atividadesRouter.get("/:id/historico", async (req: AuthenticatedRequest, res) =>
     res.json({
       historico: historico.map((h) => ({
         id: h.id,
+        tipo: h.tipo,
+        // Preenchida só nos eventos que não são movimentação — a tela usa uma ou outra.
+        descricao: h.descricao,
         colunaAnteriorNome: h.colunaAnterior?.nome ?? null,
-        colunaNovaNome: h.colunaNova.nome,
+        colunaNovaNome: h.colunaNova?.nome ?? null,
         userNome: h.user?.nome ?? "Usuário removido",
         movidoEm: h.movidoEm,
       })),
@@ -1438,22 +1476,12 @@ atividadesRouter.post("/:id/comentarios", async (req: AuthenticatedRequest, res)
     });
 
     // Notifica o consultor responsável pela atividade, se alguém além dele comentou.
-    const consultorResponsavel = await prisma.consultor.findFirst({
-      where: { codemp: resolvido.atividade.codemp, codfor: resolvido.atividade.codfor },
-    });
-    if (consultorResponsavel?.email) {
-      const usuarioResponsavel = await prisma.user.findFirst({
-        where: { email: { equals: consultorResponsavel.email, mode: "insensitive" } },
-      });
-      if (usuarioResponsavel && usuarioResponsavel.id !== ctx.user.id) {
-        await criarNotificacao(
-          usuarioResponsavel.id,
-          "novo_comentario",
-          `${ctx.user.nome} comentou na atividade da proposta ${resolvido.atividade.codpro}`,
-          id
-        );
-      }
-    }
+    await notificarConsultorDaAtividade(
+      resolvido.atividade,
+      "novo_comentario",
+      `${ctx.user.nome} comentou na atividade da proposta ${resolvido.atividade.codpro}`,
+      ctx.user.id
+    );
 
     res.status(201).json({
       comentario: {

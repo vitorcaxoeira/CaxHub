@@ -2,11 +2,21 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Avatar } from "../ui/Avatar";
 import { GrupoAuditoria, configEvento, toneBadgeAuditoria } from "./auditoriaVisual";
+import { formatHoras } from "../../utils/horas";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "medium" });
 
-function formatarValorCampo(valor: unknown): string {
+// Campos gravados em MINUTOS. `qtdhor` espelha USU_QtdHor do Senior e vale pras três
+// entidades auditadas (Horas Contratadas da proposta, Horas do Item, Horas Alocadas da
+// atividade) — todas em minutos, ver frontend/src/utils/horas.ts. Sem esta lista a
+// auditoria mostrava o número cru: "240" no lugar de "4:00 h".
+const CAMPOS_EM_MINUTOS = new Set(["qtdhor", "horasExcedentes"]);
+
+function formatarValorCampo(valor: unknown, campo?: string): string {
   if (valor === null || valor === undefined) return "—";
+  if (campo && CAMPOS_EM_MINUTOS.has(campo) && typeof valor === "number") {
+    return formatHoras(valor / 60);
+  }
   if (typeof valor === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(valor)) {
     return dateTimeFormatter.format(new Date(valor));
   }
@@ -100,9 +110,11 @@ export function DrawerAuditoria({ grupo, onFechar }: DrawerAuditoriaProps) {
                           <tr key={campo} className="border-t border-border/60">
                             <td className="px-2.5 py-1.5 text-foreground">{diff.rotulo ?? campo}</td>
                             <td className="px-2.5 py-1.5 text-muted line-through decoration-muted/60">
-                              {formatarValorCampo(diff.de)}
+                              {formatarValorCampo(diff.de, campo)}
                             </td>
-                            <td className="px-2.5 py-1.5 font-medium text-foreground">{formatarValorCampo(diff.para)}</td>
+                            <td className="px-2.5 py-1.5 font-medium text-foreground">
+                              {formatarValorCampo(diff.para, campo)}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -178,7 +190,7 @@ function MetadataEvento({ eventoTipo, metadata }: { eventoTipo: string; metadata
       {entradas.map(([chave, valor]) => (
         <p key={chave}>
           <span className="text-muted">{chave}: </span>
-          <span className="text-foreground">{formatarValorCampo(valor)}</span>
+          <span className="text-foreground">{formatarValorCampo(valor, chave)}</span>
         </p>
       ))}
     </div>

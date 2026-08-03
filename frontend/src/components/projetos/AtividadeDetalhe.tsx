@@ -29,8 +29,13 @@ interface Anexo {
 
 interface HistoricoItem {
   id: number;
+  /** "movimentacao" ou o fato registrado (ex.: "horas_excedentes"). */
+  tipo: string;
+  /** Frase pronta dos eventos que não movem o card; nula nas movimentações. */
+  descricao: string | null;
   colunaAnteriorNome: string | null;
-  colunaNovaNome: string;
+  /** Nula nos eventos que não são movimentação — não há coluna de destino. */
+  colunaNovaNome: string | null;
   userNome: string;
   movidoEm: string;
 }
@@ -536,12 +541,16 @@ export function AtividadeDetalhe({
                   {historico.map((h) => (
                     <p key={h.id} className="text-[12px] text-muted">
                       <span className="font-medium text-foreground">{h.userNome}</span>{" "}
-                      {h.colunaAnteriorNome ? `moveu de "${h.colunaAnteriorNome}" para` : "definiu como"} "{h.colunaNovaNome}"
+                      {/* Evento sem coluna de destino (ex.: liberação de horas excedentes) já
+                          vem com a frase pronta do servidor. */}
+                      {h.colunaNovaNome == null
+                        ? h.descricao
+                        : `${h.colunaAnteriorNome ? `moveu de "${h.colunaAnteriorNome}" para` : "definiu como"} "${h.colunaNovaNome}"`}
                       {" · "}
                       {dateTimeFormatter.format(new Date(h.movidoEm))}
                     </p>
                   ))}
-                  {historico.length === 0 && <p className="text-[12.5px] text-muted">Sem movimentações registradas.</p>}
+                  {historico.length === 0 && <p className="text-[12.5px] text-muted">Sem registros no histórico.</p>}
                 </div>
               </section>
 
