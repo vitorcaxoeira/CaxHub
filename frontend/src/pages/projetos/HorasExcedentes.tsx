@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useToast } from "../../components/ui/Toast";
 import { SolicitacaoExcedente } from "../../components/projetos/AtividadeDetalhe";
 import { formatHoras, horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
@@ -134,6 +135,14 @@ export function HorasExcedentes() {
                 <span className="text-[12.5px] text-muted">
                   · Proposta {s.codpro} · Item {String(s.seqite).padStart(2, "0")} · {s.depexeLabel}
                 </span>
+                {/* Abre o painel da atividade direto, sem depender dos filtros da tela de
+                    Atividades — a de um pedido quase nunca está na página atual dela. */}
+                <Link
+                  to={`/projetos/atividades?atividade=${s.atividadeId}`}
+                  className="text-[12.5px] font-medium text-primary hover:underline"
+                >
+                  Ver atividade →
+                </Link>
                 <span className="ml-auto font-mono text-[12.5px] text-muted">
                   {dateTimeFormatter.format(new Date(s.criadoEm))}
                 </span>

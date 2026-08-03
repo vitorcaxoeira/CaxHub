@@ -1,5 +1,5 @@
 import axios from "axios";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AtividadeKanban, ColunaKanban, DetalheInfo, KanbanBoard } from "../../components/projetos/KanbanBoard";
 import { AtividadesTable, FiltrosAtividades } from "../../components/projetos/AtividadesTable";
@@ -138,6 +138,46 @@ export function Atividades() {
     if (proximo.situacao) params.set("situacao", proximo.situacao);
     if (proximo.page > 1) params.set("page", String(proximo.page));
     setSearchParams(params, { replace: true });
+  }
+
+  // Abre o painel de uma atividade específica vinda por link (?atividade=123). Busca o
+  // cabeçalho em GET /atividades/:id/detalhe em vez de procurar na lista carregada: o
+  // link chega de outra tela (o painel de Horas Excedentes), e a atividade quase nunca
+  // está na página/filtro atuais — procurar na lista abriria nada na maioria das vezes.
+  const abrirPorLink = useCallback(async (atividadeId: number) => {
+    try {
+      const { data } = await axios.get(`/api/atividades/${atividadeId}/detalhe`);
+      // `titulo` não vem da API — quem clica num card monta a frase na hora, e aqui tem
+      // de ser a MESMA (ver KanbanBoard/AtividadesTable), senão o painel aberto por link
+      // aparece com o cabeçalho vazio.
+      setDetalhe({
+        ...data.atividade,
+        id: atividadeId,
+        titulo: `Proposta ${data.atividade.codpro} · Projeto ${data.atividade.numprj}`,
+      });
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Não foi possível abrir esta atividade");
+    }
+  }, []);
+
+  const atividadeParam = searchParams.get("atividade");
+  useEffect(() => {
+    if (atividadeParam == null) return;
+    const id = Number(atividadeParam);
+    if (Number.isFinite(id)) abrirPorLink(id);
+    // Só na chegada do link: reagir ao estado do detalhe reabriria o painel ao fechar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atividadeParam]);
+
+  // Fechar tem de tirar o parâmetro da URL junto — senão um F5 reabre o painel, e o
+  // efeito acima reabriria na próxima mudança de filtro.
+  function fecharDetalhe() {
+    setDetalhe(null);
+    if (searchParams.has("atividade")) {
+      const params = new URLSearchParams(searchParams);
+      params.delete("atividade");
+      setSearchParams(params, { replace: true });
+    }
   }
 
   // Clicar num KPI vira o único critério de "situação" da lista/quadro; clicar de novo
@@ -520,7 +560,7 @@ export function Atividades() {
           podeSolicitarExcedente={detalhe.podeSolicitarExcedente}
           // Mudar o excedente muda o teto do card, então a lista/quadro recarrega.
           onExcedenteAlterado={carregar}
-          onClose={() => setDetalhe(null)}
+          onClose={fecharDetalhe}
         />
       )}
 
