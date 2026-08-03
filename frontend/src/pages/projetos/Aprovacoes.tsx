@@ -77,8 +77,10 @@ const classeBotao = {
 const classeCampo =
   "rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-// Cabeçalho comum às duas listas: status, quem pediu, onde, o link pra atividade e a data.
+// Cabeçalho comum às duas listas: id, status, quem pediu, onde, o link pra atividade e a
+// data.
 function CabecalhoLinha({
+  id,
   status,
   solicitanteNome,
   codpro,
@@ -88,6 +90,7 @@ function CabecalhoLinha({
   criadoEm,
   onVerAtividade,
 }: {
+  id: number;
   status: string;
   solicitanteNome: string;
   codpro: number;
@@ -99,6 +102,10 @@ function CabecalhoLinha({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      {/* Id da SOLICITAÇÃO, não da atividade — é por ele que se conversa sobre um pedido
+          específico. Cada aba tem a numeração da sua própria tabela, então #4 em Horas
+          Excedentes e #4 em Apontamentos são registros diferentes. */}
+      <span className="font-mono text-[11.5px] text-muted">#{id}</span>
       <span className={`rounded px-1.5 py-0.5 font-mono text-[10.5px] uppercase ${TOM_STATUS[status] ?? ""}`}>{status}</span>
       <span className="text-sm font-medium text-foreground">{solicitanteNome}</span>
       <span className="text-[12.5px] text-muted">
