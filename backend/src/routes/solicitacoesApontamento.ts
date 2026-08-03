@@ -10,7 +10,7 @@ import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
-import { registrarApontamentoAvulso } from "./apontamentos";
+import { criarSessaoManualPendente } from "./apontamentos";
 import { depexeLabel } from "../domain/propostasDominio";
 
 // Apontamento avulso: o consultor trabalhou e esqueceu de mover o card, então pede o tempo
@@ -364,14 +364,19 @@ solicitacoesApontamentoRouter.post("/:id/decidir", async (req: AuthenticatedRequ
       }
     }
 
-    // Grava o apontamento ANTES de marcar a solicitação como aprovada: registrarApontamentoAvulso
-    // ainda pode recusar por teto (alocado + excedentes), e uma solicitação "aprovada" sem
-    // apontamento nenhum seria o pior dos dois mundos — o consultor veria deferido e as
-    // horas não estariam lá. Recusou, a solicitação continua pendente e o gestor lê o
-    // motivo: pra liberar, ele autoriza horas excedentes antes.
+    // Aprovar NÃO confirma o apontamento: cria a sessão fechada e não confirmada, que cai
+    // na lista "a confirmar" do consultor em Meus Apontamentos. Quem fecha o apontamento e
+    // dispara o envio ao Senior continua sendo quem executou — o gestor autoriza o tempo,
+    // não lança no lugar dele.
+    //
+    // Antes da sessão existir a solicitação não é marcada como aprovada: a criação ainda
+    // pode recusar por teto (alocado + excedentes), e uma solicitação "aprovada" sem
+    // sessão nenhuma seria o pior dos dois mundos — o consultor veria deferido e as horas
+    // não estariam em lugar nenhum. Recusou, a solicitação continua pendente e o gestor lê
+    // o motivo: pra liberar, ele autoriza horas excedentes antes.
     let sessaoId: number | undefined;
     if (aprovar) {
-      const resultado = await registrarApontamentoAvulso(solicitacao.atividadeId, inicio!, fim!, descricao, ctx);
+      const resultado = await criarSessaoManualPendente(solicitacao.atividadeId, inicio!, fim!, descricao);
       if (resultado.status >= 400) {
         res.status(resultado.status).json(resultado.body);
         return;
@@ -430,10 +435,15 @@ solicitacoesApontamentoRouter.post("/:id/decidir", async (req: AuthenticatedRequ
       return s;
     });
 
+    // A notificação carrega o mesmo `fato` do histórico mais o próximo passo — o consultor
+    // precisa saber que ainda tem de confirmar, senão o apontamento fica parado esperando
+    // uma ação que ele não sabe que existe.
     await notificarConsultorDaAtividade(
       atividade,
       "apontamento_decidido",
-      `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}`,
+      `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}${
+        aprovar ? " — confirme em Meus Apontamentos" : ""
+      }`,
       user.id
     );
 

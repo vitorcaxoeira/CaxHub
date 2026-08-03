@@ -53,12 +53,18 @@ function intervalo(inicio: string, fim: string): string {
   return `${dateTimeFormatter.format(new Date(inicio))} – ${dateTimeFormatter.format(new Date(fim))}`;
 }
 
-// `datetime-local` quer "AAAA-MM-DDTHH:MM" em hora LOCAL; um ISO cru (UTC) preencheria o
-// campo com o horário deslocado.
-function paraInputDateTime(iso: string): string {
+// Os inputs `date`/`time` querem hora LOCAL; um ISO cru (UTC) preencheria o campo com o
+// horário deslocado.
+const p2 = (n: number) => String(n).padStart(2, "0");
+
+function paraInputData(iso: string): string {
   const d = new Date(iso);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+}
+
+function paraInputHora(iso: string): string {
+  const d = new Date(iso);
+  return `${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
 
 const classeBotao = {
@@ -282,9 +288,11 @@ function ListaApontamentos({
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [decidindoId, setDecidindoId] = useState<number | null>(null);
-  // O gestor pode corrigir os três antes de aprovar; nascem com o que foi pedido.
-  const [inicio, setInicio] = useState("");
-  const [fim, setFim] = useState("");
+  // O gestor pode corrigir antes de aprovar; nascem com o que foi pedido. Uma data só,
+  // como no formulário do consultor — o fim assume o dia do início.
+  const [data, setData] = useState("");
+  const [horaInicio, setHoraInicio] = useState("");
+  const [horaFim, setHoraFim] = useState("");
   const [descricao, setDescricao] = useState("");
   const [observacao, setObservacao] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -304,16 +312,33 @@ function ListaApontamentos({
   useEffect(carregar, [carregar]);
 
   async function decidir(s: SolicitacaoApontamento, aprovar: boolean) {
+    if (aprovar && (!data || !horaInicio || !horaFim)) {
+      toast.mostrar("Informe a data, a hora inicial e a hora final.", "destructive");
+      return;
+    }
+    if (aprovar && horaFim <= horaInicio) {
+      toast.mostrar("A hora final precisa ser depois da inicial.", "destructive");
+      return;
+    }
     setEnviando(true);
     try {
       await axios.post(`/api/solicitacoes-apontamento/${s.id}/decidir`, {
         aprovar,
         ...(aprovar
-          ? { inicio: new Date(inicio).toISOString(), fim: new Date(fim).toISOString(), descricao }
+          ? {
+              inicio: new Date(`${data}T${horaInicio}`).toISOString(),
+              fim: new Date(`${data}T${horaFim}`).toISOString(),
+              descricao,
+            }
           : {}),
         observacao,
       });
-      toast.mostrar(aprovar ? "Apontamento aprovado e registrado." : "Solicitação reprovada.", aprovar ? "success" : "neutral");
+      toast.mostrar(
+        aprovar
+          ? "Aprovado. O apontamento foi para o consultor confirmar em Meus Apontamentos."
+          : "Solicitação reprovada.",
+        aprovar ? "success" : "neutral"
+      );
       setDecidindoId(null);
       carregar();
       onMudou();
@@ -369,24 +394,34 @@ function ListaApontamentos({
             (decidindoId === s.id ? (
               <div className="mt-2 space-y-2 rounded-md border border-border bg-surface-2/40 px-2.5 py-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <label htmlFor={`inicio-${s.id}`} className="text-[12px] text-muted">
-                    De
+                  <label htmlFor={`data-${s.id}`} className="text-[12px] text-muted">
+                    Data
                   </label>
                   <input
-                    id={`inicio-${s.id}`}
-                    type="datetime-local"
-                    value={inicio}
-                    onChange={(e) => setInicio(e.target.value)}
+                    id={`data-${s.id}`}
+                    type="date"
+                    value={data}
+                    onChange={(e) => setData(e.target.value)}
                     className={classeCampo}
                   />
-                  <label htmlFor={`fim-${s.id}`} className="text-[12px] text-muted">
-                    até
+                  <label htmlFor={`hini-${s.id}`} className="text-[12px] text-muted">
+                    das
                   </label>
                   <input
-                    id={`fim-${s.id}`}
-                    type="datetime-local"
-                    value={fim}
-                    onChange={(e) => setFim(e.target.value)}
+                    id={`hini-${s.id}`}
+                    type="time"
+                    value={horaInicio}
+                    onChange={(e) => setHoraInicio(e.target.value)}
+                    className={classeCampo}
+                  />
+                  <label htmlFor={`hfim-${s.id}`} className="text-[12px] text-muted">
+                    às
+                  </label>
+                  <input
+                    id={`hfim-${s.id}`}
+                    type="time"
+                    value={horaFim}
+                    onChange={(e) => setHoraFim(e.target.value)}
                     className={classeCampo}
                   />
                 </div>
@@ -419,8 +454,9 @@ function ListaApontamentos({
               <button
                 onClick={() => {
                   setDecidindoId(s.id);
-                  setInicio(paraInputDateTime(s.inicioSolicitado));
-                  setFim(paraInputDateTime(s.fimSolicitado));
+                  setData(paraInputData(s.inicioSolicitado));
+                  setHoraInicio(paraInputHora(s.inicioSolicitado));
+                  setHoraFim(paraInputHora(s.fimSolicitado));
                   setDescricao(s.descricao);
                   setObservacao("");
                 }}
@@ -468,7 +504,7 @@ export function Aprovacoes() {
       <p className="mt-1 text-sm text-muted">
         {aba === "excedentes"
           ? "Horas acima do alocado, pedidas por quem executa e liberadas pelo gestor do departamento. O que é aprovado entra no teto de apontamento da atividade."
-          : "Tempo trabalhado sem mover o card de raia. Só vira apontamento — e só conta como realizado — depois que o gestor aprova."}
+          : "Tempo trabalhado sem mover o card de raia. Aprovar libera o apontamento para o consultor confirmar em Meus Apontamentos — quem fecha e envia ao Senior continua sendo quem executou."}
       </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-4">

@@ -107,6 +107,38 @@ async function buscarOuCriarRatRascunho(
   });
 }
 
+// Teto de apontamento = alocado + excedentes autorizados. Vale pro gestor também: pra
+// lançar acima do teto ele aumenta o campo de excedentes antes, e aí fica registrado quem
+// autorizou e quanto — que é o ponto de ter o campo.
+//
+// `descontarMinutos` é a duração de uma sessão que JÁ está no realizado e vai ser
+// substituída por este intervalo. Zero quando a sessão ainda nem existe.
+async function recusarSeEstourarTeto(
+  atividade: Parameters<typeof saldoDaAtividade>[0],
+  inicio: Date,
+  fim: Date,
+  descontarMinutos = 0
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const duracao = Math.round((fim.getTime() - inicio.getTime()) / 60000);
+  const { teto, realizado } = await saldoDaAtividade(atividade);
+  const realizadoBase = realizado - descontarMinutos;
+  if (teto <= 0 || realizadoBase + duracao <= teto) return null;
+
+  const disponivel = teto - realizadoBase;
+  return {
+    status: 409,
+    body: {
+      error:
+        disponivel > 0
+          ? `Apontamento de ${formatarMinutos(duracao)} excede o teto da atividade. Saldo disponível: ${formatarMinutos(disponivel)} (alocado + excedentes: ${formatarMinutos(teto)}). Ajuste o horário ou peça ao gestor pra liberar horas excedentes.`
+          : `A atividade já consumiu todo o teto de ${formatarMinutos(teto)} (alocado + excedentes). Peça ao gestor pra liberar horas excedentes antes de apontar.`,
+      teto,
+      realizado: realizadoBase,
+      disponivel,
+    },
+  };
+}
+
 interface AjustesConfirmacao {
   ajusteInicio?: string;
   ajusteFim?: string;
@@ -150,32 +182,30 @@ async function confirmarSessao(
     return { status: 400, body: { error: "O fim precisa ser depois do início" } };
   }
 
-  // Teto de apontamento = alocado + excedentes autorizados. Vale pro gestor também: pra
-  // lançar acima do teto ele aumenta o campo de excedentes antes, e aí fica registrado
-  // quem autorizou e quanto — que é o ponto de ter o campo.
-  //
-  // O `realizado` desconta esta sessão porque ela ainda não está confirmada e, portanto,
-  // já entra na conta como "sessão não confirmada". Sem isso a duração seria contada duas
-  // vezes e o bloqueio dispararia com metade do saldo consumido.
-  const duracao = Math.round((fim.getTime() - inicio.getTime()) / 60000);
-  const { teto, realizado } = await saldoDaAtividade(atividade);
-  const duracaoAtualDaSessao = Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000);
-  const realizadoSemEsta = realizado - duracaoAtualDaSessao;
-  if (teto > 0 && realizadoSemEsta + duracao > teto) {
-    const disponivel = teto - realizadoSemEsta;
+  // Sessão nascida de uma solicitação avulsa aprovada tem horário FECHADO. A tela de
+  // confirmação permite ajustar início/fim — o que aqui deixaria o consultor confirmar
+  // 09:00–18:00 sobre um intervalo que o gestor aprovou como 12:30–12:50, desfazendo a
+  // decisão sem passar por ninguém. Mexer no horário exige um pedido novo.
+  const daSolicitacao = await prisma.solicitacaoApontamento.findFirst({ where: { sessaoId } });
+  if (
+    daSolicitacao &&
+    (inicio.getTime() !== sessao.inicio.getTime() || fim.getTime() !== sessao.fim.getTime())
+  ) {
     return {
-      status: 409,
+      status: 403,
       body: {
         error:
-          disponivel > 0
-            ? `Apontamento de ${formatarMinutos(duracao)} excede o teto da atividade. Saldo disponível: ${formatarMinutos(disponivel)} (alocado + excedentes: ${formatarMinutos(teto)}). Ajuste o horário ou peça ao gestor pra liberar horas excedentes.`
-            : `A atividade já consumiu todo o teto de ${formatarMinutos(teto)} (alocado + excedentes). Peça ao gestor pra liberar horas excedentes antes de apontar.`,
-        teto,
-        realizado: realizadoSemEsta,
-        disponivel,
+          "Este apontamento veio de uma solicitação aprovada pelo gestor — o horário não pode ser alterado aqui. Para outro horário, abra uma nova solicitação na atividade.",
       },
     };
   }
+
+  // A sessão já existe e já entra em `realizado` como "não confirmada", então desconta a
+  // duração atual dela — senão a mesma hora contaria duas vezes e o bloqueio dispararia
+  // com metade do saldo consumido.
+  const duracaoAtualDaSessao = Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000);
+  const recusa = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao);
+  if (recusa) return recusa;
 
   const rat = await buscarOuCriarRatRascunho(atividade, atividade.codfor, item.depexe, inicio);
   const ratNovo = rat.origemCaxHub && rat.numrat == null;
@@ -429,15 +459,48 @@ apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => 
   }
 });
 
+// Resolve a coluna que a sessão vai carregar. Sessão manual não move o card — herda a
+// coluna atual só porque o campo é obrigatório.
+async function colunaDaAtividade(atividade: { colunaId: number | null }) {
+  return atividade.colunaId
+    ? prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } })
+    : prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } });
+}
+
+// Cria a sessão fechada e NÃO confirmada — ela cai na lista de "apontamentos a confirmar"
+// do consultor (GET /sessoes-pendentes), que é quem fecha o apontamento e dispara o envio
+// ao Senior.
+//
+// É o caminho da aprovação de uma solicitação avulsa: o gestor autoriza o tempo, o
+// consultor confirma. Diferente de POST /manual, onde o próprio gestor lança e confirma no
+// mesmo passo.
+//
+// O teto é conferido AQUI, e não só na confirmação: uma sessão não confirmada já entra em
+// `realizado` (ver domain/tetoAtividade.ts), então aprovar já estoura o teto na prática.
+export async function criarSessaoManualPendente(
+  atividadeId: number,
+  inicio: Date,
+  fim: Date,
+  observacao: string
+): Promise<{ status: number; body: Record<string, unknown>; sessaoId?: number }> {
+  const atividade = await prisma.atividadeConsultor.findUnique({ where: { id: atividadeId } });
+  if (!atividade) return { status: 404, body: { error: "Atividade não encontrada" } };
+
+  const coluna = await colunaDaAtividade(atividade);
+  if (!coluna) return { status: 400, body: { error: "Quadro Kanban sem colunas configuradas" } };
+
+  const recusa = await recusarSeEstourarTeto(atividade, inicio, fim);
+  if (recusa) return recusa;
+
+  const sessao = await prisma.atividadeSessaoExecucao.create({
+    data: { atividadeId, colunaId: coluna.id, inicio, fim, origem: "manual", observacao },
+  });
+  return { status: 201, body: { sessaoId: sessao.id }, sessaoId: sessao.id };
+}
+
 // Lança tempo sem uma sessão automática correspondente: cria a sessão já fechada e confirma
-// no mesmo passo, o que gera o RatItem e enfileira o envio ao Senior.
-//
-// Exportada porque a aprovação de uma solicitação avulsa do consultor precisa exatamente
-// disto (ver routes/solicitacoesApontamento.ts) — duplicar a sequência criaria dois
-// caminhos de gravação de apontamento pra manter em sincronia.
-//
-// A sessão só nasce aqui: enquanto a solicitação está pendente não existe sessão nenhuma, e
-// é isso que faz "só conta como apontamento depois de aprovado" valer no dado.
+// no mesmo passo, o que gera o RatItem e enfileira o envio ao Senior. É o atalho do gestor
+// (POST /manual) — a aprovação de solicitação usa criarSessaoManualPendente acima.
 export async function registrarApontamentoAvulso(
   atividadeId: number,
   inicio: Date,
@@ -448,9 +511,7 @@ export async function registrarApontamentoAvulso(
   const atividade = await prisma.atividadeConsultor.findUnique({ where: { id: atividadeId } });
   if (!atividade) return { status: 404, body: { error: "Atividade não encontrada" } };
 
-  const colunaAtual = atividade.colunaId
-    ? await prisma.quadroColuna.findUnique({ where: { id: atividade.colunaId } })
-    : await prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } });
+  const colunaAtual = await colunaDaAtividade(atividade);
   if (!colunaAtual) return { status: 400, body: { error: "Quadro Kanban sem colunas configuradas" } };
 
   const sessao = await prisma.atividadeSessaoExecucao.create({

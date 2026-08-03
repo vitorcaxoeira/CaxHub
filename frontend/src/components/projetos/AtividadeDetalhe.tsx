@@ -192,16 +192,23 @@ export function AtividadeDetalhe({
   // do excedente: pode haver vários pendentes na mesma atividade, um por dia esquecido.
   const [apontamentos, setApontamentos] = useState<SolicitacaoApontamento[]>([]);
   const [abrindoApontamento, setAbrindoApontamento] = useState(false);
-  const [inicioApontamento, setInicioApontamento] = useState("");
-  const [fimApontamento, setFimApontamento] = useState("");
+  // Uma data só: um apontamento começa e termina no mesmo dia. Antes eram dois
+  // datetime-local, o que deixava escolher datas diferentes sem querer.
+  const [dataApontamento, setDataApontamento] = useState("");
+  const [horaInicioApontamento, setHoraInicioApontamento] = useState("");
+  const [horaFimApontamento, setHoraFimApontamento] = useState("");
   const [motivoApontamento, setMotivoApontamento] = useState("");
   const [descricaoApontamento, setDescricaoApontamento] = useState("");
   const [enviandoApontamento, setEnviandoApontamento] = useState(false);
   const [erroApontamento, setErroApontamento] = useState<string | null>(null);
 
   async function enviarApontamento() {
-    if (!inicioApontamento || !fimApontamento) {
-      setErroApontamento("Informe o início e o fim.");
+    if (!dataApontamento || !horaInicioApontamento || !horaFimApontamento) {
+      setErroApontamento("Informe a data, a hora inicial e a hora final.");
+      return;
+    }
+    if (horaFimApontamento <= horaInicioApontamento) {
+      setErroApontamento("A hora final precisa ser depois da inicial.");
       return;
     }
     if (motivoApontamento.trim() === "") {
@@ -217,16 +224,18 @@ export function AtividadeDetalhe({
     try {
       await axios.post("/api/solicitacoes-apontamento", {
         atividadeId,
-        // O <input type="datetime-local"> devolve hora local sem fuso; o `new Date(...)`
-        // do navegador resolve pro instante certo, e o servidor recebe ISO com offset.
-        inicio: new Date(inicioApontamento).toISOString(),
-        fim: new Date(fimApontamento).toISOString(),
+        // "AAAA-MM-DDTHH:MM" sem fuso é lido como hora LOCAL pelo navegador, que é o que a
+        // pessoa digitou; o toISOString devolve o instante certo pro servidor. As duas
+        // horas usam a MESMA data — o fim assume o dia do início.
+        inicio: new Date(`${dataApontamento}T${horaInicioApontamento}`).toISOString(),
+        fim: new Date(`${dataApontamento}T${horaFimApontamento}`).toISOString(),
         motivo: motivoApontamento.trim(),
         descricao: descricaoApontamento.trim(),
       });
       setAbrindoApontamento(false);
-      setInicioApontamento("");
-      setFimApontamento("");
+      setDataApontamento("");
+      setHoraInicioApontamento("");
+      setHoraFimApontamento("");
       setMotivoApontamento("");
       setDescricaoApontamento("");
       carregar();
@@ -562,24 +571,34 @@ export function AtividadeDetalhe({
                     {abrindoApontamento ? (
                       <div className="space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <label htmlFor="apont-inicio" className="text-[12px] text-muted">
-                            De
+                          <label htmlFor="apont-data" className="text-[12px] text-muted">
+                            Data
                           </label>
                           <input
-                            id="apont-inicio"
-                            type="datetime-local"
-                            value={inicioApontamento}
-                            onChange={(e) => setInicioApontamento(e.target.value)}
+                            id="apont-data"
+                            type="date"
+                            value={dataApontamento}
+                            onChange={(e) => setDataApontamento(e.target.value)}
                             className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           />
-                          <label htmlFor="apont-fim" className="text-[12px] text-muted">
-                            até
+                          <label htmlFor="apont-hora-inicio" className="text-[12px] text-muted">
+                            das
                           </label>
                           <input
-                            id="apont-fim"
-                            type="datetime-local"
-                            value={fimApontamento}
-                            onChange={(e) => setFimApontamento(e.target.value)}
+                            id="apont-hora-inicio"
+                            type="time"
+                            value={horaInicioApontamento}
+                            onChange={(e) => setHoraInicioApontamento(e.target.value)}
+                            className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          />
+                          <label htmlFor="apont-hora-fim" className="text-[12px] text-muted">
+                            às
+                          </label>
+                          <input
+                            id="apont-hora-fim"
+                            type="time"
+                            value={horaFimApontamento}
+                            onChange={(e) => setHoraFimApontamento(e.target.value)}
                             className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           />
                         </div>
@@ -617,8 +636,8 @@ export function AtividadeDetalhe({
                     ) : (
                       <>
                         <p className="mb-2 text-[11.5px] text-muted">
-                          Trabalhou e esqueceu de mover o card? Peça o apontamento aqui — as horas entram depois que o
-                          gestor aprovar.
+                          Trabalhou e esqueceu de mover o card? Peça o apontamento aqui. Depois que o gestor aprovar, ele
+                          aparece em Meus Apontamentos pra você confirmar.
                         </p>
                         <button
                           onClick={() => setAbrindoApontamento(true)}
