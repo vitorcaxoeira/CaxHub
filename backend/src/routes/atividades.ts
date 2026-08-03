@@ -1382,7 +1382,11 @@ atividadesRouter.get("/:id/historico", async (req: AuthenticatedRequest, res) =>
 
     const historico = await prisma.atividadeHistoricoMovimentacao.findMany({
       where: { atividadeId: id },
-      orderBy: { movidoEm: "asc" },
+      // Mais recente primeiro, igual à Auditoria logo abaixo no mesmo painel. O `id` como
+      // desempate importa: liberação de excedente e movimentação de card nascem na mesma
+      // transação e podem dividir o milissegundo — só por `movidoEm` a ordem entre elas
+      // ficaria a cargo do banco.
+      orderBy: [{ movidoEm: "desc" }, { id: "desc" }],
       include: { colunaAnterior: true, colunaNova: true, user: { select: { nome: true } } },
     });
 
