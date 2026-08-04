@@ -11,9 +11,12 @@ interface ModalObservacaoAtividadeProps {
 }
 
 // Abre ao sair de "Em Andamento" (mover o card ou clicar Parar, ver Atividades.tsx) —
-// pré-preenche a Descrição em Meus Apontamentos depois. Fechar de qualquer jeito (Esc,
-// backdrop, "Pular") NÃO cancela a movimentação, que já aconteceu/foi confirmada pelo
-// usuário antes deste modal abrir — só decide se leva texto junto.
+// pré-preenche a Descrição em Meus Apontamentos depois. Fechar NÃO cancela a movimentação,
+// que já aconteceu/foi confirmada pelo usuário antes deste modal abrir — só decide se leva
+// texto junto.
+//
+// Sai só pelos botões (ou pelo ✕): clique fora e Esc não fecham, senão um clique torto na
+// tela descartaria o texto que a pessoa acabou de escrever.
 //
 // Vem com a descrição da atividade já escrita: o que a pessoa editar prevalece, e "Pular"
 // deixa a herança acontecer do lado do servidor de qualquer forma.
@@ -21,7 +24,7 @@ export function ModalObservacaoAtividade({ titulo, descricaoPadrao, onConfirmar,
   const [texto, setTexto] = useState(descricaoPadrao ?? "");
 
   return (
-    <Modal open onClose={onFechar} title="O que foi feito?" subtitulo={titulo}>
+    <Modal open onClose={onFechar} fecharPorFora={false} title="O que foi feito?" subtitulo={titulo}>
       <textarea
         autoFocus
         value={texto}

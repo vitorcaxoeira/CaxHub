@@ -153,7 +153,13 @@ export function VigiaFimDeJornada() {
   // Passo 2 — descrever o que foi feito antes de encerrar, igual ao Parar normal.
   if (descrevendo) {
     return (
-      <Modal open onClose={() => setDescrevendo(false)} title="O que foi feito?" subtitulo={`Proposta ${sessao.codpro}`}>
+      <Modal
+        open
+        onClose={() => setDescrevendo(false)}
+        fecharPorFora={false}
+        title="O que foi feito?"
+        subtitulo={`Proposta ${sessao.codpro}`}
+      >
         <div className="space-y-4 p-4">
           <textarea
             autoFocus

@@ -8,12 +8,17 @@ interface ModalProps {
   subtitulo?: string;
   children: ReactNode;
   className?: string;
+  // Desliga os fechamentos ACIDENTAIS — clique no backdrop e Esc. Pro modal que pede uma
+  // decisão (um texto, um sim/não), onde sair sem querer perde o que a pessoa escreveu.
+  // O ✕ do cabeçalho continua fechando: um <dialog> sem nenhuma saída pelo teclado seria
+  // uma armadilha de foco.
+  fecharPorFora?: boolean;
 }
 
 // Dialog nativo — foco preso e Esc de graça, sem precisar de lib. `onClose` cobre Esc
 // (evento `close` do <dialog>) e clique no backdrop (clique cujo alvo é o próprio
 // elemento, não um filho — <dialog> ocupa a tela toda quando aberto via showModal()).
-export function Modal({ open, onClose, title, subtitulo, children, className }: ModalProps) {
+export function Modal({ open, onClose, title, subtitulo, children, className, fecharPorFora = true }: ModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -27,7 +32,12 @@ export function Modal({ open, onClose, title, subtitulo, children, className }: 
     <dialog
       ref={ref}
       onClose={onClose}
-      onClick={(e) => e.target === ref.current && onClose()}
+      // Esc dispara `cancel` antes de `close`; barrar ali é o único jeito de impedir o
+      // fechamento nativo do <dialog>.
+      onCancel={(e) => {
+        if (!fecharPorFora) e.preventDefault();
+      }}
+      onClick={(e) => fecharPorFora && e.target === ref.current && onClose()}
       className={cn(
         // O Preflight do Tailwind zera `margin` de todo elemento (inclusive <dialog>) —
         // sem `m-auto` o <dialog nativo> perde a centralização automática que o
