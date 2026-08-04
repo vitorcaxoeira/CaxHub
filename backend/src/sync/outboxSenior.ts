@@ -7,6 +7,7 @@ import {
   formatarHoraSenior,
   ideExtItem,
   ideExtRat,
+  mensagemDeRecusa,
   registrarAtividadesViaSoap,
   runSqlViaSoap,
   SIS_ORI,
@@ -168,12 +169,8 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
   // A recusa é lida DEPOIS de localizar o item na resposta, porque o motivo específico
   // costuma vir no `msg` dele, não no `mensagemProcesso` geral — e é esse texto que o
   // consultor vê na tela (chega até lá via ultimoErro da pendência).
-  if (resposta.statusProcesso !== 1) {
-    const detalhes = [resposta.mensagemProcesso, itemRetornado?.msg].filter(Boolean).join(" — ");
-    throw new Error(
-      `Senior recusou o registro (statusProcesso=${resposta.statusProcesso}): ${detalhes || "sem mensagem"}`
-    );
-  }
+  const recusa = mensagemDeRecusa(resposta, itemRetornado?.msg);
+  if (recusa) throw new Error(recusa);
 
   if (resultado?.numRat == null || itemRetornado?.seqRat == null) {
     throw new Error(

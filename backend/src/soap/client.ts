@@ -12,6 +12,51 @@ function escapeXml(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
+// ---------------------------------------------------------------------------
+// Erros do Senior — TRÊS camadas, e cada uma fala por um canal diferente.
+// Medido contra o serviço real em 04/08/2026:
+//
+//   1. SOAP Fault      HTTP 4xx/5xx, com o motivo em <faultstring>. Ex.: chamar uma porta
+//                      inexistente devolve 400 e "A porta "x" não foi encontrada na lista
+//                      de serviços". O axios LANÇA nesse caso, então a resposta nunca
+//                      chega ao parser — e era aqui que o CaxHub perdia tudo, guardando só
+//                      "Request failed with status code 400". Ver a pendência 132.
+//   2. erroExecucao    HTTP 200 com o campo preenchido. Ex.: SQL inválido devolve
+//                      "Ocorreu um erro ao executar o serviço "Consulta Genérica": ...".
+//   3. statusProcesso  HTTP 200, campo != 1 — recusa de negócio de registrarAtividades,
+//                      com o texto em `mensagemProcesso` (o geral) e no `msg` do item (o
+//                      específico). O nome do campo é `mensagemProcesso`, confirmado no
+//                      XSD publicado: `mensagemRetorno` não existe em nenhuma operação.
+//
+// A precedência é essa mesma ordem: fault > erroExecucao > statusProcesso.
+// ---------------------------------------------------------------------------
+
+/** Texto do <faultstring> de um SOAP Fault, quando a resposta de erro trouxer um. */
+function faultstringDaResposta(corpo: unknown): string | null {
+  if (typeof corpo !== "string" || corpo === "") return null;
+  try {
+    const fault = parser.parse(corpo)?.["S:Envelope"]?.["S:Body"]?.["S:Fault"];
+    const texto = fault?.faultstring;
+    if (typeof texto === "string" && texto.trim() !== "") return texto.trim();
+  } catch {
+    // Corpo que não é XML — cai no recorte cru abaixo, melhor que perder a informação.
+  }
+  return null;
+}
+
+// Traduz a falha de uma chamada SOAP na mensagem mais informativa disponível. Sem isto,
+// todo erro de transporte vira "Request failed with status code 400" e o motivo que o
+// Senior mandou junto é jogado fora.
+export function mensagemDeFalhaSoap(erro: unknown, operacao: string): string {
+  if (axios.isAxiosError(erro) && erro.response) {
+    const fault = faultstringDaResposta(erro.response.data);
+    if (fault) return `Senior recusou "${operacao}" (HTTP ${erro.response.status}): ${fault}`;
+    const cru = typeof erro.response.data === "string" ? erro.response.data.slice(0, 500) : "";
+    return `Senior recusou "${operacao}" (HTTP ${erro.response.status})${cru ? `: ${cru}` : " — sem corpo na resposta"}`;
+  }
+  return erro instanceof Error ? erro.message : String(erro);
+}
+
 export interface RunSqlOptions {
   limit?: number;
   offSet?: number;
@@ -55,13 +100,17 @@ export async function runSqlViaSoap(query: string, options: RunSqlOptions = {}):
   </soapenv:Body>
 </soapenv:Envelope>`;
 
-  const response = await axios.post(endpoint, envelope, {
-    headers: {
-      "Content-Type": "text/xml; charset=utf-8",
-      SOAPAction: '""',
-    },
-    timeout: 20000,
-  });
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: {
+        "Content-Type": "text/xml; charset=utf-8",
+        SOAPAction: '""',
+      },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "getData"));
+    });
 
   const parsed = parser.parse(response.data);
   const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:getDataResponse"]?.result;
@@ -166,6 +215,19 @@ export interface ItemRegistrado {
   msg: string | null;
 }
 
+// Camada 3: recusa de negócio. `statusProcesso` 1 é sucesso — qualquer outro valor é
+// recusa, e o texto vem em `mensagemProcesso` (geral) e no `msg` do item (específico).
+// Os dois entram juntos porque nem sempre os dois vêm preenchidos, e qual deles traz o
+// motivo varia com a recusa.
+export function mensagemDeRecusa(
+  resposta: Pick<RegistrarAtividadesResposta, "statusProcesso" | "mensagemProcesso">,
+  msgDoItem: string | null | undefined
+): string | null {
+  if (resposta.statusProcesso === 1) return null;
+  const detalhes = [resposta.mensagemProcesso, msgDoItem].filter(Boolean).join(" — ");
+  return `Senior recusou o registro (statusProcesso=${resposta.statusProcesso}): ${detalhes || "sem mensagem"}`;
+}
+
 export interface RegistrarAtividadesResposta {
   /** 1 = sucesso (confirmado com o publicador do serviço). */
   statusProcesso: number | null;
@@ -259,10 +321,14 @@ export async function registrarAtividadesViaSoap(payload: RegistrarAtividadesPay
   const endpoint = soapUrl.replace(/\?wsdl$/i, "");
   const envelope = montarEnvelopeRegistrarAtividades(payload, soapUser, soapPassword);
 
-  const response = await axios.post(endpoint, envelope, {
-    headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
-    timeout: 20000,
-  });
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "registrarAtividades"));
+    });
 
   const parsed = parser.parse(response.data);
   const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:registrarAtividadesResponse"]?.result;
@@ -277,6 +343,8 @@ export async function registrarAtividadesViaSoap(payload: RegistrarAtividadesPay
   }
 
   return {
+    // camada 3 fica pro chamador (ver mensagemDeRecusa) — ele é quem tem o item da
+    // resposta em mãos, e o motivo específico costuma vir no `msg` dele.
     statusProcesso: numeroOuNulo(result.statusProcesso),
     mensagemProcesso: textoOuNulo(result.mensagemProcesso),
     erroExecucao,
