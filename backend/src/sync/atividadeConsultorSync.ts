@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { reconciliarAlocacoesOrfas, resumirReconciliacao } from "../domain/reconciliarEstrutura";
 
 export const JOB_NAME = "atividades_consultor-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -64,8 +65,14 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
       });
     }
 
+    // O Senior não tem como mandar `estruturaAtividadeId` — é conceito 100% CaxHub —, então
+    // toda alocação importada nasce sem nó na EAP e fica invisível no cronograma (que
+    // agrupa por nó, ver routes/alocacao.ts). A reconciliação roda AQUI, colada no import,
+    // pra não existir janela entre a órfã nascer e ganhar seu nó.
+    const reconciliacao = await reconciliarAlocacoesOrfas();
+
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success" },
+      data: { jobName: JOB_NAME, query, status: "success", message: resumirReconciliacao(reconciliacao) },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

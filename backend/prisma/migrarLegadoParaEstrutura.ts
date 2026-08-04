@@ -1,182 +1,86 @@
-// Migração de dado (não de schema): converte alocações do fluxo antigo "item" — direto
-// em AtividadeConsultor, sem `estruturaAtividadeId` — pro formato "estrutura" (EAP),
-// criando 1 EstruturaAtividade (tipo "atividade") por alocação legada, filha direta do
-// item, e linkando via estruturaAtividadeId. Mesmo formato que o lote novo já grava
-// (ver alocacaoRouter.post(".../alocar-lote") em backend/src/routes/alocacao.ts):
-// nome = nome do item, responsavelCodfor = consultor.
+// Reconciliação de alocações órfãs — as que não têm `estruturaAtividadeId` e por isso não
+// aparecem no cronograma (que agrupa por nó da EAP, ver routes/alocacao.ts).
 //
-// Escopo: só propostas com sitpro Aprovada(4) ou Em Execução(7) — as únicas situações
-// que as telas de alocação (item ou estrutura) liberam hoje (SITPRO_ALOCAVEL, ver
-// backend/src/domain/propostasDominio.ts). Propostas fora desse recorte já são
-// inacessíveis nas duas telas, migrar não muda nada visível.
+// A REGRA NÃO MORA MAIS AQUI. Desde 04/08/2026 ela é `reconciliarAlocacoesOrfas` em
+// src/domain/reconciliarEstrutura.ts, chamada automaticamente no fim do
+// atividadeConsultorSync — o Senior não sabe preencher aquele campo, então toda alocação
+// importada nascia invisível, e um script manual só resolvia até a próxima importação.
 //
-// Cobre as 2 formas de "modo item" que existem hoje: implícita (sem PropostaModoAlocacao,
-// inferida por já ter AtividadeConsultor ativa — era o fallback de resolverModoAlocacao)
-// e explícita (PropostaModoAlocacao.modo="item", de quando o modal "Como esta proposta
-// será alocada?" ainda existia e alguém escolheu "Por item"). As duas viram "estrutura".
+// Este arquivo sobrou como a porta de linha de comando da MESMA função: serve pra rodar a
+// reconciliação sob demanda (backfill, ou depois de mexer no recorte) e pra ver o relatório
+// antes de gravar. Duas cópias da regra divergiriam no primeiro ajuste.
 //
-// TAMBÉM varre propostas JÁ em "estrutura" atrás de AtividadeConsultor órfã (sem
-// estruturaAtividadeId) — achado rodando a 1ª vez em produção: mesmo proposta migrada
-// há meses continua recebendo alocação nova sem nó na EAP (provável efeito do sync do
-// Senior, que grava AtividadeConsultor direto, sem noção nenhuma de estruturaAtividadeId
-// — um conceito 100% CaxHub). Ou seja, essa lacuna é contínua, não só histórica; rodar
-// este script periodicamente (não só uma vez) faz sentido até existir uma reconciliação
-// automática. Pra proposta já "estrutura", só cria os nós que faltam — não mexe no modo.
-//
-// Idempotente: só cria nó pra alocação que ainda não tem estruturaAtividadeId — seguro
-// rodar quantas vezes precisar.
+// Idempotente: só toca alocação sem nó.
 //
 // Uso:
-//   npx ts-node prisma/migrarLegadoParaEstrutura.ts              (relatório, não grava nada)
-//   npx ts-node prisma/migrarLegadoParaEstrutura.ts --aplicar    (grava de verdade)
+//   node_modules/.bin/ts-node prisma/migrarLegadoParaEstrutura.ts              (relatório)
+//   node_modules/.bin/ts-node prisma/migrarLegadoParaEstrutura.ts --aplicar    (grava)
 import { prisma } from "../src/db/prisma";
-import { truncarNomeEstrutura } from "../src/domain/estruturaAtividadeDominio";
-
-const SITPRO_ALOCAVEL = [4, 7];
+import { reconciliarAlocacoesOrfas, resumirReconciliacao } from "../src/domain/reconciliarEstrutura";
+import { SITPRO_ALOCAVEL } from "../src/domain/propostasDominio";
 
 const aplicar = process.argv.includes("--aplicar");
 
-async function main() {
-  const propostasComModo = await prisma.propostaModoAlocacao.findMany({ select: { codemp: true, codpro: true, modo: true } });
-  // "estrutura" já migrada/definida: pula (idempotência). "item" explícito: entra no
-  // recorte pra virar "estrutura" também (com UPDATE em vez de CREATE no final).
-  const jaEstrutura = new Set(propostasComModo.filter((p) => p.modo === "estrutura").map((p) => `${p.codemp}-${p.codpro}`));
-  const itemExplicito = new Set(propostasComModo.filter((p) => p.modo === "item").map((p) => `${p.codemp}-${p.codpro}`));
-
-  const alocacoesLegadas = await prisma.atividadeConsultor.findMany({
+// Recalcula o mesmo recorte da função, sem gravar nada — é o que dá pra conferir o alcance
+// antes de aplicar.
+async function relatorio() {
+  const orfas = await prisma.atividadeConsultor.findMany({
     where: { sitreg: "A", estruturaAtividadeId: null },
-    orderBy: [{ codemp: "asc" }, { codpro: "asc" }, { id: "asc" }],
+    select: { id: true, codemp: true, codpro: true, seqite: true, codfor: true, qtdhor: true },
   });
-
-  const porProposta = new Map<string, typeof alocacoesLegadas>();
-  for (const a of alocacoesLegadas) {
-    const chave = `${a.codemp}-${a.codpro}`;
-    if (!porProposta.has(chave)) porProposta.set(chave, []);
-    porProposta.get(chave)!.push(a);
-  }
-  // Proposta com "item" explícito mas 0 alocação ativa não aparece em `porProposta`
-  // (não tem nenhuma linha em atividades_consultor pra iterar) — garante que ela ainda
-  // entre no recorte, só pra trocar o modo (sem nó nenhum pra criar).
-  for (const chave of itemExplicito) {
-    if (!jaEstrutura.has(chave) && !porProposta.has(chave)) porProposta.set(chave, []);
-  }
-
-  const chaves = [...porProposta.keys()];
-  const propostasInfo =
-    chaves.length > 0
-      ? await prisma.proposta.findMany({
-          where: { OR: chaves.map((c) => { const [codemp, codpro] = c.split("-").map(Number); return { codemp, codpro }; }) },
-          select: { codemp: true, codpro: true, sitpro: true },
-        })
-      : [];
-  const sitproPorProposta = new Map(propostasInfo.map((p) => [`${p.codemp}-${p.codpro}`, p.sitpro]));
-
-  const candidatas: {
-    chave: string;
-    codemp: number;
-    codpro: number;
-    alocacoes: typeof alocacoesLegadas;
-    jaTinhaConfigItem: boolean;
-    jaEraEstrutura: boolean;
-  }[] = [];
-  for (const [chave, alocs] of porProposta) {
-    const sitpro = sitproPorProposta.get(chave);
-    if (sitpro == null || !SITPRO_ALOCAVEL.includes(sitpro)) continue;
-    const [codemp, codpro] = chave.split("-").map(Number);
-    candidatas.push({ chave, codemp, codpro, alocacoes: alocs, jaTinhaConfigItem: itemExplicito.has(chave), jaEraEstrutura: jaEstrutura.has(chave) });
-  }
-  // "item" explícito sem alocação ativa nenhuma (0 nós pra criar, só troca o modo) não
-  // aparece em `porProposta` — inclui aqui também.
-  for (const chave of itemExplicito) {
-    if (candidatas.some((c) => c.chave === chave)) continue;
-    const [codemp, codpro] = chave.split("-").map(Number);
-    const sitpro = sitproPorProposta.get(chave);
-    if (sitpro == null || !SITPRO_ALOCAVEL.includes(sitpro)) continue;
-    candidatas.push({ chave, codemp, codpro, alocacoes: [], jaTinhaConfigItem: true, jaEraEstrutura: false });
-  }
-
-  const totalAlocacoes = candidatas.reduce((s, c) => s + c.alocacoes.length, 0);
-  const comConfigItem = candidatas.filter((c) => c.jaTinhaConfigItem).length;
-  const reconciliacaoEstrutura = candidatas.filter((c) => c.jaEraEstrutura).length;
-  console.log(`\n=== Migração/reconciliação legado -> estrutura ${aplicar ? "(APLICANDO)" : "(RELATÓRIO — nada será gravado)"} ===\n`);
-  console.log(`Propostas candidatas (sitpro 4 ou 7, com alocação órfã ou "item" explícita): ${candidatas.length}`);
-  console.log(`  — das quais com PropostaModoAlocacao="item" explícita (vão virar "estrutura"): ${comConfigItem}`);
-  console.log(`  — das quais JÁ em "estrutura" (só reconciliação de órfãs, modo não muda): ${reconciliacaoEstrutura}`);
-  console.log(`Alocações ativas nessas propostas: ${totalAlocacoes}`);
-
-  const anomalas = candidatas.flatMap((c) =>
-    c.alocacoes.filter((a) => a.qtdhor == null || a.qtdhor <= 0).map((a) => ({ ...a, codemp: c.codemp, codpro: c.codpro }))
+  const chaves = [...new Set(orfas.map((a) => `${a.codemp}-${a.codpro}`))];
+  const propostas = await prisma.proposta.findMany({
+    where: {
+      OR: chaves.map((c) => {
+        const [codemp, codpro] = c.split("-").map(Number);
+        return { codemp, codpro };
+      }),
+    },
+    select: { codemp: true, codpro: true, sitpro: true },
+  });
+  const alocaveis = new Set(
+    propostas.filter((p) => p.sitpro != null && SITPRO_ALOCAVEL.includes(p.sitpro)).map((p) => `${p.codemp}-${p.codpro}`)
   );
-  if (anomalas.length > 0) {
-    console.log(`\n${anomalas.length} alocação(ões) com qtdhor inválido (NÃO serão migradas, revisar manualmente):`);
-    for (const a of anomalas) {
-      console.log(`  id=${a.id} codemp=${a.codemp} codpro=${a.codpro} seqite=${a.seqite} codfor=${a.codfor} qtdhor=${a.qtdhor}`);
-    }
+  const modoItem = new Set(
+    (await prisma.propostaModoAlocacao.findMany({ where: { modo: "item" }, select: { codemp: true, codpro: true } })).map(
+      (m) => `${m.codemp}-${m.codpro}`
+    )
+  );
+
+  const elegiveis = orfas.filter((a) => alocaveis.has(`${a.codemp}-${a.codpro}`) && !modoItem.has(`${a.codemp}-${a.codpro}`));
+  const itens = await prisma.propostaItem.findMany({ select: { codemp: true, codpro: true, seqite: true } });
+  const temItem = new Set(itens.map((i) => `${i.codemp}-${i.codpro}-${i.seqite}`));
+  const semItem = elegiveis.filter((a) => !temItem.has(`${a.codemp}-${a.codpro}-${a.seqite}`));
+  const horas = elegiveis.reduce((s, a) => s + (a.qtdhor ?? 0), 0);
+  const propostasAfetadas = [...new Set(elegiveis.map((a) => `${a.codemp}-${a.codpro}`))];
+
+  console.log(`\n=== Reconciliação de alocações órfãs ${aplicar ? "(APLICANDO)" : "(RELATÓRIO — nada será gravado)"} ===\n`);
+  console.log(`Alocações ativas sem nó, no total da base: ${orfas.length}`);
+  console.log(`  fora do recorte alocável (sitpro não ${SITPRO_ALOCAVEL.join("/")}) ou modo "item": ${orfas.length - elegiveis.length}`);
+  console.log(`  >> ELEGÍVEIS: ${elegiveis.length} alocações (${Math.round(horas / 60)}h) em ${propostasAfetadas.length} propostas`);
+  console.log(`     das quais aguardando o PropostaItem chegar (ficam pra próxima passagem): ${semItem.length}`);
+  console.log(`\npropostas: ${propostasAfetadas.join(", ")}`);
+  const semQtd = elegiveis.filter((a) => a.qtdhor == null || a.qtdhor <= 0);
+  if (semQtd.length > 0) {
+    console.log(`\n${semQtd.length} com qtdhor inválido — o nó é criado assim mesmo (duracaoHoras nula), pra não`);
+    console.log(`ficarem invisíveis: ${semQtd.map((a) => `${a.codemp}-${a.codpro}/${a.seqite}#${a.id}`).join(", ")}`);
   }
+}
+
+async function main() {
+  await relatorio();
 
   if (!aplicar) {
     console.log("\nRodar com --aplicar para gravar.\n");
     return;
   }
 
-  let propostasMigradas = 0;
-  let nosCriados = 0;
-
-  for (const c of candidatas) {
-    const validas = c.alocacoes.filter((a) => a.qtdhor != null && a.qtdhor > 0);
-
-    const seqites = [...new Set(validas.map((a) => a.seqite))];
-    const itens =
-      seqites.length > 0
-        ? await prisma.propostaItem.findMany({
-            where: { codemp: c.codemp, codpro: c.codpro, seqite: { in: seqites } },
-            select: { seqite: true, despro: true, codser: true },
-          })
-        : [];
-    const itemPorSeqite = new Map(itens.map((i) => [i.seqite, i]));
-
-    await prisma.$transaction(async (tx) => {
-      const ordemPorSeqite = new Map<number, number>();
-      for (const a of validas) {
-        const item = itemPorSeqite.get(a.seqite);
-        if (!item) {
-          console.warn(`  aviso: PropostaItem não encontrado pra codemp=${c.codemp} codpro=${c.codpro} seqite=${a.seqite}, pulando alocação id=${a.id}`);
-          continue;
-        }
-        const nome = truncarNomeEstrutura(item.despro ?? item.codser);
-        const ordem = ordemPorSeqite.get(a.seqite) ?? 0;
-        ordemPorSeqite.set(a.seqite, ordem + 1);
-
-        const no = await tx.estruturaAtividade.create({
-          data: {
-            codemp: c.codemp,
-            codpro: c.codpro,
-            seqite: a.seqite,
-            parentId: null,
-            tipo: "atividade",
-            nome,
-            ordem,
-            duracaoHoras: a.qtdhor,
-            responsavelCodfor: a.codfor,
-            dataPrevistaInicio: a.dataPrevistaInicio,
-            dataPrevistaFim: a.dataPrevistaFim,
-          },
-        });
-        await tx.atividadeConsultor.update({ where: { id: a.id }, data: { estruturaAtividadeId: no.id } });
-        nosCriados++;
-      }
-      if (c.jaEraEstrutura) {
-        // Já estava em "estrutura" — só reconciliação de órfãs, não mexe no modo.
-      } else if (c.jaTinhaConfigItem) {
-        await tx.propostaModoAlocacao.update({ where: { codemp_codpro: { codemp: c.codemp, codpro: c.codpro } }, data: { modo: "estrutura" } });
-      } else {
-        await tx.propostaModoAlocacao.create({ data: { codemp: c.codemp, codpro: c.codpro, modo: "estrutura" } });
-      }
-    });
-    propostasMigradas++;
+  const r = await reconciliarAlocacoesOrfas();
+  console.log(`\nConcluído: ${resumirReconciliacao(r)}.`);
+  if (r.pendentes.length > 0) {
+    console.log(`Aguardando item: ${r.pendentes.map((p) => `${p.codemp}-${p.codpro}/${p.seqite}#${p.id}`).join(", ")}`);
   }
-
-  console.log(`\nConcluído: ${propostasMigradas} propostas processadas, ${nosCriados} nós criados.\n`);
+  console.log("");
 }
 
 main()
