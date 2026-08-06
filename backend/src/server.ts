@@ -99,20 +99,22 @@ const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 
 app.listen(port, () => {
   console.log(`CaxHub backend rodando na porta ${port}`);
+  // Mesma ordem de dependência do registry (sync/registry.ts) — ver lá o porquê de
+  // Portador e Transação virem antes dos Títulos.
   scheduleEmpresaSync();
   scheduleFilialSync();
   scheduleClienteSync();
   scheduleTipoTituloSync();
+  schedulePortadorSync();
+  scheduleTransacaoSync();
   scheduleTituloReceberSync();
   scheduleMovimentoTituloReceberSync();
   scheduleRepresentanteSync();
   scheduleCentroCustoSync();
   scheduleMovimentoContaSync();
   scheduleNaturezaFinanceiraSync();
-  schedulePortadorSync();
   scheduleMoedaSync();
   scheduleContaCorrenteSync();
-  scheduleTransacaoSync();
   schedulePropostaSync();
   schedulePropostaItemSync();
   scheduleConsultorSync();

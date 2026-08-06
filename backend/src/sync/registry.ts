@@ -64,21 +64,37 @@ export interface ItemRemovido {
   marcado: boolean;
 }
 
+// A ORDEM É A ORDEM DE DEPENDÊNCIA — é ela que "Sincronizar tudo" segue, e num banco VAZIO
+// cada FK precisa do alvo já carregado. As arestas que existem hoje:
+//
+//   Filial                 -> Empresa
+//   TituloReceber          -> Cliente, TipoTitulo, Portador
+//   MovimentoTituloReceber -> TituloReceber, Transacao
+//   Proposta               -> Cliente
+//   PropostaItem           -> Proposta
+//   AtividadeConsultor     -> FaseProposta
+//   RatItem                -> Rat
+//
+// Portador e Transação estavam DEPOIS dos títulos e foram movidos pra cá. O defeito era
+// invisível nesta base porque as tabelas já estão populadas de cargas antigas — o upsert
+// acha o alvo de qualquer jeito. Só aparece em restore pra base limpa, e aí a carga inteira
+// de Títulos a Receber morre por FK e derruba os Movimentos junto (medido no CaxHub_Hedel,
+// que nasceu vazio: 0 de 23.937 linhas).
 export const SYNC_JOBS: SyncJobDescriptor[] = [
   { jobName: EMPRESA_JOB, displayName: "Empresas", cronExpr: EMPRESA_CRON, suportaAlterados: EMPRESA_DATA != null, run: runEmpresaSync, contarRegistros: () => prisma.empresa.count() },
   { jobName: FILIAL_JOB, displayName: "Filiais", cronExpr: FILIAL_CRON, suportaAlterados: FILIAL_DATA != null, run: runFilialSync, contarRegistros: () => prisma.filial.count() },
   { jobName: CLIENTE_JOB, displayName: "Clientes", cronExpr: CLIENTE_CRON, suportaAlterados: CLIENTE_DATA != null, run: runClienteSync, contarRegistros: () => prisma.cliente.count() },
   { jobName: TIPO_TITULO_JOB, displayName: "Tipos de Título", cronExpr: TIPO_TITULO_CRON, suportaAlterados: TIPO_TITULO_DATA != null, run: runTipoTituloSync, contarRegistros: () => prisma.tipoTitulo.count() },
+  { jobName: PORTADOR_JOB, displayName: "Portadores", cronExpr: PORTADOR_CRON, suportaAlterados: PORTADOR_DATA != null, run: runPortadorSync, contarRegistros: () => prisma.portador.count() },
+  { jobName: TRANSACAO_JOB, displayName: "Transações", cronExpr: TRANSACAO_CRON, suportaAlterados: TRANSACAO_DATA != null, run: runTransacaoSync, contarRegistros: () => prisma.transacao.count() },
   { jobName: TITULO_RECEBER_JOB, displayName: "Títulos a Receber", cronExpr: TITULO_RECEBER_CRON, suportaAlterados: TITULO_RECEBER_DATA != null, run: runTituloReceberSync, contarRegistros: () => prisma.tituloReceber.count() },
   { jobName: MOVIMENTO_TITULO_JOB, displayName: "Movimentos de Títulos a Receber", cronExpr: MOVIMENTO_TITULO_CRON, suportaAlterados: MOVIMENTO_TITULO_DATA != null, run: runMovimentoTituloReceberSync, contarRegistros: () => prisma.movimentoTituloReceber.count() },
   { jobName: REPRESENTANTE_JOB, displayName: "Representantes", cronExpr: REPRESENTANTE_CRON, suportaAlterados: REPRESENTANTE_DATA != null, run: runRepresentanteSync, contarRegistros: () => prisma.representante.count() },
   { jobName: CENTRO_CUSTO_JOB, displayName: "Centros de Custo", cronExpr: CENTRO_CUSTO_CRON, suportaAlterados: CENTRO_CUSTO_DATA != null, run: runCentroCustoSync, contarRegistros: () => prisma.centroCusto.count() },
   { jobName: MOVIMENTO_CONTA_JOB, displayName: "Movimentos de Conta", cronExpr: MOVIMENTO_CONTA_CRON, suportaAlterados: MOVIMENTO_CONTA_DATA != null, run: runMovimentoContaSync, contarRegistros: () => prisma.movimentoConta.count() },
   { jobName: NATUREZA_FINANCEIRA_JOB, displayName: "Naturezas Financeiras", cronExpr: NATUREZA_FINANCEIRA_CRON, suportaAlterados: NATUREZA_FINANCEIRA_DATA != null, run: runNaturezaFinanceiraSync, contarRegistros: () => prisma.naturezaFinanceira.count() },
-  { jobName: PORTADOR_JOB, displayName: "Portadores", cronExpr: PORTADOR_CRON, suportaAlterados: PORTADOR_DATA != null, run: runPortadorSync, contarRegistros: () => prisma.portador.count() },
   { jobName: MOEDA_JOB, displayName: "Moedas", cronExpr: MOEDA_CRON, suportaAlterados: MOEDA_DATA != null, run: runMoedaSync, contarRegistros: () => prisma.moeda.count() },
   { jobName: CONTA_CORRENTE_JOB, displayName: "Contas Correntes", cronExpr: CONTA_CORRENTE_CRON, suportaAlterados: CONTA_CORRENTE_DATA != null, run: runContaCorrenteSync, contarRegistros: () => prisma.contaCorrente.count() },
-  { jobName: TRANSACAO_JOB, displayName: "Transações", cronExpr: TRANSACAO_CRON, suportaAlterados: TRANSACAO_DATA != null, run: runTransacaoSync, contarRegistros: () => prisma.transacao.count() },
   { jobName: PROPOSTA_JOB, displayName: "Propostas", cronExpr: PROPOSTA_CRON, suportaAlterados: PROPOSTA_DATA != null, run: runPropostaSync, contarRegistros: () => prisma.proposta.count() },
   { jobName: PROPOSTA_ITEM_JOB, displayName: "Itens de Proposta", cronExpr: PROPOSTA_ITEM_CRON, suportaAlterados: PROPOSTA_ITEM_DATA != null, run: runPropostaItemSync, contarRegistros: () => prisma.propostaItem.count() },
   { jobName: CONSULTOR_JOB, displayName: "Consultores", cronExpr: CONSULTOR_CRON, suportaAlterados: CONSULTOR_DATA != null, run: runConsultorSync, contarRegistros: () => prisma.consultor.count() },
