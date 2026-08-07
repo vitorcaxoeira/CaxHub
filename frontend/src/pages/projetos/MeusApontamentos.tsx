@@ -96,7 +96,6 @@ interface RatItemRow {
   seqrat: number | null;
   // Estado do envio ao ERP: pendente | enviando | enviado | bloqueado | null.
   envioStatus: string | null;
-  ajustePendente: AjustePendente | null;
 }
 
 interface ConsultorFiltro {
@@ -177,13 +176,11 @@ function AcaoIntegracao({
   reenviando,
   onReenviar,
   onExcluir,
-  onPedirAjuste,
 }: {
   item: RatItemRow;
   reenviando: boolean;
   onReenviar: () => void;
   onExcluir: () => void;
-  onPedirAjuste: () => void;
 }) {
   if (item.confirmadoNoSenior) {
     return (
@@ -237,15 +234,13 @@ function AcaoIntegracao({
           Enviar
         </button>
       )}
+      {/* Sem "Pedir ajuste" aqui de propósito: o ajuste só existe ANTES de confirmar (ver
+          confirmarSessao no backend). Depois de confirmado o apontamento já está na RAT e,
+          em segundos, no Senior. */}
       {item.editavel && item.sessaoId != null && (
-        <>
-          <button onClick={onPedirAjuste} className="text-[11px] text-primary hover:underline">
-            Pedir ajuste
-          </button>
-          <button onClick={onExcluir} className="text-[11px] text-destructive hover:underline">
-            Excluir
-          </button>
-        </>
+        <button onClick={onExcluir} className="text-[11px] text-destructive hover:underline">
+          Excluir
+        </button>
       )}
       {!podeEnviar && !item.editavel && <span className="text-[11px] text-muted">—</span>}
     </span>
@@ -1183,13 +1178,7 @@ export function MeusApontamentos() {
                                     </thead>
                                     <tbody>
                                       {itens.map((item) => (
-                                        <tr
-                                          key={item.id}
-                                          className={`border-t border-border/40 ${
-                                            item.ajustePendente ? "border-l-2 border-l-warning bg-warning/5" : ""
-                                          }`}
-                                          title={item.ajustePendente ? "Ajuste de horário aguardando o gestor — envio ao Senior retido" : undefined}
-                                        >
+                                        <tr key={item.id} className="border-t border-border/40">
                                           <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums">
                                             {item.atividadeId != null ? (
                                               <button
@@ -1250,26 +1239,6 @@ export function MeusApontamentos() {
                                               reenviando={reenviando.has(item.id)}
                                               onReenviar={() => reenviarAoSenior(item.id, rat.id)}
                                               onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
-                                              onPedirAjuste={() => {
-                                                const titulo = `RAT ${rat.id} · ${
-                                                  item.horini != null && item.horfim != null
-                                                    ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}`
-                                                    : "sem horário"
-                                                }`;
-                                                if (item.ajustePendente) {
-                                                  abrirPedidoAjuste(item.sessaoId!, titulo, "", null, item.ajustePendente);
-                                                  return;
-                                                }
-                                                // datati/horini/horfim já são hora de parede
-                                                // brasileira (ver RatItem no schema) —
-                                                // alimentam os inputs direto, sem conversão.
-                                                setPedidoAjuste({ sessaoId: item.sessaoId!, titulo, pendente: null });
-                                                setAjusteData(item.datati ? item.datati.slice(0, 10) : "");
-                                                setAjusteInicio(item.horini != null ? formatHoraDoDia(item.horini) : "");
-                                                setAjusteFim(item.horfim != null ? formatHoraDoDia(item.horfim) : "");
-                                                setAjusteMotivo("");
-                                                setErroAjuste(null);
-                                              }}
                                             />
                                           </td>
                                         </tr>

@@ -182,6 +182,23 @@ async function confirmarSessao(
   if (!sessao) return { status: 404, body: { error: "Sessão não encontrada" } };
   if (sessao.confirmada) return { status: 400, body: { error: "Sessão já confirmada" } };
   if (sessao.fim == null) return { status: 400, body: { error: "Sessão ainda em andamento" } };
+  if (sessao.excluidaEm != null) return { status: 400, body: { error: "Apontamento excluído" } };
+
+  // Ajuste de horário aguardando o gestor barra a confirmação AQUI, e não na hora de
+  // integrar: assim o apontamento nem chega a virar RatItem, nem entra na RAT com o
+  // horário que está em discussão. Decidido o pedido, a confirmação segue normal.
+  const ajustePendente = await prisma.solicitacaoAjusteApontamento.findFirst({
+    where: { sessaoId, status: "pendente" },
+    select: { id: true },
+  });
+  if (ajustePendente) {
+    return {
+      status: 409,
+      body: {
+        error: `Há um ajuste de horário aguardando o gestor (solicitação ${ajustePendente.id}) — confirme depois da decisão`,
+      },
+    };
+  }
 
   const atividade = sessao.atividade;
   const item = await prisma.propostaItem.findUnique({

@@ -119,10 +119,14 @@ solicitacoesAjusteRouter.post("/", async (req: AuthenticatedRequest, res) => {
       res.status(400).json({ error: "Apontamento excluído — não há o que ajustar" });
       return;
     }
-    // A regra do fluxo: nada que já esteja no Senior é alterado. Depois do `numrat` a
-    // correção precisa acontecer no ERP.
-    if (sessao.ratItem?.numrat != null) {
-      res.status(400).json({ error: "Já registrado no Senior — o horário não pode mais ser corrigido por aqui" });
+    // O ajuste é ANTES de confirmar. Depois de confirmado o apontamento já é um RatItem
+    // dentro de uma RAT e, em segundos, um registro no Senior — e a regra do fluxo é nunca
+    // alterar o que já foi pro ERP. Quem confirmou com o horário errado exclui e refaz.
+    //
+    // É o que faz a trava viver na confirmação (ver confirmarSessao em routes/apontamentos.ts)
+    // em vez de na integração: o apontamento em discussão nem chega a entrar na RAT.
+    if (sessao.confirmada || sessao.ratItemId != null) {
+      res.status(400).json({ error: "Apontamento já confirmado — o ajuste precisa ser pedido antes de confirmar" });
       return;
     }
 
@@ -394,22 +398,12 @@ solicitacoesAjusteRouter.post("/:id/decidir", async (req: AuthenticatedRequest, 
       });
 
       if (aprovar) {
-        // Sessão e RatItem andam JUNTOS: a sessão é a fonte do realizado, o RatItem é o que
-        // viaja pro Senior. Mover só um deixaria os dois discordando.
+        // Só a sessão: o pedido só existe antes de confirmar, então não há RatItem pra
+        // acertar junto. O horário aprovado é o que a confirmação vai levar pra RAT.
         await tx.atividadeSessaoExecucao.update({
           where: { id: sessao.id },
           data: { inicio: inicio!, fim: fim! },
         });
-        if (sessao.ratItem) {
-          await tx.ratItem.update({
-            where: { id: sessao.ratItem.id },
-            data: {
-              datati: diaBrasilComoData(inicio!),
-              horini: paraHoraBrasil(inicio!).minutosDoDia,
-              horfim: paraHoraBrasil(fim!).minutosDoDia,
-            },
-          });
-        }
       }
 
       await tx.atividadeHistoricoMovimentacao.create({
@@ -450,18 +444,9 @@ solicitacoesAjusteRouter.post("/:id/decidir", async (req: AuthenticatedRequest, 
       user.id
     );
 
-    // Decidido, a retenção some e o apontamento pode seguir pro Senior com o valor final.
-    // Fire-and-forget, igual à confirmação — quem espera é a fila, não a resposta HTTP.
-    const pendencia = await prisma.sincronizacaoPendente.findFirst({
-      where: { tipo: "criar_apontamento", atividadeId: atividade.id, status: "pendente" },
-      orderBy: { id: "desc" },
-    });
-    if (pendencia) {
-      processarFilaSincronizacao({ apenasId: pendencia.id }).catch((erro) => {
-        console.error("[solicitacoes-ajuste] envio pós-decisão falhou:", erro);
-      });
-    }
-
+    // Nada a liberar na fila: o apontamento ainda não foi confirmado, então não existe
+    // pendência de envio. Quem leva o horário final pro Senior é a confirmação, que volta
+    // a ser permitida agora que o pedido foi decidido.
     res.json({ id, status: aprovar ? "aprovada" : "reprovada" });
   } catch (error) {
     handleError(res, error, "decidir");
