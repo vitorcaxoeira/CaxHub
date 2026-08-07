@@ -270,6 +270,19 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
       }
     }
 
+    // Pedido de ajuste de horário aguardando o gestor. A tela destaca a linha e abre o
+    // formulário em leitura — e é este mesmo pendente que retém o envio ao Senior (ver
+    // RetidoPorAjusteError em sync/outboxSenior.ts), então mostrar é o que explica por que
+    // o apontamento parou de andar.
+    const sessaoIds = itens.map((i) => i.sessoes[0]?.id).filter((v): v is number => v != null);
+    const ajustes =
+      sessaoIds.length > 0
+        ? await prisma.solicitacaoAjusteApontamento.findMany({
+            where: { status: "pendente", sessaoId: { in: sessaoIds } },
+          })
+        : [];
+    const ajustePorSessao = new Map(ajustes.map((a) => [a.sessaoId, a]));
+
     res.json({
       itens: itens.map((item) => {
         const propostaItem =
@@ -289,6 +302,12 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           desati: item.desati,
           confirmadoNoSenior: item.numrat != null,
           editavel: souDono && item.numrat == null && rat.sitrat === 9,
+          ajustePendente: (() => {
+            const a = item.sessoes[0] ? ajustePorSessao.get(item.sessoes[0].id) : undefined;
+            return a
+              ? { id: a.id, inicioSolicitado: a.inicioSolicitado, fimSolicitado: a.fimSolicitado, motivo: a.motivo, criadoEm: a.criadoEm }
+              : null;
+          })(),
           // Identidade atribuída pelo Senior — só existe depois do registro.
           numrat: item.numrat,
           seqrat: item.seqrat,

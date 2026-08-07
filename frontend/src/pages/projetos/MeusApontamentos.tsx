@@ -15,6 +15,17 @@ import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 
+
+// Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
+// apontamento ao Senior fica retido no servidor.
+interface AjustePendente {
+  id: number;
+  inicioSolicitado: string;
+  fimSolicitado: string;
+  motivo: string;
+  criadoEm: string;
+}
+
 interface SessaoPendente {
   id: number;
   atividadeId: number;
@@ -30,6 +41,7 @@ interface SessaoPendente {
   duracaoMinutos: number;
   origem: string;
   observacao: string | null;
+  ajustePendente: AjustePendente | null;
 }
 
 interface AtividadeResumo {
@@ -84,6 +96,7 @@ interface RatItemRow {
   seqrat: number | null;
   // Estado do envio ao ERP: pendente | enviando | enviado | bloqueado | null.
   envioStatus: string | null;
+  ajustePendente: AjustePendente | null;
 }
 
 interface ConsultorFiltro {
@@ -272,7 +285,14 @@ export function MeusApontamentos() {
 
   // Pedido de correção de horário. Enquanto pendente, o envio do apontamento ao Senior fica
   // retido no servidor — é o que permite corrigir sem alterar nada do lado do ERP.
-  const [pedidoAjuste, setPedidoAjuste] = useState<{ sessaoId: number; titulo: string } | null>(null);
+  // `pendente` preenchido = já existe pedido aguardando o gestor; o formulário abre em
+  // leitura. Deixar editar seria oferecer uma ação que o servidor recusa: o índice único
+  // parcial só admite um pendente por apontamento.
+  const [pedidoAjuste, setPedidoAjuste] = useState<{
+    sessaoId: number;
+    titulo: string;
+    pendente: AjustePendente | null;
+  } | null>(null);
   const [ajusteData, setAjusteData] = useState("");
   const [ajusteInicio, setAjusteInicio] = useState("");
   const [ajusteFim, setAjusteFim] = useState("");
@@ -689,6 +709,25 @@ export function MeusApontamentos() {
     }
   }
 
+  // Um ponto só pra abrir o formulário, das duas tabelas. Com pedido pendente, os campos
+  // nascem com o que FOI PEDIDO (não com o horário atual) — é o que a pessoa quer conferir.
+  function abrirPedidoAjuste(
+    sessaoId: number,
+    titulo: string,
+    inicioAtual: string,
+    fimAtual: string | null,
+    pendente: AjustePendente | null
+  ) {
+    setPedidoAjuste({ sessaoId, titulo, pendente });
+    const inicio = pendente?.inicioSolicitado ?? inicioAtual;
+    const fim = pendente?.fimSolicitado ?? fimAtual;
+    setAjusteData(paraInputData(inicio));
+    setAjusteInicio(paraInputHora(inicio));
+    setAjusteFim(fim ? paraInputHora(fim) : "");
+    setAjusteMotivo(pendente?.motivo ?? "");
+    setErroAjuste(null);
+  }
+
   async function enviarPedidoAjuste() {
     if (!pedidoAjuste) return;
     if (!ajusteData || !ajusteInicio || !ajusteFim) {
@@ -840,7 +879,14 @@ export function MeusApontamentos() {
                     ))}
                   {!loading &&
                     sessoes.map((s) => (
-                      <tr key={s.id} className="border-t border-border/60">
+                      // Faixa âmbar à esquerda quando há ajuste aguardando o gestor: a
+                      // linha está congelada até a decisão, e sem marca isso não se vê.
+                      <tr
+                        key={s.id}
+                        className={`border-t border-border/60 ${
+                          s.ajustePendente ? "border-l-2 border-l-warning bg-warning/5" : ""
+                        }`}
+                      >
                         <td className="hidden px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">{s.id}</td>
                         <td className="px-2.5 py-3.5 text-sm font-semibold text-foreground">{s.codpro}</td>
                         {/* O próprio id abre a atividade — mesmo padrão da tabela de itens
@@ -908,19 +954,17 @@ export function MeusApontamentos() {
                                   como o rastreamento gravou. Quem precisa de outro
                                   intervalo pede aqui, antes de confirmar. */}
                               <DropdownMenu.Item
-                                onSelect={() => {
-                                  setPedidoAjuste({
-                                    sessaoId: s.id,
-                                    titulo: `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
-                                  });
-                                  setAjusteData(paraInputData(s.inicio));
-                                  setAjusteInicio(paraInputHora(s.inicio));
-                                  setAjusteFim(s.fim ? paraInputHora(s.fim) : "");
-                                  setAjusteMotivo("");
-                                  setErroAjuste(null);
-                                }}
+                                onSelect={() =>
+                                  abrirPedidoAjuste(
+                                    s.id,
+                                    `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
+                                    s.inicio,
+                                    s.fim,
+                                    s.ajustePendente
+                                  )
+                                }
                               >
-                                Pedir ajuste de horário
+                                {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
                               </DropdownMenu.Item>
                               {/* Antes daqui não havia como apagar uma sessão rastreada
                                   errada — só restava confirmar e desfazer depois. */}
@@ -1139,7 +1183,13 @@ export function MeusApontamentos() {
                                     </thead>
                                     <tbody>
                                       {itens.map((item) => (
-                                        <tr key={item.id} className="border-t border-border/40">
+                                        <tr
+                                          key={item.id}
+                                          className={`border-t border-border/40 ${
+                                            item.ajustePendente ? "border-l-2 border-l-warning bg-warning/5" : ""
+                                          }`}
+                                          title={item.ajustePendente ? "Ajuste de horário aguardando o gestor — envio ao Senior retido" : undefined}
+                                        >
                                           <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums">
                                             {item.atividadeId != null ? (
                                               <button
@@ -1201,17 +1251,19 @@ export function MeusApontamentos() {
                                               onReenviar={() => reenviarAoSenior(item.id, rat.id)}
                                               onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
                                               onPedirAjuste={() => {
+                                                const titulo = `RAT ${rat.id} · ${
+                                                  item.horini != null && item.horfim != null
+                                                    ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}`
+                                                    : "sem horário"
+                                                }`;
+                                                if (item.ajustePendente) {
+                                                  abrirPedidoAjuste(item.sessaoId!, titulo, "", null, item.ajustePendente);
+                                                  return;
+                                                }
                                                 // datati/horini/horfim já são hora de parede
                                                 // brasileira (ver RatItem no schema) —
                                                 // alimentam os inputs direto, sem conversão.
-                                                setPedidoAjuste({
-                                                  sessaoId: item.sessaoId!,
-                                                  titulo: `RAT ${rat.id} · ${
-                                                    item.horini != null && item.horfim != null
-                                                      ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}`
-                                                      : "sem horário"
-                                                  }`,
-                                                });
+                                                setPedidoAjuste({ sessaoId: item.sessaoId!, titulo, pendente: null });
                                                 setAjusteData(item.datati ? item.datati.slice(0, 10) : "");
                                                 setAjusteInicio(item.horini != null ? formatHoraDoDia(item.horini) : "");
                                                 setAjusteFim(item.horfim != null ? formatHoraDoDia(item.horfim) : "");
@@ -1294,13 +1346,20 @@ export function MeusApontamentos() {
           open
           onClose={() => setPedidoAjuste(null)}
           fecharPorFora={false}
-          title="Pedir ajuste de horário"
+          title={pedidoAjuste.pendente ? "Ajuste aguardando o gestor" : "Pedir ajuste de horário"}
           subtitulo={pedidoAjuste.titulo}
         >
           <div className="space-y-3 p-4">
-            <p className="text-[12.5px] text-muted">
-              O envio deste apontamento ao Senior fica retido até o gestor decidir — o ERP só recebe o horário final.
-            </p>
+            {pedidoAjuste.pendente ? (
+              <p className="rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2 text-[12.5px] text-warning">
+                Pedido enviado em {dataCurtaFormatter.format(new Date(pedidoAjuste.pendente.criadoEm))} às {horaCurtaFormatter.format(new Date(pedidoAjuste.pendente.criadoEm))}, aguardando decisão. O
+                envio ao Senior está retido até lá. Para mudar o horário pedido, o gestor precisa decidir este pedido antes.
+              </p>
+            ) : (
+              <p className="text-[12.5px] text-muted">
+                O envio deste apontamento ao Senior fica retido até o gestor decidir — o ERP só recebe o horário final.
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <label htmlFor="aj-data" className="text-[12px] text-muted">
                 Data
@@ -1310,6 +1369,7 @@ export function MeusApontamentos() {
                 type="date"
                 value={ajusteData}
                 onChange={(e) => setAjusteData(e.target.value)}
+                disabled={pedidoAjuste.pendente != null}
                 className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
               <label htmlFor="aj-ini" className="text-[12px] text-muted">
@@ -1320,6 +1380,7 @@ export function MeusApontamentos() {
                 type="time"
                 value={ajusteInicio}
                 onChange={(e) => setAjusteInicio(e.target.value)}
+                disabled={pedidoAjuste.pendente != null}
                 className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
               <label htmlFor="aj-fim" className="text-[12px] text-muted">
@@ -1330,32 +1391,38 @@ export function MeusApontamentos() {
                 type="time"
                 value={ajusteFim}
                 onChange={(e) => setAjusteFim(e.target.value)}
+                disabled={pedidoAjuste.pendente != null}
                 className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
             <textarea
               value={ajusteMotivo}
               onChange={(e) => setAjusteMotivo(e.target.value)}
+              disabled={pedidoAjuste.pendente != null}
               rows={3}
               placeholder="Motivo da correção — é o que o gestor lê pra decidir"
               className="w-full resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
             {erroAjuste && <p className="text-[12px] text-destructive">{erroAjuste}</p>}
+            {/* Com pedido pendente não há o que enviar — só fechar. Mostrar um botão que o
+                servidor recusaria seria prometer uma ação que não existe. */}
             <div className="flex items-center justify-end gap-2">
               <button
                 onClick={() => setPedidoAjuste(null)}
                 disabled={enviandoAjuste}
                 className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
               >
-                Cancelar
+                {pedidoAjuste.pendente ? "Fechar" : "Cancelar"}
               </button>
-              <button
-                onClick={enviarPedidoAjuste}
-                disabled={enviandoAjuste}
-                className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-              >
-                {enviandoAjuste ? "Enviando..." : "Enviar para o gestor"}
-              </button>
+              {!pedidoAjuste.pendente && (
+                <button
+                  onClick={enviarPedidoAjuste}
+                  disabled={enviandoAjuste}
+                  className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                >
+                  {enviandoAjuste ? "Enviando..." : "Enviar para o gestor"}
+                </button>
+              )}
             </div>
           </div>
         </Modal>

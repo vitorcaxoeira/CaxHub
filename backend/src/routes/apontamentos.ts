@@ -433,6 +433,14 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     const itens = chavesItem.length > 0 ? await prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : [];
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
 
+    // Pedido de ajuste de horário aguardando o gestor — a tela destaca a linha e abre o
+    // formulário em leitura, em vez de deixar pedir de novo (o índice único parcial da
+    // migration recusaria de qualquer forma).
+    const ajustes = await prisma.solicitacaoAjusteApontamento.findMany({
+      where: { status: "pendente", sessaoId: { in: sessoes.map((s) => s.id) } },
+    });
+    const ajustePorSessao = new Map(ajustes.map((a) => [a.sessaoId, a]));
+
     res.json({
       sessoes: sessoes.map((s) => {
         const proposta = propostaPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
@@ -452,6 +460,12 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           duracaoMinutos: s.fim ? Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000) : 0,
           origem: s.origem,
           observacao: s.observacao,
+          ajustePendente: (() => {
+            const a = ajustePorSessao.get(s.id);
+            return a
+              ? { id: a.id, inicioSolicitado: a.inicioSolicitado, fimSolicitado: a.fimSolicitado, motivo: a.motivo, criadoEm: a.criadoEm }
+              : null;
+          })(),
         };
       }),
     });
