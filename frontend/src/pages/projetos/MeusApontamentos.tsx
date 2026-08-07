@@ -2,6 +2,7 @@ import axios from "axios";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { formatHoras } from "../../utils/horas";
+import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Spinner } from "../../components/ui/Spinner";
 import { Pagination } from "../../components/ui/Pagination";
@@ -894,6 +895,27 @@ export function MeusApontamentos() {
                             <DropdownMenu.Content>
                               <DropdownMenu.Item onSelect={() => confirmar(s.id)} disabled={confirmando === s.id}>
                                 {confirmando === s.id ? "Confirmando..." : "Confirmar"}
+                              </DropdownMenu.Item>
+                              {/* Confirmar não deixa mexer no horário — só manda a sessão
+                                  como o rastreamento gravou. Quem precisa de outro
+                                  intervalo pede aqui, antes de confirmar. */}
+                              <DropdownMenu.Item
+                                onSelect={() => {
+                                  setPedidoAjuste({
+                                    sessaoId: s.id,
+                                    titulo: `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
+                                  });
+                                  setAjusteData(paraInputData(s.inicio));
+                                  setAjusteInicio(paraInputHora(s.inicio));
+                                  setAjusteFim(s.fim ? paraInputHora(s.fim) : "");
+                                  setAjusteMotivo("");
+                                  setErroAjuste(null);
+                                }}
+                              >
+                                Pedir ajuste de horário
+                              </DropdownMenu.Item>
+                              <DropdownMenu.Item onSelect={() => abrirDetalheAtividade(s.atividadeId)}>
+                                Ver atividade
                               </DropdownMenu.Item>
                               {/* Antes daqui não havia como apagar uma sessão rastreada
                                   errada — só restava confirmar e desfazer depois. */}

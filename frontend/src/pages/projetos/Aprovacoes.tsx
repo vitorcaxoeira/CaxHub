@@ -7,6 +7,7 @@ import {
   SolicitacaoExcedente,
 } from "../../components/projetos/AtividadeDetalhe";
 import { formatHoras, horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
+import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
 
 // Cabeçalho da atividade devolvido por GET /atividades/:id/detalhe — os mesmos campos que
 // o painel consome, igual ao que Meus Apontamentos já faz pra abrir o drawer sem ter o
@@ -81,20 +82,6 @@ const TOM_STATUS: Record<string, string> = {
 // "03/08 09:00 – 10:30" a partir de dois ISO.
 function intervalo(inicio: string, fim: string): string {
   return `${dateTimeFormatter.format(new Date(inicio))} – ${dateTimeFormatter.format(new Date(fim))}`;
-}
-
-// Os inputs `date`/`time` querem hora LOCAL; um ISO cru (UTC) preencheria o campo com o
-// horário deslocado.
-const p2 = (n: number) => String(n).padStart(2, "0");
-
-function paraInputData(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
-}
-
-function paraInputHora(iso: string): string {
-  const d = new Date(iso);
-  return `${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
 
 const classeBotao = {
