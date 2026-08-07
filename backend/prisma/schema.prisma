@@ -835,6 +835,17 @@ model AtividadeSessaoExecucao {
 
   ajustesSolicitados SolicitacaoAjusteApontamento[]
 
+  // Sinal de "a aba pode estar fechando", vindo do `pagehide` do navegador (ver
+  // POST /:id/agendar-parada). NÃO fecha a sessão na hora: o navegador não distingue
+  // fechar a aba de dar F5, e os dois disparam o mesmo evento. Fica pendente por um
+  // respiro curto — se o app voltar a perguntar por esta sessão nesse meio tempo
+  // (GET /minha-sessao-aberta, que o vigia já consulta a cada 30s), o campo volta a null
+  // sozinho, e é isso que tolera o F5 sem precisar de estado nenhum no cliente. Se
+  // ninguém voltar a perguntar, uma checagem à parte (pararSessoesAoFecharPagina.ts,
+  // separada da varredura de teto/expediente por rodar bem mais frequente) fecha a
+  // sessão usando ESTE instante — não o momento em que a checagem reparou.
+  fechamentoSolicitadoEm DateTime?
+
   @@index([atividadeId])
   @@map("atividade_sessoes_execucao")
 }

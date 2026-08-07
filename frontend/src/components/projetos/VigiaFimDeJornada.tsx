@@ -61,6 +61,41 @@ export function VigiaFimDeJornada() {
   // não volta. A chave inclui o início, pra uma sessão NOVA poder ser encerrada depois.
   const encerrando = useRef<string | null>(null);
 
+  // Espelha `sessao` a cada render pro listener de `pagehide` (registrado uma vez só, ver
+  // abaixo) sempre ler a sessão ATUAL no instante do fechamento — sem isto, o listener
+  // fecharia sobre a sessão de quando a página abriu, mesma classe de bug do commit
+  // 6464c34 desta semana (closure obsoleta presa num efeito com `[]` de dependência).
+  const sessaoRef = useRef<SessaoVigiada | null>(null);
+  sessaoRef.current = sessao;
+
+  // O navegador não distingue "fechei a aba" de "dei F5" — os dois disparam `pagehide`.
+  // Por isso isto NÃO para a atividade: só avisa o servidor "posso estar fechando"
+  // (POST /:id/agendar-parada). Se a página voltar a perguntar pela sessão dentro de uns
+  // segundos (o polling normal deste mesmo componente, ver `consultar` abaixo), o servidor
+  // cancela sozinho — é isso que tolera o F5. Se ninguém voltar, quem fecha de fato é
+  // sync/pararSessoesAoFecharPagina.ts, no backend.
+  //
+  // `pagehide` e não `beforeunload`: não dispara em navegação dentro do próprio SPA (trocar
+  // de rota não é "a página saindo"), não tira a página do cache de voltar/avançar do
+  // navegador, e não arrisca abrir um prompt de confirmação — só precisa de um aviso
+  // silencioso. `fetch` com `keepalive` e não `navigator.sendBeacon` porque este projeto
+  // autentica por header Authorization (sendBeacon não deixa setar headers).
+  useEffect(() => {
+    function aoFechar() {
+      const atual = sessaoRef.current;
+      if (!atual) return;
+      const token = localStorage.getItem("token");
+      if (!token) return;
+      fetch(`/api/atividades/${atual.atividadeId}/agendar-parada`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        keepalive: true,
+      }).catch(() => {});
+    }
+    window.addEventListener("pagehide", aoFechar);
+    return () => window.removeEventListener("pagehide", aoFechar);
+  }, []);
+
   const consultar = useCallback(async () => {
     try {
       const { data } = await axios.get("/api/atividades/minha-sessao-aberta");

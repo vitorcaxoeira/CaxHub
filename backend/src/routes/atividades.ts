@@ -894,6 +894,33 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
 // 2 horas. Validadas no servidor e não só no <select> — o valor chega pelo body.
 const OPCOES_PRORROGACAO_MIN = [15, 30, 45, 60, 75, 90, 105, 120];
 
+// Chamada de bastidor: o `pagehide` do navegador dispara isto ao fechar a aba — mas o
+// navegador não distingue fechar de dar F5, os dois disparam o mesmo evento. Por isso NÃO
+// fecha nada aqui, só anota a intenção (ver comentário do campo no schema.prisma). Quem
+// fecha de verdade, se ninguém voltar a dar sinal, é sync/pararSessoesAoFecharPagina.ts.
+//
+// `keepalive: true` do fetch garante a entrega mesmo com a página fechando, mas ninguém do
+// lado do cliente vai ler a resposta — por isso responde sempre 204, mesmo sem achar
+// sessão aberta (dono errado, já fechada, corrida com outra aba). Não é um endpoint que
+// alguém possa "usar errado": só grava em cima da PRÓPRIA sessão aberta do chamador.
+atividadesRouter.post("/:id/agendar-parada", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    const meuCodfor = ctx?.contexto.consultor?.codfor;
+    if (meuCodfor == null) {
+      res.status(204).send();
+      return;
+    }
+    await prisma.atividadeSessaoExecucao.updateMany({
+      where: { atividadeId: Number(req.params.id), fim: null, atividade: { codfor: meuCodfor } },
+      data: { fechamentoSolicitadoEm: new Date() },
+    });
+    res.status(204).send();
+  } catch (error) {
+    handleError(res, error, "agendar-parada");
+  }
+});
+
 // Sessão aberta do consultor LOGADO, com o limite e o prazo de resposta. Endpoint enxuto
 // de propósito: é consultado a cada 30s pelo vigia que roda em qualquer tela, e puxar o
 // payload inteiro de GET /atividades (centenas de KB) pra isso seria desproporcional.
@@ -918,6 +945,17 @@ atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, r
     if (!sessao) {
       res.json({ sessao: null });
       return;
+    }
+
+    // Se um `pagehide` tinha marcado esta sessão pra fechar, e o app está aqui perguntando
+    // por ela — o vigia só consulta isto de dentro do app rodando —, a intenção não se
+    // confirmou. É este cancelamento, e não nenhum estado guardado no navegador, que
+    // tolera o F5 (ver POST /:id/agendar-parada e sync/pararSessoesAoFecharPagina.ts).
+    if (sessao.fechamentoSolicitadoEm != null) {
+      await prisma.atividadeSessaoExecucao.update({
+        where: { id: sessao.id },
+        data: { fechamentoSolicitadoEm: null },
+      });
     }
 
     const jornada = await prisma.jornadaConsultor.findUnique({

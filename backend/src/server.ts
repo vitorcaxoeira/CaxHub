@@ -57,6 +57,7 @@ import { scheduleFormaPagamentoSync } from "./sync/formaPagamentoSync";
 import { scheduleCondicaoPagamentoSync } from "./sync/condicaoPagamentoSync";
 import { scheduleOutboxSeniorSync } from "./sync/outboxSenior";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
+import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 
 garantirDiretorioUploads();
 
@@ -130,6 +131,9 @@ app.listen(port, () => {
   scheduleFormaPagamentoSync();
   scheduleCondicaoPagamentoSync();
   scheduleOutboxSeniorSync();
-  // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas.
+  // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do
+  // fim do expediente (5 em 5 min), e a que ficou sem resposta depois de a aba fechar
+  // (15 em 15s — cadência bem mais curta, ver o comentário no arquivo).
   agendarParadaAutomatica();
+  agendarParadaPorFechamento();
 });
