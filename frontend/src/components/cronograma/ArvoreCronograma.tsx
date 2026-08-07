@@ -692,6 +692,8 @@ export function ArvoreCronograma({
         <DrawerAtividade
           no={drawerNo}
           item={itemDoDrawer}
+          codemp={codemp}
+          codpro={codpro}
           porId={porId}
           agregados={agregados}
           candidatosPredecessora={candidatosPredecessora}

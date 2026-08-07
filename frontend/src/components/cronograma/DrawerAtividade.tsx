@@ -20,6 +20,11 @@ interface DrawerAtividadeProps {
   // usuário digita (ver projetarSaldo). Undefined pra pasta (não tem horasPrevistas
   // editável) ou se por algum motivo o item não for encontrado.
   item?: NoCronogramaCompleto;
+  // Só pra completar a chamada de GET /alocacao/consultores-elegiveis, que exige os
+  // quatro (depexe/codemp/codpro/seqite) — mesmas duas props que ArvoreCronograma já
+  // repassa pro ModalAlocarConsultores vizinho.
+  codemp: string;
+  codpro: string;
   porId: Map<number, NoCronogramaCompleto>;
   agregados: Map<number, HorasAgregadas>;
   candidatosPredecessora: NoCronogramaCompleto[];
@@ -32,6 +37,8 @@ interface DrawerAtividadeProps {
 export function DrawerAtividade({
   no,
   item,
+  codemp,
+  codpro,
   porId,
   agregados,
   candidatosPredecessora,
@@ -72,12 +79,30 @@ export function DrawerAtividade({
   }, [no.id]);
 
   useEffect(() => {
-    if (no.tipo !== "atividade" || no.depexe == null) return;
+    // A rota exige os quatro — sem codemp/codpro/seqite ela devolve 400 (era exatamente o
+    // bug: SÓ depexe ia, a chamada falhava sempre, e o catch engolia em silêncio deixando
+    // `consultores` eternamente vazio — todo responsável aparecia em branco no <select>,
+    // mesmo o nó já tendo um.
+    if (no.tipo !== "atividade" || no.depexe == null || no.seqite == null) return;
     axios
-      .get("/api/alocacao/consultores-elegiveis", { params: { depexe: no.depexe } })
-      .then(({ data }) => setConsultores(data.consultores))
+      .get("/api/alocacao/consultores-elegiveis", {
+        params: { depexe: no.depexe, codemp, codpro, seqite: no.seqite },
+      })
+      .then(({ data }) => {
+        const lista: { codfor: number; nome: string }[] = data.consultores;
+        // O responsável gravado pode não estar mais no time do departamento — é o caso de
+        // alocação entre departamentos, que este projeto suporta de propósito (ver
+        // podeMexerNoItem em alocacao.ts). Sem essa entrada, o <select> voltaria a mostrar
+        // em branco pra esse caso, e salvar sem tocar no campo apagaria o nome gravado
+        // (ver `consultorSelecionado` em salvar() abaixo).
+        const responsavelForaDoTime =
+          no.responsavelCodfor != null && !lista.some((c) => c.codfor === no.responsavelCodfor);
+        setConsultores(
+          responsavelForaDoTime ? [...lista, { codfor: no.responsavelCodfor!, nome: no.responsavelNome ?? `Fornecedor ${no.responsavelCodfor}` }] : lista
+        );
+      })
       .catch(() => setConsultores([]));
-  }, [no.tipo, no.depexe]);
+  }, [no.tipo, no.depexe, no.seqite, no.responsavelCodfor, no.responsavelNome, codemp, codpro]);
 
   useEffect(() => {
     function aoTeclar(e: KeyboardEvent) {
