@@ -5,6 +5,9 @@ import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamento
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
 import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
+import { criarEventoAuditoria } from "../audit/registrarEvento";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
 // rastreou (ver AtividadeSessaoExecucao / PATCH /atividades/:id/mover) e confirma —
@@ -38,13 +41,30 @@ function minutosDesdeMeiaNoite(data: Date): number {
 }
 
 // Dia brasileiro do instante, como meia-noite UTC — o formato que @db.Date espera.
-function diaBrasilComoData(data: Date): Date {
+// Exportada porque a aprovação de ajuste de horário (routes/solicitacoesAjuste.ts) reescreve
+// datati/horini/horfim do RatItem e precisa da MESMA conversão — duas cópias divergiriam, e
+// já custou caro uma vez (ver o comentário de fuso acima).
+export function diaBrasilComoData(data: Date): Date {
   const { ano, mes, dia } = paraHoraBrasil(data);
   return new Date(Date.UTC(ano, mes - 1, dia));
 }
 
 function nomeConsultor(c: { codfor: number | null; nomcom: string | null; nomfor: string | null }): string {
   return c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`;
+}
+
+// "07/08 09:00–10:30 (1:30)" — hora de parede brasileira, nunca o relógio do servidor.
+// Usado nas frases de histórico e notificação de exclusão e de ajuste.
+export function descreverIntervaloSessao(inicio: Date, fim: Date | null): string {
+  const hhmm = (d: Date) => {
+    const h = paraHoraBrasil(d);
+    return `${String(Math.trunc(h.minutosDoDia / 60)).padStart(2, "0")}:${String(h.minutosDoDia % 60).padStart(2, "0")}`;
+  };
+  const i = paraHoraBrasil(inicio);
+  const dia = `${String(i.dia).padStart(2, "0")}/${String(i.mes).padStart(2, "0")}`;
+  if (!fim) return `${dia} ${hhmm(inicio)} (em aberto)`;
+  const duracao = Math.round((fim.getTime() - inicio.getTime()) / 60000);
+  return `${dia} ${hhmm(inicio)}–${hhmm(fim)} (${formatarMinutos(duracao)})`;
 }
 
 // Quem pode lançar apontamento MANUAL: só admin e Líder Técnico (quem gerencia algum
@@ -394,7 +414,7 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     }
 
     const sessoes = await prisma.atividadeSessaoExecucao.findMany({
-      where: { fim: { not: null }, confirmada: false, atividade: { codfor, sitreg: "A" } },
+      where: { fim: { not: null }, confirmada: false, excluidaEm: null, atividade: { codfor, sitreg: "A" } },
       include: { atividade: true, coluna: true },
       orderBy: { id: "desc" },
     });
@@ -796,11 +816,11 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       res.status(404).json({ error: "Apontamento não encontrado" });
       return;
     }
-    if (!sessao.confirmada || !sessao.ratItem) {
-      res.status(400).json({ error: "Sessão ainda não confirmada — nada a desfazer" });
+    if (sessao.excluidaEm != null) {
+      res.status(400).json({ error: "Apontamento já excluído" });
       return;
     }
-    if (sessao.ratItem.numrat != null) {
+    if (sessao.ratItem?.numrat != null) {
       res.status(400).json({ error: "Já confirmado no Senior — não é possível excluir" });
       return;
     }
@@ -808,15 +828,53 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       where: { tipo: "criar_apontamento", atividadeId: sessao.atividadeId },
       orderBy: { id: "desc" },
     });
-    if (pendencia && pendencia.status !== "pendente") {
+    if (sessao.ratItem && pendencia && pendencia.status !== "pendente") {
       res.status(400).json({ error: "Envio já em andamento ou bloqueado — não é possível excluir" });
       return;
     }
 
-    const ratItemId = sessao.ratItem.id;
-    await prisma.atividadeSessaoExecucao.update({ where: { id: sessaoId }, data: { confirmada: false, ratItemId: null } });
-    if (pendencia) await prisma.sincronizacaoPendente.delete({ where: { id: pendencia.id } });
-    await prisma.ratItem.delete({ where: { id: ratItemId } });
+    // Exclusão LÓGICA da sessão: antes isto desfazia a confirmação, e o apontamento voltava
+    // pra fila de "a confirmar" — quem queria apagar via o item reaparecer. Agora a sessão
+    // é marcada e sai de vista, do realizado e da fila de confirmação.
+    //
+    // O RatItem, ao contrário, é apagado de verdade: ele é espelho de um documento do ERP,
+    // e guardar um "excluído" que nunca chegou lá não descreve nada. Só existe quando a
+    // sessão já tinha sido confirmada — a exclusão vale também pra sessão que nunca foi.
+    const ratItemId = sessao.ratItem?.id ?? null;
+    const fato = `excluiu o apontamento de ${descreverIntervaloSessao(sessao.inicio, sessao.fim)}`;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.atividadeSessaoExecucao.update({
+        where: { id: sessaoId },
+        data: { excluidaEm: new Date(), excluidaPorId: ctx!.user.id, confirmada: false, ratItemId: null },
+      });
+      if (pendencia) await tx.sincronizacaoPendente.delete({ where: { id: pendencia.id } });
+      if (ratItemId) await tx.ratItem.delete({ where: { id: ratItemId } });
+      await tx.atividadeHistoricoMovimentacao.create({
+        data: { atividadeId: sessao.atividadeId, tipo: "apontamento_excluido", descricao: fato, userId: ctx!.user.id },
+      });
+      await criarEventoAuditoria(
+        {
+          origem: "tela",
+          usuarioId: ctx!.user.id,
+          codemp: sessao.atividade.codemp,
+          codpro: sessao.atividade.codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+          entidadeId: entidadeIdAtividade(sessao.atividadeId),
+          entidadeRotulo: `Atividade — Proposta ${sessao.atividade.codpro}`,
+          eventoTipo: EVENTOS_AUDITORIA.APONTAMENTO_EXCLUIDO,
+          alteracoes: null,
+          metadata: {
+            inicio: sessao.inicio.toISOString(),
+            fim: sessao.fim?.toISOString() ?? null,
+            estavaConfirmada: sessao.confirmada,
+            ratItemRemovido: ratItemId,
+          },
+          correlationId: req.correlationId!,
+        },
+        tx
+      );
+    });
 
     res.status(204).send();
   } catch (error) {

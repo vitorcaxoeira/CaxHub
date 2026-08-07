@@ -48,6 +48,13 @@ export const EVENTOS_AUDITORIA = {
   APONTAMENTO_APROVADO: "APONTAMENTO_APROVADO",
   APONTAMENTO_REPROVADO: "APONTAMENTO_REPROVADO",
 
+  // Exclusão lógica do apontamento pelo próprio consultor (ação direta, sem aprovação), e
+  // o pedido de correção de horário, que passa pelo gestor.
+  APONTAMENTO_EXCLUIDO: "APONTAMENTO_EXCLUIDO",
+  AJUSTE_SOLICITADO: "AJUSTE_SOLICITADO",
+  AJUSTE_APROVADO: "AJUSTE_APROVADO",
+  AJUSTE_REPROVADO: "AJUSTE_REPROVADO",
+
   KANBAN_RAIA_ALTERADA: "KANBAN_RAIA_ALTERADA",
 
   // Ciclo de vida de execução — nascem de PATCH /atividades/:id/mover, a partir de

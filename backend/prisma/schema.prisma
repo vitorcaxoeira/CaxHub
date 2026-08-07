@@ -39,6 +39,9 @@ model User {
   excedentesDecididos    SolicitacaoHorasExcedentes[] @relation("excedenteDecisor")
   apontamentosSolicitados SolicitacaoApontamento[]    @relation("apontamentoSolicitante")
   apontamentosDecididos   SolicitacaoApontamento[]    @relation("apontamentoDecisor")
+  sessoesExcluidas        AtividadeSessaoExecucao[]   @relation("sessaoExcluidaPor")
+  ajustesSolicitados      SolicitacaoAjusteApontamento[] @relation("ajusteSolicitante")
+  ajustesDecididos        SolicitacaoAjusteApontamento[] @relation("ajusteDecisor")
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -819,8 +822,65 @@ model AtividadeSessaoExecucao {
 
   criadoEm DateTime @default(now())
 
+  // Exclusão lógica, feita pelo próprio consultor em Meus Apontamentos. NÃO apaga a linha:
+  // a hora trabalhada é registro do que aconteceu, e quem excluiu precisa ficar visível.
+  //
+  // Uma sessão excluída some de TRÊS lugares, e os três importam: da fila de "a confirmar"
+  // (GET /apontamentos/sessoes-pendentes), do realizado da atividade (domain/tetoAtividade.ts
+  // e o cálculo em lote de routes/atividades.ts — senão a hora excluída segue consumindo o
+  // teto) e da tabela de RATs da tela.
+  excluidaEm    DateTime?
+  excluidaPorId Int?
+  excluidaPor   User?     @relation("sessaoExcluidaPor", fields: [excluidaPorId], references: [id], onDelete: SetNull)
+
+  ajustesSolicitados SolicitacaoAjusteApontamento[]
+
   @@index([atividadeId])
   @@map("atividade_sessoes_execucao")
+}
+
+// Pedido do consultor pra corrigir o horário de um apontamento que ele já confirmou, e a
+// decisão do gestor — dado 100% do CaxHub.
+//
+// Existe porque a regra é NUNCA alterar o que já foi registrado no Senior. Como o envio
+// dispara na hora da confirmação (processarFilaSincronizacao em routes/apontamentos.ts), a
+// janela pra corrigir duraria segundos. Então uma solicitação pendente RETÉM o envio (ver
+// sync/outboxSenior.ts): o ERP só recebe o valor final, e nunca precisa ser alterado lá.
+//
+// Solicitado, aprovado e anterior em colunas separadas: o que foi pedido continua legível
+// mesmo quando o gestor grava outra coisa, e `inicioAnterior`/`fimAnterior` guardam o valor
+// que a sessão tinha antes — é o histórico do dado substituído.
+model SolicitacaoAjusteApontamento {
+  id            Int  @id @default(autoincrement())
+  sessaoId      Int
+  solicitanteId Int?
+
+  // IMUTÁVEIS.
+  inicioSolicitado DateTime
+  fimSolicitado    DateTime
+  motivo           String   @db.VarChar(1000)
+  criadoEm         DateTime @default(now())
+
+  // pendente | aprovada | reprovada
+  status            String    @default("pendente") @db.VarChar(20)
+  decididoPorId     Int?
+  decididoEm        DateTime?
+  inicioAprovado    DateTime?
+  fimAprovado       DateTime?
+  observacaoDecisao String?   @db.VarChar(1000)
+  // O que a sessão tinha antes de aprovar.
+  inicioAnterior    DateTime?
+  fimAnterior       DateTime?
+
+  sessao      AtividadeSessaoExecucao @relation(fields: [sessaoId], references: [id], onDelete: Cascade)
+  solicitante User?                   @relation("ajusteSolicitante", fields: [solicitanteId], references: [id], onDelete: SetNull)
+  decididoPor User?                   @relation("ajusteDecisor", fields: [decididoPorId], references: [id], onDelete: SetNull)
+
+  @@index([sessaoId])
+  @@index([status])
+  // O índice único parcial que garante UM pendente por apontamento vai em SQL cru na
+  // migration (Prisma não expressa `WHERE`) — é ele que sustenta a retenção do envio.
+  @@map("solicitacoes_ajuste_apontamento")
 }
 
 // Cabeçalho de RAT (Registro de Atividade Técnica) — espelho parcial de USU_TE777RAT

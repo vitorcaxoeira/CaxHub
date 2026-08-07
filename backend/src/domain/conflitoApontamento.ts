@@ -70,7 +70,10 @@ export async function conflitosDoIntervalo(
   codfor: number,
   inicio: Date,
   fim: Date,
-  opcoes: { ignorarSolicitacaoId?: number; ignorarSessaoId?: number } = {}
+  // `ignorarSessaoId` pula a sessão; `ignorarRatItemId` pula o apontamento que ELA gerou.
+  // Os dois andam juntos ao corrigir o horário de um apontamento já confirmado: sem o
+  // segundo, o pedido colide com o próprio RatItem e nunca passa.
+  opcoes: { ignorarSolicitacaoId?: number; ignorarSessaoId?: number; ignorarRatItemId?: number } = {}
 ): Promise<ConflitoApontamento[]> {
   const atividadesDoConsultor = await prisma.atividadeConsultor.findMany({
     where: { codemp, codfor },
@@ -96,6 +99,7 @@ export async function conflitosDoIntervalo(
         datati: { in: datasParaConsulta(inicio, fim) },
         horini: { not: null },
         horfim: { not: null },
+        ...(opcoes.ignorarRatItemId ? { id: { not: opcoes.ignorarRatItemId } } : {}),
       },
       select: { id: true, datati: true, horini: true, horfim: true, codpro: true, seqite: true },
     }),

@@ -207,6 +207,30 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeRemocao,
     resumo: (e) => `Reprovou o apontamento avulso — ${rotuloEntidade(e)}`,
   },
+  APONTAMENTO_EXCLUIDO: {
+    tone: "destructive",
+    rotuloGrupo: "Apontamento",
+    icone: IconeRemocao,
+    resumo: (e) => `Excluiu um apontamento — ${rotuloEntidade(e)}`,
+  },
+  AJUSTE_SOLICITADO: {
+    tone: "warning",
+    rotuloGrupo: "Ajuste de horário",
+    icone: IconeEdicao,
+    resumo: (e) => `Pediu ajuste de horário — ${rotuloEntidade(e)}`,
+  },
+  AJUSTE_APROVADO: {
+    tone: "success",
+    rotuloGrupo: "Ajuste de horário",
+    icone: IconeEdicao,
+    resumo: (e) => `Aprovou o ajuste de horário — ${rotuloEntidade(e)}`,
+  },
+  AJUSTE_REPROVADO: {
+    tone: "destructive",
+    rotuloGrupo: "Ajuste de horário",
+    icone: IconeRemocao,
+    resumo: (e) => `Reprovou o ajuste de horário — ${rotuloEntidade(e)}`,
+  },
   ALOCACAO_REMOVIDA: {
     tone: "destructive",
     rotuloGrupo: "Alocação",

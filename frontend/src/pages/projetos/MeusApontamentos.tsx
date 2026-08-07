@@ -9,6 +9,7 @@ import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { ModalEditarDescricao } from "../../components/projetos/ModalEditarDescricao";
+import { Modal } from "../../components/ui/Modal";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
@@ -162,11 +163,13 @@ function AcaoIntegracao({
   reenviando,
   onReenviar,
   onExcluir,
+  onPedirAjuste,
 }: {
   item: RatItemRow;
   reenviando: boolean;
   onReenviar: () => void;
   onExcluir: () => void;
+  onPedirAjuste: () => void;
 }) {
   if (item.confirmadoNoSenior) {
     return (
@@ -221,9 +224,14 @@ function AcaoIntegracao({
         </button>
       )}
       {item.editavel && item.sessaoId != null && (
-        <button onClick={onExcluir} className="text-[11px] text-destructive hover:underline">
-          Excluir
-        </button>
+        <>
+          <button onClick={onPedirAjuste} className="text-[11px] text-primary hover:underline">
+            Pedir ajuste
+          </button>
+          <button onClick={onExcluir} className="text-[11px] text-destructive hover:underline">
+            Excluir
+          </button>
+        </>
       )}
       {!podeEnviar && !item.editavel && <span className="text-[11px] text-muted">—</span>}
     </span>
@@ -259,6 +267,17 @@ export function MeusApontamentos() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [confirmando, setConfirmando] = useState<number | null>(null);
+  const [excluindoSessao, setExcluindoSessao] = useState<number | null>(null);
+
+  // Pedido de correção de horário. Enquanto pendente, o envio do apontamento ao Senior fica
+  // retido no servidor — é o que permite corrigir sem alterar nada do lado do ERP.
+  const [pedidoAjuste, setPedidoAjuste] = useState<{ sessaoId: number; titulo: string } | null>(null);
+  const [ajusteData, setAjusteData] = useState("");
+  const [ajusteInicio, setAjusteInicio] = useState("");
+  const [ajusteFim, setAjusteFim] = useState("");
+  const [ajusteMotivo, setAjusteMotivo] = useState("");
+  const [enviandoAjuste, setEnviandoAjuste] = useState(false);
+  const [erroAjuste, setErroAjuste] = useState<string | null>(null);
   const [descricoes, setDescricoes] = useState<Record<number, string>>({});
   const [editandoDescricaoId, setEditandoDescricaoId] = useState<number | null>(null);
 
@@ -653,6 +672,55 @@ export function MeusApontamentos() {
     }
   }
 
+  // Exclusão de sessão ainda NÃO confirmada. Mesma rota do apontamento confirmado — ela
+  // marca a sessão como excluída dos dois jeitos; a diferença é que aqui não há RatItem
+  // nem RAT pra recarregar.
+  async function excluirSessao(sessaoId: number) {
+    if (!confirm("Excluir este apontamento? Ele sai da lista e deixa de contar nas horas da atividade.")) return;
+    setExcluindoSessao(sessaoId);
+    try {
+      await axios.delete(`/api/apontamentos/${sessaoId}`);
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao excluir o apontamento");
+    } finally {
+      setExcluindoSessao(null);
+    }
+  }
+
+  async function enviarPedidoAjuste() {
+    if (!pedidoAjuste) return;
+    if (!ajusteData || !ajusteInicio || !ajusteFim) {
+      setErroAjuste("Informe a data, a hora inicial e a hora final.");
+      return;
+    }
+    if (ajusteFim <= ajusteInicio) {
+      setErroAjuste("A hora final precisa ser depois da inicial.");
+      return;
+    }
+    if (ajusteMotivo.trim() === "") {
+      setErroAjuste("Informe o motivo da correção.");
+      return;
+    }
+    setEnviandoAjuste(true);
+    setErroAjuste(null);
+    try {
+      await axios.post("/api/solicitacoes-ajuste", {
+        sessaoId: pedidoAjuste.sessaoId,
+        inicio: new Date(`${ajusteData}T${ajusteInicio}`).toISOString(),
+        fim: new Date(`${ajusteData}T${ajusteFim}`).toISOString(),
+        motivo: ajusteMotivo.trim(),
+      });
+      setPedidoAjuste(null);
+      carregar();
+      carregarRats();
+    } catch (err: any) {
+      setErroAjuste(err.response?.data?.error ?? "Falha ao enviar o pedido");
+    } finally {
+      setEnviandoAjuste(false);
+    }
+  }
+
   return (
     <div>
       <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
@@ -811,13 +879,22 @@ export function MeusApontamentos() {
                             {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
                           </button>
                         </td>
-                        <td className="px-2.5 py-3.5 text-right">
+                        <td className="whitespace-nowrap px-2.5 py-3.5 text-right">
                           <button
                             onClick={() => confirmar(s.id)}
                             disabled={confirmando === s.id}
                             className="rounded-md border border-border px-3 py-1.5 text-sm text-primary hover:bg-surface-2 disabled:opacity-50"
                           >
                             {confirmando === s.id ? "Confirmando..." : "Confirmar"}
+                          </button>
+                          {/* Antes daqui não havia como apagar uma sessão rastreada errada —
+                              só restava confirmar e desfazer depois. */}
+                          <button
+                            onClick={() => excluirSessao(s.id)}
+                            disabled={excluindoSessao === s.id}
+                            className="ml-2 text-[11px] text-destructive hover:underline disabled:opacity-50"
+                          >
+                            {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
                           </button>
                         </td>
                       </tr>
@@ -1086,6 +1163,24 @@ export function MeusApontamentos() {
                                               reenviando={reenviando.has(item.id)}
                                               onReenviar={() => reenviarAoSenior(item.id, rat.id)}
                                               onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
+                                              onPedirAjuste={() => {
+                                                // datati/horini/horfim já são hora de parede
+                                                // brasileira (ver RatItem no schema) —
+                                                // alimentam os inputs direto, sem conversão.
+                                                setPedidoAjuste({
+                                                  sessaoId: item.sessaoId!,
+                                                  titulo: `RAT ${rat.id} · ${
+                                                    item.horini != null && item.horfim != null
+                                                      ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}`
+                                                      : "sem horário"
+                                                  }`,
+                                                });
+                                                setAjusteData(item.datati ? item.datati.slice(0, 10) : "");
+                                                setAjusteInicio(item.horini != null ? formatHoraDoDia(item.horini) : "");
+                                                setAjusteFim(item.horfim != null ? formatHoraDoDia(item.horfim) : "");
+                                                setAjusteMotivo("");
+                                                setErroAjuste(null);
+                                              }}
                                             />
                                           </td>
                                         </tr>
@@ -1153,6 +1248,80 @@ export function MeusApontamentos() {
           }
           onFechar={() => setEditandoObservacao(null)}
         />
+      )}
+
+      {/* Pedido de correção de horário. Não fecha por clique fora nem por Esc — tem texto
+          digitado dentro, mesma razão do modal de parada. */}
+      {pedidoAjuste && (
+        <Modal
+          open
+          onClose={() => setPedidoAjuste(null)}
+          fecharPorFora={false}
+          title="Pedir ajuste de horário"
+          subtitulo={pedidoAjuste.titulo}
+        >
+          <div className="space-y-3 p-4">
+            <p className="text-[12.5px] text-muted">
+              O envio deste apontamento ao Senior fica retido até o gestor decidir — o ERP só recebe o horário final.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <label htmlFor="aj-data" className="text-[12px] text-muted">
+                Data
+              </label>
+              <input
+                id="aj-data"
+                type="date"
+                value={ajusteData}
+                onChange={(e) => setAjusteData(e.target.value)}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <label htmlFor="aj-ini" className="text-[12px] text-muted">
+                das
+              </label>
+              <input
+                id="aj-ini"
+                type="time"
+                value={ajusteInicio}
+                onChange={(e) => setAjusteInicio(e.target.value)}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <label htmlFor="aj-fim" className="text-[12px] text-muted">
+                às
+              </label>
+              <input
+                id="aj-fim"
+                type="time"
+                value={ajusteFim}
+                onChange={(e) => setAjusteFim(e.target.value)}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+            <textarea
+              value={ajusteMotivo}
+              onChange={(e) => setAjusteMotivo(e.target.value)}
+              rows={3}
+              placeholder="Motivo da correção — é o que o gestor lê pra decidir"
+              className="w-full resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {erroAjuste && <p className="text-[12px] text-destructive">{erroAjuste}</p>}
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setPedidoAjuste(null)}
+                disabled={enviandoAjuste}
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={enviarPedidoAjuste}
+                disabled={enviandoAjuste}
+                className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {enviandoAjuste ? "Enviando..." : "Enviar para o gestor"}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Mesmo painel que abre ao clicar no card do quadro, em modo leitura: todas as ações

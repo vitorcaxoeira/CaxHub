@@ -27,7 +27,7 @@ export function tetoDaAtividade(atividade: Pick<AtividadeConsultor, "qtdhor" | "
 export async function realizadoDaAtividade(atividade: Pick<AtividadeConsultor, "id" | "seqati">): Promise<number> {
   const [sessoes, ratItens] = await Promise.all([
     prisma.atividadeSessaoExecucao.findMany({
-      where: { atividadeId: atividade.id, confirmada: false, fim: { not: null } },
+      where: { atividadeId: atividade.id, confirmada: false, fim: { not: null }, excluidaEm: null },
       select: { inicio: true, fim: true },
     }),
     atividade.seqati != null

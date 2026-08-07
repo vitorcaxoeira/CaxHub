@@ -31,7 +31,37 @@ interface AtividadeDetalheDados {
   souOExecutor: boolean;
 }
 
-type Aba = "excedentes" | "apontamentos";
+type Aba = "excedentes" | "apontamentos" | "ajustes";
+
+// Correção de horário de um apontamento já confirmado. Enquanto o pedido está pendente, o
+// envio ao Senior fica retido (ver RetidoPorAjusteError no backend) — é o que permite
+// corrigir sem nunca alterar nada do lado do ERP.
+export interface SolicitacaoAjuste {
+  id: number;
+  sessaoId: number;
+  atividadeId: number;
+  status: "pendente" | "aprovada" | "reprovada";
+  inicioAtual: string;
+  fimAtual: string | null;
+  inicioSolicitado: string;
+  fimSolicitado: string;
+  motivo: string;
+  inicioAprovado: string | null;
+  fimAprovado: string | null;
+  inicioAnterior: string | null;
+  fimAnterior: string | null;
+  observacaoDecisao: string | null;
+  criadoEm: string;
+  decididoEm: string | null;
+  solicitanteNome: string;
+  decisorNome: string | null;
+  codemp: number;
+  codpro: number;
+  seqite: number;
+  depexe: number | null;
+  depexeLabel: string;
+  podeDecidir: boolean;
+}
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
@@ -478,7 +508,176 @@ function ListaApontamentos({
   );
 }
 
-// Uma tela, dois tipos de pedido, dois recortes. O gestor decide os do time dele; o
+function ListaAjustes({
+  status,
+  onVerAtividade,
+  onMudou,
+}: {
+  status: string;
+  onVerAtividade: (id: number) => void;
+  onMudou: () => void;
+}) {
+  const toast = useToast();
+  const [solicitacoes, setSolicitacoes] = useState<SolicitacaoAjuste[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
+  const [decidindoId, setDecidindoId] = useState<number | null>(null);
+  const [data, setData] = useState("");
+  const [horaInicio, setHoraInicio] = useState("");
+  const [horaFim, setHoraFim] = useState("");
+  const [observacao, setObservacao] = useState("");
+  const [enviando, setEnviando] = useState(false);
+
+  const carregar = useCallback(() => {
+    setLoading(true);
+    axios
+      .get("/api/solicitacoes-ajuste", { params: status ? { status } : {} })
+      .then(({ data }) => {
+        setSolicitacoes(data.solicitacoes);
+        setErro(null);
+      })
+      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar as solicitações"))
+      .finally(() => setLoading(false));
+  }, [status]);
+
+  useEffect(carregar, [carregar]);
+
+  async function decidir(s: SolicitacaoAjuste, aprovar: boolean) {
+    if (aprovar && (!data || !horaInicio || !horaFim)) {
+      toast.mostrar("Informe a data, a hora inicial e a hora final.", "destructive");
+      return;
+    }
+    if (aprovar && horaFim <= horaInicio) {
+      toast.mostrar("A hora final precisa ser depois da inicial.", "destructive");
+      return;
+    }
+    setEnviando(true);
+    try {
+      await axios.post(`/api/solicitacoes-ajuste/${s.id}/decidir`, {
+        aprovar,
+        ...(aprovar
+          ? { inicio: new Date(`${data}T${horaInicio}`).toISOString(), fim: new Date(`${data}T${horaFim}`).toISOString() }
+          : {}),
+        observacao,
+      });
+      toast.mostrar(
+        aprovar ? "Ajuste aprovado. O apontamento foi liberado para envio ao Senior." : "Ajuste reprovado.",
+        aprovar ? "success" : "neutral"
+      );
+      setDecidindoId(null);
+      carregar();
+      onMudou();
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      // Conflito de horário e estouro de teto chegam aqui: são recusas com explicação, e a
+      // solicitação continua pendente pro gestor resolver antes de tentar de novo.
+      toast.mostrar(mensagem ?? "Falha ao registrar a decisão", "destructive");
+      carregar();
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  if (loading) return <p className="mt-6 text-sm text-muted">Carregando...</p>;
+  if (erro)
+    return <p className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{erro}</p>;
+  if (solicitacoes.length === 0)
+    return (
+      <p className="mt-6 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-sm text-muted">
+        Nenhum pedido de ajuste de horário por aqui.
+      </p>
+    );
+
+  return (
+    <div className="mt-4 space-y-2">
+      {solicitacoes.map((s) => (
+        <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+          <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
+
+          <p className="mt-1.5 font-mono text-[12px] text-muted">
+            De <span className="text-muted">{intervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>
+            {" para "}
+            <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+            {s.inicioAprovado && s.fimAprovado && (
+              <>
+                {" · Gravado "}
+                <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>
+              </>
+            )}
+          </p>
+
+          <p className="mt-1.5 text-[13px] text-foreground">{s.motivo}</p>
+
+          {s.status !== "pendente" && (
+            <p className="mt-1 text-[12px] text-muted">
+              {s.decisorNome} decidiu em {s.decididoEm ? dateTimeFormatter.format(new Date(s.decididoEm)) : "—"}
+              {s.observacaoDecisao && ` — "${s.observacaoDecisao}"`}
+            </p>
+          )}
+
+          {s.status === "pendente" && (
+            <p className="mt-1 text-[11.5px] text-warning">
+              O envio deste apontamento ao Senior está retido até a decisão.
+            </p>
+          )}
+
+          {s.status === "pendente" &&
+            s.podeDecidir &&
+            (decidindoId === s.id ? (
+              <div className="mt-2 space-y-2 rounded-md border border-border bg-surface-2/40 px-2.5 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label htmlFor={`aj-data-${s.id}`} className="text-[12px] text-muted">
+                    Data
+                  </label>
+                  <input id={`aj-data-${s.id}`} type="date" value={data} onChange={(e) => setData(e.target.value)} className={classeCampo} />
+                  <label htmlFor={`aj-ini-${s.id}`} className="text-[12px] text-muted">
+                    das
+                  </label>
+                  <input id={`aj-ini-${s.id}`} type="time" value={horaInicio} onChange={(e) => setHoraInicio(e.target.value)} className={classeCampo} />
+                  <label htmlFor={`aj-fim-${s.id}`} className="text-[12px] text-muted">
+                    às
+                  </label>
+                  <input id={`aj-fim-${s.id}`} type="time" value={horaFim} onChange={(e) => setHoraFim(e.target.value)} className={classeCampo} />
+                </div>
+                <input
+                  value={observacao}
+                  onChange={(e) => setObservacao(e.target.value)}
+                  placeholder="Observação (opcional) — vai junto no aviso ao consultor"
+                  className={`w-full ${classeCampo}`}
+                />
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button onClick={() => setDecidindoId(null)} disabled={enviando} className={classeBotao.neutro}>
+                    Cancelar
+                  </button>
+                  <button onClick={() => decidir(s, false)} disabled={enviando} className={classeBotao.destrutivo}>
+                    Reprovar
+                  </button>
+                  <button onClick={() => decidir(s, true)} disabled={enviando} className={classeBotao.primario}>
+                    {enviando ? "Salvando..." : "Aprovar"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setDecidindoId(s.id);
+                  setData(paraInputData(s.inicioSolicitado));
+                  setHoraInicio(paraInputHora(s.inicioSolicitado));
+                  setHoraFim(paraInputHora(s.fimSolicitado));
+                  setObservacao("");
+                }}
+                className={`mt-2 ${classeBotao.neutro}`}
+              >
+                Decidir
+              </button>
+            ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Uma tela, três tipos de pedido, dois recortes. O gestor decide os do time dele; o
 // consultor acompanha os próprios. Quem separa é o servidor — a tela só desenha o que veio,
 // e `podeDecidir` por linha diz de qual lado a pessoa está naquele pedido.
 export function Aprovacoes() {
@@ -502,17 +701,23 @@ export function Aprovacoes() {
   const abas: { valor: Aba; rotulo: string }[] = [
     { valor: "excedentes", rotulo: "Horas Excedentes" },
     { valor: "apontamentos", rotulo: "Apontamentos" },
+    { valor: "ajustes", rotulo: "Ajustes de horário" },
   ];
+
+  const descricaoDaAba: Record<Aba, string> = {
+    excedentes:
+      "Horas acima do alocado, pedidas por quem executa e liberadas pelo gestor do departamento. O que é aprovado entra no teto de apontamento da atividade.",
+    apontamentos:
+      "Tempo trabalhado sem mover o card de raia. Aprovar libera o apontamento para o consultor confirmar em Meus Apontamentos — quem fecha e envia ao Senior continua sendo quem executou.",
+    ajustes:
+      "Correção de horário de apontamento já confirmado. Enquanto o pedido está aqui, o envio ao Senior fica retido — o ERP só recebe o valor final, e nunca precisa ser alterado lá.",
+  };
 
   return (
     <div>
       <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Gestão de Projetos · Aprovações</p>
       <h1 className="mt-1 font-display text-2xl font-bold text-foreground">Aprovações</h1>
-      <p className="mt-1 text-sm text-muted">
-        {aba === "excedentes"
-          ? "Horas acima do alocado, pedidas por quem executa e liberadas pelo gestor do departamento. O que é aprovado entra no teto de apontamento da atividade."
-          : "Tempo trabalhado sem mover o card de raia. Aprovar libera o apontamento para o consultor confirmar em Meus Apontamentos — quem fecha e envia ao Senior continua sendo quem executou."}
-      </p>
+      <p className="mt-1 text-sm text-muted">{descricaoDaAba[aba]}</p>
 
       <div className="mt-4 flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-1 border-b border-border">
@@ -546,10 +751,14 @@ export function Aprovacoes() {
         </div>
       </div>
 
-      {aba === "excedentes" ? (
+      {aba === "excedentes" && (
         <ListaExcedentes key={`exc-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
-      ) : (
+      )}
+      {aba === "apontamentos" && (
         <ListaApontamentos key={`apo-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
+      )}
+      {aba === "ajustes" && (
+        <ListaAjustes key={`aju-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
       )}
 
       {/* O mesmo painel que abre ao clicar no card do quadro. `podeEditar` false: aqui o

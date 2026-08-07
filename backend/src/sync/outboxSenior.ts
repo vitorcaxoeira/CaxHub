@@ -41,6 +41,17 @@ export async function enfileirar(atividadeId: number, tipo: string, payload: Rec
 // voltam a fluir sozinhos, sem precisar reprocessar um por um.
 class CanalIndisponivelError extends Error {}
 
+// Apontamento com pedido de ajuste de horário aguardando o gestor. MESMA semântica de
+// "ainda não é hora" do erro acima: volta pra fila sem consumir tentativa e sem evento de
+// auditoria — não houve tentativa de envio de verdade.
+//
+// É esta retenção que faz a funcionalidade existir. Confirmar dispara o envio na hora (ver
+// processarFilaSincronizacao em routes/apontamentos.ts), então sem segurar aqui o item
+// chegaria ao Senior em segundos e o ajuste seria recusado por "já registrado" antes de o
+// gestor abrir a tela. Decidido o pedido, o próximo passe manda o valor FINAL — e o ERP
+// nunca precisa ser alterado, que é a regra do fluxo.
+class RetidoPorAjusteError extends CanalIndisponivelError {}
+
 // O ideExt do cabeçalho é o que faz o Senior ANEXAR o item a uma RAT já criada em vez de
 // abrir outra; o do item é a alça pra casar a resposta. Definidos em soap/client.ts junto
 // do resto do contrato.
@@ -115,6 +126,18 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
   // devolve o que já existe em vez de mandar de novo.
   if (ratItem.numrat != null && ratItem.seqrat != null) {
     return { ratId: ratItem.ratId, ratItemId: ratItem.id, numrat: ratItem.numrat, seqrat: ratItem.seqrat };
+  }
+
+  // Segura enquanto houver pedido de ajuste de horário aguardando o gestor: o que vai pro
+  // Senior tem de ser o valor FINAL. Ver RetidoPorAjusteError lá em cima.
+  const ajustePendente = await prisma.solicitacaoAjusteApontamento.findFirst({
+    where: { status: "pendente", sessao: { ratItemId: ratItem.id } },
+    select: { id: true },
+  });
+  if (ajustePendente) {
+    throw new RetidoPorAjusteError(
+      `Apontamento com ajuste de horário aguardando o gestor (solicitação ${ajustePendente.id}) — envio retido até a decisão`
+    );
   }
 
   // Confere na origem ANTES de todo envio, não só nas retentativas. Custa uma leitura

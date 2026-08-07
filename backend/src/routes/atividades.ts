@@ -148,7 +148,7 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
       : Promise.resolve([]),
     atividadeIds.length > 0
       ? prisma.atividadeSessaoExecucao.findMany({
-          where: { atividadeId: { in: atividadeIds }, confirmada: false, fim: { not: null } },
+          where: { atividadeId: { in: atividadeIds }, confirmada: false, fim: { not: null }, excluidaEm: null },
           select: { atividadeId: true, inicio: true, fim: true },
         })
       : Promise.resolve([]),
