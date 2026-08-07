@@ -879,23 +879,33 @@ export function MeusApontamentos() {
                             {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
                           </button>
                         </td>
+                        {/* Mesmo agrupador "⋯" das linhas de RAT logo abaixo — duas ações
+                            soltas na coluna empurravam a tabela e competiam por atenção. */}
                         <td className="whitespace-nowrap px-2.5 py-3.5 text-right">
-                          <button
-                            onClick={() => confirmar(s.id)}
-                            disabled={confirmando === s.id}
-                            className="rounded-md border border-border px-3 py-1.5 text-sm text-primary hover:bg-surface-2 disabled:opacity-50"
-                          >
-                            {confirmando === s.id ? "Confirmando..." : "Confirmar"}
-                          </button>
-                          {/* Antes daqui não havia como apagar uma sessão rastreada errada —
-                              só restava confirmar e desfazer depois. */}
-                          <button
-                            onClick={() => excluirSessao(s.id)}
-                            disabled={excluindoSessao === s.id}
-                            className="ml-2 text-[11px] text-destructive hover:underline disabled:opacity-50"
-                          >
-                            {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
-                          </button>
+                          <DropdownMenu placement="bottom-end">
+                            <DropdownMenu.Trigger>
+                              <button
+                                className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                aria-label="Ações do apontamento"
+                              >
+                                ⋯
+                              </button>
+                            </DropdownMenu.Trigger>
+                            <DropdownMenu.Content>
+                              <DropdownMenu.Item onSelect={() => confirmar(s.id)} disabled={confirmando === s.id}>
+                                {confirmando === s.id ? "Confirmando..." : "Confirmar"}
+                              </DropdownMenu.Item>
+                              {/* Antes daqui não havia como apagar uma sessão rastreada
+                                  errada — só restava confirmar e desfazer depois. */}
+                              <DropdownMenu.Item
+                                onSelect={() => excluirSessao(s.id)}
+                                disabled={excluindoSessao === s.id}
+                                destructive
+                              >
+                                {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
+                              </DropdownMenu.Item>
+                            </DropdownMenu.Content>
+                          </DropdownMenu>
                         </td>
                       </tr>
                     ))}
