@@ -212,14 +212,33 @@ export function Atividades() {
   // ele prorroga ou encerra uma sessão, o card aqui ainda está com o `sessaoLimite`
   // antigo — e o cronômetro fica congelado no limite vencido mesmo depois do consultor
   // confirmar que ia trabalhar mais. Este ouvinte é o que destrava.
+  //
+  // `iniciarAtividade` (Kanban e Lista) também dispara este mesmo evento ao iniciar com
+  // sucesso — e é aí que o bug aparecia: com `[]` de dependência, o efeito assina o
+  // listener UMA vez só, na montagem, e a função `recarregar` fechava sobre o `carregar`
+  // daquele primeiro render — que por sua vez tinha fechado sobre `codfor` (e os demais
+  // filtros) como estavam ANTES do padrão "só eu" ser aplicado (ele chega depois, via
+  // GET /opcoes-filtro, assíncrono). Resultado: o chip do filtro e a URL mostravam o
+  // consultor certo, mas cada início de atividade recarregava com os filtros de quando a
+  // tela abriu, sem o `codfor`, e sobrescrevia a lista com a de todo mundo.
+  //
+  // Refs "ao vivo" em vez de por no array de dependências: `carregar`/`carregarIndicadores`
+  // são funções simples, recriadas a cada render (não memoizadas), então guardar a mais
+  // recente aqui e reassinar o listener sempre que o filtro mudar teria o mesmo efeito com
+  // mais churn de addEventListener/removeEventListener — e, principal motivo, deixaria a
+  // correção refém de alguém lembrar de incluir todo filtro novo nas duas listas de
+  // dependência (a desta e a do efeito de cima) pra sempre ficarem em sincronia.
+  const carregarRef = useRef(carregar);
+  carregarRef.current = carregar;
+  const carregarIndicadoresRef = useRef(carregarIndicadores);
+  carregarIndicadoresRef.current = carregarIndicadores;
   useEffect(() => {
     function recarregar() {
-      carregar();
-      carregarIndicadores();
+      carregarRef.current();
+      carregarIndicadoresRef.current();
     }
     window.addEventListener(EVENTO_SESSAO_ALTERADA, recarregar);
     return () => window.removeEventListener(EVENTO_SESSAO_ALTERADA, recarregar);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Baixa imediata da sessão que atingiu o limite (teto de horas ou fim do expediente).
