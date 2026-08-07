@@ -843,8 +843,16 @@ export function MeusApontamentos() {
                       <tr key={s.id} className="border-t border-border/60">
                         <td className="hidden px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">{s.id}</td>
                         <td className="px-2.5 py-3.5 text-sm font-semibold text-foreground">{s.codpro}</td>
+                        {/* O próprio id abre a atividade — mesmo padrão da tabela de itens
+                            de RAT logo abaixo. */}
                         <td className="hidden px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                          {s.atividadeId}
+                          <button
+                            onClick={() => abrirDetalheAtividade(s.atividadeId)}
+                            className="text-primary hover:underline"
+                            title="Abrir a atividade (somente visualização)"
+                          >
+                            {s.atividadeId}
+                          </button>
                         </td>
                         <td
                           className="hidden max-w-[220px] truncate px-2.5 py-3.5 text-sm text-muted lg:table-cell"
@@ -913,9 +921,6 @@ export function MeusApontamentos() {
                                 }}
                               >
                                 Pedir ajuste de horário
-                              </DropdownMenu.Item>
-                              <DropdownMenu.Item onSelect={() => abrirDetalheAtividade(s.atividadeId)}>
-                                Ver atividade
                               </DropdownMenu.Item>
                               {/* Antes daqui não havia como apagar uma sessão rastreada
                                   errada — só restava confirmar e desfazer depois. */}
