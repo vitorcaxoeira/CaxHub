@@ -37,6 +37,9 @@ interface ConsultorResumo {
   nome: string;
   depexeLabel: string;
   horasAlocadas: number;
+  horasExcedentes: number;
+  horasRealizadas: number;
+  saldo: number;
 }
 
 interface KpiValor {
@@ -557,6 +560,15 @@ export function Alocacao() {
                                     Horas Alocada
                                   </th>
                                   <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                    Excedente
+                                  </th>
+                                  <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                    Realizado
+                                  </th>
+                                  <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                    Saldo
+                                  </th>
+                                  <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                     % do Alocado
                                   </th>
                                 </tr>
@@ -575,6 +587,19 @@ export function Alocacao() {
                                       </td>
                                       <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground">
                                         {formatHoras(c.horasAlocadas / 60)}
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
+                                        {c.horasExcedentes > 0 ? formatHoras(c.horasExcedentes / 60) : "—"}
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
+                                        {formatHoras(c.horasRealizadas / 60)}
+                                      </td>
+                                      <td
+                                        className={`whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums ${
+                                          c.saldo < 0 ? "text-destructive" : "text-foreground"
+                                        }`}
+                                      >
+                                        {formatHoras(c.saldo / 60)}
                                       </td>
                                       <td className="whitespace-nowrap py-1.5 pl-4">
                                         <div className="flex items-center justify-end gap-2">

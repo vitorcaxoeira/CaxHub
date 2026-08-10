@@ -3,8 +3,10 @@ import { randomUUID } from "crypto";
 import { Prisma, SincronizacaoPendente } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import {
+  alocarAtividadesViaSoap,
   formatarDataSenior,
   formatarHoraSenior,
+  ideExtAlocacao,
   ideExtItem,
   ideExtRat,
   mensagemDeRecusa,
@@ -12,6 +14,9 @@ import {
   runSqlViaSoap,
   SIS_ORI,
   TIP_EVE,
+  TIP_EVE_ALTERAR,
+  TIP_EVE_EXCLUIR,
+  TIP_EVE_INCLUIR,
 } from "../soap/client";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
@@ -49,12 +54,25 @@ class CanalIndisponivelError extends Error {}
 // `numrat` preenchido é o que trava edição e exclusão do apontamento (ver
 // routes/apontamentos.ts e o `editavel` de routes/rats.ts) — por isso o write-back
 // precisa ser atômico com a baixa da fila.
-interface ResultadoEnvio {
+//
+// Duas formas hoje: apontamento (write-back em Rat/RatItem) e criação de alocação
+// (write-back em AtividadeConsultor.seqati). Editar/remover alocação não geram write-back
+// nenhum — `enviarParaSenior` devolve `null` nesses casos, e a fila só baixa pra "enviado".
+interface ResultadoEnvioApontamento {
+  tipo: "apontamento";
   ratId: number;
   ratItemId: number;
   numrat: number;
   seqrat: number;
 }
+
+interface ResultadoEnvioAlocacaoCriada {
+  tipo: "alocacao_criada";
+  atividadeConsultorId: number;
+  seqAti: number;
+}
+
+type ResultadoEnvio = ResultadoEnvioApontamento | ResultadoEnvioAlocacaoCriada;
 
 /** Só a identidade devolvida pelo ERP, antes de saber a quem ela pertence localmente. */
 interface IdentidadeSenior {
@@ -95,7 +113,7 @@ async function procurarApontamentoNoSenior(item: {
 // Envia um apontamento confirmado (RatItem) pro Senior e devolve a identidade que o ERP
 // atribuiu. NÃO grava nada — o write-back é feito pelo chamador junto com a baixa da fila,
 // numa transação só.
-async function enviarApontamento(item: SincronizacaoPendente): Promise<ResultadoEnvio> {
+async function enviarApontamento(item: SincronizacaoPendente): Promise<ResultadoEnvioApontamento> {
   const payload = item.payload as { ratItemId?: number };
   const ratItemId = Number(payload?.ratItemId);
   if (!Number.isFinite(ratItemId)) {
@@ -114,7 +132,7 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
   // Já registrado (reprocessamento manual, ou corrida entre o cron e o disparo imediato):
   // devolve o que já existe em vez de mandar de novo.
   if (ratItem.numrat != null && ratItem.seqrat != null) {
-    return { ratId: ratItem.ratId, ratItemId: ratItem.id, numrat: ratItem.numrat, seqrat: ratItem.seqrat };
+    return { tipo: "apontamento", ratId: ratItem.ratId, ratItemId: ratItem.id, numrat: ratItem.numrat, seqrat: ratItem.seqrat };
   }
 
   // Não há retenção por ajuste de horário aqui, de propósito: a trava vive na CONFIRMAÇÃO
@@ -141,7 +159,7 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
     console.warn(
       `[${JOB_NAME}] apontamento ${ratItemId} já existe no Senior (RAT ${jaExiste.numrat}/${jaExiste.seqrat}) — não reenvia, só reconcilia`
     );
-    return { ratId: ratItem.ratId, ratItemId: ratItem.id, ...jaExiste };
+    return { tipo: "apontamento", ratId: ratItem.ratId, ratItemId: ratItem.id, ...jaExiste };
   }
 
   const resposta = await registrarAtividadesViaSoap({
@@ -182,13 +200,157 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
     );
   }
 
-  return { ratId: ratItem.ratId, ratItemId: ratItem.id, numrat: resultado.numRat, seqrat: itemRetornado.seqRat };
+  return { tipo: "apontamento", ratId: ratItem.ratId, ratItemId: ratItem.id, numrat: resultado.numRat, seqrat: itemRetornado.seqRat };
 }
 
-// Despacha cada mudança pro canal certo. Hoje só apontamento tem operação publicada
-// (`registrarAtividades`); os demais tipos esperam sem consumir tentativa.
+// ---------------------------------------------------------------------------
+// Canal de alocação — operação `alocarAtividades`, publicada em 10/08/2026. Três tipos
+// de mudança, um tipEve cada (I/A/E — aqui os três fazem sentido de verdade, diferente do
+// apontamento: alocação TEM exclusão real no Senior). Ver soap/client.ts pro contrato e
+// pra observação sobre o formato de qtdHor/hrsExc ainda não confirmado contra o serviço.
+// ---------------------------------------------------------------------------
+
+// Espelho local da AtividadeConsultor, relido do banco (nunca do payload enfileirado —
+// pode ter mudado entre o enfileiramento e o envio, mesmo espírito de enviarApontamento).
+async function buscarAlocacao(atividadeConsultorId: number) {
+  const alocacao = await prisma.atividadeConsultor.findUnique({ where: { id: atividadeConsultorId } });
+  if (!alocacao) {
+    throw new Error(`AtividadeConsultor ${atividadeConsultorId} não existe mais — removida antes do envio`);
+  }
+  return alocacao;
+}
+
+// `qtdHor`/`hrsExc` são horas em minutos localmente; a hipótese de formato pro Senior é
+// "HH:MM" (mesmo estilo de horIni/horFim) — ainda não confirmada, ver comentário em
+// soap/client.ts. formatarHoraSenior já faz exatamente essa conta, só reaproveitando.
+function horasParaQtdHorSenior(minutos: number): string {
+  return formatarHoraSenior(minutos);
+}
+
+// Cria a alocação no Senior (tipEve I). Idempotência: se `seqati` já estiver preenchido
+// localmente, a criação já aconteceu numa tentativa anterior — não reenvia (reenviar um
+// "I" já processado arriscaria duplicar a alocação lá, e diferente do apontamento não há
+// aqui uma consulta de reconciliação equivalente a USU_TE777IAT ainda implementada).
+async function enviarCriarAtividade(item: SincronizacaoPendente): Promise<ResultadoEnvioAlocacaoCriada | null> {
+  const alocacao = await buscarAlocacao(item.atividadeId);
+
+  if (alocacao.seqati != null) {
+    console.warn(`[${JOB_NAME}] alocação ${alocacao.id} já tem seqAti (${alocacao.seqati}) — não reenvia criação`);
+    return null;
+  }
+
+  const meuIdeExt = ideExtAlocacao(alocacao.id);
+  const resposta = await alocarAtividadesViaSoap({
+    codEmp: alocacao.codemp,
+    codFor: alocacao.codfor,
+    codPro: alocacao.codpro,
+    ideExt: meuIdeExt,
+    sisOri: SIS_ORI,
+    tipEve: TIP_EVE_INCLUIR,
+    itens: [
+      {
+        ideExt: meuIdeExt,
+        seqite: alocacao.seqite,
+        qtdHor: horasParaQtdHorSenior(alocacao.qtdhor ?? 0),
+        ...(alocacao.horasExcedentes > 0 ? { hrsExc: horasParaQtdHorSenior(alocacao.horasExcedentes) } : {}),
+      },
+    ],
+  });
+
+  const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
+  const itemRetornado = resultado?.itens.find((i) => i.ideExt === meuIdeExt) ?? resultado?.itens[0];
+
+  const recusa = mensagemDeRecusa(resposta, itemRetornado?.msg);
+  if (recusa) throw new Error(recusa);
+
+  if (itemRetornado?.seqAti == null) {
+    throw new Error(
+      `Senior respondeu sucesso mas sem seqAti (item: ${itemRetornado?.msg ?? "sem detalhe"}) — não dá pra confirmar a alocação`
+    );
+  }
+
+  return { tipo: "alocacao_criada", atividadeConsultorId: alocacao.id, seqAti: itemRetornado.seqAti };
+}
+
+// Altera qtdHor/horasExcedentes de uma alocação já existente no Senior (tipEve A).
+async function enviarEditarAtividade(item: SincronizacaoPendente): Promise<null> {
+  const alocacao = await buscarAlocacao(item.atividadeId);
+
+  // A alocação ainda não foi criada lá (o criar_atividade correspondente ainda não
+  // processou) — não é um canal inexistente de verdade, é uma dependência que ainda não
+  // resolveu. Reusa CanalIndisponivelError de propósito: mesmo efeito desejado (não
+  // consome tentativa, fica pendente) até o create resolver — a fila processa em ordem de
+  // criação, então o create sempre foi enfileirado antes.
+  if (alocacao.seqati == null) {
+    throw new CanalIndisponivelError(
+      `Alocação ${alocacao.id} ainda não foi criada no Senior (seqAti pendente) — aguardando o criar_atividade correspondente`
+    );
+  }
+
+  const meuIdeExt = ideExtAlocacao(alocacao.id);
+  const resposta = await alocarAtividadesViaSoap({
+    codEmp: alocacao.codemp,
+    codFor: alocacao.codfor,
+    codPro: alocacao.codpro,
+    ideExt: meuIdeExt,
+    sisOri: SIS_ORI,
+    tipEve: TIP_EVE_ALTERAR,
+    itens: [
+      {
+        ideExt: meuIdeExt,
+        seqite: alocacao.seqite,
+        seqAti: Number(alocacao.seqati),
+        qtdHor: horasParaQtdHorSenior(alocacao.qtdhor ?? 0),
+        ...(alocacao.horasExcedentes > 0 ? { hrsExc: horasParaQtdHorSenior(alocacao.horasExcedentes) } : {}),
+      },
+    ],
+  });
+
+  const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
+  const itemRetornado = resultado?.itens.find((i) => i.ideExt === meuIdeExt) ?? resultado?.itens[0];
+  const recusa = mensagemDeRecusa(resposta, itemRetornado?.msg);
+  if (recusa) throw new Error(recusa);
+
+  return null; // nada novo pra gravar localmente — qtdhor/horasExcedentes já estão certos.
+}
+
+// Exclui a alocação no Senior (tipEve E). Sem operação de exclusão pra reconciliar contra
+// — mas diferente do apontamento, aqui excluir de novo por engano não é catastrófico: o
+// Senior já sabe que o registro não existe mais e é essa a intenção.
+async function enviarRemoverAtividade(item: SincronizacaoPendente): Promise<null> {
+  const alocacao = await buscarAlocacao(item.atividadeId);
+
+  // Nunca chegou a ser criada no Senior — não há o que excluir lá.
+  if (alocacao.seqati == null) {
+    return null;
+  }
+
+  const meuIdeExt = ideExtAlocacao(alocacao.id);
+  const resposta = await alocarAtividadesViaSoap({
+    codEmp: alocacao.codemp,
+    codFor: alocacao.codfor,
+    codPro: alocacao.codpro,
+    ideExt: meuIdeExt,
+    sisOri: SIS_ORI,
+    tipEve: TIP_EVE_EXCLUIR,
+    itens: [{ ideExt: meuIdeExt, seqite: alocacao.seqite, seqAti: Number(alocacao.seqati) }],
+  });
+
+  const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
+  const itemRetornado = resultado?.itens.find((i) => i.ideExt === meuIdeExt) ?? resultado?.itens[0];
+  const recusa = mensagemDeRecusa(resposta, itemRetornado?.msg);
+  if (recusa) throw new Error(recusa);
+
+  return null;
+}
+
+// Despacha cada mudança pro canal certo. Tipos ainda sem operação publicada esperam sem
+// consumir tentativa (ver CanalIndisponivelError).
 async function enviarParaSenior(item: SincronizacaoPendente): Promise<ResultadoEnvio | null> {
   if (item.tipo === "criar_apontamento") return enviarApontamento(item);
+  if (item.tipo === "criar_atividade") return enviarCriarAtividade(item);
+  if (item.tipo === "editar_atividade") return enviarEditarAtividade(item);
+  if (item.tipo === "remover_atividade") return enviarRemoverAtividade(item);
 
   throw new CanalIndisponivelError(
     `Ainda não há operação publicada no Senior para "${item.tipo}" — o item fica aguardando na fila`
@@ -242,12 +404,20 @@ export async function processarFilaSincronizacao(opcoes: { apenasId?: number } =
       // marcado como registrado e a pendência fecha, ou nenhum dos dois. É o que impede
       // um item de ficar "enviado" sem numrat (e portanto ainda excluível na tela).
       await prisma.$transaction([
-        ...(registrado
+        ...(registrado?.tipo === "apontamento"
           ? [
               prisma.rat.update({ where: { id: registrado.ratId }, data: { numrat: registrado.numrat } }),
               prisma.ratItem.update({
                 where: { id: registrado.ratItemId },
                 data: { numrat: registrado.numrat, seqrat: registrado.seqrat, datreg: new Date() },
+              }),
+            ]
+          : []),
+        ...(registrado?.tipo === "alocacao_criada"
+          ? [
+              prisma.atividadeConsultor.update({
+                where: { id: registrado.atividadeConsultorId },
+                data: { seqati: BigInt(registrado.seqAti) },
               }),
             ]
           : []),

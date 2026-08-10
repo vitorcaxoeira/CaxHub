@@ -12,6 +12,7 @@ import {
 } from "../domain/contextoProjeto";
 import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
 import { enfileirar } from "../sync/outboxSenior";
+import { TIP_EVE_ALTERAR, TIP_EVE_EXCLUIR, TIP_EVE_INCLUIR } from "../soap/client";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
@@ -475,9 +476,46 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
       where: { sitreg: "A", OR: itens.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })) },
     });
 
+    // "Horas realizadas" por consultor — mesmo cálculo de horasRealizadasDaAlocacao mais
+    // abaixo neste arquivo (árvore do cronograma) e de horasRealizadasDaAtividade em
+    // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
+    // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão), somado por
+    // TODAS as alocações do consultor nesta proposta (pode ter mais de um item).
+    const seqatisValidos = [...new Set(alocacoes.map((a) => a.seqati).filter((s): s is bigint => s != null))];
+    const ratItemsComHoras =
+      seqatisValidos.length > 0
+        ? await prisma.ratItem.findMany({
+            where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
+            select: { seqati: true, horini: true, horfim: true },
+          })
+        : [];
+    const minutosRealizadosPorSeqati = new Map<bigint, number>();
+    for (const item of ratItemsComHoras) {
+      if (item.seqati == null || item.horini == null || item.horfim == null) continue;
+      minutosRealizadosPorSeqati.set(item.seqati, (minutosRealizadosPorSeqati.get(item.seqati) ?? 0) + (item.horfim - item.horini));
+    }
+    const sessoesNaoConfirmadas =
+      alocacoes.length > 0
+        ? await prisma.atividadeSessaoExecucao.findMany({
+            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null } },
+            select: { atividadeId: true, inicio: true, fim: true },
+          })
+        : [];
+    const msRealizadosPorAtividadeId = new Map<number, number>();
+    for (const s of sessoesNaoConfirmadas) {
+      if (s.fim == null) continue;
+      msRealizadosPorAtividadeId.set(s.atividadeId, (msRealizadosPorAtividadeId.get(s.atividadeId) ?? 0) + (s.fim.getTime() - s.inicio.getTime()));
+    }
+
     const horasPorCodfor = new Map<number, number>();
+    const excedentesPorCodfor = new Map<number, number>();
+    const realizadoPorCodfor = new Map<number, number>();
     for (const a of alocacoes) {
       horasPorCodfor.set(a.codfor, (horasPorCodfor.get(a.codfor) ?? 0) + (a.qtdhor ?? 0));
+      excedentesPorCodfor.set(a.codfor, (excedentesPorCodfor.get(a.codfor) ?? 0) + a.horasExcedentes);
+      const realizadoDaAlocacao =
+        (a.seqati != null ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) + Math.round((msRealizadosPorAtividadeId.get(a.id) ?? 0) / 60000);
+      realizadoPorCodfor.set(a.codfor, (realizadoPorCodfor.get(a.codfor) ?? 0) + realizadoDaAlocacao);
     }
 
     const codforUnicos = [...horasPorCodfor.keys()];
@@ -488,11 +526,20 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
     const linhas = codforUnicos
       .map((codfor) => {
         const consultor = consultorPorCodfor.get(codfor);
+        const horasAlocadas = horasPorCodfor.get(codfor) ?? 0;
+        const horasExcedentes = excedentesPorCodfor.get(codfor) ?? 0;
+        const horasRealizadas = realizadoPorCodfor.get(codfor) ?? 0;
         return {
           codfor,
           nome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${codfor}`,
           depexeLabel: consultor?.depexedes ?? depexeLabel(consultor?.depexe ?? null),
-          horasAlocadas: horasPorCodfor.get(codfor) ?? 0,
+          horasAlocadas,
+          horasExcedentes,
+          horasRealizadas,
+          // Mesma fórmula de tetoDaAtividade (domain/tetoAtividade.ts): o teto de
+          // apontamento é qtdhor + horasExcedentes, não só qtdhor — senão o saldo mostraria
+          // "estourado" pra quem já tem folga autorizada pelo gestor.
+          saldo: horasAlocadas + horasExcedentes - horasRealizadas,
         };
       })
       .sort((a, b) => b.horasAlocadas - a.horasAlocadas);
@@ -1378,6 +1425,41 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
         observacao,
       },
     });
+
+    // A alocação que alimenta o Senior (AtividadeConsultor.qtdhor) é uma CÓPIA da duração
+    // do nó, feita só no momento em que o vínculo nasce (ver reconciliarAlocacoesOrfas e a
+    // criação em lote mais abaixo) — editar o nó por aqui nunca propagava de volta, e por
+    // isso nunca enfileirava editar_atividade. Bug real (não teórico): reportado em
+    // 10/08/2026 na alocação do Eli Venturi (proposta 8688) — duracaoHoras foi pra 30 e
+    // qtdhor ficou parado em 60, sem nada na fila. Cascateia aqui, no mesmo espírito do
+    // que PUT /alocacoes/:id já faz pro modo "item" (linha ~2126).
+    if (no.tipo === "atividade" && duracaoHoras != null && duracaoHoras !== no.duracaoHoras) {
+      // 1:1 na prática (confirmado: 0 de 993 nós com alocação têm mais de uma
+      // AtividadeConsultor ativa vinculada) — mas se um dia deixar de ser, cascatear pra
+      // todas em vez de escolher uma seria o certo; por ora `findFirst` já cobre o caso
+      // real.
+      const alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
+        where: { estruturaAtividadeId: id, sitreg: "A" },
+      });
+      if (alocacaoVinculada && alocacaoVinculada.qtdhor !== duracaoHoras) {
+        await prisma.atividadeConsultor.update({
+          where: { id: alocacaoVinculada.id },
+          data: { qtdhor: duracaoHoras },
+        });
+        await enfileirar(alocacaoVinculada.id, "editar_atividade", {
+          codemp: alocacaoVinculada.codemp,
+          codpro: alocacaoVinculada.codpro,
+          seqite: alocacaoVinculada.seqite,
+          codfor: alocacaoVinculada.codfor,
+          qtdhor: duracaoHoras,
+          fasid: alocacaoVinculada.fasid,
+          dataPrevistaInicio: alocacaoVinculada.dataPrevistaInicio?.toISOString() ?? null,
+          dataPrevistaFim: alocacaoVinculada.dataPrevistaFim?.toISOString() ?? null,
+          tipEve: TIP_EVE_ALTERAR,
+        });
+      }
+    }
+
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error, "estrutura-editar");
@@ -1468,7 +1550,17 @@ alocacaoRouter.delete("/estrutura/:id", async (req: AuthenticatedRequest, res) =
         }),
         prisma.estruturaAtividade.delete({ where: { id } }),
       ]);
-      await enfileirar(alocacao.id, "remover_atividade", {});
+      await enfileirar(alocacao.id, "remover_atividade", {
+        codemp: alocacao.codemp,
+        codpro: alocacao.codpro,
+        seqite: alocacao.seqite,
+        codfor: alocacao.codfor,
+        qtdhor: alocacao.qtdhor,
+        fasid: alocacao.fasid,
+        dataPrevistaInicio: alocacao.dataPrevistaInicio?.toISOString() ?? null,
+        dataPrevistaFim: alocacao.dataPrevistaFim?.toISOString() ?? null,
+        tipEve: TIP_EVE_EXCLUIR,
+      });
       res.json({ ok: true });
       return;
     }
@@ -1688,6 +1780,7 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
       fasid,
       dataPrevistaInicio: dataPrevistaInicio?.toISOString() ?? null,
       dataPrevistaFim: dataPrevistaFim?.toISOString() ?? null,
+      tipEve: TIP_EVE_INCLUIR,
     });
 
     res.status(201).json({ id: nova.id });
@@ -1996,6 +2089,7 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
         fasid,
         dataPrevistaInicio: dataPrevistaInicio?.toISOString() ?? null,
         dataPrevistaFim: dataPrevistaFim?.toISOString() ?? null,
+        tipEve: TIP_EVE_INCLUIR,
       });
     }
 
@@ -2124,9 +2218,15 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
     await prisma.$transaction(operacoes);
 
     await enfileirar(id, "editar_atividade", {
-      qtdhorNovo: qtdhor,
+      codemp: atividade.codemp,
+      codpro: atividade.codpro,
+      seqite: atividade.seqite,
+      codfor: atividade.codfor,
+      qtdhor,
+      fasid: atividade.fasid,
       dataPrevistaInicio: dataPrevistaInicio?.toISOString() ?? null,
       dataPrevistaFim: dataPrevistaFim?.toISOString() ?? null,
+      tipEve: TIP_EVE_ALTERAR,
     });
 
     res.json({ id, qtdhor, horasExcedentes: horasExcedentes ?? atividade.horasExcedentes, dataPrevistaInicio, dataPrevistaFim });
@@ -2181,7 +2281,17 @@ alocacaoRouter.delete("/alocacoes/:id", async (req: AuthenticatedRequest, res) =
         correlationId: req.correlationId!,
       }),
     ]);
-    await enfileirar(id, "remover_atividade", {});
+    await enfileirar(id, "remover_atividade", {
+      codemp: atividade.codemp,
+      codpro: atividade.codpro,
+      seqite: atividade.seqite,
+      codfor: atividade.codfor,
+      qtdhor: atividade.qtdhor,
+      fasid: atividade.fasid,
+      dataPrevistaInicio: atividade.dataPrevistaInicio?.toISOString() ?? null,
+      dataPrevistaFim: atividade.dataPrevistaFim?.toISOString() ?? null,
+      tipEve: TIP_EVE_EXCLUIR,
+    });
 
     res.json({ ok: true });
   } catch (error) {

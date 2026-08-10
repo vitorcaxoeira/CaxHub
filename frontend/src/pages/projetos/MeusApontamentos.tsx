@@ -69,8 +69,6 @@ interface RatRow {
   sitratTone: Tone;
   totalItens: number;
   totalMinutos: number;
-  podeAprovar: boolean;
-  todosComObservacao: boolean;
 }
 
 interface RatItemRow {
@@ -307,7 +305,6 @@ export function MeusApontamentos() {
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
   const [ratsExpandidas, setRatsExpandidas] = useState<Set<number>>(new Set());
   const [itensPorRat, setItensPorRat] = useState<Record<number, RatItemRow[] | "carregando" | "erro">>({});
-  const [aprovando, setAprovando] = useState<number | null>(null);
   const [sincronizando, setSincronizando] = useState<number | null>(null);
 
   const [modalManual, setModalManual] = useState(false);
@@ -609,18 +606,6 @@ export function MeusApontamentos() {
       .catch(() => setItensPorRat((i) => ({ ...i, [ratId]: "erro" })));
   }
 
-  async function aprovar(rat: RatRow) {
-    setAprovando(rat.id);
-    try {
-      await axios.patch(`/api/rats/${rat.id}/aprovar`);
-      carregarRats();
-    } catch (err: any) {
-      setErro(err.response?.data?.error ?? "Falha ao aprovar RAT");
-    } finally {
-      setAprovando(null);
-    }
-  }
-
   // Abre o MESMO painel de detalhe do card do quadro, só que em leitura. Os dados de
   // cabeçalho vêm de GET /atividades/:id/detalhe, que reaproveita a derivação da listagem
   // de Atividades (item, alocado, realizado, estrutura) — aqui só se tem o atividadeId.
@@ -642,8 +627,8 @@ export function MeusApontamentos() {
       setEditandoObservacao(null);
       const { data } = await axios.get(`/api/rats/${ratId}/itens`);
       setItensPorRat((i) => ({ ...i, [ratId]: data.itens }));
-      // A RAT só pode ser aprovada quando todo item tem observação, e esse gate é
-      // calculado no backend — recarregar a lista atualiza o "Aprovar" do menu.
+      // A RAT só pode ser aprovada (em /api/rats/:id/aprovar) quando todo item tem
+      // observação preenchida — recarregar a lista mantém o totalItens/status em dia.
       carregarRats();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao salvar a observação");
@@ -1120,15 +1105,6 @@ export function MeusApontamentos() {
                                   </button>
                                 </DropdownMenu.Trigger>
                                 <DropdownMenu.Content>
-                                  {rat.podeAprovar && (
-                                    <DropdownMenu.Item
-                                      onSelect={() => aprovar(rat)}
-                                      disabled={aprovando === rat.id || !rat.todosComObservacao}
-                                      title={!rat.todosComObservacao ? "Todos os itens precisam de observação preenchida" : undefined}
-                                    >
-                                      {aprovando === rat.id ? "Aprovando..." : "Aprovar"}
-                                    </DropdownMenu.Item>
-                                  )}
                                   <DropdownMenu.Item
                                     onSelect={() => sincronizarErp(rat)}
                                     disabled={rat.numrat == null || sincronizando === rat.id}

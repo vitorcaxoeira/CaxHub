@@ -16,7 +16,6 @@ import {
 import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos, gerenciaDepartamento } from "../domain/contextoProjeto";
 import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
-import { enfileirar } from "../sync/outboxSenior";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS, CAMPOS_AUDITADOS_EXCEDENTE } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
@@ -728,16 +727,10 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       await notificarGestoresDoDepartamento(atividade.codemp, item.depexe, "atividade_movida", mensagem, id, user.id);
     }
 
-    // Só enfileira pra sincronizar de volta pro Senior se a atividade já veio do ERP
-    // (tem seqati) — sem isso não existe registro lá pra atualizar.
-    if (atividade.seqati != null) {
-      await enfileirar(id, "mover_coluna", {
-        seqati: atividade.seqati.toString(),
-        colunaAnteriorId: atividade.colunaId,
-        colunaNovaId: colunaIdNovo,
-        colunaNovaNome: colunaNova.nome,
-      });
-    }
+    // Mudar de coluna no kanban não vai mais pro Senior: confirmado no contrato real de
+    // `alocarAtividades` (10/08/2026) que não existe campo de coluna/status — só
+    // seqAti/seqite/qtdHor/hrsExc. Não há o que sincronizar aqui (ver [[CaxHub]] no
+    // Segundo Cérebro pro raciocínio completo).
 
     res.json({ id, colunaId: colunaIdNovo, aviso: entradaEmExecucao?.mensagem ?? null });
   } catch (error) {
@@ -841,15 +834,7 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
       });
       operacoes.push(...opsPausa);
       pausada = { id: atividadeAnterior.id, codpro: atividadeAnterior.codpro };
-
-      if (atividadeAnterior.seqati != null) {
-        await enfileirar(atividadeAnterior.id, "mover_coluna", {
-          seqati: atividadeAnterior.seqati.toString(),
-          colunaAnteriorId: atividadeAnterior.colunaId,
-          colunaNovaId: colunaAFazer.id,
-          colunaNovaNome: colunaAFazer.nome,
-        });
-      }
+      // Mudar de coluna não vai pro Senior — ver comentário equivalente mais acima.
     }
 
     const { operacoes: opsInicio } = await montarOperacoesMovimentacao({
@@ -869,14 +854,7 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
       const mensagem = `${user.nome} iniciou a atividade da proposta ${atividade.codpro}`;
       await notificarGestoresDoDepartamento(atividade.codemp, depexe, "atividade_movida", mensagem, id, user.id);
     }
-    if (atividade.seqati != null) {
-      await enfileirar(id, "mover_coluna", {
-        seqati: atividade.seqati.toString(),
-        colunaAnteriorId: atividade.colunaId,
-        colunaNovaId: colunaEmAndamento.id,
-        colunaNovaNome: colunaEmAndamento.nome,
-      });
-    }
+    // Mudar de coluna não vai pro Senior — ver comentário equivalente mais acima.
 
     res.json({
       id,
@@ -1225,14 +1203,7 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
       const mensagem = `${user.nome} parou a atividade da proposta ${atividade.codpro}`;
       await notificarGestoresDoDepartamento(atividade.codemp, depexe, "atividade_movida", mensagem, id, user.id);
     }
-    if (atividade.seqati != null) {
-      await enfileirar(id, "mover_coluna", {
-        seqati: atividade.seqati.toString(),
-        colunaAnteriorId: atividade.colunaId,
-        colunaNovaId: colunaAFazer.id,
-        colunaNovaNome: colunaAFazer.nome,
-      });
-    }
+    // Mudar de coluna não vai pro Senior — ver comentário equivalente mais acima.
 
     res.json({ id, colunaId: colunaAFazer.id, duracaoMinutos: duracaoSessaoFechadaMin ?? 0 });
   } catch (error) {

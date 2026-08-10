@@ -1,6 +1,8 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { Modal } from "../../components/ui/Modal";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { copiarParaAreaDeTransferencia } from "../../utils/clipboard";
 
 interface ItemSincronizacao {
   id: number;
@@ -28,6 +30,8 @@ export function SincronizacaoSenior() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState<number | null>(null);
+  const [itemDoPayload, setItemDoPayload] = useState<ItemSincronizacao | null>(null);
+  const [copiado, setCopiado] = useState(false);
 
   function carregar() {
     setLoading(true);
@@ -72,9 +76,9 @@ export function SincronizacaoSenior() {
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-foreground">Exportados para o Senior</h1>
         <p className="mt-1 text-sm text-muted">
-          Fila (outbox) de mudanças feitas no CaxHub que precisam ser propagadas de volta pro ERP Senior. O canal de
-          escrita do Senior ainda não foi confirmado — por isso os itens abaixo tendem a acumular em "Bloqueado" até
-          esse canal existir.
+          Fila (outbox) de mudanças feitas no CaxHub que precisam ser propagadas de volta pro ERP Senior. Apontamento
+          (<code>registrarAtividades</code>) e alocação (<code>alocarAtividades</code>) já têm canal publicado; um
+          item só fica represado sem consumir tentativa quando o tipo ainda não tem operação do lado do Senior.
         </p>
       </div>
 
@@ -181,15 +185,20 @@ export function SincronizacaoSenior() {
                     </span>
                   </td>
                   <td className="px-5 py-3.5 text-right">
-                    {item.status === "bloqueado" && (
-                      <button
-                        onClick={() => reprocessar(item.id)}
-                        disabled={reprocessando === item.id}
-                        className="text-sm text-primary hover:underline disabled:opacity-50"
-                      >
-                        {reprocessando === item.id ? "Reprocessando..." : "Reprocessar"}
+                    <div className="flex items-center justify-end gap-3">
+                      <button onClick={() => setItemDoPayload(item)} className="text-sm text-primary hover:underline">
+                        Ver payload
                       </button>
-                    )}
+                      {item.status === "bloqueado" && (
+                        <button
+                          onClick={() => reprocessar(item.id)}
+                          disabled={reprocessando === item.id}
+                          className="text-sm text-primary hover:underline disabled:opacity-50"
+                        >
+                          {reprocessando === item.id ? "Reprocessando..." : "Reprocessar"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -204,6 +213,35 @@ export function SincronizacaoSenior() {
           </table>
         </div>
       </div>
+
+      <Modal
+        open={itemDoPayload != null}
+        onClose={() => {
+          setItemDoPayload(null);
+          setCopiado(false);
+        }}
+        title={`Payload — ${itemDoPayload?.tipo ?? ""}`}
+        subtitulo={itemDoPayload ? `Proposta ${itemDoPayload.codpro} · pendência #${itemDoPayload.id}` : undefined}
+      >
+        {itemDoPayload && (
+          <>
+            <pre className="overflow-x-auto rounded-md bg-surface-2 p-3 text-[12px] text-foreground">
+              {JSON.stringify(itemDoPayload.payload, null, 2)}
+            </pre>
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={async () => {
+                  const ok = await copiarParaAreaDeTransferencia(JSON.stringify(itemDoPayload.payload, null, 2));
+                  setCopiado(ok);
+                }}
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
+              >
+                {copiado ? "Copiado!" : "Copiar"}
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

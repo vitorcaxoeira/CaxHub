@@ -362,6 +362,162 @@ export async function registrarAtividadesViaSoap(payload: RegistrarAtividadesPay
   };
 }
 
+// ---------------------------------------------------------------------------
+// Canal de ESCRITA — operação `alocarAtividades`, do mesmo serviço.
+//
+// Grava/altera/exclui a alocação de um consultor num item de proposta (espelho local:
+// AtividadeConsultor / USU_TE077ATI). Publicada em 10/08/2026 — confirmada baixando o WSDL
+// e o `?xsd` reais (mesmo método usado pra descobrir `registrarAtividades`). Contrato
+// (`CaxHubalocarAtividadesIn/Out`): mesma forma de duas camadas de erro (erroExecucao,
+// statusProcesso/mensagemProcesso) e mesmo domínio de tipEve (I/E/A) — só que aqui os TRÊS
+// valores fazem sentido de verdade: alocação tem exclusão de fato no Senior, diferente de
+// apontamento (registrarAtividades nunca usa "E", o serviço não tem como desfazer aquele).
+//
+// `qtdHor`/`hrsExc` são string no XSD, sem formato declarado — a hipótese usada aqui é o
+// mesmo "HH:MM" de horIni/horFim (ver formatarHoraSenior), ainda NÃO confirmada contra o
+// serviço real. Primeira chamada de verdade (script manual, antes de ligar o cron pra estes
+// tipos) é o que confirma ou corrige isso.
+// ---------------------------------------------------------------------------
+
+/** Identificador externo mandado ao Senior pra alocação: o id local de AtividadeConsultor. */
+export const ideExtAlocacao = (atividadeConsultorId: number) => String(atividadeConsultorId);
+
+export const TIP_EVE_ALTERAR = "A";
+export const TIP_EVE_EXCLUIR = "E";
+
+export interface ItemAlocacaoSenior {
+  ideExt: string;
+  seqite: number;
+  /** Ausente ao CRIAR (o Senior gera e devolve); presente ao alterar/excluir. */
+  seqAti?: number;
+  /** Ausente ao EXCLUIR (nada a informar) — presente ao criar/alterar. */
+  qtdHor?: string;
+  /** Horas excedentes autorizadas (AtividadeConsultor.horasExcedentes) — só quando > 0. */
+  hrsExc?: string;
+}
+
+export interface AlocarAtividadesPayload {
+  codEmp: number;
+  codFor: number;
+  codPro: number;
+  /** Mesmo espírito do ideExt de registrarAtividades — aqui vale o mesmo id do item, já
+   * que uma alocação não tem um "cabeçalho" separado como a RAT tem (não testado em lote). */
+  ideExt: string;
+  sisOri: string;
+  tipEve: string;
+  itens: ItemAlocacaoSenior[];
+}
+
+export interface ItemAlocacaoRegistrado {
+  ideExt: string | null;
+  seqAti: number | null;
+  seqIte: number | null;
+  status: number | null;
+  msg: string | null;
+}
+
+export interface AlocarAtividadesResposta {
+  statusProcesso: number | null;
+  mensagemProcesso: string | null;
+  erroExecucao: string | null;
+  resultados: { ideExt: string | null; itens: ItemAlocacaoRegistrado[] }[];
+}
+
+/** Monta o XML que seria enviado, sem enviar — mesmo uso do irmão de registrarAtividades. */
+export function montarEnvelopeAlocarAtividades(payload: AlocarAtividadesPayload, user: string, password: string): string {
+  const itensXml = payload.itens
+    .map(
+      (i) =>
+        `<itens>` +
+        (i.hrsExc != null ? `<hrsExc>${escapeXml(i.hrsExc)}</hrsExc>` : "") +
+        `<ideExt>${escapeXml(i.ideExt)}</ideExt>` +
+        (i.qtdHor != null ? `<qtdHor>${escapeXml(i.qtdHor)}</qtdHor>` : "") +
+        (i.seqAti != null ? `<seqAti>${i.seqAti}</seqAti>` : "") +
+        `<seqite>${i.seqite}</seqite>` +
+        `</itens>`
+    )
+    .join("");
+
+  const parametersXml =
+    `<codEmp>${payload.codEmp}</codEmp>` +
+    `<codFor>${payload.codFor}</codFor>` +
+    `<codPro>${payload.codPro}</codPro>` +
+    `<ideExt>${escapeXml(payload.ideExt)}</ideExt>` +
+    itensXml +
+    `<sisOri>${escapeXml(payload.sisOri)}</sisOri>` +
+    `<tipEve>${escapeXml(payload.tipEve)}</tipEve>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ser:alocarAtividades>
+      <user>${escapeXml(user)}</user>
+      <password>${escapeXml(password)}</password>
+      <encryption>0</encryption>
+      <parameters>${parametersXml}</parameters>
+    </ser:alocarAtividades>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+}
+
+/**
+ * Cria/altera/exclui a alocação de um consultor num item, via `alocarAtividades`.
+ *
+ * Mesmo contrato de responsabilidade que `registrarAtividadesViaSoap`: não decide
+ * sucesso/fracasso de negócio, só normaliza a resposta — quem decide é o chamador
+ * (sync/outboxSenior.ts).
+ */
+export async function alocarAtividadesViaSoap(payload: AlocarAtividadesPayload): Promise<AlocarAtividadesResposta> {
+  const soapUrl = process.env.SOAP_URL;
+  const soapUser = process.env.SOAP_USER;
+  const soapPassword = process.env.SOAP_PASSWORD;
+
+  if (!soapUrl || !soapUser || !soapPassword) {
+    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
+  }
+
+  const endpoint = soapUrl.replace(/\?wsdl$/i, "");
+  const envelope = montarEnvelopeAlocarAtividades(payload, soapUser, soapPassword);
+
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "alocarAtividades"));
+    });
+
+  const parsed = parser.parse(response.data);
+  const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:alocarAtividadesResponse"]?.result;
+
+  if (!result) {
+    throw new Error("Resposta SOAP de alocarAtividades em formato inesperado — ajustar parsing em soap/client.ts");
+  }
+
+  const erroExecucao = textoOuNulo(result.erroExecucao);
+  if (erroExecucao) {
+    throw new Error(`Erro no serviço Senior (alocarAtividades): ${erroExecucao}`);
+  }
+
+  return {
+    statusProcesso: numeroOuNulo(result.statusProcesso),
+    mensagemProcesso: textoOuNulo(result.mensagemProcesso),
+    erroExecucao,
+    resultados: comoArray<Record<string, unknown>>(result.result).map((r) => ({
+      ideExt: ideExtOuNulo(r.ideExt),
+      itens: comoArray<Record<string, unknown>>(r.itens as never).map((i) => ({
+        ideExt: ideExtOuNulo(i.ideExt),
+        seqAti: numeroOuNulo(i.seqAti),
+        seqIte: numeroOuNulo(i.seqIte),
+        status: numeroOuNulo(i.status),
+        msg: textoOuNulo(i.msg),
+      })),
+    })),
+  };
+}
+
 const PAGE_SIZE = 10000;
 
 /**

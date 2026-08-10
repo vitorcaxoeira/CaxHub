@@ -582,8 +582,11 @@ model AtividadeConsultor {
   codfor Int
   qtdhor Int?
   /// Horas excedentes autorizadas pelo gestor, em minutos (mesma unidade de qtdhor).
-  /// Conceito só do CaxHub, sem equivalente no Senior — por isso NÃO é tocado pelo sync
-  /// (ver atividadeConsultorSync.ts, que lista as colunas que sobrescreve).
+  /// Desde 10/08/2026 tem equivalente no Senior: vai no campo `hrsExc` de `alocarAtividades`
+  /// (ver sync/outboxSenior.ts) — mapeamento por semelhança de nome, ainda sem confirmação
+  /// oficial do Senior/Hedel sobre o significado exato do campo lá.
+  /// Mesmo assim NÃO é tocado pelo sync de LEITURA (ver atividadeConsultorSync.ts, que lista
+  /// as colunas que sobrescreve) — só o canal de escrita lê este campo.
   ///
   /// Existe pra o planejado nunca ser falseado: quando 20h não bastam, a saída antes era
   /// editar `qtdhor` e perder o registro de que o planejado era 20h. O teto de apontamento
