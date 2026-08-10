@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../../auth/AuthContext";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { copiarParaAreaDeTransferencia } from "../../utils/clipboard";
 
 interface Role {
   id: number;
@@ -232,11 +233,14 @@ export function Usuarios() {
     }
   }
 
-  function copiarLink() {
+  async function copiarLink() {
     if (!linkGerado) return;
-    navigator.clipboard.writeText(linkGerado).then(() => {
+    const copiou = await copiarParaAreaDeTransferencia(linkGerado);
+    if (copiou) {
       setLinkCopiado(true);
-    });
+    } else {
+      setErro("Não foi possível copiar automaticamente. Selecione e copie o link exibido acima.");
+    }
   }
 
   return (
