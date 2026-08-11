@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { reprocessar } from "../sync/outboxSenior";
+import { reprocessar, processarFilaSincronizacao } from "../sync/outboxSenior";
 
 // Painel de administração da fila de sincronização CaxHub -> Senior (outbox). Só admin,
 // já que é uma tela operacional/infra, não de negócio.
@@ -40,6 +40,11 @@ sincronizacaoRouter.get("/", async (_req, res) => {
   }
 });
 
+// "Enviar para o Senior" na tela — não é só reagendar pro cron de 15 em 15 min: reseta
+// tentativas/status E já tenta enviar na hora (mesmo disparo imediato que a confirmação de
+// apontamento usa, restrito a este item via `apenasId`). Item que falhar de novo volta pro
+// estado de erro normal (pendente ou bloqueado, conforme as tentativas) — a lista recarrega
+// e mostra o resultado, sem precisar de resposta especial aqui.
 sincronizacaoRouter.post("/:id/reprocessar", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -48,6 +53,7 @@ sincronizacaoRouter.post("/:id/reprocessar", async (req, res) => {
       return;
     }
     await reprocessar(id);
+    await processarFilaSincronizacao({ apenasId: id });
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error, "reprocessar");

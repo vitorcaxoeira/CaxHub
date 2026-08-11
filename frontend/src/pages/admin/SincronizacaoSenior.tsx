@@ -189,13 +189,13 @@ export function SincronizacaoSenior() {
                       <button onClick={() => setItemDoPayload(item)} className="text-sm text-primary hover:underline">
                         Ver payload
                       </button>
-                      {item.status === "bloqueado" && (
+                      {(item.status === "bloqueado" || item.status === "pendente") && (
                         <button
                           onClick={() => reprocessar(item.id)}
                           disabled={reprocessando === item.id}
                           className="text-sm text-primary hover:underline disabled:opacity-50"
                         >
-                          {reprocessando === item.id ? "Reprocessando..." : "Reprocessar"}
+                          {reprocessando === item.id ? "Enviando..." : "Enviar para o Senior"}
                         </button>
                       )}
                     </div>
