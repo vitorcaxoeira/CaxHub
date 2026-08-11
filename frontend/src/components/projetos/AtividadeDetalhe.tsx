@@ -173,6 +173,13 @@ export function AtividadeDetalhe({
   const [inicioPlanejado, setInicioPlanejado] = useState(paraInputDate(dataPrevistaInicio));
   const [fimPlanejado, setFimPlanejado] = useState(paraInputDate(dataPrevistaFim));
   const [salvandoPlanejamento, setSalvandoPlanejamento] = useState(false);
+
+  // Sombra local dos números que vêm por prop (preenchidos uma vez só, quando o
+  // componente-pai abriu o drawer). `carregar()` abaixo os atualiza de novo depois de
+  // qualquer ação que mude o teto/realizado desta alocação — sem isso, salvar excedente
+  // (ou qualquer outra mudança) parecia "não ter feito nada", porque o texto continuava
+  // lendo o snapshot antigo até o drawer fechar e reabrir.
+  const [detalheAtual, setDetalheAtual] = useState({ horasExcedentes, qtdhorPrevisto, itemAlocado, itemRealizado });
   const [excedenteInput, setExcedenteInput] = useState(minutosParaInputHoras(horasExcedentes));
   const [salvandoExcedente, setSalvandoExcedente] = useState(false);
   const [erroExcedente, setErroExcedente] = useState<string | null>(null);
@@ -287,6 +294,7 @@ export function AtividadeDetalhe({
     setErroExcedente(null);
     try {
       await axios.patch(`/api/atividades/${atividadeId}/horas-excedentes`, { horasExcedentes: minutos });
+      carregar();
       onExcedenteAlterado?.();
     } catch (err) {
       const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -308,14 +316,25 @@ export function AtividadeDetalhe({
       // vazia e o resto do drawer segue carregando normalmente.
       axios.get(`/api/solicitacoes-excedente/atividade/${atividadeId}`).catch(() => ({ data: { solicitacoes: [] } })),
       axios.get(`/api/solicitacoes-apontamento/atividade/${atividadeId}`).catch(() => ({ data: { solicitacoes: [] } })),
+      // Mesma rota que os componentes-pai (Atividades.tsx, Aprovacoes.tsx, MeusApontamentos.tsx)
+      // usam pra montar as props deste drawer — relida aqui pra manter horasExcedentes/
+      // qtdhorPrevisto/itemAlocado/itemRealizado frescos sem depender do pai re-passar props
+      // pro drawer já aberto (ele não faz isso, só recarrega a LISTA atrás do drawer).
+      axios.get(`/api/atividades/${atividadeId}/detalhe`),
     ])
-      .then(([c, ch, a, h, s, ap]) => {
+      .then(([c, ch, a, h, s, ap, d]) => {
         setComentarios(c.data.comentarios);
         setChecklist(ch.data.itens);
         setAnexos(a.data.anexos);
         setHistorico(h.data.historico);
         setSolicitacoes(s.data.solicitacoes);
         setApontamentos(ap.data.solicitacoes);
+        setDetalheAtual({
+          horasExcedentes: d.data.atividade.horasExcedentes,
+          qtdhorPrevisto: d.data.atividade.qtdhorPrevisto,
+          itemAlocado: d.data.atividade.itemAlocado,
+          itemRealizado: d.data.atividade.itemRealizado,
+        });
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar"))
@@ -426,7 +445,11 @@ export function AtividadeDetalhe({
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4">
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border border-border bg-surface shadow-lg">
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <h2 className="font-display text-lg font-bold text-foreground">{titulo}</h2>
+          <h2 className="font-display text-lg font-bold text-foreground">
+            <span className="font-mono text-muted">#{atividadeId}</span>
+            <span className="mx-1.5 text-muted">·</span>
+            {titulo}
+          </h2>
           <button onClick={onClose} className="text-sm text-muted hover:text-foreground">
             Fechar
           </button>
@@ -450,15 +473,17 @@ export function AtividadeDetalhe({
                 <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Teto de apontamento</p>
                 <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5">
                   <p className="font-mono text-[11.5px] text-muted">
-                    Alocado {formatHorasCompacto(qtdhorPrevisto ?? 0, 2)}
-                    {horasExcedentes > 0 && (
+                    Alocado {formatHorasCompacto(detalheAtual.qtdhorPrevisto ?? 0, 2)}
+                    {detalheAtual.horasExcedentes > 0 && (
                       <>
                         {" + excedente "}
-                        <span className="text-warning">{formatHorasCompacto(horasExcedentes, 2)}</span>
+                        <span className="text-warning">{formatHorasCompacto(detalheAtual.horasExcedentes, 2)}</span>
                       </>
                     )}
                     {" = teto "}
-                    <span className="text-foreground">{formatHorasCompacto((qtdhorPrevisto ?? 0) + horasExcedentes, 2)}</span>
+                    <span className="text-foreground">
+                      {formatHorasCompacto((detalheAtual.qtdhorPrevisto ?? 0) + detalheAtual.horasExcedentes, 2)}
+                    </span>
                   </p>
 
                   {podeAutorizarExcedente ? (
@@ -551,7 +576,7 @@ export function AtividadeDetalhe({
                       )}
                     </div>
                   ) : (
-                    horasExcedentes === 0 && (
+                    detalheAtual.horasExcedentes === 0 && (
                       <p className="mt-1 text-[11.5px] text-muted">
                         Precisa de mais horas? Peça ao gestor do departamento pra autorizar excedentes.
                       </p>
@@ -688,7 +713,7 @@ export function AtividadeDetalhe({
                     </p>
                   )}
                   {(() => {
-                    const orcamento = orcamentoDeTotais(itemQtdhor ?? 0, itemAlocado, itemRealizado);
+                    const orcamento = orcamentoDeTotais(itemQtdhor ?? 0, detalheAtual.itemAlocado, detalheAtual.itemRealizado);
                     const largura = 2;
                     const saldo = descreverSaldoDistribuicao(orcamento, largura);
                     return (

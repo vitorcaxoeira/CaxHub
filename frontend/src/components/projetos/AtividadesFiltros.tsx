@@ -54,7 +54,7 @@ export function AtividadesFiltros({
     <div className="mb-4 flex flex-wrap items-center gap-3">
       <input
         type="text"
-        placeholder="Buscar cliente ou proposta..."
+        placeholder="Buscar cliente, proposta ou ID da atividade..."
         value={filtros.busca}
         onChange={(e) => onFiltros({ busca: e.target.value })}
         className={`${selectClass} w-56`}

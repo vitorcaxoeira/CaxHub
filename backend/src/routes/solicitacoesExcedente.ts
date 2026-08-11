@@ -5,6 +5,8 @@ import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, gerenciaDepartamento } from "../domain/contextoProjeto";
 import { formatarMinutos } from "../domain/tetoAtividade";
 import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
+import { enfileirar } from "../sync/outboxSenior";
+import { TIP_EVE_ALTERAR } from "../soap/client";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
@@ -421,6 +423,23 @@ solicitacoesExcedenteRouter.post("/:id/decidir", async (req: AuthenticatedReques
       `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}`,
       user.id
     );
+
+    // Só na aprovação — reprovar não muda a alocação, não há o que sincronizar. O teto
+    // (horasExcedentes) tem equivalente no Senior desde 10/08/2026 (`hrsExc` de
+    // alocarAtividades); mesmo formato de payload já usado em criar/editar/remover_atividade.
+    if (aprovar) {
+      await enfileirar(atividade.id, "editar_atividade", {
+        codemp: atividade.codemp,
+        codpro: atividade.codpro,
+        seqite: atividade.seqite,
+        codfor: atividade.codfor,
+        qtdhor: atividade.qtdhor,
+        fasid: atividade.fasid,
+        dataPrevistaInicio: atividade.dataPrevistaInicio?.toISOString() ?? null,
+        dataPrevistaFim: atividade.dataPrevistaFim?.toISOString() ?? null,
+        tipEve: TIP_EVE_ALTERAR,
+      });
+    }
 
     res.json({
       id: atualizada.id,

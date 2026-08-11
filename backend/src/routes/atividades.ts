@@ -16,6 +16,8 @@ import {
 import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos, gerenciaDepartamento } from "../domain/contextoProjeto";
 import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
+import { enfileirar } from "../sync/outboxSenior";
+import { TIP_EVE_ALTERAR } from "../soap/client";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS, CAMPOS_AUDITADOS_EXCEDENTE } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
@@ -573,7 +575,13 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
       .filter((item) => filtroPripro === null || item.pripro === filtroPripro)
       .filter((item) => filtroCodfors.length === 0 || filtroCodfors.includes(item.codfor))
       .filter((item) => !somenteAtrasadas || item.atrasada)
-      .filter((item) => !busca || item.cliente.toLowerCase().includes(busca) || String(item.codpro).includes(busca))
+      .filter(
+        (item) =>
+          !busca ||
+          item.cliente.toLowerCase().includes(busca) ||
+          String(item.codpro).includes(busca) ||
+          String(item.id).includes(busca)
+      )
       .filter((item) => {
         if (situacao === "backlog") return !item.coluna?.ehFinal;
         if (situacao === "atrasadas") return item.atrasada;
@@ -1213,9 +1221,11 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
 
 // ---------- Planejamento (datas previstas de início/fim, pra Timeline/Gantt) ----------
 // Horas excedentes autorizadas pelo gestor. Endpoint próprio, e não o PATCH /alocacoes/:id
-// da Alocação, por dois motivos: aquele exige `qtdhor` no body (o planejado, que aqui não
-// deve ser tocado) e enfileira um `editar_atividade` pro Senior — e horas excedentes são
-// campo só do CaxHub, sem equivalente lá, então não há o que enviar.
+// da Alocação, porque aquele exige `qtdhor` no body (o planejado, que aqui não deve ser
+// tocado). Desde 10/08/2026 `hrsExc` existe no contrato de `alocarAtividades`, então ESTE
+// endpoint agora também enfileira um `editar_atividade` — quem chama aqui só pode ser
+// gestor (ver a trava abaixo), então toda gravação já é "aprovado no ato", sem precisar de
+// nenhuma etapa extra antes de mandar pro Senior.
 //
 // A permissão é explicitamente "gerencia o departamento", NÃO podeExecutarAcao("editar"):
 // desde a mudança de 31/07/2026 a ação `editar` também é liberada pro dono da atividade,
@@ -1307,6 +1317,17 @@ atividadesRouter.patch("/:id/horas-excedentes", async (req: AuthenticatedRequest
         `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}`,
         user.id
       );
+      await enfileirar(atividade.id, "editar_atividade", {
+        codemp: atividade.codemp,
+        codpro: atividade.codpro,
+        seqite: atividade.seqite,
+        codfor: atividade.codfor,
+        qtdhor: atividade.qtdhor,
+        fasid: atividade.fasid,
+        dataPrevistaInicio: atividade.dataPrevistaInicio?.toISOString() ?? null,
+        dataPrevistaFim: atividade.dataPrevistaFim?.toISOString() ?? null,
+        tipEve: TIP_EVE_ALTERAR,
+      });
     }
 
     res.json({ id, horasExcedentes, teto: (atividade.qtdhor ?? 0) + horasExcedentes });
