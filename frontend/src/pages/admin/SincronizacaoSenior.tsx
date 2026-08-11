@@ -32,6 +32,8 @@ export function SincronizacaoSenior() {
   const [reprocessando, setReprocessando] = useState<number | null>(null);
   const [itemDoPayload, setItemDoPayload] = useState<ItemSincronizacao | null>(null);
   const [copiado, setCopiado] = useState(false);
+  const [itemDoErro, setItemDoErro] = useState<ItemSincronizacao | null>(null);
+  const [copiadoErro, setCopiadoErro] = useState(false);
 
   function carregar() {
     setLoading(true);
@@ -120,6 +122,9 @@ export function SincronizacaoSenior() {
             <thead>
               <tr>
                 <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                  ID
+                </th>
+                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Proposta
                 </th>
                 <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
@@ -145,6 +150,9 @@ export function SincronizacaoSenior() {
                 Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i} className="border-t border-border/60">
                     <td className="px-5 py-3.5">
+                      <Skeleton className="h-4 w-10" />
+                    </td>
+                    <td className="px-5 py-3.5">
                       <Skeleton className="h-4 w-16" />
                     </td>
                     <td className="px-5 py-3.5">
@@ -168,11 +176,22 @@ export function SincronizacaoSenior() {
               {!loading &&
                 itens.map((item) => (
                 <tr key={item.id} className="border-t border-border/60 transition hover:bg-surface-2">
+                  <td className="px-5 py-3.5 font-mono text-sm tabular-nums text-muted">{item.id}</td>
                   <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{item.codpro}</td>
                   <td className="px-5 py-3.5 text-sm text-muted">{item.tipo}</td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{item.tentativas}</td>
-                  <td className="max-w-[280px] truncate px-5 py-3.5 text-[12px] text-destructive" title={item.ultimoErro ?? ""}>
-                    {item.ultimoErro ?? "—"}
+                  <td className="max-w-[280px] px-5 py-3.5 text-[12px]">
+                    {item.ultimoErro ? (
+                      <button
+                        onClick={() => setItemDoErro(item)}
+                        className="block max-w-full truncate text-left text-destructive hover:underline"
+                        title={item.ultimoErro}
+                      >
+                        {item.ultimoErro}
+                      </button>
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
                   </td>
                   <td className="px-5 py-3.5 text-[12px] text-muted">{dateTimeFormatter.format(new Date(item.criadoEm))}</td>
                   <td className="px-5 py-3.5 text-right">
@@ -204,7 +223,7 @@ export function SincronizacaoSenior() {
               ))}
               {!loading && itens.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted">
+                  <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhum item na fila de sincronização.
                   </td>
                 </tr>
@@ -237,6 +256,35 @@ export function SincronizacaoSenior() {
                 className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
               >
                 {copiado ? "Copiado!" : "Copiar"}
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
+
+      <Modal
+        open={itemDoErro != null}
+        onClose={() => {
+          setItemDoErro(null);
+          setCopiadoErro(false);
+        }}
+        title={`Erro — ${itemDoErro?.tipo ?? ""}`}
+        subtitulo={itemDoErro ? `Proposta ${itemDoErro.codpro} · pendência #${itemDoErro.id}` : undefined}
+      >
+        {itemDoErro && (
+          <>
+            <p className="whitespace-pre-wrap rounded-md bg-surface-2 p-3 text-[12.5px] text-foreground">
+              {itemDoErro.ultimoErro}
+            </p>
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={async () => {
+                  const ok = await copiarParaAreaDeTransferencia(itemDoErro.ultimoErro ?? "");
+                  setCopiadoErro(ok);
+                }}
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
+              >
+                {copiadoErro ? "Copiado!" : "Copiar"}
               </button>
             </div>
           </>
