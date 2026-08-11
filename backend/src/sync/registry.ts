@@ -16,16 +16,21 @@ import { JOB_NAME as EMPRESA_JOB, CRON_EXPR as EMPRESA_CRON, CAMPO_DATA as EMPRE
 import { JOB_NAME as FASE_PROPOSTA_JOB, CRON_EXPR as FASE_PROPOSTA_CRON, CAMPO_DATA as FASE_PROPOSTA_DATA, runFasePropostaSync } from "./fasePropostaSync";
 import { JOB_NAME as FILIAL_JOB, CRON_EXPR as FILIAL_CRON, CAMPO_DATA as FILIAL_DATA, runFilialSync } from "./filialSync";
 import { JOB_NAME as FORMA_PAGAMENTO_JOB, CRON_EXPR as FORMA_PAGAMENTO_CRON, CAMPO_DATA as FORMA_PAGAMENTO_DATA, runFormaPagamentoSync } from "./formaPagamentoSync";
+import { JOB_NAME as LANCAMENTO_CONTABIL_JOB, CRON_EXPR as LANCAMENTO_CONTABIL_CRON, CAMPO_DATA as LANCAMENTO_CONTABIL_DATA, runLancamentoContabilSync } from "./lancamentoContabilSync";
 import { JOB_NAME as MOEDA_JOB, CRON_EXPR as MOEDA_CRON, CAMPO_DATA as MOEDA_DATA, runMoedaSync } from "./moedaSync";
 import { JOB_NAME as MOVIMENTO_CONTA_JOB, CRON_EXPR as MOVIMENTO_CONTA_CRON, CAMPO_DATA as MOVIMENTO_CONTA_DATA, runMovimentoContaSync } from "./movimentoContaSync";
 import { JOB_NAME as MOVIMENTO_TITULO_JOB, CRON_EXPR as MOVIMENTO_TITULO_CRON, CAMPO_DATA as MOVIMENTO_TITULO_DATA, runMovimentoTituloReceberSync } from "./movimentoTituloReceberSync";
 import { JOB_NAME as NATUREZA_FINANCEIRA_JOB, CRON_EXPR as NATUREZA_FINANCEIRA_CRON, CAMPO_DATA as NATUREZA_FINANCEIRA_DATA, runNaturezaFinanceiraSync } from "./naturezaFinanceiraSync";
+import { JOB_NAME as ORCAMENTO_CONTABIL_JOB, CRON_EXPR as ORCAMENTO_CONTABIL_CRON, CAMPO_DATA as ORCAMENTO_CONTABIL_DATA, runOrcamentoContabilSync } from "./orcamentoContabilSync";
 import { JOB_NAME as PEDIDO_JOB, CRON_EXPR as PEDIDO_CRON, CAMPO_DATA as PEDIDO_DATA, runPedidoSync } from "./pedidoSync";
+import { JOB_NAME as PLANO_CONTABIL_JOB, CRON_EXPR as PLANO_CONTABIL_CRON, CAMPO_DATA as PLANO_CONTABIL_DATA, runPlanoContabilSync } from "./planoContabilSync";
+import { JOB_NAME as PLANO_CONTABIL_PARALELO_JOB, CRON_EXPR as PLANO_CONTABIL_PARALELO_CRON, CAMPO_DATA as PLANO_CONTABIL_PARALELO_DATA, runPlanoContabilParaleloSync } from "./planoContabilParaleloSync";
 import { JOB_NAME as PORTADOR_JOB, CRON_EXPR as PORTADOR_CRON, CAMPO_DATA as PORTADOR_DATA, runPortadorSync } from "./portadorSync";
 import { JOB_NAME as PROPOSTA_ITEM_JOB, CRON_EXPR as PROPOSTA_ITEM_CRON, CAMPO_DATA as PROPOSTA_ITEM_DATA, runPropostaItemSync } from "./propostaItemSync";
 import { JOB_NAME as PROPOSTA_JOB, CRON_EXPR as PROPOSTA_CRON, CAMPO_DATA as PROPOSTA_DATA, runPropostaSync } from "./propostaSync";
 import { JOB_NAME as RAT_JOB, CRON_EXPR as RAT_CRON, CAMPO_DATA as RAT_DATA, runRatSync } from "./ratSync";
 import { JOB_NAME as RAT_ITEM_JOB, CRON_EXPR as RAT_ITEM_CRON, CAMPO_DATA as RAT_ITEM_DATA, runRatItemSync } from "./ratItemSync";
+import { JOB_NAME as RATEIO_LANCAMENTO_JOB, CRON_EXPR as RATEIO_LANCAMENTO_CRON, CAMPO_DATA as RATEIO_LANCAMENTO_DATA, runRateioLancamentoSync } from "./rateioLancamentoSync";
 import { JOB_NAME as REPRESENTANTE_JOB, CRON_EXPR as REPRESENTANTE_CRON, CAMPO_DATA as REPRESENTANTE_DATA, runRepresentanteSync } from "./representanteSync";
 import { JOB_NAME as TIPO_TITULO_JOB, CRON_EXPR as TIPO_TITULO_CRON, CAMPO_DATA as TIPO_TITULO_DATA, runTipoTituloSync } from "./tipoTituloSync";
 import { JOB_NAME as TITULO_RECEBER_JOB, CRON_EXPR as TITULO_RECEBER_CRON, CAMPO_DATA as TITULO_RECEBER_DATA, runTituloReceberSync } from "./tituloReceberSync";
@@ -139,4 +144,14 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   },
   { jobName: FORMA_PAGAMENTO_JOB, displayName: "Formas de Pagamento", cronExpr: FORMA_PAGAMENTO_CRON, suportaAlterados: FORMA_PAGAMENTO_DATA != null, run: runFormaPagamentoSync, contarRegistros: () => prisma.formaPagamento.count() },
   { jobName: CONDICAO_PAGAMENTO_JOB, displayName: "Condições de Pagamento", cronExpr: CONDICAO_PAGAMENTO_CRON, suportaAlterados: CONDICAO_PAGAMENTO_DATA != null, run: runCondicaoPagamentoSync, contarRegistros: () => prisma.condicaoPagamento.count() },
+  // Tabelas de Contábil/Orçamento (e045pla/e043pcm/e640lct/e640rat/e650rto), identificadas a
+  // partir de uma SQL de BI (11/08/2026). Sem dependência das tabelas acima — PlanoContabil e
+  // PlanoContabilParalelo não dependem de nada novo; RateioLancamento depende de
+  // LancamentoContabil já carregado; OrcamentoContabil é independente das demais.
+  { jobName: PLANO_CONTABIL_JOB, displayName: "Plano Contábil", cronExpr: PLANO_CONTABIL_CRON, suportaAlterados: PLANO_CONTABIL_DATA != null, run: runPlanoContabilSync, contarRegistros: () => prisma.planoContabil.count() },
+  { jobName: PLANO_CONTABIL_PARALELO_JOB, displayName: "Plano Contábil Paralelo", cronExpr: PLANO_CONTABIL_PARALELO_CRON, suportaAlterados: PLANO_CONTABIL_PARALELO_DATA != null, run: runPlanoContabilParaleloSync, contarRegistros: () => prisma.planoContabilParalelo.count() },
+  { jobName: LANCAMENTO_CONTABIL_JOB, displayName: "Lançamentos Contábeis", cronExpr: LANCAMENTO_CONTABIL_CRON, suportaAlterados: LANCAMENTO_CONTABIL_DATA != null, run: runLancamentoContabilSync, contarRegistros: () => prisma.lancamentoContabil.count() },
+  // RateioLancamento roda depois de Lançamentos Contábeis: é o detalhe do lançamento.
+  { jobName: RATEIO_LANCAMENTO_JOB, displayName: "Rateios de Lançamento", cronExpr: RATEIO_LANCAMENTO_CRON, suportaAlterados: RATEIO_LANCAMENTO_DATA != null, run: runRateioLancamentoSync, contarRegistros: () => prisma.rateioLancamento.count() },
+  { jobName: ORCAMENTO_CONTABIL_JOB, displayName: "Orçamentos Contábeis", cronExpr: ORCAMENTO_CONTABIL_CRON, suportaAlterados: ORCAMENTO_CONTABIL_DATA != null, run: runOrcamentoContabilSync, contarRegistros: () => prisma.orcamentoContabil.count() },
 ];

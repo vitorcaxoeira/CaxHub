@@ -1,0 +1,2 @@
+ALTER TABLE "lancamentos_contabeis" ADD CONSTRAINT "chk_lancamentos_contabeis_sitlct" CHECK ("sitlct" IN ('1', '2', '3', '4'));
+ALTER TABLE "lancamentos_contabeis" ADD CONSTRAINT "chk_lancamentos_contabeis_orilct" CHECK ("orilct" IN ('MAN', 'VEN', 'VEF', 'EST', 'REC', 'AFR', 'RAM', 'ARV', 'CPR', 'COF', 'PAG', 'COM', 'AFP', 'PAM', 'APV', 'TES', 'PRD', 'PAT', 'IVE', 'ICO', 'IVZ', 'IOD', 'IMP', 'RPA', 'UIV', 'IVR', 'IVO', 'IVI', 'PRJ', 'CTC', 'VRB', 'REG'));

@@ -107,6 +107,13 @@ model Empresa {
   sigemp  String   @db.VarChar(30)
   filiais Filial[]
 
+  // Modelo de plano de contas/centro de custo "paralelo" que esta empresa usa — chave pra
+  // achar a descrição paralela em PlanoContabilParalelo.codmpc (ver SQL de Contábil/Orçamento,
+  // 11/08/2026). codmpc é pro lado de conta, codmpu pro lado de centro de custo — dois
+  // modelos independentes, confirmados separados no dicionário do Senior.
+  codmpc Int?
+  codmpu Int?
+
   @@map("empresa")
 }
 
@@ -249,6 +256,10 @@ model CentroCusto {
   ccupai String? @db.VarChar(9)
   /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
   anasin String? @db.VarChar(1)
+  // Classificação hierárquica do centro de custo — mesmo papel que PlanoContabil.clacta
+  // tem pro plano de contas (substring pra montar os níveis pai). Usada na SQL de
+  // Contábil/Orçamento (11/08/2026); não vinha sincronizada até então.
+  claccu String? @db.VarChar(30)
 
   @@id([codemp, codccu])
   @@map("centros_custo")
@@ -1318,4 +1329,117 @@ model CondicaoPagamento {
   @@id([codemp, codcpg])
 
   @@map("condicoes_pagamento")
+}
+
+// Espelho local da tabela E045PLA do Senior ERP (Tabelas - Plano Contábil - Contas).
+model PlanoContabil {
+  codemp Int
+  ctared Int
+  descta String @db.VarChar(250)
+  clacta String @db.VarChar(30)
+  /// Domínio "LGruCta": A=Ativo (Contábil - Devedora), P=Passivo (Contábil - Credora), D=Despesas (Contábil - Devedora), R=Receitas (Contábil - Credora), X=Ambas (Contábil - Desp./Rec.), M=Receitas Financeiras, N=Despesas Financeiras, U=Conta Auxiliar, L=Patrimônio Líquido, V=Custo de Venda, C=Custo de Produção, S=Custo de Ordem Dedutora, E=Custo de Ordem Credora, O=Outros, T=Contas de Compensação
+  defgru String @db.VarChar(1)
+  /// Domínio "LNatCtb": D=Devedora, C=Credora
+  natcta String @db.VarChar(1)
+  /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
+  anasin String @db.VarChar(1)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, ctared])
+
+  @@map("plano_contabil")
+}
+
+// Espelho local da tabela E043PCM do Senior ERP (Tabelas - Modelos de Planos - Contas ou Centros de Custos).
+model PlanoContabilParalelo {
+  codmpc Int
+  ctared Int
+  despar String? @db.VarChar(80)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codmpc, ctared])
+
+  @@map("plano_contabil_paralelo")
+}
+
+// Espelho local da tabela E640LCT do Senior ERP (Contábil - Lançamento - Lançamentos Contábeis).
+model LancamentoContabil {
+  codemp Int
+  numlct BigInt
+  /// Domínio "LSitLot": 1=A Contabilizar, 2=Contabilizado, 3=Excluído, 4=Desativado
+  sitlct Int
+  /// Domínio "LOriLct": MAN=Manual, VEN=Mercado - NF de Saída, VEF=Mercado - Faturas, EST=Estoques - Movimentos, REC=C. Receber - Movimentos, AFR=C. Receber - Ajuste Financeiro, RAM=C. Receber - Ajuste Valor de Mercado, ARV=C. Receber - Variação Cambial, CPR=Suprimentos - NF de Entrada, COF=Suprimentos - Faturas, PAG=C. Pagar - Movimentos, COM=C. Pagar - Comissões, AFP=C. Pagar - Ajuste Financeiro, PAM=C. Pagar - Ajuste Valor de Mercado, APV=C. Pagar - Variação Cambial, TES=Tesouraria - Movimentos, PRD=Produção, PAT=Patrimônio, IVE=Tributos - Vendas, ICO=Tributos - Compras, IVZ=Tributos - Redução Z, IOD=Tributos - Outros Documentos, IMP=Tributos - Apuração/Cálculo, RPA=Tributos - Recibo de Pagamento Autônomo, UIV=Tributos - Unidade Imobiliária Vendida, IVR=Tributos - Unidade Imobiliária Vendida - Valores Recebidos, IVO=Tributos - Unidade Imobiliária Vendida - Custo Orçado, IVI=Tributos - Unidade Imobiliária Vendida - Custo Incorrido, PRJ=Projetos - Lançamentos Manuais, CTC=Cota Capital - Movimentos, VRB=Vetorh - Rubi, REG=Regente
+  orilct String @db.VarChar(3)
+  cpllct String? @db.VarChar(250)
+  numlot Int?
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, numlct])
+
+  @@map("lancamentos_contabeis")
+}
+
+// Espelho local da tabela E640RAT do Senior ERP (Contábil - Lançamento - Rateios).
+model RateioLancamento {
+  codemp Int
+  numlct BigInt
+  ctared Int
+  codccu String @db.VarChar(9)
+  /// Domínio "LDebCre": D=Débito, C=Crédito
+  debcre String? @db.VarChar(1)
+  datlct DateTime @db.Date
+  vlrrat Decimal @db.Decimal(17, 2)
+  /// Domínio "LSitLot": 1=A Contabilizar, 2=Contabilizado, 3=Excluído, 4=Desativado
+  sitrat Int
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, numlct, ctared, codccu])
+
+  @@map("rateios_lancamento")
+}
+
+// Espelho local da tabela E650RTO do Senior ERP (Contábil - Saldo - Mensal e Orçamento por Centro de Custos (PC)).
+model OrcamentoContabil {
+  codemp Int
+  codfil Int
+  mesano DateTime @db.Date
+  ctared Int
+  codccu String @db.VarChar(9)
+  ctafin Int
+  vlrrat Decimal @db.Decimal(17, 2)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codfil, mesano, ctared, codccu, ctafin])
+
+  @@map("orcamentos_contabeis")
 }
