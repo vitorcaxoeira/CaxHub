@@ -1,8 +1,11 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { Modal } from "../../components/ui/Modal";
+import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
+import { Pagination } from "../../components/ui/Pagination";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { copiarParaAreaDeTransferencia } from "../../utils/clipboard";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 
 interface ItemSincronizacao {
   id: number;
@@ -33,8 +36,25 @@ const statusTone: Record<string, string> = {
   bloqueado: "bg-destructive/15 text-destructive",
 };
 
+// As 5 constantes reais usadas em enfileirar(...) pelo backend (routes/alocacao.ts,
+// apontamentos.ts, atividades.ts, rats.ts, solicitacoesExcedente.ts) — não existe um catálogo
+// central deles, então mantém aqui igual à lista usada no filtro de Tipo.
+const TIPO_LABEL: Record<string, string> = {
+  criar_apontamento: "Criar apontamento",
+  criar_atividade: "Criar alocação",
+  editar_atividade: "Editar alocação",
+  remover_atividade: "Remover alocação",
+  aprovar_rat: "Aprovar RAT",
+};
+
+const TIPO_OPCOES: MultiSelectOption<string>[] = Object.entries(TIPO_LABEL).map(([value, label]) => ({ value, label }));
+
+const PAGE_SIZE = 30;
+
 export function SincronizacaoSenior() {
   const [itens, setItens] = useState<ItemSincronizacao[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState<number | null>(null);
@@ -47,21 +67,71 @@ export function SincronizacaoSenior() {
   const [itemDoErro, setItemDoErro] = useState<ItemSincronizacao | null>(null);
   const [copiadoErro, setCopiadoErro] = useState(false);
 
+  // Situação vem de um clique num KPI (só um valor por vez, ver handleKpiClick); Tipo é
+  // multi-select; Proposta é texto livre (aceita vários números separados por vírgula, mesmo
+  // padrão de "Nro. da proposta" em ListarPedidos).
+  const [statusFiltro, setStatusFiltro] = useState<string | null>(null);
+  const [tipoFiltro, setTipoFiltro] = useState<string[]>([]);
+  const [codproInput, setCodproInput] = useState("");
+  const codproDebounced = useDebouncedValue(codproInput, 350);
+
+  // Totais por situação da fila INTEIRA (não reagem a statusFiltro/tipoFiltro/codproDebounced)
+  // — mesma regra de GET /pedidos/indicadores: o KPI mostra sempre o todo, só a lista abaixo
+  // reage aos filtros.
+  const [indicadores, setIndicadores] = useState({ pendente: 0, enviando: 0, enviado: 0, bloqueado: 0 });
+  const [loadingIndicadores, setLoadingIndicadores] = useState(true);
+
   function carregar() {
     setLoading(true);
     axios
-      .get("/api/sincronizacao")
+      .get("/api/sincronizacao", {
+        params: {
+          page,
+          pageSize: PAGE_SIZE,
+          status: statusFiltro || undefined,
+          tipo: tipoFiltro.length > 0 ? tipoFiltro.join(",") : undefined,
+          codpro: codproDebounced || undefined,
+        },
+      })
       .then(({ data }) => {
         setItens(data.itens);
+        setTotal(data.total);
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar fila de sincronização"))
       .finally(() => setLoading(false));
   }
 
+  function carregarIndicadores() {
+    setLoadingIndicadores(true);
+    axios
+      .get("/api/sincronizacao/indicadores")
+      .then(({ data }) => setIndicadores(data))
+      .catch(() => {})
+      .finally(() => setLoadingIndicadores(false));
+  }
+
+  // Indicadores carregam só uma vez ao montar — não dependem dos filtros da tela.
+  useEffect(() => {
+    carregarIndicadores();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     carregar();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, statusFiltro, tipoFiltro, codproDebounced]);
+
+  // Trocar qualquer filtro volta pra página 1 — senão a busca pode "sumir" numa página que
+  // não existe mais no recorte novo (mesmo padrão de ListarPedidos.tsx).
+  useEffect(() => {
+    setPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFiltro, tipoFiltro, codproDebounced]);
+
+  function alternarStatusFiltro(status: string) {
+    setStatusFiltro((atual) => (atual === status ? null : status));
+  }
 
   function abrirPayload(item: ItemSincronizacao) {
     setItemDoPayload(item);
@@ -80,18 +150,15 @@ export function SincronizacaoSenior() {
     try {
       await axios.post(`/api/sincronizacao/${id}/reprocessar`);
       carregar();
+      // O item que acabou de ser reprocessado mudou de situação — sem isso o KPI ficaria
+      // visivelmente errado logo depois da própria ação que esta tela oferece.
+      carregarIndicadores();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao reprocessar item");
     } finally {
       setReprocessando(null);
     }
   }
-
-  const totais = {
-    pendente: itens.filter((i) => i.status === "pendente").length,
-    bloqueado: itens.filter((i) => i.status === "bloqueado").length,
-    enviado: itens.filter((i) => i.status === "enviado").length,
-  };
 
   return (
     <div>
@@ -108,7 +175,7 @@ export function SincronizacaoSenior() {
         </p>
       </div>
 
-      {loading ? (
+      {loadingIndicadores ? (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-border bg-surface p-5">
@@ -119,20 +186,62 @@ export function SincronizacaoSenior() {
         </div>
       ) : (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="rounded-lg border border-border bg-surface p-5">
+          {/* Clicáveis: filtram a lista abaixo por situação (mesmo espírito do bucket
+              clicável de AgingDashboard/ContasReceber) — o total de cada cartão nunca muda
+              com o clique, só o da fila inteira, igual a /pedidos/indicadores. */}
+          <button
+            onClick={() => alternarStatusFiltro("pendente")}
+            className={`rounded-lg border p-5 text-left transition ${
+              statusFiltro === "pendente" ? "border-warning ring-2 ring-warning/40" : "border-border hover:bg-surface-2"
+            } ${statusFiltro && statusFiltro !== "pendente" ? "opacity-40" : ""}`}
+          >
             <p className="mb-2 text-[11.5px] text-muted">Pendentes</p>
-            <span className="block font-mono text-2xl font-semibold tabular-nums text-warning">{totais.pendente}</span>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-warning">{indicadores.pendente}</span>
+          </button>
+          <button
+            onClick={() => alternarStatusFiltro("bloqueado")}
+            className={`rounded-lg border p-5 text-left transition ${
+              statusFiltro === "bloqueado" ? "border-destructive ring-2 ring-destructive/40" : "border-border hover:bg-surface-2"
+            } ${statusFiltro && statusFiltro !== "bloqueado" ? "opacity-40" : ""}`}
+          >
             <p className="mb-2 text-[11.5px] text-muted">Bloqueados</p>
-            <span className="block font-mono text-2xl font-semibold tabular-nums text-destructive">{totais.bloqueado}</span>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-destructive">{indicadores.bloqueado}</span>
+          </button>
+          <button
+            onClick={() => alternarStatusFiltro("enviado")}
+            className={`rounded-lg border p-5 text-left transition ${
+              statusFiltro === "enviado" ? "border-success ring-2 ring-success/40" : "border-border hover:bg-surface-2"
+            } ${statusFiltro && statusFiltro !== "enviado" ? "opacity-40" : ""}`}
+          >
             <p className="mb-2 text-[11.5px] text-muted">Enviados</p>
-            <span className="block font-mono text-2xl font-semibold tabular-nums text-success">{totais.enviado}</span>
-          </div>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-success">{indicadores.enviado}</span>
+          </button>
         </div>
       )}
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          value={codproInput}
+          onChange={(e) => setCodproInput(e.target.value)}
+          placeholder="Nro. da proposta... (separe por vírgula)"
+          className="w-56 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <MultiSelectDropdown
+          opcoes={TIPO_OPCOES}
+          selecionados={tipoFiltro}
+          onChange={setTipoFiltro}
+          labelTodos="Todos os tipos"
+          labelSufixo="tipos"
+        />
+        {statusFiltro && (
+          <button
+            onClick={() => setStatusFiltro(null)}
+            className="font-mono text-[10.5px] uppercase tracking-wide text-muted underline hover:text-foreground"
+          >
+            limpar filtro de situação
+          </button>
+        )}
+      </div>
 
       {erro && (
         <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
@@ -202,7 +311,7 @@ export function SincronizacaoSenior() {
                 <tr key={item.id} className="border-t border-border/60 transition hover:bg-surface-2">
                   <td className="px-5 py-3.5 font-mono text-sm tabular-nums text-muted">{item.id}</td>
                   <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{item.codpro}</td>
-                  <td className="px-5 py-3.5 text-sm text-muted">{item.tipo}</td>
+                  <td className="px-5 py-3.5 text-sm text-muted">{TIPO_LABEL[item.tipo] ?? item.tipo}</td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{item.tentativas}</td>
                   <td className="max-w-[280px] px-5 py-3.5 text-[12px]">
                     {item.ultimoErro ? (
@@ -248,13 +357,14 @@ export function SincronizacaoSenior() {
               {!loading && itens.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
-                    Nenhum item na fila de sincronização.
+                    Nenhum item encontrado com esses filtros.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPageChange={setPage} label="pendências" />
       </div>
 
       <Modal

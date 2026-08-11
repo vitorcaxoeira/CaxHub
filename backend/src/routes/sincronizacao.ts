@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { reprocessar, processarFilaSincronizacao, previewEnvioSenior } from "../sync/outboxSenior";
@@ -14,14 +15,60 @@ function handleError(res: import("express").Response, error: unknown, label: str
   res.status(500).json({ error: message });
 }
 
-sincronizacaoRouter.get("/", async (_req, res) => {
+// Lista separada por vírgula ("criar_atividade,editar_atividade") -> array de números,
+// descartando o que não converte. Mesmo espírito de parseStringListParam em auditoria.ts,
+// só que pra número (usado no filtro de Proposta).
+function parseIntListParam(value: unknown): number[] | null {
+  if (typeof value !== "string" || value === "") return null;
+  const numeros = value
+    .split(",")
+    .map((v) => Number(v.trim()))
+    .filter((n) => Number.isFinite(n));
+  return numeros.length > 0 ? numeros : null;
+}
+
+function parseStringListParam(value: unknown): string[] | null {
+  if (typeof value !== "string" || value === "") return null;
+  const itens = value.split(",").filter((v) => v !== "");
+  return itens.length > 0 ? itens : null;
+}
+
+// Situações possíveis de SincronizacaoPendente.status (ver model no schema.prisma).
+const STATUS_VALIDOS = ["pendente", "enviando", "enviado", "bloqueado"] as const;
+
+// GET / — lista paginada, com filtro de situação (um valor, vem do clique num KPI da tela),
+// tipo (multi-select) e proposta (lista de números). `codpro` não é coluna própria desta
+// tabela — vem de AtividadeConsultor.codpro pela relação já incluída abaixo, por isso o
+// filtro é via `atividade: { codpro: { in } }`.
+sincronizacaoRouter.get("/", async (req, res) => {
   try {
-    const itens = await prisma.sincronizacaoPendente.findMany({
-      orderBy: { criadoEm: "desc" },
-      take: 200,
-      include: { atividade: { select: { codpro: true, seqite: true, codemp: true } } },
-    });
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
+    const status =
+      typeof req.query.status === "string" && (STATUS_VALIDOS as readonly string[]).includes(req.query.status)
+        ? req.query.status
+        : null;
+    const tipos = parseStringListParam(req.query.tipo);
+    const codpros = parseIntListParam(req.query.codpro);
+
+    const where: Prisma.SincronizacaoPendenteWhereInput = {};
+    if (status) where.status = status;
+    if (tipos) where.tipo = { in: tipos };
+    if (codpros) where.atividade = { codpro: { in: codpros } };
+
+    const [total, itens] = await Promise.all([
+      prisma.sincronizacaoPendente.count({ where }),
+      prisma.sincronizacaoPendente.findMany({
+        where,
+        orderBy: { criadoEm: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { atividade: { select: { codpro: true, seqite: true, codemp: true } } },
+      }),
+    ]);
+
     res.json({
+      total,
       itens: itens.map((i) => ({
         id: i.id,
         atividadeId: i.atividadeId,
@@ -40,11 +87,22 @@ sincronizacaoRouter.get("/", async (_req, res) => {
   }
 });
 
-// "Enviar para o Senior" na tela — não é só reagendar pro cron de 15 em 15 min: reseta
-// tentativas/status E já tenta enviar na hora (mesmo disparo imediato que a confirmação de
-// apontamento usa, restrito a este item via `apenasId`). Item que falhar de novo volta pro
-// estado de erro normal (pendente ou bloqueado, conforme as tentativas) — a lista recarrega
-// e mostra o resultado, sem precisar de resposta especial aqui.
+// Totais por situação da fila INTEIRA, sem nenhum filtro da tela — mesma decisão já tomada
+// em GET /pedidos/indicadores: o KPI mostra sempre o todo, só a lista abaixo dele reage aos
+// filtros. Carregado uma vez pela tela, não a cada mudança de filtro.
+sincronizacaoRouter.get("/indicadores", async (_req, res) => {
+  try {
+    const grupos = await prisma.sincronizacaoPendente.groupBy({ by: ["status"], _count: true });
+    const totais: Record<string, number> = { pendente: 0, enviando: 0, enviado: 0, bloqueado: 0 };
+    for (const g of grupos) {
+      if (g.status in totais) totais[g.status] = g._count;
+    }
+    res.json(totais);
+  } catch (error) {
+    handleError(res, error, "indicadores");
+  }
+});
+
 // Prévia do que seria de fato enviado ao Senior agora, sem enviar nada — relê o dado vivo
 // (mesma fonte que o envio real usa), nunca a coluna `payload` (que é só um retrato interno
 // tirado no momento em que a pendência foi criada). É o que a tela usa pra mostrar o XML de
@@ -68,6 +126,11 @@ sincronizacaoRouter.get("/:id/preview", async (req, res) => {
   }
 });
 
+// "Enviar para o Senior" na tela — não é só reagendar pro cron de 15 em 15 min: reseta
+// tentativas/status E já tenta enviar na hora (mesmo disparo imediato que a confirmação de
+// apontamento usa, restrito a este item via `apenasId`). Item que falhar de novo volta pro
+// estado de erro normal (pendente ou bloqueado, conforme as tentativas) — a lista recarrega
+// e mostra o resultado, sem precisar de resposta especial aqui.
 sincronizacaoRouter.post("/:id/reprocessar", async (req, res) => {
   try {
     const id = Number(req.params.id);
