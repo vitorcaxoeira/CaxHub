@@ -1282,7 +1282,7 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
-    const { contexto, role } = ctx;
+    const { contexto, role, user } = ctx;
 
     if (no.seqite == null) {
       // Pasta raiz: permissão no nível da proposta inteira (ver POST /estrutura).
@@ -1426,37 +1426,146 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
       },
     });
 
-    // A alocação que alimenta o Senior (AtividadeConsultor.qtdhor) é uma CÓPIA da duração
-    // do nó, feita só no momento em que o vínculo nasce (ver reconciliarAlocacoesOrfas e a
-    // criação em lote mais abaixo) — editar o nó por aqui nunca propagava de volta, e por
-    // isso nunca enfileirava editar_atividade. Bug real (não teórico): reportado em
-    // 10/08/2026 na alocação do Eli Venturi (proposta 8688) — duracaoHoras foi pra 30 e
-    // qtdhor ficou parado em 60, sem nada na fila. Cascateia aqui, no mesmo espírito do
-    // que PUT /alocacoes/:id já faz pro modo "item" (linha ~2126).
-    if (no.tipo === "atividade" && duracaoHoras != null && duracaoHoras !== no.duracaoHoras) {
-      // 1:1 na prática (confirmado: 0 de 993 nós com alocação têm mais de uma
-      // AtividadeConsultor ativa vinculada) — mas se um dia deixar de ser, cascatear pra
-      // todas em vez de escolher uma seria o certo; por ora `findFirst` já cobre o caso
-      // real.
-      const alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
-        where: { estruturaAtividadeId: id, sitreg: "A" },
-      });
-      if (alocacaoVinculada && alocacaoVinculada.qtdhor !== duracaoHoras) {
-        await prisma.atividadeConsultor.update({
-          where: { id: alocacaoVinculada.id },
-          data: { qtdhor: duracaoHoras },
+    // A alocação que alimenta o Senior (AtividadeConsultor) é criada/atualizada aqui, nunca
+    // só pelo campo do nó — editar o nó por aqui nunca propagava pra AtividadeConsultor, e
+    // por isso nunca enfileirava nada pro Senior. Dois bugs reais (não teóricos) da mesma
+    // causa: duracaoHoras mudava sem cascatear pro qtdhor (10/08/2026, alocação do Eli
+    // Venturi, proposta 8688) e responsavelCodfor mudava sem NUNCA criar a
+    // AtividadeConsultor (11/08/2026, atividade "Visões do Financeiro" alocada pro
+    // Amarildo na proposta 8568, item 14, sem nenhuma AtividadeConsultor nascer). Mesmo
+    // espírito do que PUT /alocacoes/:id já faz pro modo "item" (linha ~2126) e do que
+    // POST .../alocar-lote já faz na criação em lote (mais abaixo neste arquivo).
+    if (no.tipo === "atividade") {
+      const houveMudancaResponsavel = responsavelCodfor !== undefined && responsavelCodfor !== no.responsavelCodfor;
+
+      if (houveMudancaResponsavel) {
+        // 1:1 na prática (confirmado: 0 de 993 nós com alocação têm mais de uma
+        // AtividadeConsultor ativa vinculada) — `findFirst` cobre o caso real.
+        const alocacaoAnterior = await prisma.atividadeConsultor.findFirst({
+          where: { estruturaAtividadeId: id, sitreg: "A" },
         });
-        await enfileirar(alocacaoVinculada.id, "editar_atividade", {
-          codemp: alocacaoVinculada.codemp,
-          codpro: alocacaoVinculada.codpro,
-          seqite: alocacaoVinculada.seqite,
-          codfor: alocacaoVinculada.codfor,
-          qtdhor: duracaoHoras,
-          fasid: alocacaoVinculada.fasid,
-          dataPrevistaInicio: alocacaoVinculada.dataPrevistaInicio?.toISOString() ?? null,
-          dataPrevistaFim: alocacaoVinculada.dataPrevistaFim?.toISOString() ?? null,
-          tipEve: TIP_EVE_ALTERAR,
+
+        // Trocar ou limpar: a alocação anterior deixa de existir aqui — mesmo padrão de
+        // DELETE /alocacoes/:id (soft-delete + auditoria + remover_atividade).
+        if (alocacaoAnterior) {
+          await prisma.$transaction([
+            prisma.atividadeConsultor.update({ where: { id: alocacaoAnterior.id }, data: { sitreg: "I" } }),
+            criarEventoAuditoria({
+              origem: "tela",
+              usuarioId: user.id,
+              codemp: alocacaoAnterior.codemp,
+              codpro: alocacaoAnterior.codpro,
+              entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+              entidadeId: entidadeIdAtividade(alocacaoAnterior.id),
+              entidadeRotulo: `Alocação — Item ${alocacaoAnterior.seqite} da Proposta ${alocacaoAnterior.codemp}/${alocacaoAnterior.codpro}`,
+              eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_REMOVIDA,
+              alteracoes: null,
+              metadata: { motivo: "responsavel_trocado_ou_limpo_na_arvore" },
+              correlationId: req.correlationId!,
+            }),
+          ]);
+          await enfileirar(alocacaoAnterior.id, "remover_atividade", {
+            codemp: alocacaoAnterior.codemp,
+            codpro: alocacaoAnterior.codpro,
+            seqite: alocacaoAnterior.seqite,
+            codfor: alocacaoAnterior.codfor,
+            qtdhor: alocacaoAnterior.qtdhor,
+            fasid: alocacaoAnterior.fasid,
+            dataPrevistaInicio: alocacaoAnterior.dataPrevistaInicio?.toISOString() ?? null,
+            dataPrevistaFim: alocacaoAnterior.dataPrevistaFim?.toISOString() ?? null,
+            tipEve: TIP_EVE_EXCLUIR,
+          });
+        }
+
+        // Definir ou trocar: nasce a alocação nova, já com a duração/datas efetivas desta
+        // mesma requisição (se vieram junto) — não precisa de um segundo passo de "editar"
+        // em cima. fasid/coluna resolvidos do mesmo jeito que POST .../alocar-lote.
+        if (responsavelCodfor != null) {
+          const duracaoEfetiva = duracaoHoras !== undefined ? duracaoHoras : no.duracaoHoras;
+          const inicioEfetivo = dataPrevistaInicio !== undefined ? dataPrevistaInicio : no.dataPrevistaInicio;
+          const fimEfetivo = dataPrevistaFim !== undefined ? dataPrevistaFim : no.dataPrevistaFim;
+          const fasidBody = req.body?.fasid != null ? Number(req.body.fasid) : null;
+          const fasid =
+            fasidBody != null && Number.isFinite(fasidBody)
+              ? fasidBody
+              : (await prisma.faseProposta.findFirst({ orderBy: { fasid: "asc" } }))?.fasid;
+          const primeiraColuna = await prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } });
+
+          if (fasid == null) {
+            res.status(400).json({ error: "Nenhuma fase cadastrada — não é possível criar a alocação" });
+            return;
+          }
+
+          const novaAlocacao = await prisma.$transaction(async (tx) => {
+            const criada = await tx.atividadeConsultor.create({
+              data: {
+                codemp: no.codemp,
+                codpro: no.codpro,
+                seqite: no.seqite!,
+                codfor: responsavelCodfor!,
+                qtdhor: duracaoEfetiva,
+                sitreg: "A",
+                datger: new Date(),
+                usuger: contexto.consultor?.codusu ?? null,
+                dataPrevistaInicio: inicioEfetivo,
+                dataPrevistaFim: fimEfetivo,
+                fasid,
+                colunaId: primeiraColuna?.id ?? null,
+                estruturaAtividadeId: id,
+              },
+            });
+            await criarEventoAuditoria(
+              {
+                origem: "tela",
+                usuarioId: user.id,
+                codemp: no.codemp,
+                codpro: no.codpro,
+                entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+                entidadeId: entidadeIdAtividade(criada.id),
+                entidadeRotulo: `Alocação — Item ${no.seqite} da Proposta ${no.codemp}/${no.codpro}`,
+                eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_CRIADA,
+                alteracoes: null,
+                metadata: { qtdhor: duracaoEfetiva, fasid, origem: "arvore-drawer" },
+                correlationId: req.correlationId!,
+              },
+              tx
+            );
+            return criada;
+          });
+
+          await enfileirar(novaAlocacao.id, "criar_atividade", {
+            codemp: no.codemp,
+            codpro: no.codpro,
+            seqite: no.seqite,
+            codfor: responsavelCodfor,
+            qtdhor: duracaoEfetiva,
+            fasid,
+            dataPrevistaInicio: inicioEfetivo?.toISOString() ?? null,
+            dataPrevistaFim: fimEfetivo?.toISOString() ?? null,
+            tipEve: TIP_EVE_INCLUIR,
+          });
+        }
+      } else if (duracaoHoras != null && duracaoHoras !== no.duracaoHoras) {
+        const alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
+          where: { estruturaAtividadeId: id, sitreg: "A" },
         });
+        if (alocacaoVinculada && alocacaoVinculada.qtdhor !== duracaoHoras) {
+          await prisma.atividadeConsultor.update({
+            where: { id: alocacaoVinculada.id },
+            data: { qtdhor: duracaoHoras },
+          });
+          await enfileirar(alocacaoVinculada.id, "editar_atividade", {
+            codemp: alocacaoVinculada.codemp,
+            codpro: alocacaoVinculada.codpro,
+            seqite: alocacaoVinculada.seqite,
+            codfor: alocacaoVinculada.codfor,
+            qtdhor: duracaoHoras,
+            fasid: alocacaoVinculada.fasid,
+            dataPrevistaInicio: alocacaoVinculada.dataPrevistaInicio?.toISOString() ?? null,
+            dataPrevistaFim: alocacaoVinculada.dataPrevistaFim?.toISOString() ?? null,
+            tipEve: TIP_EVE_ALTERAR,
+          });
+        }
       }
     }
 
