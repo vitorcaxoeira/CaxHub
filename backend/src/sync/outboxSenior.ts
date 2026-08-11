@@ -1,8 +1,10 @@
 import cron from "node-cron";
 import { randomUUID } from "crypto";
-import { Prisma, SincronizacaoPendente } from "@prisma/client";
+import { AtividadeConsultor, Prisma, SincronizacaoPendente } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import {
+  AlocarAtividadesPayload,
+  RegistrarAtividadesPayload,
   alocarAtividadesViaSoap,
   formatarDataSenior,
   formatarHoraSenior,
@@ -10,6 +12,8 @@ import {
   ideExtItem,
   ideExtRat,
   mensagemDeRecusa,
+  montarEnvelopeAlocarAtividades,
+  montarEnvelopeRegistrarAtividades,
   registrarAtividadesViaSoap,
   runSqlViaSoap,
   SIS_ORI,
@@ -110,6 +114,43 @@ async function procurarApontamentoNoSenior(item: {
   return { numrat: Number(linhas[0].numrat), seqrat: Number(linhas[0].seqrat) };
 }
 
+/** RatItem já validado (data/hora e Rat.codpro presentes) — o que `montarPayloadApontamento` exige. */
+interface RatItemPronto {
+  id: number;
+  ratId: number;
+  codemp: number;
+  seqite: number | null;
+  datati: Date;
+  horini: number;
+  horfim: number;
+  desati: string | null;
+  rat: { codfor: number; codpro: number };
+}
+
+// Monta o payload de `registrarAtividades` a partir do RatItem já validado. Isolado à parte
+// pra ser a MESMA função usada no envio real (enviarApontamento) e na prévia sem envio
+// (previewEnvioSenior) — não existe outro lugar que decida esse mapeamento de campo.
+function montarPayloadApontamento(ratItem: RatItemPronto): RegistrarAtividadesPayload {
+  return {
+    codEmp: ratItem.codemp,
+    codFor: ratItem.rat.codfor,
+    codPro: ratItem.rat.codpro,
+    ideExt: ideExtRat(ratItem.ratId),
+    sisOri: SIS_ORI,
+    tipEve: TIP_EVE,
+    itens: [
+      {
+        ideExt: ideExtItem(ratItem.id),
+        seqite: ratItem.seqite ?? 0,
+        datAti: formatarDataSenior(ratItem.datati),
+        horIni: formatarHoraSenior(ratItem.horini),
+        horFim: formatarHoraSenior(ratItem.horfim),
+        desAti: ratItem.desati ?? "",
+      },
+    ],
+  };
+}
+
 // Envia um apontamento confirmado (RatItem) pro Senior e devolve a identidade que o ERP
 // atribuiu. NÃO grava nada — o write-back é feito pelo chamador junto com a baixa da fila,
 // numa transação só.
@@ -162,24 +203,7 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
     return { tipo: "apontamento", ratId: ratItem.ratId, ratItemId: ratItem.id, ...jaExiste };
   }
 
-  const resposta = await registrarAtividadesViaSoap({
-    codEmp: ratItem.codemp,
-    codFor: ratItem.rat.codfor,
-    codPro: ratItem.rat.codpro,
-    ideExt: ideExtRat(ratItem.ratId),
-    sisOri: SIS_ORI,
-    tipEve: TIP_EVE,
-    itens: [
-      {
-        ideExt: ideExtItem(ratItem.id),
-        seqite: ratItem.seqite ?? 0,
-        datAti: formatarDataSenior(ratItem.datati),
-        horIni: formatarHoraSenior(ratItem.horini),
-        horFim: formatarHoraSenior(ratItem.horfim),
-        desAti: ratItem.desati ?? "",
-      },
-    ],
-  });
+  const resposta = await registrarAtividadesViaSoap(montarPayloadApontamento(ratItem as RatItemPronto));
 
   // Casa pelo ideExt em vez de pegar o primeiro: o serviço aceita lote e nada garante a
   // ordem de volta.
@@ -227,6 +251,44 @@ function horasParaQtdHorSenior(minutos: number): string {
   return formatarHoraSenior(minutos);
 }
 
+/** Quais campos do item entram no payload — varia por tipEve (ver os três chamadores abaixo). */
+interface OpcoesPayloadAlocacao {
+  /** `seqAti` só existe do lado do Senior a partir da criação — ausente ao incluir. */
+  incluirSeqAti: boolean;
+  /** `qtdHor`/`hrsExc` não fazem sentido ao excluir (nada a informar). */
+  incluirHoras: boolean;
+}
+
+// Monta o payload de `alocarAtividades` a partir da AtividadeConsultor viva. Isolado à parte
+// pra ser a MESMA função usada no envio real (enviarCriarAtividade/enviarEditarAtividade/
+// enviarRemoverAtividade) e na prévia sem envio (previewEnvioSenior).
+function montarPayloadAlocacao(
+  alocacao: AtividadeConsultor,
+  tipEve: string,
+  opcoes: OpcoesPayloadAlocacao
+): AlocarAtividadesPayload {
+  const meuIdeExt = ideExtAlocacao(alocacao.id);
+  return {
+    codEmp: alocacao.codemp,
+    codFor: alocacao.codfor,
+    codPro: alocacao.codpro,
+    ideExt: meuIdeExt,
+    sisOri: SIS_ORI,
+    tipEve,
+    itens: [
+      {
+        ideExt: meuIdeExt,
+        seqite: alocacao.seqite,
+        ...(opcoes.incluirSeqAti && alocacao.seqati != null ? { seqAti: Number(alocacao.seqati) } : {}),
+        ...(opcoes.incluirHoras ? { qtdHor: horasParaQtdHorSenior(alocacao.qtdhor ?? 0) } : {}),
+        ...(opcoes.incluirHoras && alocacao.horasExcedentes > 0
+          ? { hrsExc: horasParaQtdHorSenior(alocacao.horasExcedentes) }
+          : {}),
+      },
+    ],
+  };
+}
+
 // Cria a alocação no Senior (tipEve I). Idempotência: se `seqati` já estiver preenchido
 // localmente, a criação já aconteceu numa tentativa anterior — não reenvia (reenviar um
 // "I" já processado arriscaria duplicar a alocação lá, e diferente do apontamento não há
@@ -240,22 +302,9 @@ async function enviarCriarAtividade(item: SincronizacaoPendente): Promise<Result
   }
 
   const meuIdeExt = ideExtAlocacao(alocacao.id);
-  const resposta = await alocarAtividadesViaSoap({
-    codEmp: alocacao.codemp,
-    codFor: alocacao.codfor,
-    codPro: alocacao.codpro,
-    ideExt: meuIdeExt,
-    sisOri: SIS_ORI,
-    tipEve: TIP_EVE_INCLUIR,
-    itens: [
-      {
-        ideExt: meuIdeExt,
-        seqite: alocacao.seqite,
-        qtdHor: horasParaQtdHorSenior(alocacao.qtdhor ?? 0),
-        ...(alocacao.horasExcedentes > 0 ? { hrsExc: horasParaQtdHorSenior(alocacao.horasExcedentes) } : {}),
-      },
-    ],
-  });
+  const resposta = await alocarAtividadesViaSoap(
+    montarPayloadAlocacao(alocacao, TIP_EVE_INCLUIR, { incluirSeqAti: false, incluirHoras: true })
+  );
 
   const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
   const itemRetornado = resultado?.itens.find((i) => i.ideExt === meuIdeExt) ?? resultado?.itens[0];
@@ -288,23 +337,9 @@ async function enviarEditarAtividade(item: SincronizacaoPendente): Promise<null>
   }
 
   const meuIdeExt = ideExtAlocacao(alocacao.id);
-  const resposta = await alocarAtividadesViaSoap({
-    codEmp: alocacao.codemp,
-    codFor: alocacao.codfor,
-    codPro: alocacao.codpro,
-    ideExt: meuIdeExt,
-    sisOri: SIS_ORI,
-    tipEve: TIP_EVE_ALTERAR,
-    itens: [
-      {
-        ideExt: meuIdeExt,
-        seqite: alocacao.seqite,
-        seqAti: Number(alocacao.seqati),
-        qtdHor: horasParaQtdHorSenior(alocacao.qtdhor ?? 0),
-        ...(alocacao.horasExcedentes > 0 ? { hrsExc: horasParaQtdHorSenior(alocacao.horasExcedentes) } : {}),
-      },
-    ],
-  });
+  const resposta = await alocarAtividadesViaSoap(
+    montarPayloadAlocacao(alocacao, TIP_EVE_ALTERAR, { incluirSeqAti: true, incluirHoras: true })
+  );
 
   const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
   const itemRetornado = resultado?.itens.find((i) => i.ideExt === meuIdeExt) ?? resultado?.itens[0];
@@ -326,15 +361,9 @@ async function enviarRemoverAtividade(item: SincronizacaoPendente): Promise<null
   }
 
   const meuIdeExt = ideExtAlocacao(alocacao.id);
-  const resposta = await alocarAtividadesViaSoap({
-    codEmp: alocacao.codemp,
-    codFor: alocacao.codfor,
-    codPro: alocacao.codpro,
-    ideExt: meuIdeExt,
-    sisOri: SIS_ORI,
-    tipEve: TIP_EVE_EXCLUIR,
-    itens: [{ ideExt: meuIdeExt, seqite: alocacao.seqite, seqAti: Number(alocacao.seqati) }],
-  });
+  const resposta = await alocarAtividadesViaSoap(
+    montarPayloadAlocacao(alocacao, TIP_EVE_EXCLUIR, { incluirSeqAti: true, incluirHoras: false })
+  );
 
   const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
   const itemRetornado = resultado?.itens.find((i) => i.ideExt === meuIdeExt) ?? resultado?.itens[0];
@@ -496,6 +525,59 @@ export async function processarFilaSincronizacao(opcoes: { apenasId?: number } =
       },
     });
   }
+}
+
+export interface PreviewEnvioSenior {
+  payload: RegistrarAtividadesPayload | AlocarAtividadesPayload;
+  envelopeXml: string;
+}
+
+// Reconstrói, SEM chamar o Senior, o que seria de fato enviado pra esta pendência agora —
+// relê o dado VIVO (RatItem/AtividadeConsultor), a mesma fonte que enviarParaSenior usa,
+// nunca `item.payload` (que é só um retrato interno tirado no momento em que a pendência foi
+// criada — nomes e formato diferentes do contrato do Senior, não serve pra comparar contra o
+// WSDL/XSD). Usado pelo endpoint admin de prévia em backend/src/routes/sincronizacao.ts.
+// `user`/`password` mascarados de propósito: isto nunca precisa da credencial real, é só pra
+// exibição.
+export async function previewEnvioSenior(item: SincronizacaoPendente): Promise<PreviewEnvioSenior> {
+  if (item.tipo === "criar_apontamento") {
+    const payload = item.payload as { ratItemId?: number };
+    const ratItemId = Number(payload?.ratItemId);
+    if (!Number.isFinite(ratItemId)) throw new Error(`Payload sem ratItemId (pendência ${item.id})`);
+
+    const ratItem = await prisma.ratItem.findUnique({ where: { id: ratItemId }, include: { rat: true } });
+    if (!ratItem) throw new Error(`RatItem ${ratItemId} não existe mais — apontamento desfeito antes do envio`);
+    if (ratItem.datati == null || ratItem.horini == null || ratItem.horfim == null) {
+      throw new Error(`RatItem ${ratItemId} sem data/hora — nada a montar`);
+    }
+    if (ratItem.rat.codpro == null) throw new Error(`RAT ${ratItem.rat.id} sem codpro — não dá pra montar`);
+
+    const payloadReal = montarPayloadApontamento(ratItem as RatItemPronto);
+    return { payload: payloadReal, envelopeXml: montarEnvelopeRegistrarAtividades(payloadReal, "***", "***") };
+  }
+
+  if (item.tipo === "criar_atividade" || item.tipo === "editar_atividade" || item.tipo === "remover_atividade") {
+    const alocacao = await buscarAlocacao(item.atividadeId);
+
+    let tipEve: string;
+    let opcoes: OpcoesPayloadAlocacao;
+    if (item.tipo === "criar_atividade") {
+      tipEve = TIP_EVE_INCLUIR;
+      opcoes = { incluirSeqAti: false, incluirHoras: true };
+    } else if (item.tipo === "editar_atividade") {
+      tipEve = TIP_EVE_ALTERAR;
+      opcoes = { incluirSeqAti: true, incluirHoras: true };
+    } else {
+      tipEve = TIP_EVE_EXCLUIR;
+      opcoes = { incluirSeqAti: true, incluirHoras: false };
+    }
+
+    const payloadReal = montarPayloadAlocacao(alocacao, tipEve, opcoes);
+    return { payload: payloadReal, envelopeXml: montarEnvelopeAlocarAtividades(payloadReal, "***", "***") };
+  }
+
+  // Mesmo erro que enviarParaSenior lançaria — explica por que não há prévia possível.
+  throw new CanalIndisponivelError(`Ainda não há operação publicada no Senior para "${item.tipo}"`);
 }
 
 // Reseta um item bloqueado pra pendente/0 tentativas, pra tentar de novo manualmente

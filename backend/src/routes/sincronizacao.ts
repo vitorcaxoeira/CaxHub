@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { reprocessar, processarFilaSincronizacao } from "../sync/outboxSenior";
+import { reprocessar, processarFilaSincronizacao, previewEnvioSenior } from "../sync/outboxSenior";
 
 // Painel de administração da fila de sincronização CaxHub -> Senior (outbox). Só admin,
 // já que é uma tela operacional/infra, não de negócio.
@@ -45,6 +45,29 @@ sincronizacaoRouter.get("/", async (_req, res) => {
 // apontamento usa, restrito a este item via `apenasId`). Item que falhar de novo volta pro
 // estado de erro normal (pendente ou bloqueado, conforme as tentativas) — a lista recarrega
 // e mostra o resultado, sem precisar de resposta especial aqui.
+// Prévia do que seria de fato enviado ao Senior agora, sem enviar nada — relê o dado vivo
+// (mesma fonte que o envio real usa), nunca a coluna `payload` (que é só um retrato interno
+// tirado no momento em que a pendência foi criada). É o que a tela usa pra mostrar o XML de
+// verdade em "Ver payload", em vez do retrato, que não representa o contrato do Senior.
+sincronizacaoRouter.get("/:id/preview", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const item = await prisma.sincronizacaoPendente.findUnique({ where: { id } });
+    if (!item) {
+      res.status(404).json({ error: "Pendência não encontrada" });
+      return;
+    }
+    const preview = await previewEnvioSenior(item);
+    res.json(preview);
+  } catch (error) {
+    handleError(res, error, "preview");
+  }
+});
+
 sincronizacaoRouter.post("/:id/reprocessar", async (req, res) => {
   try {
     const id = Number(req.params.id);

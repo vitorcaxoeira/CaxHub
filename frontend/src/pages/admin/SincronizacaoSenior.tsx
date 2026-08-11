@@ -17,6 +17,14 @@ interface ItemSincronizacao {
   processadoEm: string | null;
 }
 
+// Prévia do que seria de fato enviado ao Senior agora — GET /sincronizacao/:id/preview,
+// reconstruída no backend a partir do dado vivo (nunca do `payload` salvo na pendência, que é
+// só um retrato interno tirado na criação, sem relação com o formato do XSD do Senior).
+interface PreviewEnvio {
+  payload: Record<string, unknown>;
+  envelopeXml: string;
+}
+
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
 const statusTone: Record<string, string> = {
@@ -32,6 +40,10 @@ export function SincronizacaoSenior() {
   const [reprocessando, setReprocessando] = useState<number | null>(null);
   const [itemDoPayload, setItemDoPayload] = useState<ItemSincronizacao | null>(null);
   const [copiado, setCopiado] = useState(false);
+  const [preview, setPreview] = useState<PreviewEnvio | null>(null);
+  const [previewCarregando, setPreviewCarregando] = useState(false);
+  const [previewErro, setPreviewErro] = useState<string | null>(null);
+  const [copiadoPreview, setCopiadoPreview] = useState(false);
   const [itemDoErro, setItemDoErro] = useState<ItemSincronizacao | null>(null);
   const [copiadoErro, setCopiadoErro] = useState(false);
 
@@ -50,6 +62,18 @@ export function SincronizacaoSenior() {
   useEffect(() => {
     carregar();
   }, []);
+
+  function abrirPayload(item: ItemSincronizacao) {
+    setItemDoPayload(item);
+    setPreview(null);
+    setPreviewErro(null);
+    setPreviewCarregando(true);
+    axios
+      .get(`/api/sincronizacao/${item.id}/preview`)
+      .then(({ data }) => setPreview(data))
+      .catch((err) => setPreviewErro(err.response?.data?.error ?? "Falha ao reconstruir o envio"))
+      .finally(() => setPreviewCarregando(false));
+  }
 
   async function reprocessar(id: number) {
     setReprocessando(id);
@@ -205,7 +229,7 @@ export function SincronizacaoSenior() {
                   </td>
                   <td className="px-5 py-3.5 text-right">
                     <div className="flex items-center justify-end gap-3">
-                      <button onClick={() => setItemDoPayload(item)} className="text-sm text-primary hover:underline">
+                      <button onClick={() => abrirPayload(item)} className="text-sm text-primary hover:underline">
                         Ver payload
                       </button>
                       {(item.status === "bloqueado" || item.status === "pendente") && (
@@ -238,12 +262,53 @@ export function SincronizacaoSenior() {
         onClose={() => {
           setItemDoPayload(null);
           setCopiado(false);
+          setPreview(null);
+          setPreviewErro(null);
+          setCopiadoPreview(false);
         }}
         title={`Payload — ${itemDoPayload?.tipo ?? ""}`}
         subtitulo={itemDoPayload ? `Proposta ${itemDoPayload.codpro} · pendência #${itemDoPayload.id}` : undefined}
       >
         {itemDoPayload && (
           <>
+            <p className="mb-1.5 text-[11.5px] font-medium uppercase tracking-wide text-muted">
+              O que seria enviado ao Senior agora
+            </p>
+            <p className="mb-2 text-[12px] text-muted">
+              Reconstruído a partir do dado vivo (nunca do retrato abaixo) — é este XML que a operação real manda.
+            </p>
+            {previewCarregando ? (
+              <Skeleton className="h-24 w-full" />
+            ) : previewErro ? (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">
+                {previewErro}
+              </p>
+            ) : preview ? (
+              <>
+                <pre className="overflow-x-auto rounded-md bg-surface-2 p-3 text-[12px] text-foreground">
+                  {preview.envelopeXml}
+                </pre>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    onClick={async () => {
+                      const ok = await copiarParaAreaDeTransferencia(preview.envelopeXml);
+                      setCopiadoPreview(ok);
+                    }}
+                    className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
+                  >
+                    {copiadoPreview ? "Copiado!" : "Copiar"}
+                  </button>
+                </div>
+              </>
+            ) : null}
+
+            <p className="mb-1.5 mt-5 text-[11.5px] font-medium uppercase tracking-wide text-muted">
+              Payload salvo nesta pendência
+            </p>
+            <p className="mb-2 text-[12px] text-muted">
+              Retrato interno tirado quando a pendência foi criada, só pra auditoria — não representa o contrato do
+              Senior, os nomes de campo são outros.
+            </p>
             <pre className="overflow-x-auto rounded-md bg-surface-2 p-3 text-[12px] text-foreground">
               {JSON.stringify(itemDoPayload.payload, null, 2)}
             </pre>
