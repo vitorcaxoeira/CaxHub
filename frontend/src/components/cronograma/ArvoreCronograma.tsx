@@ -26,6 +26,7 @@ const FILTROS_VAZIOS: FiltrosCronograma = {
   somenteAtraso: false,
   somenteExcedidos: false,
   realizadoAcimaPrevisto: false,
+  somenteDivergentes: false,
 };
 
 function chaveExpansao(projetoId: string): string {
@@ -138,7 +139,8 @@ export function ArvoreCronograma({
   }, [nos, agregados]);
 
   // Resumo pro chip "⚠ {n} itens em alerta" da barra de ferramentas — o mais grave
-  // presente (excedido > realizado acima do previsto) decide qual filtro o chip aplica.
+  // presente (excedido > divergência de sincronização > realizado acima do previsto)
+  // decide qual filtro o chip aplica.
   const resumoAlertas = useMemo(() => {
     let total = 0;
     let temExcedido = false;
@@ -153,8 +155,18 @@ export function ArvoreCronograma({
         temRealAcima = true;
       }
     }
-    return { total, temExcedido, temRealAcima };
-  }, [orcamentosPorId]);
+    // Divergência é por ATIVIDADE (não por item, como o orçamento acima) — ver
+    // NoCronogramaCompleto.horasDivergentes e o bug descrito em
+    // backend/src/sync/atividadeConsultorSync.ts.
+    let temDivergencia = false;
+    for (const n of nos) {
+      if (n.tipo === "atividade" && n.horasDivergentes) {
+        total++;
+        temDivergencia = true;
+      }
+    }
+    return { total, temExcedido, temRealAcima, temDivergencia };
+  }, [orcamentosPorId, nos]);
 
   // Descendentes totais (pastas + atividades), usado na confirmação de exclusão.
   const contagemDescendentesPorId = useMemo(() => {
@@ -216,7 +228,8 @@ export function ArvoreCronograma({
     filtros.responsaveis.length > 0 ||
     filtros.somenteAtraso ||
     filtros.somenteExcedidos ||
-    filtros.realizadoAcimaPrevisto;
+    filtros.realizadoAcimaPrevisto ||
+    filtros.somenteDivergentes;
 
   const visiveis = useMemo(() => {
     if (!filtroAtivo) return new Set(nos.map((n) => n.id));
@@ -252,6 +265,7 @@ export function ArvoreCronograma({
         return false;
       }
       if (filtros.somenteAtraso && !estaAtrasada(completo, statusPorId.get(no.id) ?? "nao_iniciada")) return false;
+      if (filtros.somenteDivergentes && !completo.horasDivergentes) return false;
       return true;
     });
   }, [nos, filtroAtivo, busca, filtros, statusPorId, orcamentosPorId]);

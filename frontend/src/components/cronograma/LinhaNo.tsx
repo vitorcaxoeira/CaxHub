@@ -264,6 +264,18 @@ export function LinhaNo({
               </span>
             )}
 
+            {/* Duração da atividade (EstruturaAtividade.duracaoHoras) fora de sincronia com
+                o qtdhor da alocação enviada ao Senior — bug de sincronização conhecido (ver
+                backend/src/sync/atividadeConsultorSync.ts), não um estado de orçamento. */}
+            {no.tipo === "atividade" && no.horasDivergentes && (
+              <span
+                className="hidden flex-none items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium text-warning sm:inline-flex"
+                title={`Duração da tarefa: ${formatHorasCompacto(no.horasPrevistas ?? 0, larguraHoras)} · Enviado ao Senior: ${formatHorasCompacto(no.horasAlocadas, larguraHoras)} — fora de sincronia`}
+              >
+                ⚠ horas div.
+              </span>
+            )}
+
             {/* Predecessora fica na coluna de estrutura: é sobre a atividade em si, e
                 acompanha o nome dela. */}
             {no.tipo === "atividade" && no.predecessoraId != null && (

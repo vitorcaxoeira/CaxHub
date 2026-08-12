@@ -25,6 +25,10 @@ export interface NoCronogramaCompleto extends NoCronograma {
   observacao: string | null;
   horasAlocadas: number;
   saldo: number | null;
+  // `duracaoHoras` do nó diverge do `qtdhor` da alocação vinculada (ver
+  // backend/src/routes/alocacao.ts, mapNo) — sempre false pra pasta/item, só atividade-folha
+  // com responsável carrega o sinal de verdade.
+  horasDivergentes: boolean;
   // Item ao qual esse nó pertence — útil pra ações (criar/alocar) que dependem do
   // departamento/permissão do item, mesmo pra nós que estão vários níveis abaixo dele.
   // Null só pra pasta raiz da proposta (não pertence a nenhum item específico).
@@ -53,6 +57,7 @@ interface NoApi {
   horasAlocadas: number;
   horasRealizadas: number;
   saldo: number | null;
+  horasDivergentes: boolean;
 }
 
 interface ItemApi {
@@ -151,6 +156,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             observacao: null,
             horasAlocadas: 0,
             saldo: null,
+            horasDivergentes: false,
             seqite: null,
             podeEditarItem: p.podeEditar,
             depexe: null,
@@ -178,6 +184,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             observacao: null,
             horasAlocadas: 0,
             saldo: null,
+            horasDivergentes: false,
             seqite: item.seqite,
             podeEditarItem: item.podeEditar,
             depexe: item.depexe,
@@ -203,6 +210,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
               observacao: n.observacao,
               horasAlocadas: n.horasAlocadas,
               saldo: n.saldo,
+              horasDivergentes: n.horasDivergentes,
               seqite: item.seqite,
               podeEditarItem: item.podeEditar,
               depexe: item.depexe,
@@ -324,6 +332,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
           observacao: null,
           horasAlocadas: 0,
           saldo: null,
+          horasDivergentes: false,
           seqite: novo.seqite ?? null,
           podeEditarItem: itemDoNo ? itemDoNo.podeEditarItem : proposta?.podeGerenciarProposta ?? false,
           depexe: itemDoNo?.depexe ?? null,

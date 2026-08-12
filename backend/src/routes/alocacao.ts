@@ -223,7 +223,13 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     const codforFiltro = parseIdsParam(req.query.codfor);
     const modproFiltro = parseIdsParam(req.query.modpro);
     const apenasComSaldo = req.query.apenasComSaldo === "true";
-    const situacoesValidas = ["semAlocacao", "saldoPendente", "totalmenteAlocadas", "compartilhadasEmAberto"] as const;
+    const situacoesValidas = [
+      "semAlocacao",
+      "saldoPendente",
+      "totalmenteAlocadas",
+      "compartilhadasEmAberto",
+      "horasDivergentes",
+    ] as const;
     const situacao = situacoesValidas.includes(req.query.situacao as any)
       ? (req.query.situacao as (typeof situacoesValidas)[number])
       : null;
@@ -274,6 +280,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
           saldoPendente: kpiZerado,
           totalmenteAlocadas: kpiZerado,
           compartilhadasEmAberto: kpiZerado,
+          horasDivergentes: kpiZerado,
         },
       });
       return;
@@ -283,9 +290,38 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       where: { sitreg: "A", OR: itens.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })) },
     });
     const alocadoPorItem = new Map<string, number>();
+    const alocadoPorEstrutura = new Map<number, number>();
     for (const a of alocacoes) {
       const chave = `${a.codemp}-${a.codpro}-${a.seqite}`;
       alocadoPorItem.set(chave, (alocadoPorItem.get(chave) ?? 0) + (a.qtdhor ?? 0));
+      if (a.estruturaAtividadeId != null) {
+        alocadoPorEstrutura.set(a.estruturaAtividadeId, (alocadoPorEstrutura.get(a.estruturaAtividadeId) ?? 0) + (a.qtdhor ?? 0));
+      }
+    }
+
+    // Detecta o bug conhecido de sincronização (ver backend/src/sync/atividadeConsultorSync.ts):
+    // o sync de entrada sobrescreve qtdhor com o valor do Senior sem cascatear pra
+    // EstruturaAtividade.duracaoHoras, desfazendo a correção que PATCH /estrutura/:id faz no
+    // sentido contrário quando a fila de saída ainda não confirmou ou quando o Senior recusa a
+    // edição. `duracaoHoras == null` fica de fora de propósito (mesma leitura da SQL original:
+    // NULL não é "divergente", é "nunca definido").
+    const nosComResponsavel = itens.length
+      ? await prisma.estruturaAtividade.findMany({
+          where: {
+            tipo: "atividade",
+            responsavelCodfor: { not: null },
+            OR: itens.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })),
+          },
+          select: { id: true, codemp: true, codpro: true, duracaoHoras: true },
+        })
+      : [];
+    const divergenciaSomaPorProposta = new Map<string, number>();
+    for (const no of nosComResponsavel) {
+      const horasAlocadas = alocadoPorEstrutura.get(no.id) ?? 0;
+      if (no.duracaoHoras != null && no.duracaoHoras !== horasAlocadas) {
+        const chave = `${no.codemp}-${no.codpro}`;
+        divergenciaSomaPorProposta.set(chave, (divergenciaSomaPorProposta.get(chave) ?? 0) + Math.abs(no.duracaoHoras - horasAlocadas));
+      }
     }
 
     interface Agregado {
@@ -306,6 +342,9 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       totalItens: number;
       qtdhorTotal: number;
       horasAlocadas: number;
+      // Soma de |duracaoHoras - qtdhor| dos nós divergentes desta proposta — 0 quando não
+      // há divergência. Ver comentário acima de `divergenciaSomaPorProposta`.
+      horasDivergentesSoma: number;
     }
     // Semeia pelas PROPOSTAS do escopo (não pelos itens) — só assim a proposta existe
     // no mapa antes de se saber se ela tem item, o que torna a exclusão das vazias uma
@@ -327,6 +366,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
         totalItens: 0,
         qtdhorTotal: 0,
         horasAlocadas: 0,
+        horasDivergentesSoma: divergenciaSomaPorProposta.get(chaveProposta) ?? 0,
       });
     }
     // Sem recorte por item.depexe: se a proposta está no escopo, TODOS os itens dela
@@ -368,6 +408,10 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     const compartilhadasEmAberto = todasPropostas.filter(
       (a) => a.origem === "compartilhada" && a.qtdhorTotal - a.horasAlocadas > 0
     );
+    // Não é mutuamente exclusiva com as outras 3 — uma proposta pode estar "com saldo
+    // pendente" E "com horas divergentes" ao mesmo tempo. É só mais uma lente, igual às
+    // outras (ver comentário de `divergenciaSomaPorProposta` acima).
+    const horasDivergentes = todasPropostas.filter((a) => a.horasDivergentesSoma > 0);
     const somaHoras = (lista: Agregado[], campo: (a: Agregado) => number) =>
       lista.reduce((soma, a) => soma + campo(a), 0);
     const kpis = {
@@ -385,6 +429,10 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
         quantidade: compartilhadasEmAberto.length,
         horas: somaHoras(compartilhadasEmAberto, (a) => a.qtdhorTotal - a.horasAlocadas),
       },
+      horasDivergentes: {
+        quantidade: horasDivergentes.length,
+        horas: somaHoras(horasDivergentes, (a) => a.horasDivergentesSoma),
+      },
     };
 
     // Um KPI clicado vira o único critério de "situação" da tabela (substitui o
@@ -397,6 +445,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       saldoPendente: comSaldoPendente,
       totalmenteAlocadas,
       compartilhadasEmAberto,
+      horasDivergentes,
     };
     const baseFiltrada = situacao
       ? porSituacao[situacao]
@@ -1100,6 +1149,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
         horasAlocadas,
         horasRealizadas,
         saldo: n.duracaoHoras != null ? n.duracaoHoras - horasAlocadas : null,
+        // Mesmo bug/checagem do KPI "Horas divergentes" em GET /propostas — aqui já dá pra
+        // marcar o nó exato, não só a proposta. `duracaoHoras == null` fica de fora (nunca
+        // definido, não é "divergente").
+        horasDivergentes: n.tipo === "atividade" && n.responsavelCodfor != null && n.duracaoHoras != null && n.duracaoHoras !== horasAlocadas,
         alocacoes: alocacoesDoNo.map((a) => ({
           id: a.id,
           codfor: a.codfor,

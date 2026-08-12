@@ -18,15 +18,20 @@ export interface FiltrosCronograma {
   somenteExcedidos: boolean;
   // Item com realizado acima do distribuído, ainda dentro do contratado.
   realizadoAcimaPrevisto: boolean;
+  // Atividade cuja duração ficou fora de sincronia com o qtdhor enviado ao Senior (ver
+  // NoCronogramaCompleto.horasDivergentes) — bug de sincronização, não estado de orçamento.
+  somenteDivergentes: boolean;
 }
 
 // Resumo de itens em algum estado de alerta — alimenta o chip clicável da barra
-// (ver ArvoreCronograma). `temExcedido`/`temRealAcima` dizem qual filtro o chip aplica:
-// o mais grave presente sempre vence (excedido > realizado acima do previsto).
+// (ver ArvoreCronograma). `temExcedido`/`temRealAcima`/`temDivergencia` dizem qual filtro o
+// chip aplica: o mais grave presente sempre vence (excedido > divergência > realizado acima
+// do previsto).
 export interface ResumoAlertasOrcamento {
   total: number;
   temExcedido: boolean;
   temRealAcima: boolean;
+  temDivergencia: boolean;
 }
 
 interface BarraFerramentasProps {
@@ -79,12 +84,15 @@ export function BarraFerramentas({
     filtros.responsaveis.length > 0 ||
     filtros.somenteAtraso ||
     filtros.somenteExcedidos ||
-    filtros.realizadoAcimaPrevisto;
+    filtros.realizadoAcimaPrevisto ||
+    filtros.somenteDivergentes;
 
   // O chip aplica o filtro do estado mais grave presente — excedido (distribuído ou
-  // realizado acima do contratado) sempre vence sobre "realizado acima do previsto".
+  // realizado acima do contratado) vence sobre divergência de sincronização, que vence
+  // sobre "realizado acima do previsto".
   function aplicarFiltroMaisGrave() {
     if (resumoAlertas.temExcedido) onFiltrosChange({ ...filtros, somenteExcedidos: true });
+    else if (resumoAlertas.temDivergencia) onFiltrosChange({ ...filtros, somenteDivergentes: true });
     else if (resumoAlertas.temRealAcima) onFiltrosChange({ ...filtros, realizadoAcimaPrevisto: true });
   }
 
@@ -189,6 +197,15 @@ export function BarraFerramentas({
                 className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
               Realizado acima do previsto
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={filtros.somenteDivergentes}
+                onChange={(e) => onFiltrosChange({ ...filtros, somenteDivergentes: e.target.checked })}
+                className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              Horas divergentes (fora de sincronia com o Senior)
             </label>
           </div>
           </FloatingPortal>

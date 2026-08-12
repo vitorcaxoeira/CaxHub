@@ -57,9 +57,10 @@ interface KpisResumo {
   saldoPendente: KpiValor;
   totalmenteAlocadas: KpiValor;
   compartilhadasEmAberto: KpiValor;
+  horasDivergentes: KpiValor;
 }
 
-type Situacao = "semAlocacao" | "saldoPendente" | "totalmenteAlocadas" | "compartilhadasEmAberto";
+type Situacao = "semAlocacao" | "saldoPendente" | "totalmenteAlocadas" | "compartilhadasEmAberto" | "horasDivergentes";
 
 const PAGE_SIZE = 20;
 
@@ -135,7 +136,13 @@ export function Alocacao() {
         .filter((n) => Number.isFinite(n))
     : [];
   const [modpro, setModproState] = useState<number[]>(modproInicial);
-  const situacoesValidas: Situacao[] = ["semAlocacao", "saldoPendente", "totalmenteAlocadas", "compartilhadasEmAberto"];
+  const situacoesValidas: Situacao[] = [
+    "semAlocacao",
+    "saldoPendente",
+    "totalmenteAlocadas",
+    "compartilhadasEmAberto",
+    "horasDivergentes",
+  ];
   const situacaoInicial = situacoesValidas.includes(searchParams.get("situacao") as Situacao)
     ? (searchParams.get("situacao") as Situacao)
     : null;
@@ -325,8 +332,8 @@ export function Alocacao() {
       </div>
 
       {loading ? (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-border bg-surface p-5">
               <Skeleton className="mb-2 h-3.5 w-24" />
               <Skeleton className="h-7 w-16" />
@@ -337,7 +344,7 @@ export function Alocacao() {
         </div>
       ) : (
         kpis && (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <KpiCard
             label="Sem alocação"
             tone="destructive"
@@ -377,6 +384,16 @@ export function Alocacao() {
             horasLabel="em aberto"
             ativo={situacao === "compartilhadasEmAberto"}
             onClick={() => clicarKpi("compartilhadasEmAberto")}
+          />
+          <KpiCard
+            label="Horas divergentes"
+            tone="warning"
+            quantidade={kpis.horasDivergentes.quantidade}
+            total={kpis.totalNoEscopo}
+            horas={kpis.horasDivergentes.horas}
+            horasLabel="fora de sincronia"
+            ativo={situacao === "horasDivergentes"}
+            onClick={() => clicarKpi("horasDivergentes")}
           />
         </div>
         )
