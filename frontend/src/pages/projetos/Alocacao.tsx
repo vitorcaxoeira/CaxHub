@@ -2,7 +2,7 @@ import axios from "axios";
 import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
-import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
+import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
 import { KpiCard } from "../../components/ui/KpiCard";
 import { Skeleton } from "../../components/ui/Skeleton";
@@ -24,6 +24,10 @@ interface PropostaRow {
   sitpro: number | null;
   sitproLabel: string;
   sitproTone: "success" | "warning" | "destructive" | "neutral";
+  // "Data de Retorno" no Senior — não existe campo de "data de aprovação" na origem, e esta
+  // tela só lista propostas Aprovada/Em Execução (SITPRO_ALOCAVEL), então datret já é a data
+  // da aprovação pra toda linha aqui.
+  datret: string | null;
   depexeLabel: string;
   modproLabel: string;
   totalItens: number;
@@ -58,6 +62,20 @@ interface KpisResumo {
 type Situacao = "semAlocacao" | "saldoPendente" | "totalmenteAlocadas" | "compartilhadasEmAberto";
 
 const PAGE_SIZE = 20;
+
+// Domínio "USU_ModPro" do Senior (modalidade da proposta) — mesmos valores de
+// backend/src/domain/propostasDominio.ts (MODPRO_LABELS) e de MODPRO_OPCOES em
+// ListarPedidos.tsx.
+const MODPRO_OPCOES: MultiSelectOption<number>[] = [
+  { value: 0, label: "Serviço" },
+  { value: 1, label: "Levantamento" },
+  { value: 2, label: "DRM" },
+];
+
+const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
+function formatData(valor: string | null): string {
+  return valor ? dateFormatter.format(new Date(valor)) : "—";
+}
 
 // Sem o sufixo " h" do formatHoras — nas colunas Total/Alocado/Saldo dessa tabela ele
 // forçava quebra de linha (espaço antes do "h") em colunas já estreitas; o cabeçalho já
@@ -94,6 +112,14 @@ export function Alocacao() {
         .filter((n) => Number.isFinite(n))
     : [];
   const [depexe, setDepexeState] = useState<number[]>(depexeInicial);
+  const codforParam = searchParams.get("codfor");
+  const codforInicial = codforParam
+    ? codforParam
+        .split(",")
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n))
+    : [];
+  const [codfor, setCodforState] = useState<number[]>(codforInicial);
   const [busca, setBuscaState] = useState(searchParams.get("busca") ?? "");
   // Digitar atualiza a caixa na hora; a busca pesada (2 queries sem filtro seletivo no
   // banco) só dispara 350ms depois de parar de digitar — sem isso, cada tecla repetia
@@ -101,7 +127,14 @@ export function Alocacao() {
   const [buscaInput, setBuscaInput] = useState(busca);
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
   const [apenasComSaldo, setApenasComSaldoState] = useState(searchParams.get("apenasComSaldo") !== "false");
-  const [compartilhadas, setCompartilhadasState] = useState(searchParams.get("compartilhadas") === "true");
+  const modproParam = searchParams.get("modpro");
+  const modproInicial = modproParam
+    ? modproParam
+        .split(",")
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n))
+    : [];
+  const [modpro, setModproState] = useState<number[]>(modproInicial);
   const situacoesValidas: Situacao[] = ["semAlocacao", "saldoPendente", "totalmenteAlocadas", "compartilhadasEmAberto"];
   const situacaoInicial = situacoesValidas.includes(searchParams.get("situacao") as Situacao)
     ? (searchParams.get("situacao") as Situacao)
@@ -111,39 +144,44 @@ export function Alocacao() {
   function atualizarFiltros(
     patch: Partial<{
       depexe: number[];
+      codfor: number[];
+      modpro: number[];
       busca: string;
       apenasComSaldo: boolean;
-      compartilhadas: boolean;
       situacao: Situacao | null;
       page: number;
     }>
   ) {
     const mudouFiltro =
       patch.depexe !== undefined ||
+      patch.codfor !== undefined ||
+      patch.modpro !== undefined ||
       patch.busca !== undefined ||
       patch.apenasComSaldo !== undefined ||
-      patch.compartilhadas !== undefined ||
       patch.situacao !== undefined;
     const proximo = {
       depexe: patch.depexe ?? depexe,
+      codfor: patch.codfor ?? codfor,
+      modpro: patch.modpro ?? modpro,
       busca: patch.busca ?? busca,
       apenasComSaldo: patch.apenasComSaldo ?? apenasComSaldo,
-      compartilhadas: patch.compartilhadas ?? compartilhadas,
       situacao: patch.situacao !== undefined ? patch.situacao : situacao,
       page: patch.page ?? (mudouFiltro ? 1 : page),
     };
     setDepexeState(proximo.depexe);
+    setCodforState(proximo.codfor);
+    setModproState(proximo.modpro);
     setBuscaState(proximo.busca);
     setApenasComSaldoState(proximo.apenasComSaldo);
-    setCompartilhadasState(proximo.compartilhadas);
     setSituacaoState(proximo.situacao);
     setPageState(proximo.page);
 
     const params = new URLSearchParams();
     if (proximo.depexe.length > 0) params.set("depexe", proximo.depexe.join(","));
+    if (proximo.codfor.length > 0) params.set("codfor", proximo.codfor.join(","));
+    if (proximo.modpro.length > 0) params.set("modpro", proximo.modpro.join(","));
     if (proximo.busca) params.set("busca", proximo.busca);
     if (!proximo.apenasComSaldo) params.set("apenasComSaldo", "false");
-    if (proximo.compartilhadas) params.set("compartilhadas", "true");
     if (proximo.situacao) params.set("situacao", proximo.situacao);
     if (proximo.page > 1) params.set("page", String(proximo.page));
     setSearchParams(params, { replace: true });
@@ -154,12 +192,13 @@ export function Alocacao() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buscaDebounced]);
 
-  // Clicar num KPI vira o único critério de "situação" da tabela abaixo (substitui os
-  // checkboxes de saldo/compartilhadas enquanto ativo) — clicar de novo no mesmo KPI
-  // desliga o filtro e volta pros checkboxes manuais. Também realinha o checkbox
-  // "só com saldo pendente" com o KPI escolhido, pra não ficarem contraditórios quando
-  // o filtro do KPI for desligado depois (ex.: "100% alocadas" implica saldo=0, mas o
-  // checkbox pede saldo>0).
+  // Clicar num KPI vira o único critério de "situação" da tabela abaixo (substitui o
+  // checkbox de saldo enquanto ativo, e é a ÚNICA forma de ver as compartilhadas — não
+  // tem mais checkbox manual pra isso) — clicar de novo no mesmo KPI desliga o filtro e
+  // volta pro checkbox manual de saldo. Também realinha o checkbox "só com saldo
+  // pendente" com o KPI escolhido, pra não ficarem contraditórios quando o filtro do KPI
+  // for desligado depois (ex.: "100% alocadas" implica saldo=0, mas o checkbox pede
+  // saldo>0).
   function clicarKpi(tipo: Situacao) {
     if (situacao === tipo) {
       atualizarFiltros({ situacao: null });
@@ -172,6 +211,7 @@ export function Alocacao() {
   const [consultoresPorProposta, setConsultoresPorProposta] = useState<
     Record<string, ConsultorResumo[] | "carregando" | "erro">
   >({});
+  const [consultores, setConsultores] = useState<OpcaoFiltro[]>([]);
 
   useEffect(() => {
     if (!user) return;
@@ -188,15 +228,25 @@ export function Alocacao() {
     carregarDepartamentos.then(setDepartamentos).catch(() => {});
   }, [user]);
 
+  // Mesmo endpoint independente do papel — /opcoes-filtro já resolve internamente quem cada
+  // pessoa deve ver (colegas de departamento pro gestor, todo mundo visível pro admin).
+  useEffect(() => {
+    axios
+      .get("/api/atividades/opcoes-filtro")
+      .then(({ data }) => setConsultores(data.consultores as OpcaoFiltro[]))
+      .catch(() => {});
+  }, []);
+
   function carregar() {
     setLoading(true);
     axios
       .get("/api/alocacao/propostas", {
         params: {
           depexe: depexe.length > 0 ? depexe.join(",") : undefined,
+          codfor: codfor.length > 0 ? codfor.join(",") : undefined,
+          modpro: modpro.length > 0 ? modpro.join(",") : undefined,
           busca: busca || undefined,
           apenasComSaldo: apenasComSaldo || undefined,
-          compartilhadas: compartilhadas || undefined,
           situacao: situacao || undefined,
           page,
           pageSize: PAGE_SIZE,
@@ -222,7 +272,7 @@ export function Alocacao() {
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [depexe, busca, apenasComSaldo, compartilhadas, situacao, page]);
+  }, [depexe, codfor, modpro, busca, apenasComSaldo, situacao, page]);
 
   function toggleExpandir(row: PropostaRow) {
     const chave = `${row.codemp}-${row.codpro}`;
@@ -349,6 +399,22 @@ export function Alocacao() {
             labelSufixo="departamentos"
           />
         )}
+        {consultores.length > 1 && (
+          <MultiSelectDropdown
+            opcoes={consultores}
+            selecionados={codfor}
+            onChange={(selecionados) => atualizarFiltros({ codfor: selecionados })}
+            labelTodos="Todos os consultores"
+            labelSufixo="consultores"
+          />
+        )}
+        <MultiSelectDropdown
+          opcoes={MODPRO_OPCOES}
+          selecionados={modpro}
+          onChange={(selecionados) => atualizarFiltros({ modpro: selecionados })}
+          labelTodos="Todas as modalidades"
+          labelSufixo="modalidades"
+        />
         {situacao ? (
           <button
             onClick={() => atualizarFiltros({ situacao: null })}
@@ -365,14 +431,6 @@ export function Alocacao() {
                 onChange={(e) => atualizarFiltros({ apenasComSaldo: e.target.checked })}
               />
               Só propostas com saldo pendente
-            </label>
-            <label className="flex items-center gap-2 text-sm text-muted">
-              <input
-                type="checkbox"
-                checked={compartilhadas}
-                onChange={(e) => atualizarFiltros({ compartilhadas: e.target.checked })}
-              />
-              Compartilhadas com meu departamento
             </label>
           </>
         )}
@@ -394,6 +452,9 @@ export function Alocacao() {
                 </th>
                 <th className="whitespace-nowrap bg-surface-2 px-2.5 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Cliente
+                </th>
+                <th className="hidden whitespace-nowrap bg-surface-2 px-2.5 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
+                  Data Aprovação
                 </th>
                 <th className="hidden whitespace-nowrap bg-surface-2 px-2.5 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
                   Descrição
@@ -429,6 +490,9 @@ export function Alocacao() {
                     </td>
                     <td className="px-2.5 py-1.5">
                       <Skeleton className="h-4 w-40" />
+                    </td>
+                    <td className="hidden px-2.5 py-1.5 lg:table-cell">
+                      <Skeleton className="h-4 w-20" />
                     </td>
                     <td className="hidden px-2.5 py-1.5 md:table-cell">
                       <Skeleton className="h-4 w-32" />
@@ -491,6 +555,7 @@ export function Alocacao() {
                       <td className="max-w-[240px] truncate px-2.5 py-1.5 text-sm text-foreground" title={row.cliente}>
                         {row.cliente}
                       </td>
+                      <td className="hidden whitespace-nowrap px-2.5 py-1.5 text-sm text-muted lg:table-cell">{formatData(row.datret)}</td>
                       <td
                         className="hidden max-w-[260px] truncate px-2.5 py-1.5 text-sm text-muted md:table-cell"
                         title={row.despro ?? undefined}
@@ -533,7 +598,7 @@ export function Alocacao() {
                     </tr>
                     {expandida && (
                       <tr className="border-t border-border/60 bg-surface-2/40">
-                        <td colSpan={10} className="border-b border-l border-r border-primary px-2.5 py-2">
+                        <td colSpan={11} className="border-b border-l border-r border-primary px-2.5 py-2">
                           {consultoresResumo === "carregando" && (
                             <p className="py-2 text-sm text-muted">Carregando consultores...</p>
                           )}
@@ -623,7 +688,7 @@ export function Alocacao() {
               })}
               {rows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={10} className="px-2.5 py-6 text-center text-sm text-muted">
+                  <td colSpan={11} className="px-2.5 py-6 text-center text-sm text-muted">
                     Nenhuma proposta encontrada com os filtros atuais.
                   </td>
                 </tr>

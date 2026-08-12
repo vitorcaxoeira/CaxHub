@@ -220,8 +220,9 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       depexeFiltro != null ? depexeFiltro.filter((d) => permitidos.includes(d)) : permitidos;
 
     const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
+    const codforFiltro = parseIdsParam(req.query.codfor);
+    const modproFiltro = parseIdsParam(req.query.modpro);
     const apenasComSaldo = req.query.apenasComSaldo === "true";
-    const compartilhadas = req.query.compartilhadas === "true";
     const situacoesValidas = ["semAlocacao", "saldoPendente", "totalmenteAlocadas", "compartilhadasEmAberto"] as const;
     const situacao = situacoesValidas.includes(req.query.situacao as any)
       ? (req.query.situacao as (typeof situacoesValidas)[number])
@@ -294,6 +295,11 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       cliente: string;
       despro: string | null;
       sitpro: number | null;
+      // "Data de Retorno" no Senior — não existe campo de "data de aprovação" na tabela
+      // (confirmado no dicionário: USU_TE077PRO só tem DatPro/DatEnv/DatRet/DatVal como
+      // datas de marco). Nesta tela só entram propostas Aprovada/Em Execução
+      // (SITPRO_ALOCAVEL), então datret já é a data da decisão real pra toda linha aqui.
+      datret: Date | null;
       propostaDepexe: number | null;
       propostaModpro: number | null;
       origem: OrigemEscopo;
@@ -314,6 +320,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
         cliente: `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}`,
         despro: proposta.despro,
         sitpro: proposta.sitpro,
+        datret: proposta.datret,
         propostaDepexe: proposta.depexe,
         propostaModpro: proposta.modpro,
         origem,
@@ -341,8 +348,8 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
 
     // KPIs sempre por proposta (nunca por item) e sempre com quantidade + total de horas
     // juntos no mesmo card — refletem o escopo de departamento(s) selecionado, mas não os
-    // filtros transitórios de busca/saldo/compartilhadas da tabela abaixo, pra não ficarem
-    // pulando enquanto o usuário digita ou alterna um toggle.
+    // filtros transitórios de busca/saldo/consultor/modalidade da tabela abaixo, pra não
+    // ficarem pulando enquanto o usuário digita ou alterna um toggle.
     const todasPropostas = [...porProposta.values()];
     // "Sem alocação" e "Saldo pendente" são mutuamente exclusivas: a primeira é quem
     // não teve NENHUMA hora alocada ainda; a segunda é quem já teve alguma alocação
@@ -380,25 +387,29 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       },
     };
 
-    // Um KPI clicado vira o único critério de "situação" da tabela (substitui os
-    // checkboxes de saldo/compartilhadas, que só valem quando nenhum KPI está ativo) —
-    // reaproveita exatamente as mesmas listas já calculadas acima pros cards.
+    // Um KPI clicado vira o único critério de "situação" da tabela (substitui o
+    // checkbox de saldo, que só vale quando nenhum KPI está ativo) — reaproveita
+    // exatamente as mesmas listas já calculadas acima pros cards. "Compartilhadas com meu
+    // departamento" só existe via o KPI "compartilhadasEmAberto" — não tem mais checkbox
+    // manual equivalente; sem KPI ativo a lista mostra só as PRÓPRIAS.
     const porSituacao: Record<(typeof situacoesValidas)[number], Agregado[]> = {
       semAlocacao,
       saldoPendente: comSaldoPendente,
       totalmenteAlocadas,
       compartilhadasEmAberto,
     };
-    // Sem o filtro ligado a lista mostra só as PRÓPRIAS; ligado, só as compartilhadas.
-    // Os dois conjuntos são disjuntos, então o checkbox alterna entre eles em vez de
-    // somar — é o que dá sentido ao rótulo "Compartilhadas com meu departamento".
     const baseFiltrada = situacao
       ? porSituacao[situacao]
-      : todasPropostas
-          .filter((a) => (compartilhadas ? a.origem === "compartilhada" : a.origem === "propria"))
-          .filter((a) => !apenasComSaldo || a.qtdhorTotal - a.horasAlocadas > 0);
+      : todasPropostas.filter((a) => a.origem === "propria").filter((a) => !apenasComSaldo || a.qtdhorTotal - a.horasAlocadas > 0);
 
-    let linhas = baseFiltrada.map((a) => ({
+    // Modalidade da proposta (USU_ModPro) — mesmo domínio de MODPRO_LABELS. Compõe com
+    // situação/KPI ativo, não substitui.
+    const baseFiltradaPorModpro =
+      modproFiltro != null && modproFiltro.length > 0
+        ? baseFiltrada.filter((a) => a.propostaModpro != null && modproFiltro.includes(a.propostaModpro))
+        : baseFiltrada;
+
+    let linhas = baseFiltradaPorModpro.map((a) => ({
       codemp: a.codemp,
       codpro: a.codpro,
       numprj: a.numprj,
@@ -407,6 +418,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       sitpro: a.sitpro,
       sitproLabel: sitproLabel(a.sitpro),
       sitproTone: sitproTone(a.sitpro),
+      datret: a.datret,
       // Sempre o departamento "dono" da proposta no Senior — não os departamentos
       // dos itens (que podem ser só os visíveis pro usuário, e confundiriam numa
       // proposta compartilhada mostrando o depto de quem está vendo, não o real).
@@ -423,6 +435,17 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     }
     if (apenasComSaldo) {
       linhas = linhas.filter((l) => l.saldo > 0);
+    }
+    // Filtro de consultor: "já tem alocação ativa nesta proposta" — reaproveita o mesmo
+    // `alocacoes` já carregado acima pra somar horasAlocadas, sem query nova. OU entre os
+    // selecionados (proposta entra se qualquer um deles estiver alocado nela). Transitório
+    // da tabela, como busca/apenasComSaldo — não muda os KPIs do topo.
+    if (codforFiltro != null && codforFiltro.length > 0) {
+      const propostasComConsultor = new Set<string>();
+      for (const a of alocacoes) {
+        if (codforFiltro.includes(a.codfor)) propostasComConsultor.add(`${a.codemp}-${a.codpro}`);
+      }
+      linhas = linhas.filter((l) => propostasComConsultor.has(`${l.codemp}-${l.codpro}`));
     }
     linhas.sort((a, b) => b.codpro - a.codpro);
 
