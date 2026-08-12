@@ -56,7 +56,6 @@ import { schedulePedidoSync } from "./sync/pedidoSync";
 import { scheduleFormaPagamentoSync } from "./sync/formaPagamentoSync";
 import { scheduleCondicaoPagamentoSync } from "./sync/condicaoPagamentoSync";
 import { schedulePlanoContabilSync } from "./sync/planoContabilSync";
-import { schedulePlanoContabilParaleloSync } from "./sync/planoContabilParaleloSync";
 import { scheduleLancamentoContabilSync } from "./sync/lancamentoContabilSync";
 import { scheduleRateioLancamentoSync } from "./sync/rateioLancamentoSync";
 import { scheduleOrcamentoContabilSync } from "./sync/orcamentoContabilSync";
@@ -136,7 +135,6 @@ app.listen(port, () => {
   scheduleFormaPagamentoSync();
   scheduleCondicaoPagamentoSync();
   schedulePlanoContabilSync();
-  schedulePlanoContabilParaleloSync();
   scheduleLancamentoContabilSync();
   scheduleRateioLancamentoSync();
   scheduleOrcamentoContabilSync();

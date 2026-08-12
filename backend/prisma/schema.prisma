@@ -107,10 +107,10 @@ model Empresa {
   sigemp  String   @db.VarChar(30)
   filiais Filial[]
 
-  // Modelo de plano de contas/centro de custo "paralelo" que esta empresa usa — chave pra
-  // achar a descrição paralela em PlanoContabilParalelo.codmpc (ver SQL de Contábil/Orçamento,
-  // 11/08/2026). codmpc é pro lado de conta, codmpu pro lado de centro de custo — dois
-  // modelos independentes, confirmados separados no dicionário do Senior.
+  // Modelo de plano de contas/centro de custo que esta empresa usa no Senior (ver SQL de
+  // Contábil/Orçamento, 11/08/2026) — codmpc pro lado de conta, codmpu pro lado de centro de
+  // custo. Espelhados sem model/FK local: a tabela de mapeamento correspondente do Senior
+  // (E043PCM) foi avaliada e descartada — não era necessária.
   codmpc Int?
   codmpu Int?
 
@@ -1354,24 +1354,6 @@ model PlanoContabil {
   @@id([codemp, ctared])
 
   @@map("plano_contabil")
-}
-
-// Espelho local da tabela E043PCM do Senior ERP (Tabelas - Modelos de Planos - Contas ou Centros de Custos).
-model PlanoContabilParalelo {
-  codmpc Int
-  ctared Int
-  despar String? @db.VarChar(80)
-  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
-  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
-  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
-  // nasça no CaxHub em vez de vir do Senior.
-  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
-  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
-  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
-  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codmpc, ctared])
-
-  @@map("plano_contabil_paralelo")
 }
 
 // Espelho local da tabela E640LCT do Senior ERP (Contábil - Lançamento - Lançamentos Contábeis).
