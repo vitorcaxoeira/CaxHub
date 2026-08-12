@@ -61,6 +61,10 @@ export interface SolicitacaoApontamento {
   seqite: number;
   depexe: number | null;
   depexeLabel: string;
+  // Cliente e descrição da proposta (Proposta.despro) — só pra dar contexto no card de
+  // Aprovações, ver CabecalhoLinha em Aprovacoes.tsx. Nulo quando a proposta não tem despro.
+  clienteNome: string | null;
+  despro: string | null;
   podeDecidir: boolean;
 }
 
@@ -81,6 +85,8 @@ export interface SolicitacaoExcedente {
   seqite: number;
   depexe: number | null;
   depexeLabel: string;
+  clienteNome: string | null;
+  despro: string | null;
   qtdhor: number | null;
   horasExcedentesAtuais: number;
   podeDecidir: boolean;

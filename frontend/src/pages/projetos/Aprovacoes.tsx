@@ -1,11 +1,13 @@
 import axios from "axios";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useToast } from "../../components/ui/Toast";
 import {
   AtividadeDetalhe,
   SolicitacaoApontamento,
   SolicitacaoExcedente,
 } from "../../components/projetos/AtividadeDetalhe";
+import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { formatHoras, horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
 
@@ -61,6 +63,8 @@ export interface SolicitacaoAjuste {
   seqite: number;
   depexe: number | null;
   depexeLabel: string;
+  clienteNome: string | null;
+  despro: string | null;
   podeDecidir: boolean;
 }
 
@@ -94,47 +98,104 @@ const classeBotao = {
 const classeCampo =
   "rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-// Cabeçalho comum às duas listas: id, status, quem pediu, onde, o link pra atividade e a
-// data.
+// Cabeçalho comum às três listas: id, status, quem pediu, onde, o link pra atividade e a
+// data. `clienteNome`/`despro` são opcionais e só quem chama passando os dois (hoje só
+// ListaApontamentos) ganha o cabeçalho estendido — Excedentes/Ajustes continuam no formato
+// de 1 linha de sempre.
 function CabecalhoLinha({
   id,
   status,
   solicitanteNome,
+  codemp,
   codpro,
   seqite,
   depexeLabel,
   atividadeId,
   criadoEm,
   onVerAtividade,
+  clienteNome,
+  despro,
 }: {
   id: number;
   status: string;
   solicitanteNome: string;
+  codemp: number;
   codpro: number;
   seqite: number;
   depexeLabel: string;
   atividadeId: number;
   criadoEm: string;
   onVerAtividade: (id: number) => void;
+  clienteNome?: string | null;
+  despro?: string | null;
 }) {
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+  const navigate = useNavigate();
+  const cabecalhoEstendido = clienteNome !== undefined || despro !== undefined;
+
+  const linhaId = (
+    <>
       {/* Id da SOLICITAÇÃO, não da atividade — é por ele que se conversa sobre um pedido
           específico. Cada aba tem a numeração da sua própria tabela, então #4 em Horas
           Excedentes e #4 em Apontamentos são registros diferentes. */}
       <span className="font-mono text-[11.5px] text-muted">#{id}</span>
       <span className={`rounded px-1.5 py-0.5 font-mono text-[10.5px] uppercase ${TOM_STATUS[status] ?? ""}`}>{status}</span>
       <span className="text-sm font-medium text-foreground">{solicitanteNome}</span>
-      <span className="text-[12.5px] text-muted">
-        · Proposta {codpro} · Item {String(seqite).padStart(2, "0")} · {depexeLabel}
-      </span>
-      {/* Abre o painel AQUI, sem navegar: quem decide está no meio de uma fila de pedidos,
-          e ir pra tela de Atividades carregaria quadro, KPIs e filtros inteiros só pra
-          mostrar um painel lateral — e na volta o filtro e a rolagem já se perderam. */}
-      <button onClick={() => onVerAtividade(atividadeId)} className="text-[12.5px] font-medium text-primary hover:underline">
-        Ver atividade
-      </button>
-      <span className="ml-auto font-mono text-[12.5px] text-muted">{dateTimeFormatter.format(new Date(criadoEm))}</span>
+    </>
+  );
+
+  // Abre a proposta numa aba/rota própria — diferente de "Ver atividade", que abre o painel
+  // aqui mesmo sem navegar.
+  const linkProposta = (
+    <button
+      onClick={() => navigate(`/projetos/proposta/${codemp}/${codpro}`)}
+      className="font-mono text-[12.5px] font-medium text-primary hover:underline"
+    >
+      {codpro}
+    </button>
+  );
+
+  if (!cabecalhoEstendido) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {linhaId}
+        <span className="text-[12.5px] text-muted">
+          Proposta {linkProposta} · Item {String(seqite).padStart(2, "0")} · {depexeLabel}
+        </span>
+        <button onClick={() => onVerAtividade(atividadeId)} className="text-[12.5px] font-medium text-primary hover:underline">
+          Ver atividade
+        </button>
+        <span className="ml-auto font-mono text-[12.5px] text-muted">{dateTimeFormatter.format(new Date(criadoEm))}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-0.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {linhaId}
+        <span className="ml-auto font-mono text-[12.5px] text-muted">{dateTimeFormatter.format(new Date(criadoEm))}</span>
+      </div>
+      <p className="text-[12.5px] text-muted">
+        Proposta {linkProposta}
+        {clienteNome && (
+          <>
+            {" Cliente: "}
+            <span className="text-foreground">{clienteNome}</span>
+          </>
+        )}
+      </p>
+      {despro && <p className="text-[12.5px] text-muted">Descrição da Proposta: {despro}</p>}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-[12.5px] text-muted">
+          Item {String(seqite).padStart(2, "0")} : {depexeLabel}
+        </span>
+        {/* Abre o painel AQUI, sem navegar: quem decide está no meio de uma fila de pedidos,
+            e ir pra tela de Atividades carregaria quadro, KPIs e filtros inteiros só pra
+            mostrar um painel lateral — e na volta o filtro e a rolagem já se perderam. */}
+        <button onClick={() => onVerAtividade(atividadeId)} className="text-[12.5px] font-medium text-primary hover:underline">
+          Ver atividade
+        </button>
+      </div>
     </div>
   );
 }
@@ -157,6 +218,11 @@ function ListaExcedentes({
   const [observacao, setObservacao] = useState("");
   const [enviando, setEnviando] = useState(false);
 
+  // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
+  // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
+  const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  const [processandoLote, setProcessandoLote] = useState(false);
+
   const carregar = useCallback(() => {
     setLoading(true);
     axios
@@ -170,6 +236,60 @@ function ListaExcedentes({
   }, [status]);
 
   useEffect(carregar, [carregar]);
+
+  const consultoresDisponiveis = useMemo<MultiSelectOption<string>[]>(
+    () =>
+      [...new Set(solicitacoes.map((s) => s.solicitanteNome))]
+        .sort((a, b) => a.localeCompare(b, "pt-BR"))
+        .map((nome) => ({ value: nome, label: nome })),
+    [solicitacoes]
+  );
+
+  const solicitacoesFiltradas = useMemo(
+    () => (consultorFiltro.length === 0 ? solicitacoes : solicitacoes.filter((s) => consultorFiltro.includes(s.solicitanteNome))),
+    [solicitacoes, consultorFiltro]
+  );
+
+  // Só os pendentes que ESTE gestor pode decidir, dentro do filtro atual — é exatamente o
+  // conjunto que "Aprovar todos"/"Reprovar todos" atinge.
+  const pendentesDecidiveis = useMemo(
+    () => solicitacoesFiltradas.filter((s) => s.status === "pendente" && s.podeDecidir),
+    [solicitacoesFiltradas]
+  );
+
+  async function decidirEmLote(aprovar: boolean) {
+    const confirmado = window.confirm(
+      aprovar
+        ? `Aprovar ${pendentesDecidiveis.length} pedido(s) de horas excedentes, liberando exatamente o que foi solicitado? Essa ação não pode ser desfeita.`
+        : `Reprovar ${pendentesDecidiveis.length} pedido(s) de horas excedentes? Essa ação não pode ser desfeita.`
+    );
+    if (!confirmado) return;
+
+    setProcessandoLote(true);
+    try {
+      const { data } = await axios.post("/api/solicitacoes-excedente/decidir-lote", {
+        ids: pendentesDecidiveis.map((s) => s.id),
+        aprovar,
+      });
+      const totalSucesso = data.sucesso.length as number;
+      const falhas = data.falhas as { id: number; erro: string }[];
+      toast.mostrar(
+        falhas.length === 0
+          ? `${totalSucesso} pedido(s) ${aprovar ? "aprovado(s)" : "reprovado(s)"}.`
+          : `${totalSucesso} pedido(s) ${aprovar ? "aprovado(s)" : "reprovado(s)"}, ${falhas.length} falha(s): ${falhas
+              .map((f) => `#${f.id} — ${f.erro}`)
+              .join("; ")}`,
+        falhas.length === 0 ? (aprovar ? "success" : "neutral") : "destructive"
+      );
+      carregar();
+      onMudou();
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      toast.mostrar(mensagem ?? `Falha ao ${aprovar ? "aprovar" : "reprovar"} em lote`, "destructive");
+    } finally {
+      setProcessandoLote(false);
+    }
+  }
 
   async function decidir(s: SolicitacaoExcedente, aprovar: boolean) {
     const minutos = aprovar ? horasParaMinutos(horasInput) : null;
@@ -207,36 +327,63 @@ function ListaExcedentes({
   if (loading) return <p className="mt-6 text-sm text-muted">Carregando...</p>;
   if (erro)
     return <p className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{erro}</p>;
-  if (solicitacoes.length === 0)
-    return (
-      <p className="mt-6 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-sm text-muted">
-        Nenhuma solicitação de horas excedentes por aqui.
-      </p>
-    );
 
   return (
-    <div className="mt-4 space-y-2">
-      {solicitacoes.map((s) => (
-        <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
-          <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
+    <div className="mt-4">
+      {solicitacoes.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <MultiSelectDropdown
+            opcoes={consultoresDisponiveis}
+            selecionados={consultorFiltro}
+            onChange={setConsultorFiltro}
+            labelTodos="Todos os consultores"
+            labelSufixo="consultores"
+          />
+          {status === "pendente" && pendentesDecidiveis.length > 0 && (
+            <div className="ml-auto flex items-center gap-2">
+              <button onClick={() => decidirEmLote(false)} disabled={processandoLote} className={classeBotao.destrutivo}>
+                Reprovar todos ({pendentesDecidiveis.length})
+              </button>
+              <button onClick={() => decidirEmLote(true)} disabled={processandoLote} className={classeBotao.primario}>
+                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesDecidiveis.length})`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
-          <p className="mt-1.5 font-mono text-[12px] text-muted">
-            Pediu <span className="text-warning">{formatHoras(s.horasSolicitadas / 60)}</span>
-            {s.horasAprovadas != null && (
-              <>
-                {" · Aprovado "}
-                <span className="text-success">{formatHoras(s.horasAprovadas / 60)}</span>
-              </>
-            )}
-            {" · Alocado "}
-            {formatHoras((s.qtdhor ?? 0) / 60)}
-            {" · Excedente atual "}
-            {formatHoras(s.horasExcedentesAtuais / 60)}
-          </p>
+      {solicitacoesFiltradas.length === 0 ? (
+        <p className="mt-2 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-sm text-muted">
+          {solicitacoes.length === 0
+            ? "Nenhuma solicitação de horas excedentes por aqui."
+            : "Nenhuma solicitação com esse filtro de consultor."}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {solicitacoesFiltradas.map((s) => (
+            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+              <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
 
-          <p className="mt-1.5 text-[13px] text-foreground">{s.motivo}</p>
+              <p className="mt-1.5 font-mono text-[12px] text-muted">
+                Pediu <span className="text-warning">{formatHoras(s.horasSolicitadas / 60)}</span>
+                {s.horasAprovadas != null && (
+                  <>
+                    {" · Aprovado "}
+                    <span className="text-success">{formatHoras(s.horasAprovadas / 60)}</span>
+                  </>
+                )}
+                {" · Alocado "}
+                {formatHoras((s.qtdhor ?? 0) / 60)}
+                {" · Excedente atual "}
+                {formatHoras(s.horasExcedentesAtuais / 60)}
+              </p>
 
-          {s.status !== "pendente" && (
+              <p className="mt-1.5 text-[13px] text-foreground">
+                <span className="text-muted">Motivo: </span>
+                {s.motivo}
+              </p>
+
+              {s.status !== "pendente" && (
             <p className="mt-1 text-[12px] text-muted">
               {s.decisorNome} decidiu em {s.decididoEm ? dateTimeFormatter.format(new Date(s.decididoEm)) : "—"}
               {s.observacaoDecisao && ` — "${s.observacaoDecisao}"`}
@@ -294,6 +441,8 @@ function ListaExcedentes({
             ))}
         </div>
       ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -321,6 +470,11 @@ function ListaApontamentos({
   const [observacao, setObservacao] = useState("");
   const [enviando, setEnviando] = useState(false);
 
+  // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
+  // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
+  const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  const [processandoLote, setProcessandoLote] = useState(false);
+
   const carregar = useCallback(() => {
     setLoading(true);
     axios
@@ -334,6 +488,61 @@ function ListaApontamentos({
   }, [status]);
 
   useEffect(carregar, [carregar]);
+
+  const consultoresDisponiveis = useMemo<MultiSelectOption<string>[]>(
+    () =>
+      [...new Set(solicitacoes.map((s) => s.solicitanteNome))]
+        .sort((a, b) => a.localeCompare(b, "pt-BR"))
+        .map((nome) => ({ value: nome, label: nome })),
+    [solicitacoes]
+  );
+
+  const solicitacoesFiltradas = useMemo(
+    () => (consultorFiltro.length === 0 ? solicitacoes : solicitacoes.filter((s) => consultorFiltro.includes(s.solicitanteNome))),
+    [solicitacoes, consultorFiltro]
+  );
+
+  // Só os pendentes que ESTE gestor pode decidir, dentro do filtro atual — é exatamente o
+  // conjunto que "Aprovar todos"/"Reprovar todos" atinge.
+  const pendentesDecidiveis = useMemo(
+    () => solicitacoesFiltradas.filter((s) => s.status === "pendente" && s.podeDecidir),
+    [solicitacoesFiltradas]
+  );
+
+  async function decidirEmLote(aprovar: boolean) {
+    const acao = aprovar ? "aprovar" : "reprovar";
+    const confirmado = window.confirm(
+      aprovar
+        ? `Aprovar ${pendentesDecidiveis.length} pedido(s) de apontamento, exatamente como solicitados? Essa ação não pode ser desfeita.`
+        : `Reprovar ${pendentesDecidiveis.length} pedido(s) de apontamento? Essa ação não pode ser desfeita.`
+    );
+    if (!confirmado) return;
+
+    setProcessandoLote(true);
+    try {
+      const { data } = await axios.post("/api/solicitacoes-apontamento/decidir-lote", {
+        ids: pendentesDecidiveis.map((s) => s.id),
+        aprovar,
+      });
+      const totalSucesso = data.sucesso.length as number;
+      const falhas = data.falhas as { id: number; erro: string }[];
+      toast.mostrar(
+        falhas.length === 0
+          ? `${totalSucesso} pedido(s) ${aprovar ? "aprovado(s)" : "reprovado(s)"}.`
+          : `${totalSucesso} pedido(s) ${aprovar ? "aprovado(s)" : "reprovado(s)"}, ${falhas.length} falha(s): ${falhas
+              .map((f) => `#${f.id} — ${f.erro}`)
+              .join("; ")}`,
+        falhas.length === 0 ? (aprovar ? "success" : "neutral") : "destructive"
+      );
+      carregar();
+      onMudou();
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      toast.mostrar(mensagem ?? `Falha ao ${acao} em lote`, "destructive");
+    } finally {
+      setProcessandoLote(false);
+    }
+  }
 
   async function decidir(s: SolicitacaoApontamento, aprovar: boolean) {
     if (aprovar && (!data || !horaInicio || !horaFim)) {
@@ -380,21 +589,45 @@ function ListaApontamentos({
   if (loading) return <p className="mt-6 text-sm text-muted">Carregando...</p>;
   if (erro)
     return <p className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{erro}</p>;
-  if (solicitacoes.length === 0)
-    return (
-      <p className="mt-6 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-sm text-muted">
-        Nenhuma solicitação de apontamento por aqui.
-      </p>
-    );
 
   return (
-    <div className="mt-4 space-y-2">
-      {solicitacoes.map((s) => (
-        <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
-          <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
+    <div className="mt-4">
+      {solicitacoes.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <MultiSelectDropdown
+            opcoes={consultoresDisponiveis}
+            selecionados={consultorFiltro}
+            onChange={setConsultorFiltro}
+            labelTodos="Todos os consultores"
+            labelSufixo="consultores"
+          />
+          {/* Só faz sentido decidir em lote na aba Pendentes — nas outras os pedidos já
+              foram decididos ou misturam situações diferentes. */}
+          {status === "pendente" && pendentesDecidiveis.length > 0 && (
+            <div className="ml-auto flex items-center gap-2">
+              <button onClick={() => decidirEmLote(false)} disabled={processandoLote} className={classeBotao.destrutivo}>
+                Reprovar todos ({pendentesDecidiveis.length})
+              </button>
+              <button onClick={() => decidirEmLote(true)} disabled={processandoLote} className={classeBotao.primario}>
+                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesDecidiveis.length})`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
-          <p className="mt-1.5 font-mono text-[12px] text-muted">
-            Pediu <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+      {solicitacoesFiltradas.length === 0 ? (
+        <p className="mt-2 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-sm text-muted">
+          {solicitacoes.length === 0 ? "Nenhuma solicitação de apontamento por aqui." : "Nenhuma solicitação com esse filtro de consultor."}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {solicitacoesFiltradas.map((s) => (
+            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+              <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
+
+              <p className="mt-1.5 font-mono text-[12px] text-muted">
+                Pediu <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
             {s.inicioAprovado && s.fimAprovado && (
               <>
                 {" · Aprovado "}
@@ -403,7 +636,10 @@ function ListaApontamentos({
             )}
           </p>
 
-          <p className="mt-1.5 text-[13px] text-foreground">{s.descricao}</p>
+          <p className="mt-1.5 text-[13px] text-foreground">
+            <span className="text-muted">Descrição do trabalho: </span>
+            {s.descricao}
+          </p>
           <p className="mt-0.5 text-[12px] text-muted">Motivo: {s.motivo}</p>
 
           {s.status !== "pendente" && (
@@ -491,6 +727,8 @@ function ListaApontamentos({
             ))}
         </div>
       ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -515,6 +753,11 @@ function ListaAjustes({
   const [observacao, setObservacao] = useState("");
   const [enviando, setEnviando] = useState(false);
 
+  // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
+  // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
+  const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  const [processandoLote, setProcessandoLote] = useState(false);
+
   const carregar = useCallback(() => {
     setLoading(true);
     axios
@@ -528,6 +771,60 @@ function ListaAjustes({
   }, [status]);
 
   useEffect(carregar, [carregar]);
+
+  const consultoresDisponiveis = useMemo<MultiSelectOption<string>[]>(
+    () =>
+      [...new Set(solicitacoes.map((s) => s.solicitanteNome))]
+        .sort((a, b) => a.localeCompare(b, "pt-BR"))
+        .map((nome) => ({ value: nome, label: nome })),
+    [solicitacoes]
+  );
+
+  const solicitacoesFiltradas = useMemo(
+    () => (consultorFiltro.length === 0 ? solicitacoes : solicitacoes.filter((s) => consultorFiltro.includes(s.solicitanteNome))),
+    [solicitacoes, consultorFiltro]
+  );
+
+  // Só os pendentes que ESTE gestor pode decidir, dentro do filtro atual — é exatamente o
+  // conjunto que "Aprovar todos"/"Reprovar todos" atinge.
+  const pendentesDecidiveis = useMemo(
+    () => solicitacoesFiltradas.filter((s) => s.status === "pendente" && s.podeDecidir),
+    [solicitacoesFiltradas]
+  );
+
+  async function decidirEmLote(aprovar: boolean) {
+    const confirmado = window.confirm(
+      aprovar
+        ? `Aprovar ${pendentesDecidiveis.length} pedido(s) de ajuste de horário, exatamente como solicitados? Essa ação não pode ser desfeita.`
+        : `Reprovar ${pendentesDecidiveis.length} pedido(s) de ajuste de horário? Essa ação não pode ser desfeita.`
+    );
+    if (!confirmado) return;
+
+    setProcessandoLote(true);
+    try {
+      const { data } = await axios.post("/api/solicitacoes-ajuste/decidir-lote", {
+        ids: pendentesDecidiveis.map((s) => s.id),
+        aprovar,
+      });
+      const totalSucesso = data.sucesso.length as number;
+      const falhas = data.falhas as { id: number; erro: string }[];
+      toast.mostrar(
+        falhas.length === 0
+          ? `${totalSucesso} pedido(s) ${aprovar ? "aprovado(s)" : "reprovado(s)"}.`
+          : `${totalSucesso} pedido(s) ${aprovar ? "aprovado(s)" : "reprovado(s)"}, ${falhas.length} falha(s): ${falhas
+              .map((f) => `#${f.id} — ${f.erro}`)
+              .join("; ")}`,
+        falhas.length === 0 ? (aprovar ? "success" : "neutral") : "destructive"
+      );
+      carregar();
+      onMudou();
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      toast.mostrar(mensagem ?? `Falha ao ${aprovar ? "aprovar" : "reprovar"} em lote`, "destructive");
+    } finally {
+      setProcessandoLote(false);
+    }
+  }
 
   async function decidir(s: SolicitacaoAjuste, aprovar: boolean) {
     if (aprovar && (!data || !horaInicio || !horaFim)) {
@@ -568,34 +865,60 @@ function ListaAjustes({
   if (loading) return <p className="mt-6 text-sm text-muted">Carregando...</p>;
   if (erro)
     return <p className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{erro}</p>;
-  if (solicitacoes.length === 0)
-    return (
-      <p className="mt-6 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-sm text-muted">
-        Nenhum pedido de ajuste de horário por aqui.
-      </p>
-    );
 
   return (
-    <div className="mt-4 space-y-2">
-      {solicitacoes.map((s) => (
-        <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
-          <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
+    <div className="mt-4">
+      {solicitacoes.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <MultiSelectDropdown
+            opcoes={consultoresDisponiveis}
+            selecionados={consultorFiltro}
+            onChange={setConsultorFiltro}
+            labelTodos="Todos os consultores"
+            labelSufixo="consultores"
+          />
+          {status === "pendente" && pendentesDecidiveis.length > 0 && (
+            <div className="ml-auto flex items-center gap-2">
+              <button onClick={() => decidirEmLote(false)} disabled={processandoLote} className={classeBotao.destrutivo}>
+                Reprovar todos ({pendentesDecidiveis.length})
+              </button>
+              <button onClick={() => decidirEmLote(true)} disabled={processandoLote} className={classeBotao.primario}>
+                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesDecidiveis.length})`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
-          <p className="mt-1.5 font-mono text-[12px] text-muted">
-            De <span className="text-muted">{intervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>
-            {" para "}
-            <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
-            {s.inicioAprovado && s.fimAprovado && (
-              <>
-                {" · Gravado "}
-                <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>
-              </>
-            )}
-          </p>
+      {solicitacoesFiltradas.length === 0 ? (
+        <p className="mt-2 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-sm text-muted">
+          {solicitacoes.length === 0 ? "Nenhum pedido de ajuste de horário por aqui." : "Nenhuma solicitação com esse filtro de consultor."}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {solicitacoesFiltradas.map((s) => (
+            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+              <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
 
-          <p className="mt-1.5 text-[13px] text-foreground">{s.motivo}</p>
+              <p className="mt-1.5 font-mono text-[12px] text-muted">
+                De{" "}
+                <span className="text-muted">{intervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>
+                {" para "}
+                <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+                {s.inicioAprovado && s.fimAprovado && (
+                  <>
+                    {" · Gravado "}
+                    <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>
+                  </>
+                )}
+              </p>
 
-          {s.status !== "pendente" && (
+              <p className="mt-1.5 text-[13px] text-foreground">
+                <span className="text-muted">Motivo: </span>
+                {s.motivo}
+              </p>
+
+              {s.status !== "pendente" && (
             <p className="mt-1 text-[12px] text-muted">
               {s.decisorNome} decidiu em {s.decididoEm ? dateTimeFormatter.format(new Date(s.decididoEm)) : "—"}
               {s.observacaoDecisao && ` — "${s.observacaoDecisao}"`}
@@ -660,6 +983,8 @@ function ListaAjustes({
             ))}
         </div>
       ))}
+        </div>
+      )}
     </div>
   );
 }

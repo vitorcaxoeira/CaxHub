@@ -64,6 +64,31 @@ async function depexePorAtividade(
   return mapa;
 }
 
+interface PropostaInfo {
+  clienteNome: string | null;
+  despro: string | null;
+}
+
+// Cliente e descrição da proposta (Proposta.despro) pra dar contexto no card de Aprovações —
+// mesmo caminho (Proposta.cliente.nomcli) já usado em atividades.ts/alocacao.ts/apontamentos.ts.
+async function propostaInfoPorAtividades(atividades: { codemp: number; codpro: number }[]): Promise<Map<string, PropostaInfo>> {
+  const mapa = new Map<string, PropostaInfo>();
+  if (atividades.length === 0) return mapa;
+  const pares = [...new Map(atividades.map((a) => [`${a.codemp}-${a.codpro}`, a])).values()];
+  const propostas = await prisma.proposta.findMany({
+    where: { OR: pares.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
+    select: { codemp: true, codpro: true, despro: true, cliente: { select: { codcli: true, nomcli: true } } },
+  });
+  for (const p of propostas) {
+    // "1234 - Nome do cliente" — mesmo formato já usado em atividades.ts/alocacao.ts/apontamentos.ts.
+    mapa.set(`${p.codemp}-${p.codpro}`, {
+      clienteNome: p.cliente ? `${p.cliente.codcli} - ${p.cliente.nomcli}` : null,
+      despro: p.despro ?? null,
+    });
+  }
+  return mapa;
+}
+
 function lerData(valor: unknown): Date | null {
   if (typeof valor !== "string" || valor === "") return null;
   const d = new Date(valor);
@@ -193,7 +218,7 @@ const INCLUDE_LISTA = {
 
 type SolicitacaoComRelacoes = Prisma.SolicitacaoApontamentoGetPayload<{ include: typeof INCLUDE_LISTA }>;
 
-function serializar(s: SolicitacaoComRelacoes, depexe: number | null, podeDecidir: boolean) {
+function serializar(s: SolicitacaoComRelacoes, depexe: number | null, podeDecidir: boolean, propostaInfo?: PropostaInfo) {
   return {
     id: s.id,
     atividadeId: s.atividadeId,
@@ -215,6 +240,8 @@ function serializar(s: SolicitacaoComRelacoes, depexe: number | null, podeDecidi
     seqite: s.atividade.seqite,
     depexe,
     depexeLabel: depexeLabel(depexe),
+    clienteNome: propostaInfo?.clienteNome ?? null,
+    despro: propostaInfo?.despro ?? null,
     podeDecidir,
   };
 }
@@ -241,6 +268,7 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
     });
 
     const mapaDepexe = await depexePorAtividade(todas.map((s) => ({ id: s.atividadeId, ...s.atividade })));
+    const mapaProposta = await propostaInfoPorAtividades(todas.map((s) => s.atividade));
 
     const visiveis = todas
       .map((s) => {
@@ -248,7 +276,8 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
         const gerencia = depexe != null && gerenciaDepartamento(role, contexto, depexe);
         const minha = s.solicitanteId === user.id;
         if (!gerencia && !minha) return null;
-        return serializar(s, depexe, gerencia);
+        const propostaInfo = mapaProposta.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
+        return serializar(s, depexe, gerencia, propostaInfo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -291,11 +320,149 @@ solicitacoesApontamentoRouter.get("/atividade/:atividadeId", async (req: Authent
       orderBy: { criadoEm: "desc" },
     });
 
-    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gerencia)) });
+    const propostaInfo = (await propostaInfoPorAtividades([resolvido.atividade])).get(
+      `${resolvido.atividade.codemp}-${resolvido.atividade.codpro}`
+    );
+
+    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gerencia, propostaInfo)) });
   } catch (error) {
     handleError(res, error, "por-atividade");
   }
 });
+
+interface OpcoesDecisao {
+  aprovar: boolean;
+  // Sempre `unknown` porque tanto vêm direto de req.body (rota individual) quanto já
+  // tipados (rota em lote, que nunca manda estes três — ver POST /decidir-lote).
+  inicio?: unknown;
+  fim?: unknown;
+  descricao?: unknown;
+  observacao?: unknown;
+}
+
+// Miolo de "decidir uma solicitação" — extraído pra ser a MESMA lógica usada tanto por
+// POST /:id/decidir quanto por POST /decidir-lote (por item). Nunca decide sucesso/fracasso
+// olhando pra `res` — só devolve { status, body } pro chamador responder (individual) ou
+// acumular (lote). Comportamento idêntico ao que já existia antes desta extração.
+async function decidirUma(id: number, opts: OpcoesDecisao, req: AuthenticatedRequest): Promise<{ status: number; body: unknown }> {
+  if (!Number.isFinite(id)) return { status: 400, body: { error: "Id inválido" } };
+  const { aprovar } = opts;
+  const observacao = typeof opts.observacao === "string" ? opts.observacao.trim() : "";
+
+  const solicitacao = await prisma.solicitacaoApontamento.findUnique({ where: { id } });
+  if (!solicitacao) return { status: 404, body: { error: "Solicitação não encontrada" } };
+  if (solicitacao.status !== STATUS_PENDENTE) {
+    return { status: 409, body: { error: `Esta solicitação já foi ${solicitacao.status}` } };
+  }
+
+  const resolvido = await carregarAtividadeComDepexe(solicitacao.atividadeId);
+  if (!resolvido) return { status: 404, body: { error: "Atividade não encontrada" } };
+  const { atividade, depexe } = resolvido;
+
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) return { status: 404, body: { error: "Usuário não encontrado" } };
+  const { user, contexto, role } = ctx;
+  if (!gerenciaDepartamento(role, contexto, depexe)) {
+    return { status: 403, body: { error: "Só o gestor do departamento pode decidir esta solicitação" } };
+  }
+
+  // O gestor pode corrigir os três campos. Ausentes, valem os solicitados — é o caminho que
+  // POST /decidir-lote usa sempre, já que não tem UI pra editar por item.
+  const inicio = opts.inicio !== undefined ? lerData(opts.inicio) : solicitacao.inicioSolicitado;
+  const fim = opts.fim !== undefined ? lerData(opts.fim) : solicitacao.fimSolicitado;
+  const descricao =
+    typeof opts.descricao === "string" && opts.descricao.trim() !== "" ? opts.descricao.trim() : solicitacao.descricao;
+
+  if (aprovar) {
+    if (!inicio || !fim) return { status: 400, body: { error: "inicio e fim inválidos" } };
+    if (fim.getTime() <= inicio.getTime()) return { status: 400, body: { error: "O fim precisa ser depois do início" } };
+    // Revalidado com os valores FINAIS: sem isto o gestor aprovaria pra dentro de um
+    // conflito que o consultor não conseguiu enviar.
+    const conflitos = await conflitosDoIntervalo(atividade.codemp, atividade.codfor, inicio, fim, {
+      ignorarSolicitacaoId: id,
+    });
+    if (conflitos.length > 0) return { status: 409, body: { error: mensagemDeConflito(conflitos), conflitos } };
+  }
+
+  // Aprovar NÃO confirma o apontamento: cria a sessão fechada e não confirmada, que cai
+  // na lista "a confirmar" do consultor em Meus Apontamentos. Quem fecha o apontamento e
+  // dispara o envio ao Senior continua sendo quem executou — o gestor autoriza o tempo,
+  // não lança no lugar dele.
+  //
+  // Antes da sessão existir a solicitação não é marcada como aprovada: a criação ainda
+  // pode recusar por teto (alocado + excedentes), e uma solicitação "aprovada" sem
+  // sessão nenhuma seria o pior dos dois mundos — o consultor veria deferido e as horas
+  // não estariam em lugar nenhum. Recusou, a solicitação continua pendente e o gestor lê
+  // o motivo: pra liberar, ele autoriza horas excedentes antes.
+  let sessaoId: number | undefined;
+  if (aprovar) {
+    const resultado = await criarSessaoManualPendente(solicitacao.atividadeId, inicio!, fim!, descricao);
+    if (resultado.status >= 400) return { status: resultado.status, body: resultado.body };
+    sessaoId = resultado.sessaoId;
+  }
+
+  const fato = !aprovar
+    ? `reprovou o apontamento de ${descreverIntervalo(solicitacao.inicioSolicitado, solicitacao.fimSolicitado)}`
+    : inicio!.getTime() === solicitacao.inicioSolicitado.getTime() && fim!.getTime() === solicitacao.fimSolicitado.getTime()
+      ? `aprovou o apontamento de ${descreverIntervalo(inicio!, fim!)}`
+      : `aprovou o apontamento como ${descreverIntervalo(inicio!, fim!)}, no lugar de ${descreverIntervalo(solicitacao.inicioSolicitado, solicitacao.fimSolicitado)}`;
+
+  const atualizada = await prisma.$transaction(async (tx) => {
+    const s = await tx.solicitacaoApontamento.update({
+      where: { id },
+      data: {
+        status: aprovar ? STATUS_APROVADA : STATUS_REPROVADA,
+        decididoPorId: user.id,
+        decididoEm: new Date(),
+        inicioAprovado: aprovar ? inicio : null,
+        fimAprovado: aprovar ? fim : null,
+        descricaoAprovada: aprovar ? descricao : null,
+        observacaoDecisao: observacao === "" ? null : observacao,
+        sessaoId: sessaoId ?? null,
+      },
+    });
+    await tx.atividadeHistoricoMovimentacao.create({
+      data: { atividadeId: atividade.id, tipo: "apontamento_decidido", descricao: fato, userId: user.id },
+    });
+    await criarEventoAuditoria(
+      {
+        origem: "tela",
+        usuarioId: user.id,
+        codemp: atividade.codemp,
+        codpro: atividade.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+        entidadeId: entidadeIdAtividade(atividade.id),
+        entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
+        eventoTipo: aprovar ? EVENTOS_AUDITORIA.APONTAMENTO_APROVADO : EVENTOS_AUDITORIA.APONTAMENTO_REPROVADO,
+        alteracoes: null,
+        metadata: {
+          inicioSolicitado: solicitacao.inicioSolicitado.toISOString(),
+          fimSolicitado: solicitacao.fimSolicitado.toISOString(),
+          inicioAprovado: aprovar ? inicio!.toISOString() : null,
+          fimAprovado: aprovar ? fim!.toISOString() : null,
+          motivo: solicitacao.motivo,
+          descricao,
+          observacaoDecisao: observacao === "" ? null : observacao,
+        },
+        correlationId: req.correlationId!,
+      },
+      tx
+    );
+    return s;
+  });
+
+  // A notificação carrega o mesmo `fato` do histórico mais o próximo passo — o consultor
+  // precisa saber que ainda tem de confirmar, senão o apontamento fica parado esperando
+  // uma ação que ele não sabe que existe.
+  await notificarConsultorDaAtividade(
+    atividade,
+    "apontamento_decidido",
+    `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}${aprovar ? " — confirme em Meus Apontamentos" : ""}`,
+    user.id
+  );
+
+  return { status: 200, body: { id: atualizada.id, status: atualizada.status, sessaoId: atualizada.sessaoId } };
+}
 
 // POST /solicitacoes-apontamento/:id/decidir
 solicitacoesApontamentoRouter.post("/:id/decidir", async (req: AuthenticatedRequest, res) => {
@@ -306,149 +473,46 @@ solicitacoesApontamentoRouter.post("/:id/decidir", async (req: AuthenticatedRequ
       res.status(400).json({ error: "aprovar (true/false) é obrigatório" });
       return;
     }
-    const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() : "";
-
-    const solicitacao = await prisma.solicitacaoApontamento.findUnique({ where: { id } });
-    if (!solicitacao) {
-      res.status(404).json({ error: "Solicitação não encontrada" });
-      return;
-    }
-    if (solicitacao.status !== STATUS_PENDENTE) {
-      res.status(409).json({ error: `Esta solicitação já foi ${solicitacao.status}` });
-      return;
-    }
-
-    const resolvido = await carregarAtividadeComDepexe(solicitacao.atividadeId);
-    if (!resolvido) {
-      res.status(404).json({ error: "Atividade não encontrada" });
-      return;
-    }
-    const { atividade, depexe } = resolvido;
-
-    const ctx = await contextoDoUsuario(req);
-    if (!ctx) {
-      res.status(404).json({ error: "Usuário não encontrado" });
-      return;
-    }
-    const { user, contexto, role } = ctx;
-    if (!gerenciaDepartamento(role, contexto, depexe)) {
-      res.status(403).json({ error: "Só o gestor do departamento pode decidir esta solicitação" });
-      return;
-    }
-
-    // O gestor pode corrigir os três campos. Ausentes, valem os solicitados.
-    const inicio = req.body?.inicio !== undefined ? lerData(req.body.inicio) : solicitacao.inicioSolicitado;
-    const fim = req.body?.fim !== undefined ? lerData(req.body.fim) : solicitacao.fimSolicitado;
-    const descricao =
-      typeof req.body?.descricao === "string" && req.body.descricao.trim() !== ""
-        ? req.body.descricao.trim()
-        : solicitacao.descricao;
-
-    if (aprovar) {
-      if (!inicio || !fim) {
-        res.status(400).json({ error: "inicio e fim inválidos" });
-        return;
-      }
-      if (fim.getTime() <= inicio.getTime()) {
-        res.status(400).json({ error: "O fim precisa ser depois do início" });
-        return;
-      }
-      // Revalidado com os valores FINAIS: sem isto o gestor aprovaria pra dentro de um
-      // conflito que o consultor não conseguiu enviar.
-      const conflitos = await conflitosDoIntervalo(atividade.codemp, atividade.codfor, inicio, fim, {
-        ignorarSolicitacaoId: id,
-      });
-      if (conflitos.length > 0) {
-        res.status(409).json({ error: mensagemDeConflito(conflitos), conflitos });
-        return;
-      }
-    }
-
-    // Aprovar NÃO confirma o apontamento: cria a sessão fechada e não confirmada, que cai
-    // na lista "a confirmar" do consultor em Meus Apontamentos. Quem fecha o apontamento e
-    // dispara o envio ao Senior continua sendo quem executou — o gestor autoriza o tempo,
-    // não lança no lugar dele.
-    //
-    // Antes da sessão existir a solicitação não é marcada como aprovada: a criação ainda
-    // pode recusar por teto (alocado + excedentes), e uma solicitação "aprovada" sem
-    // sessão nenhuma seria o pior dos dois mundos — o consultor veria deferido e as horas
-    // não estariam em lugar nenhum. Recusou, a solicitação continua pendente e o gestor lê
-    // o motivo: pra liberar, ele autoriza horas excedentes antes.
-    let sessaoId: number | undefined;
-    if (aprovar) {
-      const resultado = await criarSessaoManualPendente(solicitacao.atividadeId, inicio!, fim!, descricao);
-      if (resultado.status >= 400) {
-        res.status(resultado.status).json(resultado.body);
-        return;
-      }
-      sessaoId = resultado.sessaoId;
-    }
-
-    const fato = !aprovar
-      ? `reprovou o apontamento de ${descreverIntervalo(solicitacao.inicioSolicitado, solicitacao.fimSolicitado)}`
-      : inicio!.getTime() === solicitacao.inicioSolicitado.getTime() &&
-          fim!.getTime() === solicitacao.fimSolicitado.getTime()
-        ? `aprovou o apontamento de ${descreverIntervalo(inicio!, fim!)}`
-        : `aprovou o apontamento como ${descreverIntervalo(inicio!, fim!)}, no lugar de ${descreverIntervalo(solicitacao.inicioSolicitado, solicitacao.fimSolicitado)}`;
-
-    const atualizada = await prisma.$transaction(async (tx) => {
-      const s = await tx.solicitacaoApontamento.update({
-        where: { id },
-        data: {
-          status: aprovar ? STATUS_APROVADA : STATUS_REPROVADA,
-          decididoPorId: user.id,
-          decididoEm: new Date(),
-          inicioAprovado: aprovar ? inicio : null,
-          fimAprovado: aprovar ? fim : null,
-          descricaoAprovada: aprovar ? descricao : null,
-          observacaoDecisao: observacao === "" ? null : observacao,
-          sessaoId: sessaoId ?? null,
-        },
-      });
-      await tx.atividadeHistoricoMovimentacao.create({
-        data: { atividadeId: atividade.id, tipo: "apontamento_decidido", descricao: fato, userId: user.id },
-      });
-      await criarEventoAuditoria(
-        {
-          origem: "tela",
-          usuarioId: user.id,
-          codemp: atividade.codemp,
-          codpro: atividade.codpro,
-          entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
-          entidadeId: entidadeIdAtividade(atividade.id),
-          entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
-          eventoTipo: aprovar ? EVENTOS_AUDITORIA.APONTAMENTO_APROVADO : EVENTOS_AUDITORIA.APONTAMENTO_REPROVADO,
-          alteracoes: null,
-          metadata: {
-            inicioSolicitado: solicitacao.inicioSolicitado.toISOString(),
-            fimSolicitado: solicitacao.fimSolicitado.toISOString(),
-            inicioAprovado: aprovar ? inicio!.toISOString() : null,
-            fimAprovado: aprovar ? fim!.toISOString() : null,
-            motivo: solicitacao.motivo,
-            descricao,
-            observacaoDecisao: observacao === "" ? null : observacao,
-          },
-          correlationId: req.correlationId!,
-        },
-        tx
-      );
-      return s;
-    });
-
-    // A notificação carrega o mesmo `fato` do histórico mais o próximo passo — o consultor
-    // precisa saber que ainda tem de confirmar, senão o apontamento fica parado esperando
-    // uma ação que ele não sabe que existe.
-    await notificarConsultorDaAtividade(
-      atividade,
-      "apontamento_decidido",
-      `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}${
-        aprovar ? " — confirme em Meus Apontamentos" : ""
-      }`,
-      user.id
+    const resultado = await decidirUma(
+      id,
+      { aprovar, inicio: req.body?.inicio, fim: req.body?.fim, descricao: req.body?.descricao, observacao: req.body?.observacao },
+      req
     );
-
-    res.json({ id: atualizada.id, status: atualizada.status, sessaoId: atualizada.sessaoId });
+    res.status(resultado.status).json(resultado.body);
   } catch (error) {
     handleError(res, error, "decidir");
+  }
+});
+
+// POST /solicitacoes-apontamento/decidir-lote — "Aprovar todos"/"Reprovar todos" da tela de
+// Aprovações. Sem edição por item (não tem UI pra isso em lote): aprovar sempre aceita
+// exatamente o horário/descrição SOLICITADOS. Roda um por vez (não Promise.all) pra não
+// disputar a mesma checagem de teto/conflito de uma atividade que apareça mais de uma vez no
+// lote; uma falha específica (ex.: teto excedido) não impede as outras.
+solicitacoesApontamentoRouter.post("/decidir-lote", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isFinite) : [];
+    const aprovar = req.body?.aprovar;
+    if (ids.length === 0 || typeof aprovar !== "boolean") {
+      res.status(400).json({ error: "ids (lista não vazia) e aprovar (true/false) são obrigatórios" });
+      return;
+    }
+    const observacao = req.body?.observacao;
+
+    const sucesso: number[] = [];
+    const falhas: { id: number; erro: string }[] = [];
+    for (const id of ids) {
+      const resultado = await decidirUma(id, { aprovar, observacao }, req);
+      if (resultado.status >= 400) {
+        const erro = (resultado.body as { error?: string })?.error ?? `Falhou com status ${resultado.status}`;
+        falhas.push({ id, erro });
+      } else {
+        sucesso.push(id);
+      }
+    }
+
+    res.json({ sucesso, falhas });
+  } catch (error) {
+    handleError(res, error, "decidir-lote");
   }
 });

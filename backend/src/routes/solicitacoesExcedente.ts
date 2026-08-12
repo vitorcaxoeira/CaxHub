@@ -72,6 +72,30 @@ function lerMinutos(valor: unknown): number | null {
   return n;
 }
 
+interface PropostaInfo {
+  clienteNome: string | null;
+  despro: string | null;
+}
+
+// Cliente e descrição da proposta (Proposta.despro) pra dar contexto no card de Aprovações —
+// mesmo caminho (Proposta.cliente.nomcli) já usado em atividades.ts/alocacao.ts/apontamentos.ts.
+async function propostaInfoPorAtividades(atividades: { codemp: number; codpro: number }[]): Promise<Map<string, PropostaInfo>> {
+  const mapa = new Map<string, PropostaInfo>();
+  if (atividades.length === 0) return mapa;
+  const pares = [...new Map(atividades.map((a) => [`${a.codemp}-${a.codpro}`, a])).values()];
+  const propostas = await prisma.proposta.findMany({
+    where: { OR: pares.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
+    select: { codemp: true, codpro: true, despro: true, cliente: { select: { codcli: true, nomcli: true } } },
+  });
+  for (const p of propostas) {
+    mapa.set(`${p.codemp}-${p.codpro}`, {
+      clienteNome: p.cliente ? `${p.cliente.codcli} - ${p.cliente.nomcli}` : null,
+      despro: p.despro ?? null,
+    });
+  }
+  return mapa;
+}
+
 // POST /solicitacoes-excedente — quem executa pede mais horas.
 solicitacoesExcedenteRouter.post("/", async (req: AuthenticatedRequest, res) => {
   try {
@@ -185,7 +209,7 @@ interface SolicitacaoParaLista {
   atividade: { codemp: number; codpro: number; seqite: number; qtdhor: number | null; horasExcedentes: number; codfor: number };
 }
 
-function serializar(s: SolicitacaoParaLista, depexe: number | null, podeDecidir: boolean) {
+function serializar(s: SolicitacaoParaLista, depexe: number | null, podeDecidir: boolean, propostaInfo?: PropostaInfo) {
   return {
     id: s.id,
     atividadeId: s.atividadeId,
@@ -203,6 +227,8 @@ function serializar(s: SolicitacaoParaLista, depexe: number | null, podeDecidir:
     seqite: s.atividade.seqite,
     depexe,
     depexeLabel: depexeLabel(depexe),
+    clienteNome: propostaInfo?.clienteNome ?? null,
+    despro: propostaInfo?.despro ?? null,
     // Contexto pro gestor decidir sem sair da tela: quanto já está alocado e quanto de
     // excedente a atividade já carrega.
     qtdhor: s.atividade.qtdhor,
@@ -243,6 +269,7 @@ solicitacoesExcedenteRouter.get("/", async (req: AuthenticatedRequest, res) => {
     const mapaDepexe = await depexePorAtividade(
       todas.map((s) => ({ id: s.atividadeId, ...s.atividade }))
     );
+    const mapaProposta = await propostaInfoPorAtividades(todas.map((s) => s.atividade));
 
     const visiveis = todas
       .map((s) => {
@@ -250,7 +277,8 @@ solicitacoesExcedenteRouter.get("/", async (req: AuthenticatedRequest, res) => {
         const gerencia = depexe != null && gerenciaDepartamento(role, contexto, depexe);
         const minha = s.solicitanteId === user.id;
         if (!gerencia && !minha) return null;
-        return serializar(s, depexe, gerencia);
+        const propostaInfo = mapaProposta.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
+        return serializar(s, depexe, gerencia, propostaInfo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -293,11 +321,153 @@ solicitacoesExcedenteRouter.get("/atividade/:atividadeId", async (req: Authentic
       orderBy: { criadoEm: "desc" },
     });
 
-    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gerencia)) });
+    const propostaInfo = (await propostaInfoPorAtividades([resolvido.atividade])).get(
+      `${resolvido.atividade.codemp}-${resolvido.atividade.codpro}`
+    );
+
+    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gerencia, propostaInfo)) });
   } catch (error) {
     handleError(res, error, "por-atividade");
   }
 });
+
+// Miolo de "decidir uma solicitação" — extraído pra ser a MESMA lógica usada tanto por
+// POST /:id/decidir quanto por POST /decidir-lote (por item). `horasAprovadas` ausente e
+// aprovar=true vale o solicitado — é o que o lote sempre usa, já que não tem UI pra editar
+// por item.
+async function decidirUma(
+  id: number,
+  opts: { aprovar: boolean; horasAprovadas?: unknown; observacao?: unknown },
+  req: AuthenticatedRequest
+): Promise<{ status: number; body: unknown }> {
+  if (!Number.isFinite(id)) return { status: 400, body: { error: "Id inválido" } };
+  const { aprovar } = opts;
+  const observacao = typeof opts.observacao === "string" ? opts.observacao.trim() : "";
+
+  const solicitacao = await prisma.solicitacaoHorasExcedentes.findUnique({ where: { id } });
+  if (!solicitacao) return { status: 404, body: { error: "Solicitação não encontrada" } };
+  // Não é corrida teórica: dois gestores do mesmo departamento com o painel aberto
+  // aprovariam o mesmo pedido e o teto somaria duas vezes.
+  if (solicitacao.status !== STATUS_PENDENTE) {
+    return { status: 409, body: { error: `Esta solicitação já foi ${solicitacao.status}` } };
+  }
+
+  // Ausente = libera o que foi pedido. É o caminho comum, e o campo da tela já nasce
+  // preenchido com o valor pedido.
+  const horasAprovadas = aprovar
+    ? opts.horasAprovadas === undefined
+      ? solicitacao.horasSolicitadas
+      : lerMinutos(opts.horasAprovadas)
+    : null;
+  if (aprovar && horasAprovadas == null) {
+    return { status: 400, body: { error: "horasAprovadas precisa ser um número de minutos maior que zero" } };
+  }
+
+  const resolvido = await carregarAtividadeComDepexe(solicitacao.atividadeId);
+  if (!resolvido) return { status: 404, body: { error: "Atividade não encontrada" } };
+  const { atividade, depexe } = resolvido;
+
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) return { status: 404, body: { error: "Usuário não encontrado" } };
+  const { user, contexto, role } = ctx;
+  if (!gerenciaDepartamento(role, contexto, depexe)) {
+    return { status: 403, body: { error: "Só o gestor do departamento pode decidir esta solicitação" } };
+  }
+
+  // UMA frase pro histórico, pra auditoria e pra notificação. Em minúscula porque os
+  // dois primeiros a emendam depois do nome de quem decidiu.
+  //
+  // Aprovar valor diferente do pedido precisa dizer os dois números: é a informação que
+  // a pessoa não consegue adivinhar, e a que muda o que ela pode fazer.
+  const fato = !aprovar
+    ? `reprovou o pedido de ${formatarMinutos(solicitacao.horasSolicitadas)} de horas excedentes`
+    : horasAprovadas === solicitacao.horasSolicitadas
+      ? `aprovou ${formatarMinutos(horasAprovadas!)} de horas excedentes`
+      : `aprovou ${formatarMinutos(horasAprovadas!)} das ${formatarMinutos(solicitacao.horasSolicitadas)} de horas excedentes solicitadas`;
+
+  const excedenteAntes = atividade.horasExcedentes;
+  // Aprovação ACUMULA: cada pedido é "preciso de mais X". Substituir faria um pedido de
+  // 1:00 derrubar um teto de 4:00 já concedido.
+  const excedenteDepois = aprovar ? excedenteAntes + horasAprovadas! : excedenteAntes;
+
+  // Tudo junto: a decisão, o teto novo, o rastro e a linha do tempo. Um teto que sobe
+  // sem a solicitação virar "aprovada" ficaria pronto pra ser aprovado de novo.
+  const atualizada = await prisma.$transaction(async (tx) => {
+    const s = await tx.solicitacaoHorasExcedentes.update({
+      where: { id },
+      data: {
+        status: aprovar ? STATUS_APROVADA : STATUS_REPROVADA,
+        decididoPorId: user.id,
+        decididoEm: new Date(),
+        horasAprovadas,
+        observacaoDecisao: observacao === "" ? null : observacao,
+      },
+    });
+    if (aprovar) {
+      await tx.atividadeConsultor.update({
+        where: { id: atividade.id },
+        data: { horasExcedentes: excedenteDepois },
+      });
+    }
+    await tx.atividadeHistoricoMovimentacao.create({
+      data: { atividadeId: atividade.id, tipo: "excedente_decidido", descricao: fato, userId: user.id },
+    });
+    await criarEventoAuditoria(
+      {
+        origem: "tela",
+        usuarioId: user.id,
+        codemp: atividade.codemp,
+        codpro: atividade.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+        entidadeId: entidadeIdAtividade(atividade.id),
+        entidadeRotulo: `Alocação — Item ${atividade.seqite} da Proposta ${atividade.codemp}/${atividade.codpro}`,
+        eventoTipo: aprovar ? EVENTOS_AUDITORIA.EXCEDENTE_APROVADO : EVENTOS_AUDITORIA.EXCEDENTE_REPROVADO,
+        alteracoes: aprovar
+          ? { horasExcedentes: { de: excedenteAntes, para: excedenteDepois, rotulo: "Horas Excedentes" } }
+          : null,
+        metadata: {
+          horasSolicitadas: solicitacao.horasSolicitadas,
+          horasAprovadas,
+          motivo: solicitacao.motivo,
+          observacaoDecisao: observacao === "" ? null : observacao,
+        },
+        correlationId: req.correlationId!,
+      },
+      tx
+    );
+    return s;
+  });
+
+  // Fora da transação: falha de notificação não desfaz a decisão do gestor.
+  await notificarConsultorDaAtividade(
+    atividade,
+    "excedente_decidido",
+    `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}`,
+    user.id
+  );
+
+  // Só na aprovação — reprovar não muda a alocação, não há o que sincronizar. O teto
+  // (horasExcedentes) tem equivalente no Senior desde 10/08/2026 (`hrsExc` de
+  // alocarAtividades); mesmo formato de payload já usado em criar/editar/remover_atividade.
+  if (aprovar) {
+    await enfileirar(atividade.id, "editar_atividade", {
+      codemp: atividade.codemp,
+      codpro: atividade.codpro,
+      seqite: atividade.seqite,
+      codfor: atividade.codfor,
+      qtdhor: atividade.qtdhor,
+      fasid: atividade.fasid,
+      dataPrevistaInicio: atividade.dataPrevistaInicio?.toISOString() ?? null,
+      dataPrevistaFim: atividade.dataPrevistaFim?.toISOString() ?? null,
+      tipEve: TIP_EVE_ALTERAR,
+    });
+  }
+
+  return {
+    status: 200,
+    body: { id: atualizada.id, status: atualizada.status, horasAprovadas: atualizada.horasAprovadas, horasExcedentes: excedenteDepois },
+  };
+}
 
 // POST /solicitacoes-excedente/:id/decidir — aprovar ou reprovar.
 solicitacoesExcedenteRouter.post("/:id/decidir", async (req: AuthenticatedRequest, res) => {
@@ -308,146 +478,40 @@ solicitacoesExcedenteRouter.post("/:id/decidir", async (req: AuthenticatedReques
       res.status(400).json({ error: "aprovar (true/false) é obrigatório" });
       return;
     }
-    const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() : "";
-
-    const solicitacao = await prisma.solicitacaoHorasExcedentes.findUnique({ where: { id } });
-    if (!solicitacao) {
-      res.status(404).json({ error: "Solicitação não encontrada" });
-      return;
-    }
-    // Não é corrida teórica: dois gestores do mesmo departamento com o painel aberto
-    // aprovariam o mesmo pedido e o teto somaria duas vezes.
-    if (solicitacao.status !== STATUS_PENDENTE) {
-      res.status(409).json({ error: `Esta solicitação já foi ${solicitacao.status}` });
-      return;
-    }
-
-    // Ausente = libera o que foi pedido. É o caminho comum, e o campo da tela já nasce
-    // preenchido com o valor pedido.
-    const horasAprovadas = aprovar
-      ? req.body?.horasAprovadas === undefined
-        ? solicitacao.horasSolicitadas
-        : lerMinutos(req.body.horasAprovadas)
-      : null;
-    if (aprovar && horasAprovadas == null) {
-      res.status(400).json({ error: "horasAprovadas precisa ser um número de minutos maior que zero" });
-      return;
-    }
-
-    const resolvido = await carregarAtividadeComDepexe(solicitacao.atividadeId);
-    if (!resolvido) {
-      res.status(404).json({ error: "Atividade não encontrada" });
-      return;
-    }
-    const { atividade, depexe } = resolvido;
-
-    const ctx = await contextoDoUsuario(req);
-    if (!ctx) {
-      res.status(404).json({ error: "Usuário não encontrado" });
-      return;
-    }
-    const { user, contexto, role } = ctx;
-    if (!gerenciaDepartamento(role, contexto, depexe)) {
-      res.status(403).json({ error: "Só o gestor do departamento pode decidir esta solicitação" });
-      return;
-    }
-
-    // UMA frase pro histórico, pra auditoria e pra notificação. Em minúscula porque os
-    // dois primeiros a emendam depois do nome de quem decidiu.
-    //
-    // Aprovar valor diferente do pedido precisa dizer os dois números: é a informação que
-    // a pessoa não consegue adivinhar, e a que muda o que ela pode fazer.
-    const fato = !aprovar
-      ? `reprovou o pedido de ${formatarMinutos(solicitacao.horasSolicitadas)} de horas excedentes`
-      : horasAprovadas === solicitacao.horasSolicitadas
-        ? `aprovou ${formatarMinutos(horasAprovadas!)} de horas excedentes`
-        : `aprovou ${formatarMinutos(horasAprovadas!)} das ${formatarMinutos(solicitacao.horasSolicitadas)} de horas excedentes solicitadas`;
-
-    const excedenteAntes = atividade.horasExcedentes;
-    // Aprovação ACUMULA: cada pedido é "preciso de mais X". Substituir faria um pedido de
-    // 1:00 derrubar um teto de 4:00 já concedido.
-    const excedenteDepois = aprovar ? excedenteAntes + horasAprovadas! : excedenteAntes;
-
-    // Tudo junto: a decisão, o teto novo, o rastro e a linha do tempo. Um teto que sobe
-    // sem a solicitação virar "aprovada" ficaria pronto pra ser aprovado de novo.
-    const atualizada = await prisma.$transaction(async (tx) => {
-      const s = await tx.solicitacaoHorasExcedentes.update({
-        where: { id },
-        data: {
-          status: aprovar ? STATUS_APROVADA : STATUS_REPROVADA,
-          decididoPorId: user.id,
-          decididoEm: new Date(),
-          horasAprovadas,
-          observacaoDecisao: observacao === "" ? null : observacao,
-        },
-      });
-      if (aprovar) {
-        await tx.atividadeConsultor.update({
-          where: { id: atividade.id },
-          data: { horasExcedentes: excedenteDepois },
-        });
-      }
-      await tx.atividadeHistoricoMovimentacao.create({
-        data: { atividadeId: atividade.id, tipo: "excedente_decidido", descricao: fato, userId: user.id },
-      });
-      await criarEventoAuditoria(
-        {
-          origem: "tela",
-          usuarioId: user.id,
-          codemp: atividade.codemp,
-          codpro: atividade.codpro,
-          entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
-          entidadeId: entidadeIdAtividade(atividade.id),
-          entidadeRotulo: `Alocação — Item ${atividade.seqite} da Proposta ${atividade.codemp}/${atividade.codpro}`,
-          eventoTipo: aprovar ? EVENTOS_AUDITORIA.EXCEDENTE_APROVADO : EVENTOS_AUDITORIA.EXCEDENTE_REPROVADO,
-          alteracoes: aprovar
-            ? { horasExcedentes: { de: excedenteAntes, para: excedenteDepois, rotulo: "Horas Excedentes" } }
-            : null,
-          metadata: {
-            horasSolicitadas: solicitacao.horasSolicitadas,
-            horasAprovadas,
-            motivo: solicitacao.motivo,
-            observacaoDecisao: observacao === "" ? null : observacao,
-          },
-          correlationId: req.correlationId!,
-        },
-        tx
-      );
-      return s;
-    });
-
-    // Fora da transação: falha de notificação não desfaz a decisão do gestor.
-    await notificarConsultorDaAtividade(
-      atividade,
-      "excedente_decidido",
-      `${user.nome} ${fato} na atividade da proposta ${atividade.codpro}`,
-      user.id
-    );
-
-    // Só na aprovação — reprovar não muda a alocação, não há o que sincronizar. O teto
-    // (horasExcedentes) tem equivalente no Senior desde 10/08/2026 (`hrsExc` de
-    // alocarAtividades); mesmo formato de payload já usado em criar/editar/remover_atividade.
-    if (aprovar) {
-      await enfileirar(atividade.id, "editar_atividade", {
-        codemp: atividade.codemp,
-        codpro: atividade.codpro,
-        seqite: atividade.seqite,
-        codfor: atividade.codfor,
-        qtdhor: atividade.qtdhor,
-        fasid: atividade.fasid,
-        dataPrevistaInicio: atividade.dataPrevistaInicio?.toISOString() ?? null,
-        dataPrevistaFim: atividade.dataPrevistaFim?.toISOString() ?? null,
-        tipEve: TIP_EVE_ALTERAR,
-      });
-    }
-
-    res.json({
-      id: atualizada.id,
-      status: atualizada.status,
-      horasAprovadas: atualizada.horasAprovadas,
-      horasExcedentes: excedenteDepois,
-    });
+    const resultado = await decidirUma(id, { aprovar, horasAprovadas: req.body?.horasAprovadas, observacao: req.body?.observacao }, req);
+    res.status(resultado.status).json(resultado.body);
   } catch (error) {
     handleError(res, error, "decidir");
+  }
+});
+
+// POST /solicitacoes-excedente/decidir-lote — "Aprovar todos"/"Reprovar todos" da tela de
+// Aprovações. Sem edição por item: aprovar sempre libera exatamente as horas SOLICITADAS.
+// Roda um por vez (não Promise.all) — uma falha específica não impede as outras.
+solicitacoesExcedenteRouter.post("/decidir-lote", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isFinite) : [];
+    const aprovar = req.body?.aprovar;
+    if (ids.length === 0 || typeof aprovar !== "boolean") {
+      res.status(400).json({ error: "ids (lista não vazia) e aprovar (true/false) são obrigatórios" });
+      return;
+    }
+    const observacao = req.body?.observacao;
+
+    const sucesso: number[] = [];
+    const falhas: { id: number; erro: string }[] = [];
+    for (const id of ids) {
+      const resultado = await decidirUma(id, { aprovar, observacao }, req);
+      if (resultado.status >= 400) {
+        const erro = (resultado.body as { error?: string })?.error ?? `Falhou com status ${resultado.status}`;
+        falhas.push({ id, erro });
+      } else {
+        sucesso.push(id);
+      }
+    }
+
+    res.json({ sucesso, falhas });
+  } catch (error) {
+    handleError(res, error, "decidir-lote");
   }
 });
