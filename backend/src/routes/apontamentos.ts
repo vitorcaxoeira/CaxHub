@@ -612,14 +612,36 @@ apontamentosRouter.post("/manual", async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Localiza o apontamento e a pendência de envio dele, garantindo que pertence ao
-// consultor logado. Compartilhado pelas duas rotas de envio abaixo.
+// Mesma regra de visibilidade de RAT usada em rats.ts (podeVerRat, duplicada por convenção
+// do projeto — ver contextoDoUsuario acima): admin vê tudo, consultor vê a própria RAT,
+// gestor vê a do departamento que gerencia. É só isso que decide quem pode ACIONAR o
+// reenvio — o consultor que de fato vai pro Senior é sempre `ratItem.rat.codfor`
+// (montarPayloadApontamento, em sync/outboxSenior.ts, relê isso fresco do banco e nunca
+// recebe `ctx`), então soltar essa checagem pra gestor/admin não muda a quem o apontamento
+// é atribuído no ERP. NÃO usar `ctx.contexto.consultor`/`ctx.user` em nada além desta
+// checagem de permissão.
+function podeVerRat(
+  role: string,
+  contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>,
+  rat: { codfor: number; depexe: number | null }
+): boolean {
+  if (role === "admin") return true;
+  if (contexto.consultor?.codfor === rat.codfor) return true;
+  return rat.depexe != null && contexto.departamentosGerenciados.includes(rat.depexe);
+}
+
+// Localiza o apontamento e a pendência de envio dele, garantindo que quem pediu pode ver
+// essa RAT (podeVerRat acima). Compartilhado pelas duas rotas de envio abaixo.
 //
 // O casamento pendência -> apontamento é o mesmo de GET /rats/:id/itens: a fila é
 // indexada por atividade e o `ratItemId` vive dentro do payload.
-async function carregarEnvioDoApontamento(ratItemId: number, codfor: number) {
+async function carregarEnvioDoApontamento(
+  ratItemId: number,
+  role: string,
+  contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>
+) {
   const ratItem = await prisma.ratItem.findUnique({ where: { id: ratItemId }, include: { rat: true, sessoes: true } });
-  if (!ratItem || ratItem.rat.codfor !== codfor) return null;
+  if (!ratItem || !podeVerRat(role, contexto, ratItem.rat)) return null;
 
   const atividadeId = ratItem.sessoes[0]?.atividadeId;
   const pendencia =
@@ -649,13 +671,12 @@ apontamentosRouter.get("/envio/:ratItemId", async (req: AuthenticatedRequest, re
       return;
     }
     const ctx = await contextoDoUsuario(req);
-    const codfor = ctx?.contexto.consultor?.codfor;
-    if (!codfor) {
+    if (!ctx) {
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
 
-    const envio = await carregarEnvioDoApontamento(ratItemId, codfor);
+    const envio = await carregarEnvioDoApontamento(ratItemId, ctx.role, ctx.contexto);
     if (!envio) {
       res.status(404).json({ error: "Apontamento não encontrado" });
       return;
@@ -695,13 +716,12 @@ apontamentosRouter.post("/envio/:ratItemId/reenviar", async (req: AuthenticatedR
       return;
     }
     const ctx = await contextoDoUsuario(req);
-    const codfor = ctx?.contexto.consultor?.codfor;
-    if (!codfor) {
+    if (!ctx) {
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
 
-    const envio = await carregarEnvioDoApontamento(ratItemId, codfor);
+    const envio = await carregarEnvioDoApontamento(ratItemId, ctx.role, ctx.contexto);
     if (!envio) {
       res.status(404).json({ error: "Apontamento não encontrado" });
       return;
