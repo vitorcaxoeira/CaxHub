@@ -1343,6 +1343,12 @@ model PlanoContabil {
   natcta String @db.VarChar(1)
   /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
   anasin String @db.VarChar(1)
+  // "Conta Paralela" — agrupamento gerencial que hoje coincide com departamento (ADM, CERP,
+  // CHCM, COM, DEV, SERP, SHCM; vazio = sem grupo, geralmente conta patrimonial). Confirmado
+  // no dicionário (E045PLA.DesPar, VARCHAR(80) nullable) e validado batendo exato contra o
+  // relatório de origem, célula a célula, em 12/08/2026 — ver contabilDominio.ts pro mapa
+  // grupo -> depexe (ainda não usado em RBAC, é o gancho pra "gestor só vê seu depto").
+  despar String? @db.VarChar(80)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -1400,6 +1406,10 @@ model RateioLancamento {
   // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
   @@id([codemp, numlct, ctared, codccu])
+  // A PK começa por numlct, inútil pra agregação por período — sem este índice, o
+  // Resultado Analítico (agrupa por codemp+sitrat+mês, casando por ctared) faz seq scan
+  // nas 300k+ linhas da tabela a cada consulta.
+  @@index([codemp, sitrat, datlct, ctared])
 
   @@map("rateios_lancamento")
 }

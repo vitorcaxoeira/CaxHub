@@ -16,6 +16,7 @@ import { Inadimplencia } from "./pages/financeiro/Inadimplencia";
 import { Clientes } from "./pages/financeiro/Clientes";
 import { FluxoCaixa } from "./pages/financeiro/FluxoCaixa";
 import { Historico } from "./pages/financeiro/Historico";
+import { ResultadoAnalitico } from "./pages/contabil/ResultadoAnalitico";
 import { Propostas } from "./pages/projetos/Propostas";
 import { Atividades } from "./pages/projetos/Atividades";
 import { Jornadas } from "./pages/projetos/Jornadas";
@@ -72,6 +73,7 @@ export default function App() {
                 <Route path="/financeiro/clientes" element={<Clientes />} />
                 <Route path="/financeiro/fluxo-caixa" element={<FluxoCaixa />} />
                 <Route path="/financeiro/historico" element={<Historico />} />
+                <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
                 <Route path="/admin/usuarios" element={<Usuarios />} />
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />

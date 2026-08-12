@@ -61,6 +61,14 @@ const groups: NavGroup[] = [
     roles: ["admin"],
   },
   {
+    label: "Contábil",
+    items: [{ to: "/contabil/resultado-analitico", label: "Resultado Analítico" }],
+    // v1 é admin-only por pedido do Vitor; a extensão pra gestor de departamento (com o
+    // resultado filtrado só pro depto dele) é um passo futuro combinado, não implementado
+    // ainda — ver DESPAR_PARA_DEPEXE em backend/src/domain/contabilDominio.ts.
+    roles: ["admin"],
+  },
+  {
     label: "Mercado",
     items: [{ to: "/mercado/pedidos", label: "Listar Pedidos" }],
     roles: ["admin"],

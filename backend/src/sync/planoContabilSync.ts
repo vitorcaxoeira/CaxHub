@@ -6,7 +6,7 @@ import { carimbo } from "./varrerRemovidos";
 export const JOB_NAME = "plano_contabil-sync";
 export const CRON_EXPR = "50 4 * * *";
 export const CAMPO_DATA: string | null = "DatAlt";
-const BASE_QUERY = `SELECT codemp AS codemp, ctared AS ctared, descta AS descta, clacta AS clacta, defgru AS defgru, natcta AS natcta, anasin AS anasin FROM e045pla`;
+const BASE_QUERY = `SELECT codemp AS codemp, ctared AS ctared, descta AS descta, clacta AS clacta, defgru AS defgru, natcta AS natcta, anasin AS anasin, despar AS despar FROM e045pla`;
 
 function montarQuery(desde?: Date): string {
   if (!desde) return BASE_QUERY;
@@ -21,6 +21,7 @@ interface PlanoContabilRow {
   defgru: string;
   natcta: string;
   anasin: string;
+  despar?: string;
 }
 
 export async function runPlanoContabilSync(desde?: Date): Promise<void> {
@@ -36,7 +37,7 @@ export async function runPlanoContabilSync(desde?: Date): Promise<void> {
     const rows = (await runSqlViaSoapPaginated(QUERY, ["codemp", "ctared"])) as PlanoContabilRow[];
 
     for (const row of rows) {
-      const data = { codemp: row.codemp, ctared: row.ctared, descta: row.descta, clacta: row.clacta, defgru: row.defgru, natcta: row.natcta, anasin: row.anasin, ...carimbo(inicio) };
+      const data = { codemp: row.codemp, ctared: row.ctared, descta: row.descta, clacta: row.clacta, defgru: row.defgru, natcta: row.natcta, anasin: row.anasin, despar: row.despar, ...carimbo(inicio) };
       await prisma.planoContabil.upsert({
         where: { codemp_ctared: { codemp: row.codemp, ctared: row.ctared } },
         update: data,
