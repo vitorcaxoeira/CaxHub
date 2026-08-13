@@ -10,6 +10,7 @@ import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { ModalEditarDescricao } from "../../components/projetos/ModalEditarDescricao";
+import { ModalDespesasRat } from "../../components/projetos/ModalDespesasRat";
 import { Modal } from "../../components/ui/Modal";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
@@ -306,6 +307,7 @@ export function MeusApontamentos() {
   const [ratsExpandidas, setRatsExpandidas] = useState<Set<number>>(new Set());
   const [itensPorRat, setItensPorRat] = useState<Record<number, RatItemRow[] | "carregando" | "erro">>({});
   const [sincronizando, setSincronizando] = useState<number | null>(null);
+  const [despesasRat, setDespesasRat] = useState<RatRow | null>(null);
 
   const [modalManual, setModalManual] = useState(false);
   // Por quem o apontamento pode ser lançado: o próprio usuário e, se for gestor, o time
@@ -1127,6 +1129,13 @@ export function MeusApontamentos() {
                                   >
                                     {sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
                                   </DropdownMenu.Item>
+                                  <DropdownMenu.Item
+                                    onSelect={() => setDespesasRat(rat)}
+                                    disabled={rat.numrat == null}
+                                    title={rat.numrat == null ? "Só disponível depois que a RAT tem número do ERP" : undefined}
+                                  >
+                                    Despesas de Viagem
+                                  </DropdownMenu.Item>
                                 </DropdownMenu.Content>
                               </DropdownMenu>
                             </td>
@@ -1293,6 +1302,14 @@ export function MeusApontamentos() {
             salvarObservacaoItem(editandoObservacao.item.sessaoId!, editandoObservacao.ratId, texto)
           }
           onFechar={() => setEditandoObservacao(null)}
+        />
+      )}
+
+      {despesasRat && (
+        <ModalDespesasRat
+          ratId={despesasRat.id}
+          ratLabel={`RAT ${despesasRat.numrat ?? despesasRat.id} · ${despesasRat.cliente ?? "—"}`}
+          onFechar={() => setDespesasRat(null)}
         />
       )}
 

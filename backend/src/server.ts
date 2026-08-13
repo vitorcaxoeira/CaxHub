@@ -60,6 +60,10 @@ import { schedulePlanoContabilSync } from "./sync/planoContabilSync";
 import { scheduleLancamentoContabilSync } from "./sync/lancamentoContabilSync";
 import { scheduleRateioLancamentoSync } from "./sync/rateioLancamentoSync";
 import { scheduleOrcamentoContabilSync } from "./sync/orcamentoContabilSync";
+import { scheduleRegistroDespesaViagemSync } from "./sync/registroDespesaViagemSync";
+import { scheduleRotaViagemSync } from "./sync/rotaViagemSync";
+import { schedulePercursoViagemSync } from "./sync/percursoViagemSync";
+import { scheduleRotaPercursoSync } from "./sync/rotaPercursoSync";
 import { scheduleOutboxSeniorSync } from "./sync/outboxSenior";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
@@ -140,6 +144,10 @@ app.listen(port, () => {
   scheduleLancamentoContabilSync();
   scheduleRateioLancamentoSync();
   scheduleOrcamentoContabilSync();
+  scheduleRotaViagemSync();
+  schedulePercursoViagemSync();
+  scheduleRotaPercursoSync();
+  scheduleRegistroDespesaViagemSync();
   scheduleOutboxSeniorSync();
   // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do
   // fim do expediente (5 em 5 min), e a que ficou sem resposta depois de a aba fechar

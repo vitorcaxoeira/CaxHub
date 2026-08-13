@@ -4,6 +4,7 @@ import { prisma } from "../db/prisma";
 import { sitratLabel, sitratTone } from "../domain/ratDominio";
 import { sitproLabel, sitproTone } from "../domain/propostasDominio";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
+import { simNaoLabel, tipdesLabel, moddesLabel } from "../domain/rdvDominio";
 
 // Tela de visualização somente-leitura de uma RAT — mesmo espírito de
 // propostaVisualizacao.ts/pedidoVisualizacao.ts, mas sem restrição de papel: a
@@ -45,13 +46,24 @@ ratVisualizacaoRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    const [cliente, proposta, consultor, itens] = await Promise.all([
+    const [cliente, proposta, consultor, itens, despesasViagem] = await Promise.all([
       rat.codcli != null ? prisma.cliente.findUnique({ where: { codcli: rat.codcli } }) : null,
       rat.codpro != null
         ? prisma.proposta.findUnique({ where: { codemp_codpro: { codemp: rat.codemp, codpro: rat.codpro } } })
         : null,
       prisma.consultor.findFirst({ where: { codemp: rat.codemp, codfor: rat.codfor } }),
       prisma.ratItem.findMany({ where: { ratId: id }, orderBy: { id: "asc" } }),
+      // Só existe despesa de viagem depois que o Senior confirma a RAT (RegistroDespesaViagem
+      // casa por codemp+numrat, igual RatItem.numrat — enquanto isso é null não há o que buscar).
+      rat.numrat != null
+        ? prisma.registroDespesaViagem.findMany({
+            where: { codemp: rat.codemp, numrat: rat.numrat },
+            // `seqrdv` fica NULL numa despesa lançada pelo CaxHub e ainda não confirmada
+            // pelo Senior (ver comentário do model) — ordenar por ele deixaria essas linhas
+            // numa posição arbitrária. Data + id (ordem de chegada) é estável nos dois casos.
+            orderBy: [{ datemi: "asc" }, { id: "asc" }],
+          })
+        : [],
     ]);
 
     const chavesItem = itens
@@ -93,6 +105,19 @@ ratVisualizacaoRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
           confirmadoNoSenior: item.numrat != null,
         };
       }),
+      despesasViagem: despesasViagem.map((d) => ({
+        id: d.id,
+        datemi: d.datemi,
+        desrdv: d.desrdv?.trim() || null,
+        tipdesLabel: tipdesLabel(d.tipdes),
+        moddesLabel: d.moddes != null ? moddesLabel(d.moddes) : null,
+        qtdrdv: d.qtdrdv,
+        vlrunt: d.vlrunt,
+        vlrtot: d.vlrtot,
+        fatrdvLabel: simNaoLabel(d.fatrdv),
+        pendenteDeEnvio: d.origemCaxHub && d.enviadoEmSenior == null,
+      })),
+      totalDespesasViagem: despesasViagem.reduce((soma, d) => soma + Number(d.vlrtot ?? 0), 0),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

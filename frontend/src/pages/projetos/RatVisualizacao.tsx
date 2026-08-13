@@ -36,7 +36,22 @@ interface ItemDetalhe {
   confirmadoNoSenior: boolean;
 }
 
+interface DespesaViagemDetalhe {
+  id: number;
+  datemi: string | null;
+  desrdv: string | null;
+  tipdesLabel: string;
+  moddesLabel: string | null;
+  qtdrdv: number | null;
+  vlrunt: number | null;
+  vlrtot: number | null;
+  fatrdvLabel: string;
+  pendenteDeEnvio: boolean;
+}
+
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
+const currencyFormatter = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const formatMoney = (v: number | null) => (v == null ? "—" : `R$ ${currencyFormatter.format(v)}`);
 
 function formatData(valor: string | null): string {
   if (!valor) return "—";
@@ -86,6 +101,8 @@ export function RatVisualizacao() {
   const navigate = useNavigate();
   const [rat, setRat] = useState<RatDetalhe | null>(null);
   const [itens, setItens] = useState<ItemDetalhe[]>([]);
+  const [despesasViagem, setDespesasViagem] = useState<DespesaViagemDetalhe[]>([]);
+  const [totalDespesasViagem, setTotalDespesasViagem] = useState(0);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [aba, setAba] = useState<"detalhes" | "auditoria">("detalhes");
@@ -97,6 +114,8 @@ export function RatVisualizacao() {
       .then(({ data }) => {
         setRat(data.rat);
         setItens(data.itens);
+        setDespesasViagem(data.despesasViagem ?? []);
+        setTotalDespesasViagem(data.totalDespesasViagem ?? 0);
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a RAT"))
@@ -289,6 +308,86 @@ export function RatVisualizacao() {
               </table>
             </div>
           </div>
+
+          {/* Só aparece quando há despesa — a maioria das RATs não tem nenhuma (a maior
+              parte das 15 mil linhas de RDV no Senior se concentra num recorte pequeno de
+              RATs que envolvem deslocamento). */}
+          {!loading && despesasViagem.length > 0 && (
+            <div className="overflow-hidden rounded-lg border border-border bg-surface">
+              <div className="border-b border-border px-5 py-3">
+                <h2 className="font-mono text-[10.5px] font-semibold uppercase tracking-widest text-muted">
+                  Despesas de Viagem
+                </h2>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="bg-surface-2 px-4 py-2.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                        Data
+                      </th>
+                      <th className="bg-surface-2 px-4 py-2.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                        Tipo
+                      </th>
+                      <th className="bg-surface-2 px-4 py-2.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                        Descrição
+                      </th>
+                      <th className="bg-surface-2 px-4 py-2.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                        Qtd
+                      </th>
+                      <th className="bg-surface-2 px-4 py-2.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                        Valor Unit.
+                      </th>
+                      <th className="bg-surface-2 px-4 py-2.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                        Valor Total
+                      </th>
+                      <th className="bg-surface-2 px-4 py-2.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                        Fatura Cliente
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {despesasViagem.map((d) => (
+                      <tr key={d.id} className="border-t border-border/60">
+                        <td className="px-4 py-2.5 font-mono text-sm text-muted">{formatData(d.datemi)}</td>
+                        <td className="px-4 py-2.5 text-sm text-muted">
+                          {d.tipdesLabel}
+                          {d.moddesLabel && <span className="text-muted/70"> · {d.moddesLabel}</span>}
+                        </td>
+                        <td className="max-w-[320px] px-4 py-2.5 text-sm text-foreground">
+                          <p className="truncate" title={d.desrdv ?? undefined}>
+                            {d.desrdv ?? "—"}
+                          </p>
+                          {d.pendenteDeEnvio && (
+                            <span className="mt-0.5 inline-block rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">
+                              Pendente de envio ao ERP
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-sm tabular-nums text-muted">{d.qtdrdv ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-sm tabular-nums text-muted">{formatMoney(d.vlrunt)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-sm tabular-nums text-foreground">
+                          {formatMoney(d.vlrtot)}
+                        </td>
+                        <td className="px-4 py-2.5 text-sm text-muted">{d.fatrdvLabel}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-border bg-surface-2">
+                      <td colSpan={5} className="px-4 py-2.5 text-right font-mono text-[11px] font-semibold uppercase tracking-wider text-muted">
+                        Total
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-sm font-semibold tabular-nums text-foreground">
+                        {formatMoney(totalDespesasViagem)}
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

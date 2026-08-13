@@ -1465,3 +1465,102 @@ model OrcamentoContabil {
 
   @@map("orcamentos_contabeis")
 }
+
+// Espelho local da tabela USU_TE777RDV do Senior ERP (Registro Despesas de Viagem) — despesa
+// de viagem lançada numa RAT (mesma chave natural de Rat: codemp+numrat). Investigado a pedido
+// do Vitor em 13/08/2026, junto das 3 tabelas de rota abaixo; sem FK formal pra Rat (mesmo
+// espírito de AtividadeConsultor.codfor — casamento por valor, sync de Rat/RDV pode chegar em
+// qualquer ordem).
+//
+// TABELA DE MÃO DUPLA (desde 13/08/2026, quando entrou o lançamento de despesa pelo CaxHub):
+// PK local `id` autoincrement, chave natural do Senior só no @@unique — mesmo padrão de
+// Rat/RatItem, e pela mesma razão. `seqrdv` é numeração DO SENIOR: despesa criada aqui nasce
+// com ele nulo, porque gerar um MAX+1 local colidiria com uma despesa lançada no ERP no
+// intervalo, e o upsert do próximo sync sobrescreveria em silêncio o lançamento do consultor.
+model RegistroDespesaViagem {
+  id     Int @id @default(autoincrement())
+  codemp Int
+  numrat Int
+  // Nulo até o Senior confirmar (só linha que veio de lá tem número).
+  seqrdv Int?
+  datemi DateTime? @db.Date
+  desrdv String?   @db.VarChar(250)
+  /// Domínio "USU_LTIPDES" — sem tradução no dicionário desta instalação do Senior (R940END
+  /// vazio). 7 valores vistos (1..7); não dá pra rotular com confiança pela descrição livre.
+  tipdes Int?
+  /// Domínio "USU_LRdvTipDes" (mesmo domínio de PercursoViagem.modtra) — idem, sem tradução.
+  moddes String? @db.VarChar(1)
+  qtdrdv Int?
+  vlrunt Decimal? @db.Decimal(9, 2)
+  vlrtot Decimal? @db.Decimal(9, 2)
+  /// Domínio "LSimNao": S=Sim, N=Não — fatura o cliente por esta despesa.
+  fatrdv String? @db.VarChar(1)
+  /// Domínio "LSimNao": S=Sim, N=Não — reembolsa o consultor por esta despesa.
+  reerdv String? @db.VarChar(1)
+  // Rota pré-cadastrada vinculada (RotaViagem.id) — na prática quase sempre vazia (90 de
+  // 15.034 linhas em 13/08/2026); a maioria das despesas não usa o catálogo de rotas.
+  rotid  Int?
+  hordes Int?
+  nidpso Int? // Id espelhado de uma integração externa (PSOffice) — não usado no CaxHub.
+
+  // true = lançada pelo consultor no CaxHub (ver POST /rats/:id/despesas); false = veio do
+  // Senior pelo sync. É o que protege a linha local: só o que nasceu aqui pode ser excluído
+  // pela tela, e é por aqui que a varredura de envio pendente acha o que falta mandar.
+  origemCaxHub    Boolean   @default(false)
+  // Quando a despesa criada aqui foi de fato gravada no Senior. NULL + origemCaxHub = ainda
+  // não está no ERP. Hoje fica sempre NULL: o serviço do Senior não publica operação de
+  // gravação de RDV (o WSDL só expõe alocarAtividades/getData/getPropostaItemDev/
+  // registrarAtividades). Quando publicarem, um job varre origemCaxHub AND enviadoEmSenior
+  // IS NULL e envia o acumulado — nada precisa ser redigitado.
+  enviadoEmSenior DateTime? @map("enviado_em_senior")
+
+  @@unique([codemp, numrat, seqrdv])
+  @@map("registros_despesa_viagem")
+}
+
+// Espelho local da tabela USU_TRDVROTAS do Senior ERP (Tabela de Rotas) — rota de viagem
+// pré-cadastrada por cliente, composta por percursos (ver RotaPercurso).
+model RotaViagem {
+  id     Int     @id
+  codcli Int?
+  desrot String? @db.VarChar(250)
+  kmtrot Decimal? @db.Decimal(10, 2)
+  horrot Int?
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitreg String?  @db.VarChar(1)
+  idagp  Int?
+  tolhrs Decimal? @db.Decimal(7, 2)
+  tolkm  Decimal? @db.Decimal(7, 2)
+
+  @@map("rotas_viagem")
+}
+
+// Espelho local da tabela USU_TRDVPER do Senior ERP (Tabela de Percursos) — trecho reutilizável
+// (origem/destino) que compõe uma ou mais rotas via RotaPercurso.
+model PercursoViagem {
+  id     Int     @id
+  perori String? @db.VarChar(100)
+  perdes String? @db.VarChar(100)
+  desper String? @db.VarChar(250)
+  kmtper Decimal? @db.Decimal(10, 2)
+  horper Int?
+  /// Domínio "USU_LRdvTipDes" (mesmo domínio de RegistroDespesaViagem.moddes) — modalidade do
+  /// transporte; sem tradução no dicionário desta instalação.
+  modtra String? @db.VarChar(1)
+  horpag Int?
+
+  @@map("percursos_viagem")
+}
+
+// Espelho local da tabela USU_TRDVROTPER do Senior ERP (Rotas x Percursos) — junção rota↔percurso
+// com a ordem de cada trecho dentro da rota. `id` é a PK própria desta linha de junção, NÃO o id
+// da rota (o dicionário do Senior nomeia os dois campos "Id. da Rota", mas são coisas diferentes —
+// confirmado com dado real: `id` sobe 1,2,3,8,9... enquanto `rotid` repete 1,1,1,5,5,5...).
+model RotaPercurso {
+  id     Int @id
+  rotid  Int
+  perid  Int
+  ordseq Int
+
+  @@map("rotas_percursos")
+}

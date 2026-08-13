@@ -23,6 +23,10 @@ import { JOB_NAME as MOVIMENTO_TITULO_JOB, CRON_EXPR as MOVIMENTO_TITULO_CRON, C
 import { JOB_NAME as NATUREZA_FINANCEIRA_JOB, CRON_EXPR as NATUREZA_FINANCEIRA_CRON, CAMPO_DATA as NATUREZA_FINANCEIRA_DATA, runNaturezaFinanceiraSync } from "./naturezaFinanceiraSync";
 import { JOB_NAME as ORCAMENTO_CONTABIL_JOB, CRON_EXPR as ORCAMENTO_CONTABIL_CRON, CAMPO_DATA as ORCAMENTO_CONTABIL_DATA, runOrcamentoContabilSync } from "./orcamentoContabilSync";
 import { JOB_NAME as PEDIDO_JOB, CRON_EXPR as PEDIDO_CRON, CAMPO_DATA as PEDIDO_DATA, runPedidoSync } from "./pedidoSync";
+import { JOB_NAME as REGISTRO_DESPESA_VIAGEM_JOB, CRON_EXPR as REGISTRO_DESPESA_VIAGEM_CRON, CAMPO_DATA as REGISTRO_DESPESA_VIAGEM_DATA, runRegistroDespesaViagemSync } from "./registroDespesaViagemSync";
+import { JOB_NAME as ROTA_VIAGEM_JOB, CRON_EXPR as ROTA_VIAGEM_CRON, CAMPO_DATA as ROTA_VIAGEM_DATA, runRotaViagemSync } from "./rotaViagemSync";
+import { JOB_NAME as PERCURSO_VIAGEM_JOB, CRON_EXPR as PERCURSO_VIAGEM_CRON, CAMPO_DATA as PERCURSO_VIAGEM_DATA, runPercursoViagemSync } from "./percursoViagemSync";
+import { JOB_NAME as ROTA_PERCURSO_JOB, CRON_EXPR as ROTA_PERCURSO_CRON, CAMPO_DATA as ROTA_PERCURSO_DATA, runRotaPercursoSync } from "./rotaPercursoSync";
 import { JOB_NAME as PLANO_CONTABIL_JOB, CRON_EXPR as PLANO_CONTABIL_CRON, CAMPO_DATA as PLANO_CONTABIL_DATA, runPlanoContabilSync } from "./planoContabilSync";
 import { JOB_NAME as PORTADOR_JOB, CRON_EXPR as PORTADOR_CRON, CAMPO_DATA as PORTADOR_DATA, runPortadorSync } from "./portadorSync";
 import { JOB_NAME as PROPOSTA_ITEM_JOB, CRON_EXPR as PROPOSTA_ITEM_CRON, CAMPO_DATA as PROPOSTA_ITEM_DATA, runPropostaItemSync } from "./propostaItemSync";
@@ -153,4 +157,12 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   // RateioLancamento roda depois de Lançamentos Contábeis: é o detalhe do lançamento.
   { jobName: RATEIO_LANCAMENTO_JOB, displayName: "Rateios de Lançamento", cronExpr: RATEIO_LANCAMENTO_CRON, suportaAlterados: RATEIO_LANCAMENTO_DATA != null, run: runRateioLancamentoSync, contarRegistros: () => prisma.rateioLancamento.count() },
   { jobName: ORCAMENTO_CONTABIL_JOB, displayName: "Orçamentos Contábeis", cronExpr: ORCAMENTO_CONTABIL_CRON, suportaAlterados: ORCAMENTO_CONTABIL_DATA != null, run: runOrcamentoContabilSync, contarRegistros: () => prisma.orcamentoContabil.count() },
+  // Despesas de viagem lançadas em RAT (USU_TE777RDV) + catálogo de rotas/percursos,
+  // identificadas a pedido do Vitor em 13/08/2026. Sem dependência das tabelas acima — RDV
+  // referencia Rat só por valor (codemp+numrat), sem FK formal. Rota/Percurso rodam antes da
+  // junção só por organização (RotaPercurso não tem FK formal também, a ordem não é exigida).
+  { jobName: ROTA_VIAGEM_JOB, displayName: "Rotas de Viagem", cronExpr: ROTA_VIAGEM_CRON, suportaAlterados: ROTA_VIAGEM_DATA != null, run: runRotaViagemSync, contarRegistros: () => prisma.rotaViagem.count() },
+  { jobName: PERCURSO_VIAGEM_JOB, displayName: "Percursos de Viagem", cronExpr: PERCURSO_VIAGEM_CRON, suportaAlterados: PERCURSO_VIAGEM_DATA != null, run: runPercursoViagemSync, contarRegistros: () => prisma.percursoViagem.count() },
+  { jobName: ROTA_PERCURSO_JOB, displayName: "Rotas x Percursos", cronExpr: ROTA_PERCURSO_CRON, suportaAlterados: ROTA_PERCURSO_DATA != null, run: runRotaPercursoSync, contarRegistros: () => prisma.rotaPercurso.count() },
+  { jobName: REGISTRO_DESPESA_VIAGEM_JOB, displayName: "Despesas de Viagem (RAT)", cronExpr: REGISTRO_DESPESA_VIAGEM_CRON, suportaAlterados: REGISTRO_DESPESA_VIAGEM_DATA != null, run: runRegistroDespesaViagemSync, contarRegistros: () => prisma.registroDespesaViagem.count() },
 ];

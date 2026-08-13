@@ -9,6 +9,15 @@ import { entidadeIdRat } from "../audit/identidadeEntidade";
 import { enfileirar } from "../sync/outboxSenior";
 import { runRatSyncPorNumrat } from "../sync/ratSync";
 import { runRatItemSyncPorNumrat } from "../sync/ratItemSync";
+import {
+  TIPDES_DESPESA_AVULSA,
+  TIPDES_DESLOCAMENTO_ROTA,
+  TIPDES_LABELS,
+  MODDES_LABELS,
+  tipdesLabel,
+  moddesLabel,
+  simNaoLabel,
+} from "../domain/rdvDominio";
 
 // Tela "Meus Apontamentos": RATs agrupam os apontamentos (RatItem) de um consultor numa
 // proposta. Visibilidade: consultor vê só as próprias RATs; gestor do departamento
@@ -516,5 +525,240 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
     res.json({ ok: true, desvinculados: desvinculados.length, seqratsDesvinculados: desvinculados });
   } catch (error) {
     handleError(res, error, "sincronizar");
+  }
+});
+
+// Resolve a RAT e confere permissão — mesma regra de podeVerRat, compartilhada pelos 3
+// endpoints de despesa de viagem abaixo.
+async function ratComPermissao(
+  req: AuthenticatedRequest,
+  res: import("express").Response,
+  ratId: number
+): Promise<import("@prisma/client").Rat | null> {
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) {
+    res.status(404).json({ error: "Usuário não encontrado" });
+    return null;
+  }
+  const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+  if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+    res.status(404).json({ error: "RAT não encontrada" });
+    return null;
+  }
+  return rat;
+}
+
+// GET /:id/despesas — despesas já lançadas na RAT + o que a tela precisa pra montar o
+// formulário de lançamento (rotas ativas do cliente da RAT, opções de tipo/modalidade).
+ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const rat = await ratComPermissao(req, res, id);
+    if (!rat) return;
+
+    const despesas =
+      rat.numrat != null
+        ? await prisma.registroDespesaViagem.findMany({
+            where: { codemp: rat.codemp, numrat: rat.numrat },
+            orderBy: [{ datemi: "asc" }, { id: "asc" }],
+          })
+        : [];
+    const rotas =
+      rat.codcli != null
+        ? await prisma.rotaViagem.findMany({ where: { codcli: rat.codcli, sitreg: "A" }, orderBy: { desrot: "asc" } })
+        : [];
+
+    res.json({
+      podeLancar: rat.numrat != null,
+      despesas: despesas.map((d) => ({
+        id: d.id,
+        datemi: d.datemi,
+        desrdv: d.desrdv,
+        tipdes: d.tipdes,
+        tipdesLabel: tipdesLabel(d.tipdes),
+        moddesLabel: d.moddes != null ? moddesLabel(d.moddes) : null,
+        qtdrdv: d.qtdrdv,
+        vlrunt: d.vlrunt,
+        vlrtot: d.vlrtot,
+        hordes: d.hordes,
+        fatrdvLabel: simNaoLabel(d.fatrdv),
+        origemCaxHub: d.origemCaxHub,
+        pendenteDeEnvio: d.origemCaxHub && d.enviadoEmSenior == null,
+        podeExcluir: d.origemCaxHub && d.enviadoEmSenior == null,
+      })),
+      rotas: rotas.map((r) => ({
+        id: r.id,
+        desrot: r.desrot,
+        kmtrot: r.kmtrot,
+        horrot: r.horrot,
+      })),
+      opcoesTipo: TIPDES_DESPESA_AVULSA.map((t) => ({ value: t, label: TIPDES_LABELS[t] })),
+      opcoesModalidade: Object.entries(MODDES_LABELS).map(([value, label]) => ({ value, label })),
+    });
+  } catch (error) {
+    handleError(res, error, "despesas-listar");
+  }
+});
+
+// POST /:id/despesas — lança despesa (aba "despesa") ou deslocamento por rota (aba
+// "deslocamento"). Grava sempre local (origemCaxHub=true, seqrdv=null): o Senior não publica
+// operação de gravação de RDV hoje (só alocarAtividades/getData/getPropostaItemDev/
+// registrarAtividades) — quando publicar, um job varre origemCaxHub + enviadoEmSenior IS NULL
+// e envia o acumulado, sem precisar redigitar nada.
+ratsRouter.post("/:id/despesas", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const rat = await ratComPermissao(req, res, id);
+    if (!rat) return;
+    if (rat.numrat == null) {
+      res.status(400).json({ error: "Esta RAT ainda não tem número do ERP — não é possível lançar despesa ainda" });
+      return;
+    }
+
+    const aba = req.body?.aba === "deslocamento" ? "deslocamento" : "despesa";
+    const datemi = req.body?.datemi ? new Date(req.body.datemi) : null;
+    const vlrunt = Number(req.body?.vlrunt);
+    if (!datemi || !Number.isFinite(datemi.getTime())) {
+      res.status(400).json({ error: "Data é obrigatória" });
+      return;
+    }
+    // `qtdrdv` é Int no banco (mesma coluna do Senior) — a Deslocamento pode chegar com o km
+    // fracionado da rota (ex.: 239.1, pré-preenchido a partir de RotaViagem.kmtrot). Arredonda
+    // ANTES de calcular vlrtot, senão o total gravado usaria o valor fracionado enquanto o
+    // qtdrdv persistido seria truncado pelo Postgres — os dois ficariam inconsistentes.
+    const qtdrdv = Math.round(Number(req.body?.qtdrdv));
+    if (!Number.isFinite(qtdrdv) || qtdrdv <= 0) {
+      res.status(400).json({ error: "Quantidade precisa ser maior que zero" });
+      return;
+    }
+    if (!Number.isFinite(vlrunt) || vlrunt < 0) {
+      res.status(400).json({ error: "Valor unitário inválido" });
+      return;
+    }
+    // Nunca confiar no total que vier do corpo — a tela mostra o campo travado, mas quem
+    // grava é o backend. É sempre qtd × unitário, os dois validados acima.
+    const vlrtot = Math.round(qtdrdv * vlrunt * 100) / 100;
+
+    let data: Parameters<typeof prisma.registroDespesaViagem.create>[0]["data"];
+
+    if (aba === "deslocamento") {
+      const rotid = Number(req.body?.rotid);
+      const moddes = typeof req.body?.moddes === "string" ? req.body.moddes.trim() : "";
+      if (!Number.isFinite(rotid)) {
+        res.status(400).json({ error: "Selecione uma rota" });
+        return;
+      }
+      if (!MODDES_LABELS[moddes]) {
+        res.status(400).json({ error: "Modalidade inválida" });
+        return;
+      }
+      // A rota tem que pertencer ao cliente da RAT — sem essa checagem, dava pra lançar
+      // deslocamento com o km de uma rota de outro cliente qualquer, só sabendo o id.
+      const rota = await prisma.rotaViagem.findFirst({ where: { id: rotid, codcli: rat.codcli ?? -1, sitreg: "A" } });
+      if (!rota) {
+        res.status(400).json({ error: "Rota não encontrada para o cliente desta RAT" });
+        return;
+      }
+      const desrdv = typeof req.body?.desrdv === "string" && req.body.desrdv.trim() !== "" ? req.body.desrdv.trim() : rota.desrot;
+      // Horas de deslocamento: só na aba Deslocamento, e só editável por ora — a regra de
+      // cálculo automático (a partir da rota/percursos) ainda não foi definida (ver plano).
+      const hordesBruto = Number(req.body?.hordes);
+      const hordes = Number.isFinite(hordesBruto) ? hordesBruto : null;
+      data = {
+        codemp: rat.codemp,
+        numrat: rat.numrat,
+        seqrdv: null,
+        datemi,
+        desrdv,
+        tipdes: TIPDES_DESLOCAMENTO_ROTA,
+        moddes,
+        qtdrdv,
+        vlrunt,
+        vlrtot,
+        hordes,
+        fatrdv: "S",
+        reerdv: "S",
+        rotid: rota.id,
+        origemCaxHub: true,
+      };
+    } else {
+      const tipdes = Number(req.body?.tipdes);
+      if (!(TIPDES_DESPESA_AVULSA as readonly number[]).includes(tipdes)) {
+        res.status(400).json({ error: "Tipo de despesa inválido" });
+        return;
+      }
+      const desrdv = typeof req.body?.desrdv === "string" ? req.body.desrdv.trim() : "";
+      if (desrdv === "") {
+        res.status(400).json({ error: "Descrição é obrigatória" });
+        return;
+      }
+      // Default "Sim" — mesma convenção da tela do ERP (a maioria fatura o cliente: 14.260
+      // de 15.034 linhas históricas já vêm com fatrdv='S').
+      const fatrdv = req.body?.fatrdv === "N" ? "N" : "S";
+      data = {
+        codemp: rat.codemp,
+        numrat: rat.numrat,
+        seqrdv: null,
+        datemi,
+        desrdv,
+        tipdes,
+        qtdrdv,
+        vlrunt,
+        vlrtot,
+        fatrdv,
+        reerdv: "S",
+        origemCaxHub: true,
+      };
+    }
+
+    const criada = await prisma.registroDespesaViagem.create({ data });
+    res.status(201).json({ id: criada.id });
+  } catch (error) {
+    handleError(res, error, "despesas-criar");
+  }
+});
+
+// DELETE /despesas/:despesaId — só remove o que nasceu no CaxHub e ainda não foi enviado ao
+// Senior. Despesa vinda do ERP (ou já marcada como enviada) não se apaga por aqui: o próximo
+// sync traria ela de volta mesmo assim, e "apagar" daria a falsa impressão de que desapareceu.
+ratsRouter.delete("/despesas/:despesaId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const despesaId = Number(req.params.despesaId);
+    if (!Number.isFinite(despesaId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const despesa = await prisma.registroDespesaViagem.findUnique({ where: { id: despesaId } });
+    if (!despesa) {
+      res.status(404).json({ error: "Despesa não encontrada" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const rat = await prisma.rat.findFirst({ where: { codemp: despesa.codemp, numrat: despesa.numrat } });
+    if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+      res.status(404).json({ error: "RAT não encontrada" });
+      return;
+    }
+    if (!despesa.origemCaxHub || despesa.enviadoEmSenior != null) {
+      res.status(400).json({ error: "Só é possível excluir despesa lançada aqui e ainda não enviada ao Senior" });
+      return;
+    }
+
+    await prisma.registroDespesaViagem.delete({ where: { id: despesaId } });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "despesas-excluir");
   }
 });
