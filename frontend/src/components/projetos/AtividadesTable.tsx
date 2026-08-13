@@ -50,6 +50,11 @@ interface GrupoAtividades {
   cliente: string;
   consultorNome: string;
   consultorFotoUrl: string | null;
+  // Departamento e Modalidade DA PROPOSTA — constantes dentro do grupo (mesma proposta em
+  // toda linha), por isso vêm da primeira atividade só.
+  propostaDepexeLabel: string;
+  propostaModproLabel: string;
+  propostaDespro: string | null;
   atividades: AtividadeRow[];
   previsto: number;
   realizado: number;
@@ -81,6 +86,9 @@ function agrupar(rows: AtividadeRow[], agora: number): GrupoAtividades[] {
         cliente: row.cliente,
         consultorNome: row.consultorNome,
         consultorFotoUrl: row.consultorFotoUrl,
+        propostaDepexeLabel: row.propostaDepexeLabel,
+        propostaModproLabel: row.propostaModproLabel,
+        propostaDespro: row.propostaDespro,
         atividades: [],
         previsto: 0,
         realizado: 0,
@@ -233,14 +241,23 @@ export function AtividadesTable({
               cliente correr até o consultor sem cortar. */}
           <table className="w-full table-fixed border-collapse">
             <colgroup>
+              <col className="w-[20rem]" />
               <col />
-              <col className="w-[15rem]" />
-              <col className="w-[7rem]" />
+              <col className="w-[9rem]" />
+              <col className="w-[8rem]" />
+              {/* Avatar + nome cabe bem mais estreito que 15rem — encolhido pra ficar mais
+                  colado em Atividades, e a sobra (aqui + no resto da linha) vai pra
+                  Cliente/Descrição, que são as únicas 2 que precisam de linha. */}
+              <col className="w-[9rem]" />
+              <col className="w-[5rem]" />
               <col className="w-[11rem]" />
             </colgroup>
             <thead>
               <tr>
                 <th className={TH_CLASS}>Proposta · Cliente</th>
+                <th className={TH_CLASS}>Descrição</th>
+                <th className={TH_CLASS}>Departamento</th>
+                <th className={TH_CLASS}>Modalidade</th>
                 <th className={TH_CLASS}>Consultor</th>
                 <th className={`${TH_CLASS} whitespace-nowrap text-right`}>Atividades</th>
                 <th className={`${TH_CLASS} whitespace-nowrap text-right`}>Realizado / Previsto</th>
@@ -251,7 +268,16 @@ export function AtividadesTable({
                 Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i} className="border-t border-border/60">
                     <td className="px-2.5 py-1.5">
+                      <Skeleton className="h-4 w-40" />
+                    </td>
+                    <td className="px-2.5 py-1.5">
                       <Skeleton className="h-4 w-72" />
+                    </td>
+                    <td className="px-2.5 py-1.5">
+                      <Skeleton className="h-4 w-24" />
+                    </td>
+                    <td className="px-2.5 py-1.5">
+                      <Skeleton className="h-4 w-20" />
                     </td>
                     <td className="px-2.5 py-1.5">
                       <Skeleton className="h-4 w-32" />
@@ -302,6 +328,25 @@ export function AtividadesTable({
                           </div>
                         </td>
                         <td className="px-2.5 pb-0.5 pt-1.5 text-sm text-muted">
+                          {/* `truncate` só corta com `overflow:hidden` de verdade num elemento
+                              BLOCK — num <span> solto (display inline) o navegador ignora o
+                              overflow e o texto vaza pra cima da célula vizinha. `block` é o
+                              que faltava; min-w-0 não fazia nada aqui (não há pai flex). */}
+                          <span className="block truncate" title={grupo.propostaDespro ?? undefined}>
+                            {grupo.propostaDespro ?? "—"}
+                          </span>
+                        </td>
+                        <td className="px-2.5 pb-0.5 pt-1.5 text-sm text-muted">
+                          <span className="block truncate" title={grupo.propostaDepexeLabel}>
+                            {grupo.propostaDepexeLabel}
+                          </span>
+                        </td>
+                        <td className="px-2.5 pb-0.5 pt-1.5 text-sm text-muted">
+                          <span className="block truncate" title={grupo.propostaModproLabel}>
+                            {grupo.propostaModproLabel}
+                          </span>
+                        </td>
+                        <td className="px-2.5 pb-0.5 pt-1.5 text-sm text-muted">
                           <span className="flex items-center gap-1.5 whitespace-nowrap" title={grupo.consultorNome}>
                             <Avatar nome={grupo.consultorNome} fotoUrl={grupo.consultorFotoUrl} size="xs" />
                             <span className="min-w-0 truncate">{grupo.consultorNome}</span>
@@ -322,7 +367,7 @@ export function AtividadesTable({
                         className={`cursor-pointer ${aberto ? "bg-primary/5" : "hover:bg-surface-2"}`}
                       >
                         <td
-                          colSpan={4}
+                          colSpan={7}
                           className={`px-2.5 pb-1.5 ${aberto ? "border-l border-r border-primary" : ""}`}
                         >
                           {temPrevisto && <IndicadorProgresso avanco={avanco} cor={tom.barra} alturaPx={4} />}
@@ -331,7 +376,7 @@ export function AtividadesTable({
 
                       {aberto && (
                         <tr className="bg-surface-2/40">
-                          <td colSpan={4} className="border-b border-l border-r border-primary px-2.5 py-2">
+                          <td colSpan={7} className="border-b border-l border-r border-primary px-2.5 py-2">
                             <div className="overflow-x-auto">
                               {/* Mesma técnica da tabela de fora: só a Descrição fica sem
                                   largura, então é ela que fica com toda a sobra e as
@@ -341,6 +386,7 @@ export function AtividadesTable({
                               <table className="w-full table-fixed border-collapse">
                                 <colgroup>
                                   <col />
+                                  <col className="w-[8rem]" />
                                   <col className="w-[10rem]" />
                                   <col className="w-[6.5rem]" />
                                   <col className="w-[8.5rem]" />
@@ -349,6 +395,7 @@ export function AtividadesTable({
                                 <thead>
                                   <tr>
                                     <th className={TH_SUB_CLASS}>Descrição</th>
+                                    <th className={TH_SUB_CLASS}>Depto. Item</th>
                                     <th className={`${TH_SUB_CLASS} whitespace-nowrap text-right`}>Horas</th>
                                     <th className={`${TH_SUB_CLASS} whitespace-nowrap`}>Fim previsto</th>
                                     <th className={`${TH_SUB_CLASS} text-right`}>Situação</th>
@@ -365,11 +412,22 @@ export function AtividadesTable({
                                           onde ele morava, virou cabeçalho do grupo. */}
                                       <td className="py-1.5 pr-2 text-sm text-foreground">
                                         <div className="flex items-center">
-                                          <span className="min-w-0 truncate" title={row.itemDescricao ?? undefined}>
-                                            {row.itemDescricao ?? "—"}
+                                          <span
+                                            className="min-w-0 truncate"
+                                            title={row.itemDescricao ?? undefined}
+                                          >
+                                            {/* Prefixo "01-" com o seqite do item, zero-padado a 2 dígitos —
+                                                é assim que o consultor identifica o item entre vários da
+                                                mesma proposta sem precisar de uma coluna própria. */}
+                                            {String(row.seqite).padStart(2, "0")}-{row.itemDescricao ?? "—"}
                                           </span>
                                           <IndicadorSessao row={row} />
                                         </div>
+                                      </td>
+                                      <td className="py-1.5 pr-2 text-sm text-muted">
+                                        <span className="block truncate" title={row.depexeLabel}>
+                                          {row.depexeLabel}
+                                        </span>
                                       </td>
                                       <td className="whitespace-nowrap py-1.5 pr-2 text-right">
                                         <ConsumoHoras realizado={realizadoExibido(row, agora)} previsto={(row.qtdhorPrevisto ?? 0) + row.horasExcedentes} />
@@ -466,7 +524,7 @@ export function AtividadesTable({
 
               {grupos.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={4} className="px-2.5 py-6 text-center text-sm text-muted">
+                  <td colSpan={7} className="px-2.5 py-6 text-center text-sm text-muted">
                     Nenhuma atividade encontrada com os filtros atuais.
                   </td>
                 </tr>

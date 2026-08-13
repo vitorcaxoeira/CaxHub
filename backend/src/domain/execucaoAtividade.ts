@@ -105,9 +105,19 @@ export interface ContextoMovimentacao {
   observacaoFechamento?: string | null;
 }
 
+export interface AtividadePausada {
+  id: number;
+  codpro: number;
+}
+
 export interface ResultadoMovimentacao {
   operacoes: Prisma.PrismaPromise<unknown>[];
   duracaoSessaoFechadaMin: number | null;
+  // Outra(s) atividade(s) do MESMO consultor que tinham sessão aberta e foram pausadas
+  // automaticamente por esta movimentação (ver regra de concorrência abaixo). Normalmente 0
+  // ou 1 — mais de uma só existiria se um bug anterior já tivesse deixado o consultor com
+  // mais de uma sessão aberta; a função limpa esse estado também, não só previne um novo.
+  pausadas: AtividadePausada[];
 }
 
 // Monta as operações Prisma de uma movimentação de card (atualizar coluna, log de
@@ -206,5 +216,85 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
       : []),
   ];
 
-  return { operacoes, duracaoSessaoFechadaMin };
+  // Regra de concorrência: 1 atividade em andamento por consultor. Só entra em jogo quando
+  // ESTA movimentação está abrindo sessão nova (entrando numa coluna que conta como
+  // execução) — sair de "Em Andamento" nunca precisa pausar ninguém. Fica AQUI, na função
+  // compartilhada por todo caminho que abre sessão (PATCH /:id/mover, POST /:id/start), e
+  // não em cada rota — é o que garante a regra valer pra qualquer origem, inclusive uma
+  // futura, sem depender de quem escrever o próximo endpoint lembrar de replicar a checagem.
+  // Bug real corrigido em 13/08/2026: só o /start tinha essa checagem: arrastar um segundo
+  // card pelo quadro (drag-and-drop, sem passar pelo /start) abria uma segunda sessão sem
+  // fechar a primeira.
+  const pausadas: AtividadePausada[] = [];
+  if (colunaNova.contaComoExecucao) {
+    const sessoesDeOutras = await prisma.atividadeSessaoExecucao.findMany({
+      where: { fim: null, atividadeId: { not: atividade.id }, atividade: { codfor: atividade.codfor } },
+      include: { atividade: { include: { coluna: true } } },
+    });
+
+    if (sessoesDeOutras.length > 0) {
+      const colunaAFazer = await prisma.quadroColuna.findFirst({ where: { nome: RAIA_A_FAZER } });
+      if (!colunaAFazer) throw new Error(`Raia "${RAIA_A_FAZER}" não configurada no quadro`);
+
+      for (const sessaoOutra of sessoesDeOutras) {
+        const atividadeOutra = sessaoOutra.atividade;
+        const nomeColunaOutra = atividadeOutra.coluna?.nome ?? null;
+        const entidadeIdOutra = entidadeIdAtividade(atividadeOutra.id);
+        const entidadeRotuloOutra = `Atividade — Proposta ${atividadeOutra.codpro}`;
+        const ctxEventoOutra = {
+          origem: origemEvento ?? ("tela" as const),
+          usuarioId,
+          codemp: atividadeOutra.codemp,
+          codpro: atividadeOutra.codpro,
+          entidadeId: entidadeIdOutra,
+          correlationId,
+        };
+        const duracaoOutraMin = Math.round((agora.getTime() - sessaoOutra.inicio.getTime()) / 60000);
+        const observacaoOutra = await descricaoPadraoDaAtividade(atividadeOutra);
+
+        operacoes.push(
+          prisma.atividadeConsultor.update({ where: { id: atividadeOutra.id }, data: { colunaId: colunaAFazer.id } }),
+          prisma.atividadeHistoricoMovimentacao.create({
+            data: {
+              atividadeId: atividadeOutra.id,
+              colunaAnteriorId: atividadeOutra.colunaId,
+              colunaNovaId: colunaAFazer.id,
+              userId: usuarioId,
+            },
+          }),
+          // `id` + `fim: null` no where, não só `id`: se a sessão já tiver sido fechada por
+          // outra requisição concorrente entre a busca acima e esta transação, o update vira
+          // no-op em vez de sobrescrever um `fim` que já tinha sido gravado.
+          prisma.atividadeSessaoExecucao.updateMany({
+            where: { id: sessaoOutra.id, fim: null },
+            data: { fim: agora, ...(observacaoOutra ? { observacao: observacaoOutra } : {}) },
+          }),
+          criarEventoAuditoria({
+            ...ctxEventoOutra,
+            entidadeTipo: ENTIDADES_AUDITORIA.KANBAN_CARD,
+            entidadeRotulo: entidadeRotuloOutra,
+            eventoTipo: EVENTOS_AUDITORIA.KANBAN_RAIA_ALTERADA,
+            alteracoes: { colunaId: { de: atividadeOutra.colunaId, para: colunaAFazer.id, rotulo: "Coluna" } },
+            metadata: { raia_de: nomeColunaOutra, raia_para: colunaAFazer.nome },
+          }),
+          criarEventoAuditoria({
+            ...ctxEventoOutra,
+            entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+            entidadeRotulo: entidadeRotuloOutra,
+            eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_PARADA,
+            alteracoes: null,
+            metadata: {
+              coluna: nomeColunaOutra,
+              duracaoMinutos: duracaoOutraMin,
+              observacao: observacaoOutra,
+              motivo: "Pausada automaticamente: o mesmo consultor iniciou outra atividade.",
+            },
+          })
+        );
+        pausadas.push({ id: atividadeOutra.id, codpro: atividadeOutra.codpro });
+      }
+    }
+  }
+
+  return { operacoes, duracaoSessaoFechadaMin, pausadas };
 }

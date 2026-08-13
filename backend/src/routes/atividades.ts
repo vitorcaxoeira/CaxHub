@@ -8,6 +8,7 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import {
   depexeLabel,
+  modproLabel,
   priproLabel,
   DEPEXE_LABELS,
   PRIPRO_LABELS,
@@ -301,6 +302,16 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         datval: proposta.datval,
         depexe,
         depexeLabel: depexeLabel(depexe),
+        // Departamento e Modalidade DA PROPOSTA (Proposta.depexe/modpro) — granularidade
+        // diferente do `depexe` acima, que é do ITEM (PropostaItem.depexe, mesmo domínio
+        // USU_LDepExe). Os dois podem divergir (proposta grande, item específico executado
+        // por outro depto), por isso a tela mostra os dois separados.
+        propostaDepexeLabel: depexeLabel(proposta.depexe),
+        propostaModproLabel: modproLabel(proposta.modpro),
+        // Descrição DA PROPOSTA (Proposta.despro, VarChar(100)) — não confundir com
+        // `itemDescricao` abaixo, que é PropostaItem.despro (VarChar(2000), descrição do
+        // item dentro da proposta).
+        propostaDespro: proposta.despro?.trim() || null,
         consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${a.codfor}`,
         // Vínculo opcional Consultor -> User (ver schema.prisma) — só existe foto quando o
         // consultor também tem uma conta CaxHub com avatar próprio configurado.
@@ -717,7 +728,7 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
 
     const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null;
 
-    const { operacoes } = await montarOperacoesMovimentacao({
+    const { operacoes, pausadas } = await montarOperacoesMovimentacao({
       atividade,
       colunaAnterior,
       colunaNova,
@@ -740,7 +751,14 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     // seqAti/seqite/qtdHor/hrsExc. Não há o que sincronizar aqui (ver [[CaxHub]] no
     // Segundo Cérebro pro raciocínio completo).
 
-    res.json({ id, colunaId: colunaIdNovo, aviso: entradaEmExecucao?.mensagem ?? null });
+    const pausada = pausadas[0] ?? null;
+
+    res.json({
+      id,
+      colunaId: colunaIdNovo,
+      aviso: entradaEmExecucao?.mensagem ?? null,
+      pausada: pausada ? { id: pausada.id, titulo: `Proposta ${pausada.codpro}` } : null,
+    });
   } catch (error) {
     handleError(res, error, "mover");
   }
@@ -818,34 +836,11 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
 
     const agora = new Date();
     const correlationId = req.correlationId!;
-    const operacoes: Prisma.PrismaPromise<unknown>[] = [];
 
-    // Regra de concorrência: 1 atividade em andamento por consultor — se já houver outra
-    // com sessão aberta, para ela automaticamente (mesma transação, mesmo correlationId)
-    // antes de iniciar esta.
-    const sessaoDoConsultor = await prisma.atividadeSessaoExecucao.findFirst({
-      where: { fim: null, atividade: { codfor: atividade.codfor, id: { not: id } } },
-      include: { atividade: { include: { coluna: true } } },
-    });
-
-    let pausada: { id: number; codpro: number } | null = null;
-    if (sessaoDoConsultor) {
-      const atividadeAnterior = sessaoDoConsultor.atividade;
-      const { operacoes: opsPausa } = await montarOperacoesMovimentacao({
-        atividade: atividadeAnterior,
-        colunaAnterior: atividadeAnterior.coluna,
-        colunaNova: colunaAFazer,
-        usuarioId: user.id,
-        origemSessao: "manual",
-        correlationId,
-        agora,
-      });
-      operacoes.push(...opsPausa);
-      pausada = { id: atividadeAnterior.id, codpro: atividadeAnterior.codpro };
-      // Mudar de coluna não vai pro Senior — ver comentário equivalente mais acima.
-    }
-
-    const { operacoes: opsInicio } = await montarOperacoesMovimentacao({
+    // Regra de concorrência (1 atividade em andamento por consultor): se o mesmo consultor
+    // já tiver outra sessão aberta, montarOperacoesMovimentacao detecta e monta as operações
+    // pra pausá-la automaticamente, na mesma transação — ver domain/execucaoAtividade.ts.
+    const { operacoes, pausadas } = await montarOperacoesMovimentacao({
       atividade,
       colunaAnterior: colunaAtual,
       colunaNova: colunaEmAndamento,
@@ -854,7 +849,6 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
       correlationId,
       agora,
     });
-    operacoes.push(...opsInicio);
 
     await prisma.$transaction(operacoes);
 
@@ -863,6 +857,8 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
       await notificarGestoresDoDepartamento(atividade.codemp, depexe, "atividade_movida", mensagem, id, user.id);
     }
     // Mudar de coluna não vai pro Senior — ver comentário equivalente mais acima.
+
+    const pausada = pausadas[0] ?? null;
 
     res.json({
       id,

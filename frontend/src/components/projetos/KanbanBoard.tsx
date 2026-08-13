@@ -35,6 +35,12 @@ export interface AtividadeKanban {
   priproLabel: string;
   datval: string | null;
   depexeLabel: string;
+  // Departamento e Modalidade DA PROPOSTA (granularidade diferente de `depexeLabel` acima,
+  // que é do ITEM) — só usados na visão Lista hoje (AtividadesTable), ver backend/src/
+  // routes/atividades.ts.
+  propostaDepexeLabel: string;
+  propostaModproLabel: string;
+  propostaDespro: string | null;
   codfor: number;
   consultorNome: string;
   // Presente só quando o consultor também tem conta CaxHub com avatar configurado (join

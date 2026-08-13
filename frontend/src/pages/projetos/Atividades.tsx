@@ -294,12 +294,22 @@ export function Atividades() {
 
   async function executarMovimentacao(atividadeId: number, novaColunaId: number, observacao: string | null) {
     const anterior = atividades;
+    const alvo = atividades.find((a) => a.id === atividadeId);
     setAtividades((atual) => atual.map((a) => (a.id === atividadeId ? { ...a, colunaId: novaColunaId } : a)));
     try {
       const { data } = await axios.patch(`/api/atividades/${atividadeId}/mover`, {
         colunaId: novaColunaId,
         observacao: observacao || undefined,
       });
+      // Regra de 1 atividade em andamento por consultor: arrastar um card pra "Em Andamento"
+      // com outro já lá pausa o outro automaticamente — mesmo aviso que o botão Iniciar já
+      // mostra (ver iniciarAtividade), pra não sumir uma atividade sem explicação.
+      if (data?.pausada) {
+        toast.mostrar(
+          `Atividade ${data.pausada.titulo} foi pausada para iniciar a Proposta ${alvo?.codpro ?? atividadeId}`,
+          "warning"
+        );
+      }
       // Só vem preenchido quando o card ENTROU em execução perto do teto (ver
       // avaliarEntradaEmExecucao) — arrastar pra qualquer outra raia nunca avisa.
       if (data?.aviso) toast.mostrar(data.aviso, "warning");

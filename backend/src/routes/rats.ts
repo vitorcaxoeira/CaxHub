@@ -528,8 +528,15 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Resolve a RAT e confere permissão — mesma regra de podeVerRat, compartilhada pelos 3
-// endpoints de despesa de viagem abaixo.
+// Lançamento de despesas de viagem restrito a admin por enquanto — a pedido do Vitor,
+// enquanto o recurso ainda está em validação (nem todo consultor/gestor deve ver a ação
+// ainda). Reavaliar pra abrir a dono/gestor da RAT quando o recurso for liberado geral.
+function podeGerenciarDespesas(role: string): boolean {
+  return role === "admin";
+}
+
+// Resolve a RAT e confere permissão — mesma regra de podeVerRat + a restrição a admin acima
+// — compartilhada pelos 3 endpoints de despesa de viagem abaixo.
 async function ratComPermissao(
   req: AuthenticatedRequest,
   res: import("express").Response,
@@ -538,6 +545,10 @@ async function ratComPermissao(
   const ctx = await contextoDoUsuario(req);
   if (!ctx) {
     res.status(404).json({ error: "Usuário não encontrado" });
+    return null;
+  }
+  if (!podeGerenciarDespesas(ctx.role)) {
+    res.status(403).json({ error: "Lançamento de despesas de viagem disponível só para administradores por enquanto" });
     return null;
   }
   const rat = await prisma.rat.findUnique({ where: { id: ratId } });
@@ -744,6 +755,10 @@ ratsRouter.delete("/despesas/:despesaId", async (req: AuthenticatedRequest, res)
     const ctx = await contextoDoUsuario(req);
     if (!ctx) {
       res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (!podeGerenciarDespesas(ctx.role)) {
+      res.status(403).json({ error: "Lançamento de despesas de viagem disponível só para administradores por enquanto" });
       return;
     }
     const rat = await prisma.rat.findFirst({ where: { codemp: despesa.codemp, numrat: despesa.numrat } });

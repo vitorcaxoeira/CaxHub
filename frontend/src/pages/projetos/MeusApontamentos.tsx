@@ -15,6 +15,7 @@ import { Modal } from "../../components/ui/Modal";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { useAuth } from "../../auth/AuthContext";
 
 
 // Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
@@ -270,6 +271,10 @@ const ENVIO_MAX_TENTATIVAS = 13;
 
 export function MeusApontamentos() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  // Despesas de Viagem: restrito a admin por enquanto, enquanto o recurso está em validação
+  // (mesma regra aplicada no backend, ver podeGerenciarDespesas em routes/rats.ts).
+  const podeGerenciarDespesas = user?.role === "admin";
   const [sessoes, setSessoes] = useState<SessaoPendente[]>([]);
   const [atividades, setAtividades] = useState<AtividadeResumo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1129,13 +1134,15 @@ export function MeusApontamentos() {
                                   >
                                     {sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
                                   </DropdownMenu.Item>
-                                  <DropdownMenu.Item
-                                    onSelect={() => setDespesasRat(rat)}
-                                    disabled={rat.numrat == null}
-                                    title={rat.numrat == null ? "Só disponível depois que a RAT tem número do ERP" : undefined}
-                                  >
-                                    Despesas de Viagem
-                                  </DropdownMenu.Item>
+                                  {podeGerenciarDespesas && (
+                                    <DropdownMenu.Item
+                                      onSelect={() => setDespesasRat(rat)}
+                                      disabled={rat.numrat == null}
+                                      title={rat.numrat == null ? "Só disponível depois que a RAT tem número do ERP" : undefined}
+                                    >
+                                      Despesas de Viagem
+                                    </DropdownMenu.Item>
+                                  )}
                                 </DropdownMenu.Content>
                               </DropdownMenu>
                             </td>
