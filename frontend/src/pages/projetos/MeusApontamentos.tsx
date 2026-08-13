@@ -618,6 +618,21 @@ export function MeusApontamentos() {
     }
   }
 
+  // Descrição de uma sessão AINDA NÃO confirmada (sem RatItem) — o mesmo PATCH usado abaixo
+  // para item já confirmado, mas o backend detecta a ausência de RatItem e grava direto em
+  // AtividadeSessaoExecucao.observacao. Sem isso, o texto só existia no estado local
+  // (`descricoes`) e um F5 antes de clicar Confirmar perdia a edição.
+  async function salvarDescricaoSessaoPendente(sessaoId: number, texto: string) {
+    try {
+      await axios.patch(`/api/apontamentos/${sessaoId}`, { desati: texto });
+      setDescricoes((atual) => ({ ...atual, [sessaoId]: texto }));
+      setEditandoDescricaoId(null);
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao salvar a descrição");
+    }
+  }
+
   // Observação (RatItem.desati) de um item já confirmado. É o campo que a aprovação da RAT
   // exige em todos os itens e que vai no desAti do Senior, então precisa ser preenchível
   // depois do fato — o backend só permite enquanto o item não foi registrado no ERP.
@@ -1258,18 +1273,15 @@ export function MeusApontamentos() {
             <ModalEditarDescricao
               titulo={`Proposta ${sessao.codpro}`}
               valorInicial={descricoes[sessao.id] ?? sessao.observacao ?? ""}
-              onSalvar={(texto) => {
-                setDescricoes((atual) => ({ ...atual, [sessao.id]: texto }));
-                setEditandoDescricaoId(null);
-              }}
+              onSalvar={(texto) => salvarDescricaoSessaoPendente(sessao.id, texto)}
               onFechar={() => setEditandoDescricaoId(null)}
             />
           );
         })()}
 
-      {/* Edição da observação de um item JÁ confirmado (dentro da RAT). Diferente do modal
-          acima, que edita a descrição de uma sessão ainda não confirmada e só guarda o
-          texto em memória, aqui o salvar vai direto pro banco via PATCH. */}
+      {/* Edição da observação de um item JÁ confirmado (dentro da RAT) — mesmo PATCH do modal
+          acima (que edita a sessão ainda não confirmada); o backend decide onde grava
+          (RatItem.desati ou AtividadeSessaoExecucao.observacao) conforme o estado da sessão. */}
       {editandoObservacao && (
         <ModalEditarDescricao
           somenteLeitura={editandoObservacao.somenteLeitura}

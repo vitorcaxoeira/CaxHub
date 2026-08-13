@@ -785,11 +785,12 @@ apontamentosRouter.post("/envio/:ratItemId/reenviar", async (req: AuthenticatedR
   }
 });
 
-// Edita a observação (RatItem.desati) de um apontamento já confirmado — é como o
-// consultor preenche o que faltou pra RAT poder ser aprovada (ver PATCH
-// /rats/:id/aprovar, que exige observação em todo item). Só o dono, só enquanto a RAT
-// pai ainda está Digitada e o item ainda não foi confirmado no Senior — mesmos guards
-// de DELETE /:id logo abaixo.
+// Edita a descrição de um apontamento — de uma sessão ainda não confirmada
+// (AtividadeSessaoExecucao.observacao, ver Meus Apontamentos > "Sessões pendentes de
+// confirmação") ou de um item já confirmado (RatItem.desati, é como o consultor preenche o
+// que faltou pra RAT poder ser aprovada — ver PATCH /rats/:id/aprovar, que exige observação
+// em todo item). No segundo caso, só o dono, só enquanto a RAT pai ainda está Digitada e o
+// item ainda não foi confirmado no Senior — mesmos guards de DELETE /:id logo abaixo.
 apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
   try {
     const sessaoId = Number(req.params.id);
@@ -813,8 +814,17 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
       res.status(404).json({ error: "Apontamento não encontrado" });
       return;
     }
+    if (sessao.excluidaEm != null) {
+      res.status(400).json({ error: "Sessão excluída — não é possível editar" });
+      return;
+    }
+    // Ainda não confirmada (sem RatItem): grava direto na sessão. É o mesmo campo que
+    // confirmarSessao usa como padrão quando o consultor confirma sem editar de novo (ver
+    // AtividadeSessaoExecucao.observacao) — sem isso, o texto só existia em memória no
+    // navegador e um F5 antes de confirmar perdia a edição.
     if (!sessao.ratItem) {
-      res.status(400).json({ error: "Sessão ainda não confirmada — nada a editar" });
+      await prisma.atividadeSessaoExecucao.update({ where: { id: sessaoId }, data: { observacao: desati } });
+      res.json({ ok: true });
       return;
     }
     if (sessao.ratItem.numrat != null) {
