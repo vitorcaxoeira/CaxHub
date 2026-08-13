@@ -92,6 +92,10 @@ export function SincronizacaoErp() {
   // entra no polling de 10s porque é dado de conferência, não de acompanhamento.
   const [expandido, setExpandido] = useState<string | null>(null);
   const [removidosPorJob, setRemovidosPorJob] = useState<Record<string, ItemRemovido[] | "carregando" | "erro">>({});
+  // Filtro por texto — busca tanto pela descrição amigável ("Empresas") quanto pelo nome
+  // técnico do job ("empresa-sync"), útil pra achar rápido numa lista que já passa de 30
+  // tabelas. Só filtra a tabela; os cards de resumo continuam contando tudo.
+  const [busca, setBusca] = useState("");
 
   function carregar() {
     axios
@@ -163,6 +167,12 @@ export function SincronizacaoErp() {
     (soma, j) => soma + (j.ultimaVarredura?.modo === "simular" ? j.ultimaVarredura.detectados : 0),
     0
   );
+  const buscaNormalizada = busca.trim().toLowerCase();
+  const jobsFiltrados = buscaNormalizada
+    ? jobs.filter(
+        (j) => j.displayName.toLowerCase().includes(buscaNormalizada) || j.jobName.toLowerCase().includes(buscaNormalizada)
+      )
+    : jobs;
   const rodandoAgora = jobs.filter((j) => j.emAndamento).length;
   const maisDesatualizada = jobs.reduce<JobSync | null>((pior, job) => {
     if (!pior) return job;
@@ -265,6 +275,15 @@ export function SincronizacaoErp() {
         </p>
       )}
 
+      <div className="mb-3">
+        <input
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Buscar por descrição ou nome da tabela..."
+          className="w-80 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+      </div>
+
       <div className="overflow-hidden rounded-lg border border-border bg-surface">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
@@ -327,7 +346,7 @@ export function SincronizacaoErp() {
                   </tr>
                 ))}
               {!loading &&
-                jobs.map((job) => (
+                jobsFiltrados.map((job) => (
                 <Fragment key={job.jobName}>
                 <tr className="border-t border-border/60 transition hover:bg-surface-2">
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{job.ordemExecucao}</td>
@@ -495,6 +514,13 @@ export function SincronizacaoErp() {
                 <tr>
                   <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhuma tabela cadastrada.
+                  </td>
+                </tr>
+              )}
+              {!loading && jobs.length > 0 && jobsFiltrados.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
+                    Nenhuma tabela encontrada para "{busca.trim()}".
                   </td>
                 </tr>
               )}
