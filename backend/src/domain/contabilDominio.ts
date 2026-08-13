@@ -124,11 +124,25 @@ export function debcreLabel(debcre: string | null): string {
   return DEBCRE_LABELS[debcre] ?? debcre;
 }
 
-// Larguras (em caracteres) de cada nível da hierarquia de PlanoContabil.clacta —
-// confirmado contra os 547 registros reais em 12/08/2026 (ex.: "4" -> "402" -> "40201"
-// -> "4020103" -> "40201030001" -> "4020103000100001"). O nível de um `clacta` é o
-// índice em que `.length` aparece nesta lista.
-export const NIVEIS_CLACTA = [1, 3, 5, 7, 11, 16];
+// "Receitas x Despesas" — o nível que fica ENTRE a Conta Paralela e a árvore de contas no
+// relatório de origem. Não é uma conta: é o `defgru` da conta agrupado, e os códigos "00"/"10"
+// são só chave de ordenação (Receitas antes de Despesas), deixando espaço pra intercalar outros
+// grupos depois sem renumerar. Validado célula a célula contra o relatório em 13/08/2026:
+// agrupar o realizado de ADM/2026 por defgru dá exatamente as duas linhas do print, nos 8 meses.
+//
+// Hoje só existem D e R entre as contas com `despar`, mas LGruCta tem 15 valores — daí o
+// fallback ordenado no fim: um grupo novo aparece no relatório (depois de Receitas e Despesas,
+// com o rótulo do domínio) em vez de sumir silenciosamente. Quando isso acontecer, vale definir
+// a ordem certa com o Vitor em vez de deixar tudo em "90".
+const DEFGRU_BUCKETS: Record<string, { ordem: string; rotulo: string }> = {
+  R: { ordem: "00", rotulo: "Receitas" },
+  D: { ordem: "10", rotulo: "Despesas" },
+};
+
+export function defgruBucket(defgru: string | null): { ordem: string; rotulo: string } {
+  if (!defgru) return { ordem: "90", rotulo: "Sem grupo contábil" };
+  return DEFGRU_BUCKETS[defgru] ?? { ordem: "90", rotulo: defgruLabel(defgru) };
+}
 
 // "Conta Paralela" (PlanoContabil.despar) — hoje coincide 1:1 com departamento (mesmos
 // códigos de USU_LDepExe usados em Proposta.depexe/DEPEXE_LABELS). Confirmado no Senior

@@ -257,9 +257,16 @@ model CentroCusto {
   /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
   anasin String? @db.VarChar(1)
   // Classificação hierárquica do centro de custo — mesmo papel que PlanoContabil.clacta
-  // tem pro plano de contas (substring pra montar os níveis pai). Usada na SQL de
-  // Contábil/Orçamento (11/08/2026); não vinha sincronizada até então.
+  // tem pro plano de contas (substring pra montar os níveis pai). Adicionada em 11/08/2026,
+  // mas ficou fora da query do centroCustoSync até 13/08 — por isso esteve 0/228 preenchida.
   claccu String? @db.VarChar(30)
+  // Nível e máscara nativos do Senior (E044CCU.NivCcu / MskCcu) — equivalentes de
+  // PlanoContabil.nivcta/mskgcc. A máscara do modelo de CC daqui é "1.22.333" (larguras
+  // acumuladas 1,3,6), conferida contra os 228 centros de custo reais: todos casam.
+  // Diferente do plano de contas, o pai aqui NÃO precisa ser derivado — `ccupai` acima é
+  // nativo e já vem preenchido pelo sync.
+  nivccu Int?
+  mskccu String? @db.VarChar(40)
 
   @@id([codemp, codccu])
   @@map("centros_custo")
@@ -1349,6 +1356,29 @@ model PlanoContabil {
   // relatório de origem, célula a célula, em 12/08/2026 — ver contabilDominio.ts pro mapa
   // grupo -> depexe (ainda não usado em RBAC, é o gancho pra "gestor só vê seu depto").
   despar String? @db.VarChar(80)
+  // NÍVEL DA CONTA NA HIERARQUIA (E045PLA.NivCta) — 1..15. O Senior já entrega isto pronto:
+  // não é preciso deduzir do comprimento de `clacta`. Conferido contra a derivação por
+  // máscara em 12/08/2026: 547 de 547 contas idênticas, zero divergência.
+  nivcta Int?
+  // Máscara do grupo a que a conta pertence (E045PLA.MskGcc) — ex. "1.22.33.44.5555.66666",
+  // que significa larguras acumuladas 1,3,5,7,11,16. É o que torna a hierarquia portátil
+  // entre planos de contas diferentes (CaxHub_Hedel): as larguras passam a vir do dado, em
+  // vez de constante no código. Varia por modelo E por grupo de contas — o modelo 188 do
+  // Senior, por exemplo, usa "1.22.33.44.55" no Ativo/Passivo e "1.22.33.44.55.66" no
+  // grupo X. Ver domain/hierarquiaPlano.ts.
+  mskgcc String? @db.VarChar(40)
+  // Grupo de contas do modelo de plano (E045PLA.GruCta) — o `codgcc` que casa com
+  // E043MMP.CodGcc, onde vive a máscara por grupo.
+  gructa Int?
+  /// Domínio "LSitCta": A=Ativa, I=Inativa
+  // Deliberadamente NÃO filtrado nas visões contábeis: as 4 contas inativas de hoje têm
+  // movimento até set/2025, e excluí-las mudaria números de anos fechados sem ninguém pedir.
+  sitcta String? @db.VarChar(1)
+  // Conta-pai na hierarquia — DERIVADO no fim do sync (o Senior não tem "CtaPai" em
+  // E045PLA, só em E044CCU.CcuPai). É a conta de `nivcta - 1` cujo `clacta` é prefixo deste,
+  // com o comprimento do prefixo vindo de `mskgcc`. Sem FK formal, mesma escolha de
+  // CentroCusto.ccupai. NULL = raiz (nivcta 1).
+  paiCtared Int? @map("pai_ctared")
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que

@@ -2,11 +2,15 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { carimbo } from "./varrerRemovidos";
+import { derivarPais } from "../domain/hierarquiaPlano";
 
 export const JOB_NAME = "plano_contabil-sync";
 export const CRON_EXPR = "50 4 * * *";
 export const CAMPO_DATA: string | null = "DatAlt";
-const BASE_QUERY = `SELECT codemp AS codemp, ctared AS ctared, descta AS descta, clacta AS clacta, defgru AS defgru, natcta AS natcta, anasin AS anasin, despar AS despar FROM e045pla`;
+// nivcta/mskgcc/gructa/sitcta acrescentados em 13/08/2026: o Senior já entrega o nível da
+// conta e a máscara do grupo, então a hierarquia deixou de ser deduzida do comprimento de
+// `clacta` com larguras chumbadas no código (ver domain/hierarquiaPlano.ts).
+const BASE_QUERY = `SELECT codemp AS codemp, ctared AS ctared, descta AS descta, clacta AS clacta, defgru AS defgru, natcta AS natcta, anasin AS anasin, despar AS despar, nivcta AS nivcta, mskgcc AS mskgcc, gructa AS gructa, sitcta AS sitcta FROM e045pla`;
 
 function montarQuery(desde?: Date): string {
   if (!desde) return BASE_QUERY;
@@ -22,6 +26,10 @@ interface PlanoContabilRow {
   natcta: string;
   anasin: string;
   despar?: string;
+  nivcta?: number;
+  mskgcc?: string;
+  gructa?: number;
+  sitcta?: string;
 }
 
 export async function runPlanoContabilSync(desde?: Date): Promise<void> {
@@ -37,12 +45,36 @@ export async function runPlanoContabilSync(desde?: Date): Promise<void> {
     const rows = (await runSqlViaSoapPaginated(QUERY, ["codemp", "ctared"])) as PlanoContabilRow[];
 
     for (const row of rows) {
-      const data = { codemp: row.codemp, ctared: row.ctared, descta: row.descta, clacta: row.clacta, defgru: row.defgru, natcta: row.natcta, anasin: row.anasin, despar: row.despar, ...carimbo(inicio) };
+      const data = { codemp: row.codemp, ctared: row.ctared, descta: row.descta, clacta: row.clacta, defgru: row.defgru, natcta: row.natcta, anasin: row.anasin, despar: row.despar, nivcta: row.nivcta, mskgcc: row.mskgcc, gructa: row.gructa, sitcta: row.sitcta, ...carimbo(inicio) };
       await prisma.planoContabil.upsert({
         where: { codemp_ctared: { codemp: row.codemp, ctared: row.ctared } },
         update: data,
         create: data,
       });
+    }
+
+    // Conta-pai: único campo derivado desta tabela — o Senior não tem "CtaPai" em E045PLA
+    // (só E044CCU.CcuPai, pro centro de custo). Roda DEPOIS do laço de upsert porque precisa
+    // do plano inteiro em mãos pra achar o pai de cada conta, e por empresa porque `clacta`
+    // só é único dentro de uma empresa. Num sync incremental (`desde` preenchido) as contas
+    // não alteradas continuam no banco, então lê do banco em vez de usar `rows`.
+    const empresasTocadas = [...new Set(rows.map((r) => r.codemp))];
+    for (const codemp of empresasTocadas) {
+      const contas = await prisma.planoContabil.findMany({
+        where: { codemp },
+        select: { ctared: true, clacta: true, nivcta: true, mskgcc: true, paiCtared: true },
+      });
+      const pais = derivarPais(
+        contas.map((c) => ({ codigo: c.ctared, classificacao: c.clacta, nivel: c.nivcta, mascara: c.mskgcc }))
+      );
+      for (const conta of contas) {
+        const paiCtared = pais.get(conta.ctared) ?? null;
+        if (paiCtared === conta.paiCtared) continue; // nada mudou — não gasta UPDATE
+        await prisma.planoContabil.update({
+          where: { codemp_ctared: { codemp, ctared: conta.ctared } },
+          data: { paiCtared },
+        });
+      }
     }
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — vem comentada de

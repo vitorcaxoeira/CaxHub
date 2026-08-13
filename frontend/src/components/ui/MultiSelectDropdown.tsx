@@ -69,6 +69,26 @@ export function MultiSelectDropdown<T extends string | number>({
 
       {open && (
         <div className="absolute left-0 top-full z-20 mt-1 w-64 max-h-64 overflow-y-auto rounded-md border border-border bg-surface shadow-lg">
+          {(selecionados.length < opcoes.length || selecionados.length > 0) && (
+            <div className="border-b border-border">
+              {selecionados.length < opcoes.length && (
+                <button
+                  onClick={() => onChange(opcoes.map((o) => o.value))}
+                  className="w-full px-3 py-2 text-left text-[11.5px] text-muted hover:bg-surface-2"
+                >
+                  Selecionar todos
+                </button>
+              )}
+              {selecionados.length > 0 && (
+                <button
+                  onClick={() => onChange([])}
+                  className="w-full px-3 py-2 text-left text-[11.5px] text-muted hover:bg-surface-2"
+                >
+                  Limpar seleção
+                </button>
+              )}
+            </div>
+          )}
           {opcoes.map((o) => (
             <label
               key={String(o.value)}
@@ -83,14 +103,6 @@ export function MultiSelectDropdown<T extends string | number>({
               {o.label}
             </label>
           ))}
-          {selecionados.length > 0 && (
-            <button
-              onClick={() => onChange([])}
-              className="w-full border-t border-border px-3 py-2 text-left text-[11.5px] text-muted hover:bg-surface-2"
-            >
-              Limpar seleção
-            </button>
-          )}
         </div>
       )}
     </div>

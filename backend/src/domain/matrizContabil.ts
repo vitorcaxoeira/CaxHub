@@ -1,139 +1,292 @@
-// Montagem da hierarquia do Resultado Analítico (backend/src/routes/contabil.ts) — separado
-// da rota porque é lógica de negócio (agregação em árvore), não parsing de request.
+// Montagem de hierarquias do módulo Contábil (backend/src/routes/contabil.ts) — separado da
+// rota porque é lógica de negócio (agregação em árvore), não parsing de request.
 //
-// A árvore não segue o prefixo de `clacta` "cru": segue o prefixo SÓ ENTRE contas do MESMO
-// grupo (`despar`). Ex.: "3" (RECEITAS) é ancestral de "30201010001" (211 - Descontos Obtidos)
-// em `clacta`, mas "3" tem despar vazio e "30201010001" tem despar=ADM — logo, dentro do grupo
-// ADM, a conta 211 não tem pai (fica no topo do grupo). Isso é deliberado (ver plano): contas
-// "guarda-chuva" como "GASTOS COM PESSOAL - (ADM)" É QUE carregam o despar do grupo, e por
-// coincidência do plano de contas do Senior isso reproduz exatamente o agrupamento do relatório
-// de origem sem precisar inventar nó sintético nenhum.
+// Duas árvores hoje, montadas em cima do MESMO construtor genérico (`criarConstrutorArvore`):
+// contas (`montarMatrizResultado`, com Grupo→Receitas/Despesas→níveis do plano) e centro de
+// custo (`montarMatrizCentroCusto`, direto pelos níveis de CC, sem grupo/bucket).
+//
+// A árvore de contas é montada A PARTIR DAS FOLHAS ("leaf-driven"), que é como o relatório de
+// origem faz: a conta que recebeu o lançamento carrega o grupo gerencial (`despar`) e o grupo
+// contábil (`defgru`), e os níveis acima saem de subir por `paiCtared` — independente de o
+// ancestral ter `despar` próprio ou não. Cada nó soma apenas as folhas que estão sob ele DENTRO
+// daquele grupo.
+//
+// Uma versão anterior fazia o contrário: só considerava contas que tinham `despar` e ligava-as
+// entre si por prefixo de `clacta`. Isso causava dois defeitos:
+//   1. Níveis intermediários desapareciam ("3 - RECEITAS", "301", "30101" não têm `despar`), e a
+//      árvore pulava degraus — era o "falta um nível" percebido na comparação com o relatório.
+//   2. Sintética com `despar` virava raiz de grupo indevidamente. O caso real:
+//      `753 - CUSTOS OPERACIONAIS` (clacta 40201) tem despar=SERP em E045PLA, mas é ancestral de
+//      TODOS os departamentos — aparecia como raiz do SERP. (O plano paralelo E043PCM, usado pelo
+//      relatório de origem, nem marca essa conta; a divergência entre as duas fontes são só 2
+//      contas sintéticas, ambas sem lançamento, então nenhum VALOR estava errado — só a estrutura.)
+//
+// Hierarquia de contas: Grupo (despar) → bucket Receitas/Despesas (defgru) → níveis da conta.
+// Hierarquia de CC: níveis do centro de custo direto (raiz = nível 1 de verdade do plano de CC).
 
-import { NIVEIS_CLACTA } from "./contabilDominio";
+import { defgruBucket } from "./contabilDominio";
 
-export interface ContaParaMatriz {
-  ctared: number;
-  clacta: string;
-  descta: string;
-  anasin: string;
-  despar: string; // já não-vazio neste ponto (filtro aplicado antes de chamar montarMatrizResultado)
-}
+export type TipoLinhaMatriz = "grupo" | "bucket" | "conta";
 
 export interface LinhaMatrizResultado {
   chave: string;
   chavePai: string | null;
   nivel: number;
   rotulo: string;
-  ehGrupo: boolean;
+  tipo: TipoLinhaMatriz;
+  /** Nível do item no plano (NivCta/NivCcu); null em grupo/bucket. */
+  nivelPlano: number | null;
   anasin: string | null;
   valores: number[];
   total: number;
 }
 
-function somaVetores(a: number[], b: number[]): number[] {
-  return a.map((v, i) => v + b[i]);
-}
-
-// Acha, dentro do mesmo grupo, a conta com o prefixo de `clacta` mais longo (o pai mais
-// próximo). Pode "pular" nível se o intermediário não pertencer a este grupo — é esperado.
-function encontrarPaiNoGrupo(conta: ContaParaMatriz, contasDoGrupoPorClacta: Map<string, ContaParaMatriz>): ContaParaMatriz | null {
-  const larguras = NIVEIS_CLACTA.filter((largura) => largura < conta.clacta.length).sort((a, b) => b - a);
-  for (const largura of larguras) {
-    const pai = contasDoGrupoPorClacta.get(conta.clacta.slice(0, largura));
-    if (pai) return pai;
-  }
-  return null;
+interface NoEmConstrucao {
+  chave: string;
+  chavePai: string | null;
+  nivel: number;
+  rotulo: string;
+  tipo: TipoLinhaMatriz;
+  nivelPlano: number | null;
+  anasin: string | null;
+  /** Critério de ordenação entre irmãos (rótulo do grupo, ordem do bucket, clacta/claccu). */
+  ordenacao: string;
+  valores: number[];
+  filhos: string[];
 }
 
 /**
- * @param contas Metadados de TODAS as contas relevantes (já filtradas por grupo/incluirSemGrupo) —
- *   inclui tanto folhas quanto os nós "guarda-chuva" que carregam despar, mesmo sem movimento no
- *   período (é preciso pra árvore não ficar com buracos).
- * @param valoresPorCtared Vetor de N meses por `ctared` que teve movimento no período; ctared
- *   sem entrada aqui não tem lançamento próprio (só herda de filhos, se tiver).
- * @param numMeses Tamanho do vetor de valores (12 pro ano completo).
+ * Núcleo comum às duas árvores: registra nós (idempotente — a mesma chave só é criada uma vez),
+ * acumula valores e devolve a lista achatada em pré-ordem (pai antes dos filhos), que é o que o
+ * front espera pra resolver visibilidade numa passada só (ver MatrizContabil.tsx).
+ */
+function criarConstrutorArvore(numColunas: number) {
+  const nos = new Map<string, NoEmConstrucao>();
+  const raizes: string[] = [];
+
+  function garantirNo(
+    chave: string,
+    chavePai: string | null,
+    dados: Omit<NoEmConstrucao, "chave" | "chavePai" | "valores" | "filhos">
+  ): NoEmConstrucao {
+    const existente = nos.get(chave);
+    if (existente) return existente;
+    const novo: NoEmConstrucao = { chave, chavePai, ...dados, valores: new Array(numColunas).fill(0), filhos: [] };
+    nos.set(chave, novo);
+    if (chavePai === null) raizes.push(chave);
+    else nos.get(chavePai)!.filhos.push(chave);
+    return novo;
+  }
+
+  function somarNoCaminho(caminho: string[], valores: number[]) {
+    for (const chave of caminho) {
+      const no = nos.get(chave)!;
+      for (let i = 0; i < numColunas; i++) no.valores[i] += valores[i];
+    }
+  }
+
+  function emitirTodos(): LinhaMatrizResultado[] {
+    const linhas: LinhaMatrizResultado[] = [];
+    const ordenarPorChave = (chaves: string[]) =>
+      [...chaves].sort((a, b) => nos.get(a)!.ordenacao.localeCompare(nos.get(b)!.ordenacao, "pt-BR"));
+
+    function emitir(chave: string) {
+      const no = nos.get(chave)!;
+      linhas.push({
+        chave: no.chave,
+        chavePai: no.chavePai,
+        nivel: no.nivel,
+        rotulo: no.rotulo,
+        tipo: no.tipo,
+        nivelPlano: no.nivelPlano,
+        anasin: no.anasin,
+        valores: no.valores,
+        total: no.valores.reduce((a, b) => a + b, 0),
+      });
+      for (const filho of ordenarPorChave(no.filhos)) emitir(filho);
+    }
+    for (const raiz of ordenarPorChave(raizes)) emitir(raiz);
+    return linhas;
+  }
+
+  return { garantirNo, somarNoCaminho, emitirTodos };
+}
+
+// Sobe a cadeia raiz→folha de um item começando nele mesmo, seguindo `pai(item)`. `codigo`
+// extrai a chave de identidade (ctared/codccu) — não dá pra inferir genericamente porque o
+// nome do campo difere entre conta e centro de custo. `visitados` protege contra ciclo em
+// dado torto (não deveria existir, mas um laço aqui travaria a requisição inteira).
+function cadeiaAteRaiz<T, K>(item: T, codigo: (item: T) => K, pai: (item: T) => T | undefined): T[] {
+  const cadeia: T[] = [];
+  const visitados = new Set<K>();
+  let atual: T | undefined = item;
+  while (atual && !visitados.has(codigo(atual))) {
+    visitados.add(codigo(atual));
+    cadeia.unshift(atual);
+    atual = pai(atual);
+  }
+  return cadeia;
+}
+
+// ---------- Árvore de contas: Grupo → Receitas/Despesas → níveis do plano ----------
+
+export interface ContaParaMatriz {
+  ctared: number;
+  clacta: string;
+  descta: string;
+  anasin: string;
+  /** Grupo gerencial ("Conta Paralela"). Só é lido da conta que teve movimento. */
+  despar: string;
+  /** Domínio LGruCta — vira o nível Receitas/Despesas. */
+  defgru: string | null;
+  /** E045PLA.NivCta. Null cai no fallback da posição na cadeia de ancestrais. */
+  nivcta: number | null;
+  paiCtared: number | null;
+}
+
+/**
+ * @param contas Metadados de TODAS as contas do recorte — folhas e ancestrais. Os ancestrais
+ *   precisam estar aqui mesmo sem `despar`, senão a cadeia de `paiCtared` não fecha.
+ * @param valoresPorCtared Vetor de valores por `ctared` que teve movimento no período. Só
+ *   estas contas geram linhas: conta sem movimento no período não aparece (é o comportamento
+ *   do relatório de origem, e evita centenas de linhas zeradas).
+ * @param numColunas Tamanho do vetor de valores — uma posição por combinação ano×mês
+ *   selecionada (ver montagem de `colunas` em routes/contabil.ts).
+ * @param niveisVisiveis Níveis do plano (`nivcta`) que devem aparecer na coluna Conta. Null =
+ *   todos. Omitir um nível intermediário não esconde valor nenhum: os descendentes sobem pro
+ *   ancestral visível mais próximo, igual ao seletor de campos do relatório de origem.
  */
 export function montarMatrizResultado(
   contas: ContaParaMatriz[],
   valoresPorCtared: Map<number, number[]>,
-  numMeses: number,
+  numColunas: number,
+  niveisVisiveis?: Set<number> | null
 ): { linhas: LinhaMatrizResultado[]; totalGeral: number[] } {
-  const porGrupo = new Map<string, ContaParaMatriz[]>();
+  const porCtared = new Map(contas.map((c) => [c.ctared, c]));
+  const arvore = criarConstrutorArvore(numColunas);
+  const totalGeral = new Array<number>(numColunas).fill(0);
+
   for (const conta of contas) {
-    const lista = porGrupo.get(conta.despar) ?? [];
-    lista.push(conta);
-    porGrupo.set(conta.despar, lista);
-  }
+    const valores = valoresPorCtared.get(conta.ctared);
+    if (!valores) continue; // sem movimento no período
 
-  const linhas: LinhaMatrizResultado[] = [];
-  const totalGeral = new Array<number>(numMeses).fill(0);
-  const gruposOrdenados = [...porGrupo.keys()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+    const cadeia = cadeiaAteRaiz(
+      conta,
+      (c) => c.ctared,
+      (c) => (c.paiCtared != null ? porCtared.get(c.paiCtared) : undefined)
+    );
 
-  for (const grupo of gruposOrdenados) {
-    const contasDoGrupo = porGrupo.get(grupo)!;
-    const contasDoGrupoPorClacta = new Map(contasDoGrupo.map((c) => [c.clacta, c]));
+    // Nível do plano: o do Senior quando existe; senão a posição na cadeia (linha nunca
+    // ressincronizada depois de 13/08/2026).
+    const nivelDoPlano = (c: ContaParaMatriz, indice: number) => c.nivcta ?? indice + 1;
+    const cadeiaVisivel = cadeia.filter((c, i) => niveisVisiveis == null || niveisVisiveis.has(nivelDoPlano(c, i)));
 
-    // ctared do pai (dentro do grupo) de cada conta; null = topo do grupo.
-    const paiPorCtared = new Map<number, number | null>();
-    for (const conta of contasDoGrupo) {
-      paiPorCtared.set(conta.ctared, encontrarPaiNoGrupo(conta, contasDoGrupoPorClacta)?.ctared ?? null);
-    }
-    const filhosPorPai = new Map<number, ContaParaMatriz[]>(); // chave -1 = topo do grupo
-    for (const conta of contasDoGrupo) {
-      const chavePai = paiPorCtared.get(conta.ctared) ?? -1;
-      const lista = filhosPorPai.get(chavePai) ?? [];
-      lista.push(conta);
-      filhosPorPai.set(chavePai, lista);
-    }
-
-    const zeros = new Array<number>(numMeses).fill(0);
-    const valoresAgregadosPorCtared = new Map<number, number[]>();
-    function valoresAgregadosDe(ctared: number): number[] {
-      const memo = valoresAgregadosPorCtared.get(ctared);
-      if (memo) return memo;
-      let soma = valoresPorCtared.get(ctared) ?? zeros;
-      for (const filho of filhosPorPai.get(ctared) ?? []) {
-        soma = somaVetores(soma, valoresAgregadosDe(filho.ctared));
-      }
-      valoresAgregadosPorCtared.set(ctared, soma);
-      return soma;
-    }
-
-    const contasDoTopo = [...(filhosPorPai.get(-1) ?? [])].sort((a, b) => a.clacta.localeCompare(b.clacta));
-    let valoresGrupo = zeros;
-    for (const conta of contasDoTopo) valoresGrupo = somaVetores(valoresGrupo, valoresAgregadosDe(conta.ctared));
-
-    const chaveGrupo = `grupo:${grupo}`;
-    linhas.push({
-      chave: chaveGrupo,
-      chavePai: null,
+    const bucket = defgruBucket(conta.defgru);
+    const chaveGrupo = `g:${conta.despar}`;
+    arvore.garantirNo(chaveGrupo, null, {
       nivel: 0,
-      rotulo: grupo,
-      ehGrupo: true,
+      rotulo: conta.despar,
+      tipo: "grupo",
+      nivelPlano: null,
       anasin: null,
-      valores: valoresGrupo,
-      total: valoresGrupo.reduce((a, b) => a + b, 0),
+      ordenacao: conta.despar,
     });
-    totalGeral.forEach((_, i) => (totalGeral[i] += valoresGrupo[i]));
+    const chaveBucket = `${chaveGrupo}|b:${bucket.ordem}`;
+    arvore.garantirNo(chaveBucket, chaveGrupo, {
+      nivel: 1,
+      rotulo: `${bucket.ordem} - ${bucket.rotulo}`,
+      tipo: "bucket",
+      nivelPlano: null,
+      anasin: null,
+      ordenacao: bucket.ordem,
+    });
 
-    const achatar = (conta: ContaParaMatriz, nivel: number, chavePai: string): void => {
-      const valores = valoresAgregadosDe(conta.ctared);
-      const chave = `conta:${conta.ctared}`;
-      linhas.push({
-        chave,
-        chavePai,
-        nivel,
-        rotulo: `${conta.ctared} - ${conta.descta}`,
-        ehGrupo: false,
-        anasin: conta.anasin,
-        valores,
-        total: valores.reduce((a, b) => a + b, 0),
+    // O caminho carrega o grupo, então a MESMA conta aparece em grupos diferentes como nós
+    // distintos — é o que faz "4 - DESPESAS" existir dentro de ADM, COM, SERP… cada um com o
+    // valor do seu próprio grupo.
+    const caminho = [chaveGrupo, chaveBucket];
+    cadeiaVisivel.forEach((c, i) => {
+      const chavePai = caminho[caminho.length - 1];
+      const chave = `${chavePai}|c:${c.ctared}`;
+      arvore.garantirNo(chave, chavePai, {
+        nivel: 2 + i,
+        rotulo: `${c.ctared} - ${c.descta}`,
+        tipo: "conta",
+        nivelPlano: c.nivcta ?? null,
+        anasin: c.anasin,
+        ordenacao: c.clacta,
       });
-      const filhos = [...(filhosPorPai.get(conta.ctared) ?? [])].sort((a, b) => a.clacta.localeCompare(b.clacta));
-      for (const filho of filhos) achatar(filho, nivel + 1, chave);
-    };
-    for (const conta of contasDoTopo) achatar(conta, 1, chaveGrupo);
+      caminho.push(chave);
+    });
+
+    arvore.somarNoCaminho(caminho, valores);
+    for (let i = 0; i < numColunas; i++) totalGeral[i] += valores[i];
   }
 
-  return { linhas, totalGeral };
+  return { linhas: arvore.emitirTodos(), totalGeral };
+}
+
+// ---------- Árvore de centro de custo: níveis nativos (CcuPai já vem do Senior) ----------
+
+export interface CentroCustoParaMatriz {
+  codccu: string;
+  desccu: string;
+  claccu: string;
+  anasin: string | null;
+  /** E044CCU.NivCcu. Null cai no fallback da posição na cadeia de ancestrais. */
+  nivccu: number | null;
+  /** E044CCU.CcuPai — pai NATIVO (diferente de conta, aqui não precisa derivar nada). Vem " "
+   *  (espaço) do Senior pra raiz, não NULL — normalizar pra null antes de passar aqui. */
+  ccupai: string | null;
+}
+
+/**
+ * Mesmo espírito de `montarMatrizResultado`, mas sem grupo/bucket: o centro de custo já tem
+ * hierarquia própria e completa via `ccupai` nativo, sem precisar de uma dimensão gerencial por
+ * cima. Raiz = centro de custo sem pai (nível 1 de verdade do plano de CC — hoje "10 - CENTRO DE
+ * CUSTOS" e "320 - SUMIR").
+ */
+export function montarMatrizCentroCusto(
+  centros: CentroCustoParaMatriz[],
+  valoresPorCodccu: Map<string, number[]>,
+  numColunas: number,
+  niveisVisiveis?: Set<number> | null
+): { linhas: LinhaMatrizResultado[]; totalGeral: number[] } {
+  const porCodigo = new Map(centros.map((c) => [c.codccu, c]));
+  const arvore = criarConstrutorArvore(numColunas);
+  const totalGeral = new Array<number>(numColunas).fill(0);
+
+  for (const centro of centros) {
+    const valores = valoresPorCodccu.get(centro.codccu);
+    if (!valores) continue;
+
+    const cadeia = cadeiaAteRaiz(
+      centro,
+      (c) => c.codccu,
+      (c) => (c.ccupai != null ? porCodigo.get(c.ccupai) : undefined)
+    );
+
+    const nivelDoPlano = (c: CentroCustoParaMatriz, indice: number) => c.nivccu ?? indice + 1;
+    const cadeiaVisivel = cadeia.filter((c, i) => niveisVisiveis == null || niveisVisiveis.has(nivelDoPlano(c, i)));
+
+    const caminho: string[] = [];
+    cadeiaVisivel.forEach((c, i) => {
+      const chavePai = caminho.length > 0 ? caminho[caminho.length - 1] : null;
+      const chave = chavePai != null ? `${chavePai}|cc:${c.codccu}` : `cc:${c.codccu}`;
+      arvore.garantirNo(chave, chavePai, {
+        nivel: i,
+        rotulo: `${c.codccu} - ${c.desccu}`,
+        tipo: "conta",
+        nivelPlano: c.nivccu ?? null,
+        anasin: c.anasin,
+        ordenacao: c.claccu,
+      });
+      caminho.push(chave);
+    });
+
+    arvore.somarNoCaminho(caminho, valores);
+    for (let i = 0; i < numColunas; i++) totalGeral[i] += valores[i];
+  }
+
+  return { linhas: arvore.emitirTodos(), totalGeral };
 }

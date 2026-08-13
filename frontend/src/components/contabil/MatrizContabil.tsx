@@ -7,7 +7,10 @@ export interface LinhaMatrizContabil {
   chavePai: string | null;
   nivel: number;
   rotulo: string;
-  ehGrupo: boolean;
+  // "grupo" = Conta Paralela, "bucket" = Receitas/Despesas (defgru), "conta" = conta contábil.
+  tipo: "grupo" | "bucket" | "conta";
+  /** Nível da conta no plano (E045PLA.NivCta); null em grupo/bucket. */
+  nivelPlano: number | null;
   anasin: string | null;
   valores: number[];
   total: number;
@@ -18,6 +21,8 @@ interface MatrizContabilProps {
   linhas: LinhaMatrizContabil[];
   totalGeral: { valores: number[]; total: number };
   loading: boolean;
+  /** Header da 1ª coluna — "Conta" (padrão) ou "Centro de Custo" na aba de CC. */
+  rotuloColuna?: string;
 }
 
 const MESES_ABREV = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
@@ -36,7 +41,7 @@ function Valor({ v }: { v: number }) {
   );
 }
 
-export function MatrizContabil({ meses, linhas, totalGeral, loading }: MatrizContabilProps) {
+export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColuna = "Conta" }: MatrizContabilProps) {
   const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
 
   // "Chave -> tem filhos" — decide se a linha ganha seta de expandir/recolher.
@@ -110,8 +115,8 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading }: MatrizCon
         <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-border bg-surface-2">
-              <th className="sticky left-0 z-10 min-w-[280px] bg-surface-2 px-4 py-2 text-left font-mono text-[11px] font-medium uppercase tracking-wider text-muted">
-                Conta
+              <th className="sticky left-0 z-10 w-[340px] max-w-[340px] bg-surface-2 px-4 py-2 text-left font-mono text-[11px] font-medium uppercase tracking-wider text-muted">
+                {rotuloColuna}
               </th>
               {meses.map((mes) => (
                 <th key={mes} className="min-w-[92px] px-3 py-2 text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted">
@@ -130,10 +135,14 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading }: MatrizCon
               return (
                 <tr key={linha.chave} className="border-b border-border/50 hover:bg-surface-2/60">
                   <td
-                    className={`sticky left-0 z-10 bg-surface px-4 py-1.5 ${linha.ehGrupo ? "font-semibold" : ""}`}
-                    style={{ paddingLeft: 16 + linha.nivel * 18 }}
+                    className={`sticky left-0 z-10 w-[340px] max-w-[340px] bg-surface px-4 py-1.5 ${
+                      linha.tipo === "conta" ? "" : "font-semibold"
+                    }`}
+                    // 14px por nível (não 18): com grupo + Receitas/Despesas + até 6 níveis de
+                    // conta, a indentação come a coluna fixa e não sobra texto legível.
+                    style={{ paddingLeft: 16 + linha.nivel * 14 }}
                   >
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex min-w-0 items-center gap-1.5">
                       {podeExpandir ? (
                         <button
                           onClick={() => alternarExpandir(linha.chave)}
@@ -156,7 +165,9 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading }: MatrizCon
                       ) : (
                         <span className="w-4 flex-none" />
                       )}
-                      <span className="text-[13px] text-foreground">{linha.rotulo}</span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={linha.rotulo}>
+                        {linha.rotulo}
+                      </span>
                     </div>
                   </td>
                   {linha.valores.map((v, i) => (
@@ -173,7 +184,9 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading }: MatrizCon
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-border bg-surface-2">
-              <td className="sticky left-0 z-10 bg-surface-2 px-4 py-2 font-semibold text-[13px] text-foreground">Total</td>
+              <td className="sticky left-0 z-10 w-[340px] max-w-[340px] truncate bg-surface-2 px-4 py-2 font-semibold text-[13px] text-foreground">
+                Total
+              </td>
               {totalGeral.valores.map((v, i) => (
                 <td key={i} className="px-3 py-2 text-right">
                   <Valor v={v} />
