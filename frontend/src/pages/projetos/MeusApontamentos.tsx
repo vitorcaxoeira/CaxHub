@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { formatHoras } from "../../utils/horas";
 import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
@@ -31,6 +31,10 @@ interface AjustePendente {
 interface SessaoPendente {
   id: number;
   atividadeId: number;
+  // Junto de codfor, é a chave EXATA que o servidor usa pra encapsular na RAT
+  // (buscarOuCriarRatRascunho: codemp+codfor+codpro) — usada no agrupamento do resumo do
+  // "Confirmar Todos", pra nunca divergir do agrupamento real.
+  codemp: number;
   codpro: number;
   numprj: number | null;
   cliente: string | null;
@@ -43,6 +47,13 @@ interface SessaoPendente {
   duracaoMinutos: number;
   origem: string;
   observacao: string | null;
+  codfor: number;
+  // Preenchido só quando `podeVerTodosApontamentos` (admin) — o consultor comum só vê as
+  // próprias sessões, então mostrar o nome dele em toda linha seria ruído.
+  consultorNome: string | null;
+  // Editar descrição, pedir ajuste e excluir são "só o dono" nos respectivos endpoints —
+  // controla quais ações do menu "⋯" a tela oferece (Confirmar não depende disto).
+  souDono: boolean;
   ajustePendente: AjustePendente | null;
 }
 
@@ -123,6 +134,7 @@ interface AtividadeDetalheDados {
   // os dois — o painel trata a ausência como "sem excedente".
   qtdhorPrevisto?: number | null;
   horasExcedentes?: number;
+  horasRealizadas: number;
 }
 
 const dataCurtaFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" });
@@ -276,6 +288,12 @@ export function MeusApontamentos() {
   // (mesma regra aplicada no backend, ver podeGerenciarDespesas em routes/rats.ts).
   const podeGerenciarDespesas = user?.role === "admin";
   const [sessoes, setSessoes] = useState<SessaoPendente[]>([]);
+  // Admin vê as sessões pendentes de todos os consultores (ver GET /sessoes-pendentes) —
+  // é o que liga a coluna Consultor e a barra de filtros abaixo.
+  const [podeVerTodosApontamentos, setPodeVerTodosApontamentos] = useState(false);
+  const [buscaSessoesInput, setBuscaSessoesInput] = useState("");
+  const buscaSessoesDebounced = useDebouncedValue(buscaSessoesInput, 350);
+  const [codforsFiltroSessoes, setCodforsFiltroSessoes] = useState<number[]>([]);
   const [atividades, setAtividades] = useState<AtividadeResumo[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -336,6 +354,7 @@ export function MeusApontamentos() {
     Promise.all([axios.get("/api/apontamentos/sessoes-pendentes"), axios.get("/api/apontamentos/minhas-atividades")])
       .then(([sessoesRes, atividadesRes]) => {
         setSessoes(sessoesRes.data.sessoes);
+        setPodeVerTodosApontamentos(Boolean(sessoesRes.data.podeVerTodos));
         setAtividades(atividadesRes.data.atividades);
         setErro(null);
       })
@@ -535,6 +554,66 @@ export function MeusApontamentos() {
       setErro(err.response?.data?.error ?? "Falha ao confirmar apontamento");
     } finally {
       setConfirmando(null);
+    }
+  }
+
+  // "Confirmar Todos" — resumo ANTES de disparar, agrupado pela MESMA chave que
+  // buscarOuCriarRatRascunho usa no servidor (codemp+codfor+codpro) pra encapsular o
+  // apontamento na RAT. É o que deixa visível, antes do clique, que a confirmação em lote
+  // não vai misturar proposta nenhuma — cada grupo aqui vira exatamente uma RAT (nova ou
+  // já existente) lá no servidor.
+  interface GrupoResumoLote {
+    chave: string;
+    codpro: number;
+    consultorNome: string | null;
+    sessaoIds: number[];
+    minutos: number;
+  }
+  const [resumoLote, setResumoLote] = useState<GrupoResumoLote[] | null>(null);
+  const [confirmandoLote, setConfirmandoLote] = useState(false);
+  const [resultadoLote, setResultadoLote] = useState<{ confirmados: number; falhas: { sessaoId: number; erro: string }[] } | null>(
+    null
+  );
+
+  function abrirResumoLote() {
+    const porGrupo = new Map<string, GrupoResumoLote>();
+    for (const s of sessoesFiltradas) {
+      const chave = `${s.codemp}-${s.codfor}-${s.codpro}`;
+      let grupo = porGrupo.get(chave);
+      if (!grupo) {
+        grupo = { chave, codpro: s.codpro, consultorNome: s.consultorNome, sessaoIds: [], minutos: 0 };
+        porGrupo.set(chave, grupo);
+      }
+      grupo.sessaoIds.push(s.id);
+      grupo.minutos += s.duracaoMinutos;
+    }
+    setResultadoLote(null);
+    setResumoLote([...porGrupo.values()].sort((a, b) => b.codpro - a.codpro));
+  }
+
+  async function confirmarTodos() {
+    if (!resumoLote) return;
+    setConfirmandoLote(true);
+    const itens = resumoLote
+      .flatMap((g) => g.sessaoIds)
+      .map((sessaoId) => {
+        const sessao = sessoes.find((s) => s.id === sessaoId);
+        const descricao = descricoes[sessaoId] ?? sessao?.observacao ?? "";
+        return { sessaoId, descricao: descricao || undefined };
+      });
+    try {
+      const { data } = await axios.post("/api/apontamentos/confirmar-lote", { itens });
+      setResultadoLote({ confirmados: data.confirmados?.length ?? 0, falhas: data.falhas ?? [] });
+      carregar();
+      carregarRats();
+      // Falha parcial fica visível no próprio diálogo (ver render abaixo) — só fecha
+      // sozinho quando tudo deu certo, senão o consultor perderia de vista o que travou.
+      if (!data.falhas || data.falhas.length === 0) setResumoLote(null);
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao confirmar em lote");
+      setResumoLote(null);
+    } finally {
+      setConfirmandoLote(false);
     }
   }
 
@@ -763,6 +842,31 @@ export function MeusApontamentos() {
     }
   }
 
+  // Opções do multi-select de consultor — só quem TEM sessão pendente na lista carregada,
+  // não a base inteira de consultores (mesmo critério da barra de RATs logo abaixo).
+  const opcoesFiltroSessoes = useMemo(() => {
+    const porCodfor = new Map<number, string>();
+    for (const s of sessoes) {
+      if (s.consultorNome && !porCodfor.has(s.codfor)) porCodfor.set(s.codfor, s.consultorNome);
+    }
+    return [...porCodfor.entries()]
+      .map(([codfor, nome]) => ({ codfor, nome }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  }, [sessoes]);
+
+  // Filtro em memória: a lista inteira já vem carregada (volume baixo, dezenas de linhas
+  // no pior caso — não vale um round-trip ao servidor pra isso, ver plano). Busca casa
+  // contra cliente, nº da proposta e a descrição do item (mesmos campos da busca de RATs).
+  const sessoesFiltradas = useMemo(() => {
+    const busca = buscaSessoesDebounced.trim().toLowerCase();
+    return sessoes.filter((s) => {
+      if (codforsFiltroSessoes.length > 0 && !codforsFiltroSessoes.includes(s.codfor)) return false;
+      if (!busca) return true;
+      const alvo = `${s.cliente ?? ""} ${s.codpro} ${rotuloItem(s)}`.toLowerCase();
+      return alvo.includes(busca);
+    });
+  }, [sessoes, codforsFiltroSessoes, buscaSessoesDebounced]);
+
   return (
     <div>
       <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
@@ -805,9 +909,48 @@ export function MeusApontamentos() {
 
       <div className="space-y-8">
         <section>
-          <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">
-            Sessões pendentes de confirmação {sessoes.length > 0 && `(${sessoes.length})`}
-          </p>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="font-mono text-[10px] uppercase tracking-widest text-muted">
+              Sessões pendentes de confirmação{" "}
+              {sessoesFiltradas.length > 0 &&
+                (sessoesFiltradas.length === sessoes.length ? `(${sessoes.length})` : `(${sessoesFiltradas.length} de ${sessoes.length})`)}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Só admin (podeVerTodos) — pro consultor comum a lista já é só ele, filtro não ajudaria em nada. */}
+              {podeVerTodosApontamentos && (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Buscar cliente ou proposta..."
+                    value={buscaSessoesInput}
+                    onChange={(e) => setBuscaSessoesInput(e.target.value)}
+                    className={`${selectClass} w-64`}
+                  />
+                  {opcoesFiltroSessoes.length > 1 && (
+                    <MultiSelectDropdown
+                      opcoes={opcoesFiltroSessoes.map((c) => ({ value: c.codfor, label: c.nome }))}
+                      selecionados={codforsFiltroSessoes}
+                      onChange={setCodforsFiltroSessoes}
+                      labelTodos="Todos os consultores"
+                      labelSufixo="consultores"
+                    />
+                  )}
+                </>
+              )}
+              {/* Escopo é o que está NA TELA (sessoesFiltradas) — filtrar por um consultor
+                  e clicar aqui confirma só as dele, e o número sempre bate com a lista
+                  visível. O resumo por RAT (modal abaixo) é o que deixa o encapsulamento
+                  conferível antes de disparar de verdade. */}
+              {sessoesFiltradas.length > 0 && (
+                <button
+                  onClick={abrirResumoLote}
+                  className="rounded-md border border-primary/40 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10"
+                >
+                  Confirmar Todos ({sessoesFiltradas.length})
+                </button>
+              )}
+            </div>
+          </div>
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
             <div className="overflow-x-auto">
               <table className="w-full border-collapse">
@@ -828,6 +971,11 @@ export function MeusApontamentos() {
                     <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
                       Cliente
                     </th>
+                    {podeVerTodosApontamentos && (
+                      <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
+                        Consultor
+                      </th>
+                    )}
                     <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                       Data
                     </th>
@@ -862,6 +1010,11 @@ export function MeusApontamentos() {
                         <td className="hidden px-2.5 py-3.5 md:table-cell">
                           <Skeleton className="h-4 w-28" />
                         </td>
+                        {podeVerTodosApontamentos && (
+                          <td className="hidden px-2.5 py-3.5 md:table-cell">
+                            <Skeleton className="h-4 w-24" />
+                          </td>
+                        )}
                         <td className="px-2.5 py-3.5">
                           <Skeleton className="h-4 w-24" />
                         </td>
@@ -880,7 +1033,7 @@ export function MeusApontamentos() {
                       </tr>
                     ))}
                   {!loading &&
-                    sessoes.map((s) => (
+                    sessoesFiltradas.map((s) => (
                       // Faixa âmbar à esquerda quando há ajuste aguardando o gestor: a
                       // linha está congelada até a decisão, e sem marca isso não se vê.
                       <tr
@@ -915,6 +1068,14 @@ export function MeusApontamentos() {
                           {s.cliente ?? "—"}
                           {s.codcli != null && ` (${s.codcli})`}
                         </td>
+                        {podeVerTodosApontamentos && (
+                          <td
+                            className="hidden max-w-[180px] truncate px-2.5 py-3.5 text-sm text-muted md:table-cell"
+                            title={s.consultorNome ?? undefined}
+                          >
+                            {s.consultorNome ?? "—"}
+                          </td>
+                        )}
                         <td className="whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted">
                           {dataCurtaFormatter.format(new Date(s.inicio))}
                         </td>
@@ -925,16 +1086,25 @@ export function MeusApontamentos() {
                           {formatMinutos(s.duracaoMinutos)}
                         </td>
                         <td className="hidden px-2.5 py-3.5 lg:table-cell">
-                          <button
-                            onClick={() => setEditandoDescricaoId(s.id)}
-                            className={`w-full max-w-[220px] truncate rounded-md border px-2.5 py-1.5 text-left text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                              descricoes[s.id] ?? s.observacao
-                                ? "border-border text-foreground hover:bg-surface-2"
-                                : "border-dashed border-border text-muted hover:bg-surface-2"
-                            }`}
-                          >
-                            {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
-                          </button>
+                          {/* Editar descrição é "só o dono" no servidor (PATCH /:id) — em
+                              sessão de outro consultor a tela nem oferece o botão, só
+                              mostra o texto (mesmo critério do menu "⋯" logo abaixo). */}
+                          {s.souDono ? (
+                            <button
+                              onClick={() => setEditandoDescricaoId(s.id)}
+                              className={`w-full max-w-[220px] truncate rounded-md border px-2.5 py-1.5 text-left text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                                descricoes[s.id] ?? s.observacao
+                                  ? "border-border text-foreground hover:bg-surface-2"
+                                  : "border-dashed border-border text-muted hover:bg-surface-2"
+                              }`}
+                            >
+                              {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
+                            </button>
+                          ) : (
+                            <span className="block max-w-[220px] truncate text-sm text-muted" title={s.observacao ?? undefined}>
+                              {s.observacao ?? "—"}
+                            </span>
+                          )}
                         </td>
                         {/* Mesmo agrupador "⋯" das linhas de RAT logo abaixo — duas ações
                             soltas na coluna empurravam a tabela e competiam por atenção. */}
@@ -952,40 +1122,51 @@ export function MeusApontamentos() {
                               <DropdownMenu.Item onSelect={() => confirmar(s.id)} disabled={confirmando === s.id}>
                                 {confirmando === s.id ? "Confirmando..." : "Confirmar"}
                               </DropdownMenu.Item>
-                              {/* Confirmar não deixa mexer no horário — só manda a sessão
-                                  como o rastreamento gravou. Quem precisa de outro
-                                  intervalo pede aqui, antes de confirmar. */}
-                              <DropdownMenu.Item
-                                onSelect={() =>
-                                  abrirPedidoAjuste(
-                                    s.id,
-                                    `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
-                                    s.inicio,
-                                    s.fim,
-                                    s.ajustePendente
-                                  )
-                                }
-                              >
-                                {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
-                              </DropdownMenu.Item>
-                              {/* Antes daqui não havia como apagar uma sessão rastreada
-                                  errada — só restava confirmar e desfazer depois. */}
-                              <DropdownMenu.Item
-                                onSelect={() => excluirSessao(s.id)}
-                                disabled={excluindoSessao === s.id}
-                                destructive
-                              >
-                                {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
-                              </DropdownMenu.Item>
+                              {/* Pedir ajuste e Excluir são "só o dono" nos respectivos
+                                  endpoints (solicitacoesAjuste.ts / DELETE /:id) — em sessão
+                                  de outro consultor o servidor recusaria com 403/404, então
+                                  a tela nem oferece. Confirmar acima não tem essa restrição
+                                  (podeExecutarAcao já libera admin). */}
+                              {s.souDono && (
+                                <>
+                                  {/* Confirmar não deixa mexer no horário — só manda a
+                                      sessão como o rastreamento gravou. Quem precisa de
+                                      outro intervalo pede aqui, antes de confirmar. */}
+                                  <DropdownMenu.Item
+                                    onSelect={() =>
+                                      abrirPedidoAjuste(
+                                        s.id,
+                                        `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
+                                        s.inicio,
+                                        s.fim,
+                                        s.ajustePendente
+                                      )
+                                    }
+                                  >
+                                    {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
+                                  </DropdownMenu.Item>
+                                  {/* Antes daqui não havia como apagar uma sessão rastreada
+                                      errada — só restava confirmar e desfazer depois. */}
+                                  <DropdownMenu.Item
+                                    onSelect={() => excluirSessao(s.id)}
+                                    disabled={excluindoSessao === s.id}
+                                    destructive
+                                  >
+                                    {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
+                                  </DropdownMenu.Item>
+                                </>
+                              )}
                             </DropdownMenu.Content>
                           </DropdownMenu>
                         </td>
                       </tr>
                     ))}
-                  {!loading && sessoes.length === 0 && (
+                  {!loading && sessoesFiltradas.length === 0 && (
                     <tr>
-                      <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
-                        Nenhuma sessão pendente — mova um card pra "Em Andamento" pra começar a rastrear tempo.
+                      <td colSpan={podeVerTodosApontamentos ? 11 : 10} className="px-2.5 py-8 text-center text-sm text-muted">
+                        {sessoes.length === 0
+                          ? 'Nenhuma sessão pendente — mova um card pra "Em Andamento" pra começar a rastrear tempo.'
+                          : "Nenhuma sessão encontrada com os filtros atuais."}
                       </td>
                     </tr>
                   )}
@@ -1312,6 +1493,71 @@ export function MeusApontamentos() {
         />
       )}
 
+      {/* Resumo antes de confirmar em lote — agrupado pela MESMA chave (consultor+proposta)
+          que o servidor usa pra encapsular na RAT, pra deixar visível que nada vai se
+          misturar antes de disparar de verdade. Não fecha por fora: some ação em andamento
+          ou resultado com falha que não pode sumir num clique sem querer. */}
+      {resumoLote && (
+        <Modal
+          open
+          onClose={() => !confirmandoLote && setResumoLote(null)}
+          fecharPorFora={false}
+          title="Confirmar apontamentos em lote"
+          subtitulo={`${resumoLote.reduce((soma, g) => soma + g.sessaoIds.length, 0)} sessões · ${resumoLote.length} RAT${resumoLote.length === 1 ? "" : "s"}`}
+        >
+          <div className="space-y-4 p-4">
+            <div className="max-h-64 space-y-1.5 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-3">
+              {resumoLote.map((g) => (
+                <div key={g.chave} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate text-foreground">
+                    Proposta {g.codpro} · {g.consultorNome ?? "eu"}
+                  </span>
+                  <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
+                    {g.sessaoIds.length} apont. · {formatMinutos(g.minutos)}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {resultadoLote && resultadoLote.falhas.length > 0 && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <p className="mb-1 font-medium">
+                  {resultadoLote.confirmados} confirmado{resultadoLote.confirmados === 1 ? "" : "s"}, {resultadoLote.falhas.length}{" "}
+                  falhou{resultadoLote.falhas.length === 1 ? "" : "aram"}:
+                </p>
+                <ul className="list-inside list-disc space-y-0.5">
+                  {resultadoLote.falhas.map((f) => (
+                    <li key={f.sessaoId}>
+                      Sessão {f.sessaoId}: {f.erro}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setResumoLote(null)}
+                disabled={confirmandoLote}
+                className="rounded-md border border-border px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+              >
+                {resultadoLote ? "Fechar" : "Cancelar"}
+              </button>
+              {!resultadoLote && (
+                <button
+                  onClick={confirmarTodos}
+                  disabled={confirmandoLote}
+                  className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                >
+                  {confirmandoLote && <Spinner className="h-3.5 w-3.5" />}
+                  Confirmar {resumoLote.reduce((soma, g) => soma + g.sessaoIds.length, 0)} apontamentos
+                </button>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {despesasRat && (
         <ModalDespesasRat
           ratId={despesasRat.id}
@@ -1430,6 +1676,7 @@ export function MeusApontamentos() {
           podeVerCronograma={detalheAtividade.podeVerCronograma}
           qtdhorPrevisto={detalheAtividade.qtdhorPrevisto ?? null}
           horasExcedentes={detalheAtividade.horasExcedentes ?? 0}
+          horasRealizadas={detalheAtividade.horasRealizadas}
           // Painel em modo leitura: aqui é o consultor olhando o próprio apontamento, e
           // ele nunca autoriza as próprias horas excedentes.
           podeAutorizarExcedente={false}

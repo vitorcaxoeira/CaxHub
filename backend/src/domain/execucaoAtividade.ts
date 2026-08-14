@@ -3,6 +3,8 @@ import { prisma } from "../db/prisma";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { limiteDaSessaoAberta, MotivoLimite } from "./limiteSessao";
+import { diaSemanaDaSessao } from "./jornadaConsultor";
 
 // Nomes reais das raias do quadro (ver backend/prisma/seed.ts) — mesma regra de negócio
 // espelhada em frontend/src/lib/atividade-acoes.ts. Duas runtimes diferentes (sem pacote
@@ -110,6 +112,24 @@ export interface AtividadePausada {
   codpro: number;
 }
 
+export interface FimAjustadoParaLimite {
+  // Quantos minutos além do limite foram descartados ao cortar o fim da sessão.
+  minutosDescartados: number;
+  motivo: MotivoLimite;
+  // O instante em que a sessão de fato fechou (o limite), pra tela poder dizer qual foi.
+  fim: Date;
+}
+
+// Recado pra quem fechou a execução depois do limite: diz onde ela foi cortada e o que
+// fazer se aquele tempo era necessário. Mora aqui (e não em limiteSessao.ts, onde vivem as
+// outras mensagens) só porque `FimAjustadoParaLimite` é declarado neste arquivo — colocar
+// lá exigiria limiteSessao importar daqui, fechando um ciclo de import.
+export function mensagemFimCortado(ajuste: FimAjustadoParaLimite): string {
+  const hora = ajuste.fim.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+  const motivo = ajuste.motivo === "teto_atingido" ? "o teto de horas" : "o fim do expediente";
+  return `A execução foi encerrada às ${hora}, quando ${motivo} foi atingido — ${ajuste.minutosDescartados} min além disso não foram registrados. Se precisava desse tempo, peça horas excedentes ao gestor.`;
+}
+
 export interface ResultadoMovimentacao {
   operacoes: Prisma.PrismaPromise<unknown>[];
   duracaoSessaoFechadaMin: number | null;
@@ -118,6 +138,9 @@ export interface ResultadoMovimentacao {
   // ou 1 — mais de uma só existiria se um bug anterior já tivesse deixado o consultor com
   // mais de uma sessão aberta; a função limpa esse estado também, não só previne um novo.
   pausadas: AtividadePausada[];
+  // Preenchido quando o fechamento chegou DEPOIS do limite e o fim foi cortado nele (ver
+  // clamp abaixo). Null quando não houve corte — que é o caso normal.
+  fimAjustadoParaLimite: FimAjustadoParaLimite | null;
 }
 
 // Monta as operações Prisma de uma movimentação de card (atualizar coluna, log de
@@ -133,8 +156,43 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
   const sessaoAbertaAntes = await prisma.atividadeSessaoExecucao.findFirst({
     where: { atividadeId: atividade.id, fim: null },
   });
+
+  // CLAMP NO LIMITE: a sessão nunca fecha depois do instante em que deveria ter parado
+  // (teto de horas ou fim do expediente). Mora AQUI, na função compartilhada, e não em cada
+  // rota: os caminhos manuais (Parar, arrastar o card pra fora de "Em Andamento", iniciar
+  // outra atividade, fechar a aba) chegam todos aqui passando `agora` = o instante do
+  // clique, e sem isto gravavam o excesso — medido em 14/08/2026: teto às 11:00, clique em
+  // Parar às 11:03, sessão gravada com 3h03 contra um teto de 3h. A varredura automática
+  // (pararExecucoesAutomaticamente.ts) e POST /:id/encerrar-automatico já passam o próprio
+  // limite como `agora`, então pra eles o clamp é no-op.
+  //
+  // Sem limite calculável (atividade sem teto e consultor sem jornada) não há o que cortar:
+  // `agora` vale como veio.
+  let fimEfetivo = agora;
+  let fimAjustadoParaLimite: FimAjustadoParaLimite | null = null;
+  if (sessaoAbertaAntes) {
+    const jornada = await prisma.jornadaConsultor.findUnique({
+      where: {
+        codemp_codfor_diaSemana: {
+          codemp: atividade.codemp,
+          codfor: atividade.codfor,
+          diaSemana: diaSemanaDaSessao(sessaoAbertaAntes.inicio),
+        },
+      },
+    });
+    const limite = await limiteDaSessaoAberta(sessaoAbertaAntes, atividade, jornada);
+    if (limite && agora.getTime() > limite.instante.getTime()) {
+      fimEfetivo = limite.instante;
+      fimAjustadoParaLimite = {
+        minutosDescartados: Math.round((agora.getTime() - limite.instante.getTime()) / 60000),
+        motivo: limite.motivo,
+        fim: limite.instante,
+      };
+    }
+  }
+
   const duracaoSessaoFechadaMin = sessaoAbertaAntes
-    ? Math.round((agora.getTime() - sessaoAbertaAntes.inicio.getTime()) / 60000)
+    ? Math.round((fimEfetivo.getTime() - sessaoAbertaAntes.inicio.getTime()) / 60000)
     : null;
 
   // Observação vazia herda a descrição da atividade. Vale pra TODA parada — a automática
@@ -168,10 +226,13 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
     }),
     prisma.atividadeSessaoExecucao.updateMany({
       where: { atividadeId: atividade.id, fim: null },
-      data: { fim: agora, ...(observacaoDaSessao ? { observacao: observacaoDaSessao } : {}) },
+      // `fimEfetivo`, não `agora`: cortado no limite quando o fechamento chegou depois dele.
+      data: { fim: fimEfetivo, ...(observacaoDaSessao ? { observacao: observacaoDaSessao } : {}) },
     }),
     ...(colunaNova.contaComoExecucao
       ? [
+          // A sessão NOVA começa em `agora` mesmo (e não em `fimEfetivo`): ela nasce no
+          // instante do clique e terá o próprio limite calculado a partir daí.
           prisma.atividadeSessaoExecucao.create({
             data: { atividadeId: atividade.id, colunaId: colunaNova.id, inicio: agora, origem: origemSessao },
           }),
@@ -249,7 +310,23 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
           entidadeId: entidadeIdOutra,
           correlationId,
         };
-        const duracaoOutraMin = Math.round((agora.getTime() - sessaoOutra.inicio.getTime()) / 60000);
+        // Mesmo clamp da sessão principal: a atividade que está sendo pausada também pode
+        // já ter passado do PRÓPRIO limite (é outra atividade, com outro teto e outra
+        // jornada), e a pausa não pode gravar o excesso dela.
+        const jornadaOutra = await prisma.jornadaConsultor.findUnique({
+          where: {
+            codemp_codfor_diaSemana: {
+              codemp: atividadeOutra.codemp,
+              codfor: atividadeOutra.codfor,
+              diaSemana: diaSemanaDaSessao(sessaoOutra.inicio),
+            },
+          },
+        });
+        const limiteOutra = await limiteDaSessaoAberta(sessaoOutra, atividadeOutra, jornadaOutra);
+        const fimOutra =
+          limiteOutra && agora.getTime() > limiteOutra.instante.getTime() ? limiteOutra.instante : agora;
+
+        const duracaoOutraMin = Math.round((fimOutra.getTime() - sessaoOutra.inicio.getTime()) / 60000);
         const observacaoOutra = await descricaoPadraoDaAtividade(atividadeOutra);
 
         operacoes.push(
@@ -267,7 +344,7 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
           // no-op em vez de sobrescrever um `fim` que já tinha sido gravado.
           prisma.atividadeSessaoExecucao.updateMany({
             where: { id: sessaoOutra.id, fim: null },
-            data: { fim: agora, ...(observacaoOutra ? { observacao: observacaoOutra } : {}) },
+            data: { fim: fimOutra, ...(observacaoOutra ? { observacao: observacaoOutra } : {}) },
           }),
           criarEventoAuditoria({
             ...ctxEventoOutra,
@@ -296,5 +373,5 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
     }
   }
 
-  return { operacoes, duracaoSessaoFechadaMin, pausadas };
+  return { operacoes, duracaoSessaoFechadaMin, pausadas, fimAjustadoParaLimite };
 }

@@ -32,6 +32,7 @@ import {
   colunaEfetiva,
   descricaoPadraoDaAtividade,
   escolherDescricaoPadrao,
+  mensagemFimCortado,
   montarOperacoesMovimentacao,
   podeIniciar,
   podeParar,
@@ -728,7 +729,7 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
 
     const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null;
 
-    const { operacoes, pausadas } = await montarOperacoesMovimentacao({
+    const { operacoes, pausadas, fimAjustadoParaLimite } = await montarOperacoesMovimentacao({
       atividade,
       colunaAnterior,
       colunaNova,
@@ -758,6 +759,9 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       colunaId: colunaIdNovo,
       aviso: entradaEmExecucao?.mensagem ?? null,
       pausada: pausada ? { id: pausada.id, titulo: `Proposta ${pausada.codpro}` } : null,
+      // Preenchido só quando o card saiu de execução DEPOIS do limite e o fim foi cortado
+      // nele — a tela avisa, senão o tempo some sem explicação.
+      fimCortado: fimAjustadoParaLimite ? mensagemFimCortado(fimAjustadoParaLimite) : null,
     });
   } catch (error) {
     handleError(res, error, "mover");
@@ -1191,7 +1195,7 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
     const agora = new Date();
     const correlationId = req.correlationId!;
     const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null;
-    const { operacoes, duracaoSessaoFechadaMin } = await montarOperacoesMovimentacao({
+    const { operacoes, duracaoSessaoFechadaMin, fimAjustadoParaLimite } = await montarOperacoesMovimentacao({
       atividade,
       colunaAnterior: colunaAtual,
       colunaNova: colunaAFazer,
@@ -1209,7 +1213,13 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
     }
     // Mudar de coluna não vai pro Senior — ver comentário equivalente mais acima.
 
-    res.json({ id, colunaId: colunaAFazer.id, duracaoMinutos: duracaoSessaoFechadaMin ?? 0 });
+    res.json({
+      id,
+      colunaId: colunaAFazer.id,
+      duracaoMinutos: duracaoSessaoFechadaMin ?? 0,
+      // Parou depois do limite: o fim foi cortado nele e a tela precisa dizer por quê.
+      fimCortado: fimAjustadoParaLimite ? mensagemFimCortado(fimAjustadoParaLimite) : null,
+    });
   } catch (error) {
     handleError(res, error, "stop");
   }

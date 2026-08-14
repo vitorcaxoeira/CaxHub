@@ -1,10 +1,12 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { orcamentoDeTotais, formatHorasCompacto, descreverSaldoDistribuicao } from "../../lib/cronograma";
+import { formatHorasCompacto } from "../../lib/cronograma";
+import { tomConsumo } from "../../lib/consumoHoras";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 import { toneBadge } from "../ui/badges";
 import { HistoricoContextual } from "../auditoria/HistoricoContextual";
+import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 
 interface Comentario {
   id: number;
@@ -111,6 +113,10 @@ interface AtividadeDetalheProps {
   // autorizou por cima dele. Juntos formam o teto de apontamento da atividade.
   qtdhorPrevisto: number | null;
   horasExcedentes: number;
+  // Realizado da PRÓPRIA atividade (não do item) — junto com o teto acima, é o par que
+  // "Contexto do item" mostra hoje. Mesma grandeza do card do Quadro e da linha de grupo
+  // da Lista (ver KanbanBoard.tsx/AtividadesTable.tsx), pra bater o mesmo número nas 3 telas.
+  horasRealizadas: number;
   // Só o gestor do departamento autoriza excedente — o consultor não libera as próprias
   // horas. Vem do backend junto do card (podeVerCronograma usa a mesma origem).
   podeAutorizarExcedente: boolean;
@@ -122,11 +128,6 @@ interface AtividadeDetalheProps {
   onClose: () => void;
 }
 
-const tomTexto: Record<"success" | "muted" | "destructive", string> = {
-  success: "text-success",
-  muted: "text-muted",
-  destructive: "text-destructive",
-};
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
@@ -158,6 +159,7 @@ export function AtividadeDetalhe({
   podeVerCronograma,
   qtdhorPrevisto,
   horasExcedentes,
+  horasRealizadas,
   podeAutorizarExcedente,
   souOExecutor,
   onExcedenteAlterado,
@@ -185,7 +187,7 @@ export function AtividadeDetalhe({
   // qualquer ação que mude o teto/realizado desta alocação — sem isso, salvar excedente
   // (ou qualquer outra mudança) parecia "não ter feito nada", porque o texto continuava
   // lendo o snapshot antigo até o drawer fechar e reabrir.
-  const [detalheAtual, setDetalheAtual] = useState({ horasExcedentes, qtdhorPrevisto, itemAlocado, itemRealizado });
+  const [detalheAtual, setDetalheAtual] = useState({ horasExcedentes, qtdhorPrevisto, itemAlocado, itemRealizado, horasRealizadas });
   const [excedenteInput, setExcedenteInput] = useState(minutosParaInputHoras(horasExcedentes));
   const [salvandoExcedente, setSalvandoExcedente] = useState(false);
   const [erroExcedente, setErroExcedente] = useState<string | null>(null);
@@ -340,6 +342,7 @@ export function AtividadeDetalhe({
           qtdhorPrevisto: d.data.atividade.qtdhorPrevisto,
           itemAlocado: d.data.atividade.itemAlocado,
           itemRealizado: d.data.atividade.itemRealizado,
+          horasRealizadas: d.data.atividade.horasRealizadas,
         });
         setErro(null);
       })
@@ -719,16 +722,25 @@ export function AtividadeDetalhe({
                     </p>
                   )}
                   {(() => {
-                    const orcamento = orcamentoDeTotais(itemQtdhor ?? 0, detalheAtual.itemAlocado, detalheAtual.itemRealizado);
-                    const largura = 2;
-                    const saldo = descreverSaldoDistribuicao(orcamento, largura);
+                    // Teto e realizado DESTA ATIVIDADE (não do item inteiro) — mesma
+                    // grandeza e mesmo visual do card do Quadro e da linha de grupo da
+                    // Lista (KanbanBoard.tsx / AtividadesTable.tsx > ConsumoHoras), pra
+                    // bater o mesmo número nas 3 telas.
+                    const previsto = (detalheAtual.qtdhorPrevisto ?? 0) + detalheAtual.horasExcedentes;
+                    const temPrevisto = previsto > 0;
+                    const avanco = temPrevisto ? detalheAtual.horasRealizadas / previsto : 0;
+                    const tom = tomConsumo(avanco);
                     return (
-                      <p className="font-mono text-[11.5px] text-muted">
-                        Contratado {formatHorasCompacto(orcamento.horasContratadas, largura)} · Distribuído{" "}
-                        {formatHorasCompacto(orcamento.horasDistribuidas, largura)} · Realizado{" "}
-                        {formatHorasCompacto(orcamento.horasRealizadas, largura)} ·{" "}
-                        <span className={tomTexto[saldo.tom]}>{saldo.texto}</span>
-                      </p>
+                      <div className="font-mono text-[11.5px] tabular-nums text-muted">
+                        <p className="flex items-baseline justify-between gap-2">
+                          <span>
+                            {formatHorasCompacto(detalheAtual.horasRealizadas)}
+                            {temPrevisto && ` / ${formatHorasCompacto(previsto)}`} h
+                          </span>
+                          {temPrevisto && <span className={tom.texto}>{Math.round(avanco * 100)}%</span>}
+                        </p>
+                        {temPrevisto && <IndicadorProgresso avanco={avanco} cor={tom.barra} alturaPx={4} className="mt-1" />}
+                      </div>
                     );
                   })()}
                   <div className="mt-2 flex flex-wrap gap-3 text-[12px]">

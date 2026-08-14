@@ -124,6 +124,14 @@ export function depexeLabel(depexe: number | null): string {
   return DEPEXE_LABELS[depexe] ?? `Depto. ${depexe}`;
 }
 
+// O Comercial é a porta de entrada de trabalho pra TODAS as áreas: a proposta nasce nele, mas
+// quem executa costuma ser de Consultoria/Suporte/Desenvolvimento. Por isso o gestor do
+// Comercial escolhe consultor de qualquer departamento na hora de alocar — ver
+// departamentosAlocaveisNoItem em routes/alocacao.ts, único lugar que usa esta exceção.
+// Constante nomeada, e não `2` solto, pra não ficar um número mágico espalhado se o código
+// do departamento mudar no Senior.
+export const DEPEXE_COMERCIAL = 2;
+
 // Domínio "USU_TRatForFat" do Senior (forma de faturamento).
 export const FORFAT_LABELS: Record<number, string> = {
   0: "Mediante RAT",

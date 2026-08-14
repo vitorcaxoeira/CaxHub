@@ -131,6 +131,13 @@ export function VigiaFimDeJornada() {
   // O modal só existe pro limite de expediente: teto encerra sem perguntar.
   const perguntando = sessao?.prorrogavel === true && limiteMs != null && agora >= limiteMs;
   const restante = prazoMs != null ? prazoMs - agora : 0;
+  // Teto vencido: encerra direto, sem modal — não há o que perguntar, as horas acabaram.
+  // Estava fundido com `perguntando` (que exige `prorrogavel`, sempre false no teto), então
+  // este vigia — o único que roda em TODA tela — nunca encerrava por teto: só o
+  // `encerrarVencidas` de Atividades.tsx fazia isso, e ele só existe na rota do quadro. Em
+  // qualquer outra tela a sessão ficava correndo até o cron de 5 min. Corrigido em
+  // 14/08/2026, junto do clamp que impede gravar além do limite.
+  const tetoVencido = sessao?.motivo === "teto_atingido" && limiteMs != null && agora >= limiteMs;
 
   const encerrar = useCallback(
     async (imediato: boolean, texto?: string) => {
@@ -161,9 +168,13 @@ export function VigiaFimDeJornada() {
 
   // Passou a tolerância sem resposta: encerra. A varredura do servidor faria isso de
   // qualquer forma em até 5 minutos; aqui é imediato porque a tela está aberta.
+  //
+  // `tetoVencido` entra na mesma porta: ali não há tolerância nem pergunta, então encerra
+  // assim que o limite passa. Quem grava o instante certo é o servidor
+  // (POST /:id/encerrar-automatico fecha em `limite.instante`), não este relógio.
   useEffect(() => {
-    if (perguntando && restante <= 0) encerrar(false);
-  }, [perguntando, restante, encerrar]);
+    if (tetoVencido || (perguntando && restante <= 0)) encerrar(false);
+  }, [tetoVencido, perguntando, restante, encerrar]);
 
   async function prorrogar() {
     if (!sessao) return;

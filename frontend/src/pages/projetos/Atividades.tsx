@@ -313,6 +313,9 @@ export function Atividades() {
       // Só vem preenchido quando o card ENTROU em execução perto do teto (ver
       // avaliarEntradaEmExecucao) — arrastar pra qualquer outra raia nunca avisa.
       if (data?.aviso) toast.mostrar(data.aviso, "warning");
+      // Saiu de execução DEPOIS do limite: o servidor cortou o fim no teto/expediente e o
+      // tempo além disso não foi registrado — sem este aviso ele sumiria sem explicação.
+      if (data?.fimCortado) toast.mostrar(data.fimCortado, "warning");
       carregar();
       carregarIndicadores();
     } catch (err: any) {
@@ -399,7 +402,10 @@ export function Atividades() {
       );
     }
     try {
-      await axios.post(`/api/atividades/${atividadeId}/stop`, { observacao: observacao || undefined });
+      const { data } = await axios.post(`/api/atividades/${atividadeId}/stop`, { observacao: observacao || undefined });
+      // Parou depois do limite: o servidor cortou o fim no teto/expediente. Avisar é o que
+      // impede o consultor de achar que o tempo todo foi registrado.
+      if (data?.fimCortado) toast.mostrar(data.fimCortado, "warning");
       carregar();
       carregarIndicadores();
     } catch (err: any) {
@@ -553,6 +559,7 @@ export function Atividades() {
           itemQtdhor={detalhe.itemQtdhor}
           itemAlocado={detalhe.itemAlocado}
           itemRealizado={detalhe.itemRealizado}
+          horasRealizadas={detalhe.horasRealizadas}
           estruturaNome={detalhe.estruturaNome}
           estruturaPercentual={detalhe.estruturaPercentual}
           podeVerCronograma={detalhe.podeVerCronograma}

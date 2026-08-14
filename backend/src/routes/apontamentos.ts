@@ -163,6 +163,11 @@ interface AjustesConfirmacao {
   ajusteInicio?: string;
   ajusteFim?: string;
   descricao?: string;
+  // Pula o disparo imediato do envio ao Senior. Só a confirmação EM LOTE usa: sem isto,
+  // confirmar N sessões dispararia N chamadas SOAP concorrentes num ERP legado. Quem chama
+  // com isto ligado fica responsável por rodar `processarFilaSincronizacao()` uma vez no
+  // fim — ela drena a fila em laço serial (ver outboxSenior.ts).
+  adiarEnvio?: boolean;
 }
 
 // Núcleo compartilhado por POST /confirmar (sessão já existe, veio de movimentação de
@@ -299,9 +304,15 @@ async function confirmarSessao(
   // esperar o ERP pra ver o apontamento confirmado na tela, e o estado do envio aparece
   // no próximo carregamento. O cron de 15 min continua como rede de segurança pro que
   // falhar aqui — mesmo padrão "fire and forget" de syncErp.ts e POST /pedidos/sincronizar.
-  processarFilaSincronizacao({ apenasId: pendenciaId }).catch((erro) => {
-    console.error("[apontamentos] envio imediato ao Senior falhou:", erro instanceof Error ? erro.message : erro);
-  });
+  //
+  // `adiarEnvio`: a confirmação em lote pula isto aqui pra não disparar N chamadas SOAP
+  // concorrentes — quem chama com o parâmetro roda processarFilaSincronizacao() uma vez só,
+  // depois do laço inteiro.
+  if (!ajustes.adiarEnvio) {
+    processarFilaSincronizacao({ apenasId: pendenciaId }).catch((erro) => {
+      console.error("[apontamentos] envio imediato ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+    });
+  }
 
   return { status: 201, body: { ratItemId: ratItem.id, ratId: rat.id } };
 }
@@ -420,18 +431,31 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
 });
 
 // Sessões fechadas (fim != null) e ainda não confirmadas das atividades do consultor
-// logado — o que aparece na tela pra revisão.
+// logado — o que aparece na tela pra revisão. Admin vê de TODOS os consultores (mesmo
+// espírito de ratsVisiveis em routes/rats.ts: admin não filtra por codfor); os outros
+// papéis continuam vendo só as próprias, e sem Consultor vinculado é lista vazia.
 apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
-    const codfor = ctx?.contexto.consultor?.codfor;
-    if (!codfor) {
-      res.json({ sessoes: [] });
+    if (!ctx) {
+      res.json({ sessoes: [], podeVerTodos: false });
+      return;
+    }
+    const { role, contexto } = ctx;
+    const meuCodfor = contexto.consultor?.codfor ?? null;
+    const podeVerTodos = role === "admin";
+    if (!podeVerTodos && !meuCodfor) {
+      res.json({ sessoes: [], podeVerTodos: false });
       return;
     }
 
     const sessoes = await prisma.atividadeSessaoExecucao.findMany({
-      where: { fim: { not: null }, confirmada: false, excluidaEm: null, atividade: { codfor, sitreg: "A" } },
+      where: {
+        fim: { not: null },
+        confirmada: false,
+        excluidaEm: null,
+        atividade: { sitreg: "A", ...(podeVerTodos ? {} : { codfor: meuCodfor! }) },
+      },
       include: { atividade: true, coluna: true },
       orderBy: { id: "desc" },
     });
@@ -450,6 +474,15 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     const itens = chavesItem.length > 0 ? await prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : [];
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
 
+    // Nome do consultor de cada sessão — só usado quando `podeVerTodos` (a lista do
+    // consultor comum é sempre ele mesmo). Mesmo padrão de GET /rats/opcoes-filtro.
+    const codforsUnicos = [...new Set(sessoes.map((s) => s.atividade.codfor))];
+    const consultores =
+      podeVerTodos && codforsUnicos.length > 0
+        ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } })
+        : [];
+    const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
+
     // Pedido de ajuste de horário aguardando o gestor — a tela destaca a linha e abre o
     // formulário em leitura, em vez de deixar pedir de novo (o índice único parcial da
     // migration recusaria de qualquer forma).
@@ -459,12 +492,18 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     const ajustePorSessao = new Map(ajustes.map((a) => [a.sessaoId, a]));
 
     res.json({
+      podeVerTodos,
       sessoes: sessoes.map((s) => {
         const proposta = propostaPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
         const item = itemPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}-${s.atividade.seqite}`);
+        const consultor = consultorPorCodfor.get(s.atividade.codfor);
         return {
           id: s.id,
           atividadeId: s.atividadeId,
+          // Junto de codfor, é a chave EXATA que buscarOuCriarRatRascunho usa pra
+          // encapsular na RAT (codemp+codfor+codpro) — o resumo do "Confirmar Todos" agrupa
+          // por ela pra nunca divergir do agrupamento real do servidor.
+          codemp: s.atividade.codemp,
           codpro: s.atividade.codpro,
           numprj: proposta?.numprj ?? null,
           cliente: proposta?.cliente.nomcli ?? null,
@@ -477,6 +516,12 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           duracaoMinutos: s.fim ? Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000) : 0,
           origem: s.origem,
           observacao: s.observacao,
+          codfor: s.atividade.codfor,
+          consultorNome: podeVerTodos ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${s.atividade.codfor}`) : null,
+          // Ações além de Confirmar (editar descrição, pedir ajuste, excluir) são "só o
+          // dono" nos respectivos endpoints — a tela usa isto pra não oferecer botão que
+          // o servidor vai recusar. Pra quem não é admin, sempre true (a lista já é só dele).
+          souDono: !podeVerTodos || s.atividade.codfor === meuCodfor,
           ajustePendente: (() => {
             const a = ajustePorSessao.get(s.id);
             return a
@@ -511,6 +556,75 @@ apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => 
     res.status(status).json(body);
   } catch (error) {
     handleError(res, error, "confirmar");
+  }
+});
+
+// POST /confirmar-lote — "Confirmar Todos" de Meus Apontamentos. Chama o MESMO
+// confirmarSessao de cima, uma sessão por vez, SEQUENCIALMENTE (não Promise.all) — duas
+// garantias dependem da ordem:
+//
+//   1. RAT rascunho: buscarOuCriarRatRascunho faz findFirst-depois-create. Em paralelo, duas
+//      sessões da MESMA proposta+consultor fariam o findFirst antes de qualquer create e
+//      cada uma criaria uma RAT — duplicando o rascunho pra mesma proposta. Sequencial, a
+//      segunda acha a RAT que a primeira acabou de criar.
+//   2. Teto de horas: recusarSeEstourarTeto lê o realizado acumulado da atividade. Em
+//      paralelo, N sessões da mesma atividade leriam todas o mesmo saldo e passariam todas,
+//      furando o teto que só caberia uma.
+//
+// Não aborta no primeiro erro — cada sessão do lote é independente (uma ter ajuste de
+// horário pendente, por exemplo, não pode travar as outras 8 que estão OK).
+apontamentosRouter.post("/confirmar-lote", async (req: AuthenticatedRequest, res) => {
+  try {
+    const itensBrutos = Array.isArray(req.body?.itens) ? req.body.itens : [];
+    const itens = itensBrutos
+      .map((i: any) => ({ sessaoId: Number(i?.sessaoId), descricao: typeof i?.descricao === "string" ? i.descricao : undefined }))
+      .filter((i: { sessaoId: number }) => Number.isFinite(i.sessaoId));
+    if (itens.length === 0) {
+      res.status(400).json({ error: "Informe ao menos um sessaoId" });
+      return;
+    }
+    // Sanidade: a tela nunca deveria mandar mais que a lista inteira de pendentes (dezenas
+    // hoje) — um número muito maior é sinal de uso indevido, não de lote legítimo.
+    if (itens.length > 200) {
+      res.status(400).json({ error: "Lote grande demais — confirme em partes menores" });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+
+    const confirmados: { sessaoId: number; ratItemId: number; ratId: number }[] = [];
+    const falhas: { sessaoId: number; erro: string }[] = [];
+
+    for (const item of itens) {
+      const { status, body } = await confirmarSessao(
+        item.sessaoId,
+        { descricao: item.descricao, adiarEnvio: true },
+        ctx
+      );
+      if (status >= 400) {
+        falhas.push({ sessaoId: item.sessaoId, erro: (body?.error as string) ?? `Falha (status ${status})` });
+      } else {
+        confirmados.push({ sessaoId: item.sessaoId, ratItemId: body.ratItemId as number, ratId: body.ratId as number });
+      }
+    }
+
+    // Um envio só pra fila inteira, agora que todas as confirmações do lote já gravaram —
+    // processarFilaSincronizacao varre TODOS os pendentes (não só os deste lote), então
+    // qualquer coisa que o cron ainda não tinha pego também sai daqui. Fire-and-forget:
+    // a tela não espera o ERP, o estado do envio aparece no próximo carregamento.
+    if (confirmados.length > 0) {
+      processarFilaSincronizacao().catch((erro) => {
+        console.error("[apontamentos] envio em lote ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+      });
+    }
+
+    res.json({ confirmados, falhas });
+  } catch (error) {
+    handleError(res, error, "confirmar-lote");
   }
 });
 

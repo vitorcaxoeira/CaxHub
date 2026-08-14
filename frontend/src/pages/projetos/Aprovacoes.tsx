@@ -30,6 +30,7 @@ interface AtividadeDetalheDados {
   podeVerCronograma: boolean;
   qtdhorPrevisto: number | null;
   horasExcedentes: number;
+  horasRealizadas: number;
   podeAutorizarExcedente: boolean;
   souOExecutor: boolean;
 }
@@ -1094,6 +1095,7 @@ export function Aprovacoes() {
           podeVerCronograma={atividadeAberta.podeVerCronograma}
           qtdhorPrevisto={atividadeAberta.qtdhorPrevisto}
           horasExcedentes={atividadeAberta.horasExcedentes}
+          horasRealizadas={atividadeAberta.horasRealizadas}
           // O campo direto do gestor continua valendo aqui — é a outra forma de liberar
           // horas, e mexer nele muda o teto que esta tela mostra, então as listas recarregam.
           podeAutorizarExcedente={atividadeAberta.podeAutorizarExcedente}

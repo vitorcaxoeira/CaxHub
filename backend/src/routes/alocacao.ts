@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
+import { depexeLabel, modproLabel, sitproLabel, sitproTone, DEPEXE_COMERCIAL, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
 import {
   resolverContextoConsultor,
   podeExecutarAcao,
@@ -53,14 +53,19 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
 // DUAS tabelas: o escopo padrão da tela olha Proposta.depexe e o de compartilhadas olha
 // PropostaItem.depexe, então tirar só de uma delas deixaria admin sem enxergar propostas
 // de um departamento que não aparece na outra.
+// Todos os departamentos EM USO — a união dos depexe distintos das duas tabelas. É o que o
+// admin enxerga. Função à parte porque tem um segundo consumidor: a exceção do Comercial em
+// departamentosAlocaveisNoItem (ver lá).
+async function departamentosEmUso(): Promise<number[]> {
+  const [deItens, dePropostas] = await Promise.all([
+    prisma.propostaItem.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
+    prisma.proposta.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
+  ]);
+  return [...new Set([...deItens, ...dePropostas].map((d) => d.depexe as number))];
+}
+
 async function departamentosPermitidos(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
-  if (role === "admin") {
-    const [deItens, dePropostas] = await Promise.all([
-      prisma.propostaItem.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
-      prisma.proposta.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
-    ]);
-    return [...new Set([...deItens, ...dePropostas].map((d) => d.depexe as number))];
-  }
+  if (role === "admin") return departamentosEmUso();
   return contexto.departamentosGerenciados;
 }
 
@@ -173,7 +178,19 @@ async function departamentosAlocaveisNoItem(
   itemDepexe: number | null
 ): Promise<number[]> {
   const comTime = new Set(await departamentosComTime());
-  const permitidos = await departamentosPermitidos(role, contexto);
+
+  // Exceção do Comercial (ver DEPEXE_COMERCIAL em domain/propostasDominio.ts): a proposta
+  // comercial é o ponto de entrada de trabalho pra qualquer área — quem executa o serviço
+  // vendido costuma ser de Consultoria/Suporte/Desenvolvimento —, então o gestor do Comercial
+  // escolhe consultor de qualquer departamento, igual ao admin.
+  //
+  // Vale SÓ aqui, na escolha de QUEM alocar. A visibilidade de propostas segue por
+  // departamentosPermitidos e não muda: ele continua enxergando só as propostas do Comercial.
+  // Em QUAIS itens ele pode mexer também não muda — isso é podeMexerNoItem.
+  const gerenciaComercial = contexto.departamentosGerenciados.includes(DEPEXE_COMERCIAL);
+  const permitidos =
+    role === "admin" || gerenciaComercial ? await departamentosEmUso() : await departamentosPermitidos(role, contexto);
+
   const candidatos = new Set<number>(permitidos);
   if (itemDepexe != null) candidatos.add(itemDepexe);
   return [...candidatos].filter((d) => comTime.has(d));
