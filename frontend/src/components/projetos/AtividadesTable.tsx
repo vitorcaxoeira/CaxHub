@@ -431,19 +431,19 @@ export function AtividadesTable({
                                           {/* Tooltip com a hierarquia (item → pasta(s) → atividade) igual à
                                               árvore do Cronograma — só quando há nó de estrutura pra mostrar
                                               (~1/3 das atividades ainda não tem, ver comentário em
-                                              domain/execucaoAtividade.ts) e o usuário tem acesso à proposta
-                                              (mesma permissão do botão "Detalhes"/podeVerCronograma). Sem
-                                              isso, fica só o `title` nativo de sempre. */}
+                                              domain/execucaoAtividade.ts). Liberado pra qualquer atividade
+                                              que já apareça na Lista, mesmo sem o usuário gerenciar o
+                                              departamento — decisão do usuário, ver comentário da rota
+                                              GET /atividades/:id/hierarquia no backend. Sem estrutura, fica
+                                              só o `title` nativo de sempre. */}
                                           <Tooltip
-                                            disabled={row.estruturaAtividadeId == null || !row.podeVerCronograma}
+                                            disabled={row.estruturaAtividadeId == null}
                                             content={
-                                              row.estruturaAtividadeId != null ? (
-                                                <HierarquiaAtividadeTooltip
-                                                  codemp={row.codemp}
-                                                  codpro={row.codpro}
-                                                  estruturaAtividadeId={row.estruturaAtividadeId}
-                                                />
-                                              ) : null
+                                              <HierarquiaAtividadeTooltip
+                                                atividadeId={row.id}
+                                                itemNome={itemDescricao ?? "—"}
+                                                itemDepexeLabel={row.depexeLabel}
+                                              />
                                             }
                                           >
                                             <span className="min-w-0 truncate" title={tituloCompleto}>
