@@ -14,7 +14,9 @@ function formatPeriodoCompacto(inicio: string | null, fim: string | null): strin
   return `${i} – ${f}`;
 }
 
-function iniciais(nome: string | null): string {
+// Exportada (junto com IconeStatusAtividade abaixo) pra ser reusada fora da árvore de
+// edição — ver HierarquiaAtividadeTooltip.tsx, que mostra a mesma linha em modo leitura.
+export function iniciais(nome: string | null): string {
   if (!nome) return "—";
   const partes = nome.trim().split(/\s+/).filter(Boolean);
   if (partes.length === 0) return "—";
@@ -30,7 +32,7 @@ const CIRCULO_STATUS: Record<StatusNo, string> = {
   concluida: "border-success bg-success",
 };
 
-function IconeStatusAtividade({ status }: { status: StatusNo }) {
+export function IconeStatusAtividade({ status }: { status: StatusNo }) {
   return (
     <span className={`flex h-3.5 w-3.5 flex-none items-center justify-center rounded-full border-2 ${CIRCULO_STATUS[status]}`}>
       {status === "concluida" && (

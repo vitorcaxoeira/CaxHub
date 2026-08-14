@@ -122,6 +122,102 @@ export interface NovoNo {
   parentId: number | null;
 }
 
+// Transforma a resposta crua de GET /propostas/:codemp/:codpro/cronograma no array achatado
+// que os seletores de lib/cronograma.ts consomem. Extraída do hook pra poder ser reusada por
+// quem precisa da mesma árvore sem todo o aparato de estado/optimistic-update daqui — ver
+// lib/cronogramaCache.ts (tooltip de hierarquia da Lista de Atividades).
+export function mapearRespostaCronograma(data: {
+  proposta: PropostaCronograma;
+  pastasRaiz: PastaRaizApi[];
+  itens: ItemApi[];
+}): { proposta: PropostaCronograma; nos: NoCronogramaCompleto[] } {
+  const todosNos: NoCronogramaCompleto[] = [];
+
+  for (const p of data.pastasRaiz) {
+    todosNos.push({
+      id: p.id,
+      parentId: p.parentId,
+      tipo: "pasta",
+      nome: p.nome,
+      ordem: p.ordem,
+      horasPrevistas: null,
+      horasRealizadas: 0,
+      responsavelCodfor: null,
+      predecessoraId: null,
+      statusManual: null,
+      dataPrevistaInicio: null,
+      dataPrevistaFim: null,
+      predecessoraNome: null,
+      responsavelNome: null,
+      observacao: null,
+      horasAlocadas: 0,
+      saldo: null,
+      horasDivergentes: false,
+      seqite: null,
+      podeEditarItem: p.podeEditar,
+      depexe: null,
+      depexeLabel: null,
+    });
+  }
+
+  for (const item of data.itens) {
+    const itemId = idVirtualItem(item.seqite);
+    todosNos.push({
+      id: itemId,
+      parentId: item.parentId,
+      tipo: "item",
+      nome: item.despro ?? item.codser,
+      ordem: item.seqite,
+      horasPrevistas: item.qtdhorItem,
+      horasRealizadas: 0,
+      responsavelCodfor: null,
+      predecessoraId: null,
+      statusManual: null,
+      dataPrevistaInicio: null,
+      dataPrevistaFim: null,
+      predecessoraNome: null,
+      responsavelNome: null,
+      observacao: null,
+      horasAlocadas: 0,
+      saldo: null,
+      horasDivergentes: false,
+      seqite: item.seqite,
+      podeEditarItem: item.podeEditar,
+      depexe: item.depexe,
+      depexeLabel: item.depexeLabel,
+    });
+
+    for (const n of item.nos) {
+      todosNos.push({
+        id: n.id,
+        parentId: n.parentId ?? itemId,
+        tipo: n.tipo,
+        nome: n.nome,
+        ordem: n.ordem,
+        horasPrevistas: n.duracaoHoras,
+        horasRealizadas: n.horasRealizadas,
+        responsavelCodfor: n.responsavelCodfor,
+        predecessoraId: n.predecessoraId,
+        statusManual: (n.status as Exclude<StatusNo, "bloqueada"> | null) ?? null,
+        dataPrevistaInicio: n.dataPrevistaInicio,
+        dataPrevistaFim: n.dataPrevistaFim,
+        predecessoraNome: n.predecessoraNome,
+        responsavelNome: n.responsavelNome,
+        observacao: n.observacao,
+        horasAlocadas: n.horasAlocadas,
+        saldo: n.saldo,
+        horasDivergentes: n.horasDivergentes,
+        seqite: item.seqite,
+        podeEditarItem: item.podeEditar,
+        depexe: item.depexe,
+        depexeLabel: item.depexeLabel,
+      });
+    }
+  }
+
+  return { proposta: data.proposta, nos: todosNos };
+}
+
 export function useCronograma(codemp: string | undefined, codpro: string | undefined) {
   const [proposta, setProposta] = useState<PropostaCronograma | null>(null);
   const [nos, setNos] = useState<NoCronogramaCompleto[]>([]);
@@ -133,91 +229,8 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     axios
       .get(`/api/alocacao/propostas/${codemp}/${codpro}/cronograma`)
       .then(({ data }) => {
-        setProposta(data.proposta);
-
-        const todosNos: NoCronogramaCompleto[] = [];
-
-        for (const p of data.pastasRaiz as PastaRaizApi[]) {
-          todosNos.push({
-            id: p.id,
-            parentId: p.parentId,
-            tipo: "pasta",
-            nome: p.nome,
-            ordem: p.ordem,
-            horasPrevistas: null,
-            horasRealizadas: 0,
-            responsavelCodfor: null,
-            predecessoraId: null,
-            statusManual: null,
-            dataPrevistaInicio: null,
-            dataPrevistaFim: null,
-            predecessoraNome: null,
-            responsavelNome: null,
-            observacao: null,
-            horasAlocadas: 0,
-            saldo: null,
-            horasDivergentes: false,
-            seqite: null,
-            podeEditarItem: p.podeEditar,
-            depexe: null,
-            depexeLabel: null,
-          });
-        }
-
-        for (const item of data.itens as ItemApi[]) {
-          const itemId = idVirtualItem(item.seqite);
-          todosNos.push({
-            id: itemId,
-            parentId: item.parentId,
-            tipo: "item",
-            nome: item.despro ?? item.codser,
-            ordem: item.seqite,
-            horasPrevistas: item.qtdhorItem,
-            horasRealizadas: 0,
-            responsavelCodfor: null,
-            predecessoraId: null,
-            statusManual: null,
-            dataPrevistaInicio: null,
-            dataPrevistaFim: null,
-            predecessoraNome: null,
-            responsavelNome: null,
-            observacao: null,
-            horasAlocadas: 0,
-            saldo: null,
-            horasDivergentes: false,
-            seqite: item.seqite,
-            podeEditarItem: item.podeEditar,
-            depexe: item.depexe,
-            depexeLabel: item.depexeLabel,
-          });
-
-          for (const n of item.nos) {
-            todosNos.push({
-              id: n.id,
-              parentId: n.parentId ?? itemId,
-              tipo: n.tipo,
-              nome: n.nome,
-              ordem: n.ordem,
-              horasPrevistas: n.duracaoHoras,
-              horasRealizadas: n.horasRealizadas,
-              responsavelCodfor: n.responsavelCodfor,
-              predecessoraId: n.predecessoraId,
-              statusManual: (n.status as Exclude<StatusNo, "bloqueada"> | null) ?? null,
-              dataPrevistaInicio: n.dataPrevistaInicio,
-              dataPrevistaFim: n.dataPrevistaFim,
-              predecessoraNome: n.predecessoraNome,
-              responsavelNome: n.responsavelNome,
-              observacao: n.observacao,
-              horasAlocadas: n.horasAlocadas,
-              saldo: n.saldo,
-              horasDivergentes: n.horasDivergentes,
-              seqite: item.seqite,
-              podeEditarItem: item.podeEditar,
-              depexe: item.depexe,
-              depexeLabel: item.depexeLabel,
-            });
-          }
-        }
+        const { proposta: propostaResp, nos: todosNos } = mapearRespostaCronograma(data);
+        setProposta(propostaResp);
         setNos(todosNos);
         setErro(null);
       })

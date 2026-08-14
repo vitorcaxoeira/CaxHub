@@ -6,6 +6,8 @@ import { Skeleton } from "../ui/Skeleton";
 import { IconePlay, IconeStop } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
+import { HierarquiaAtividadeTooltip } from "../cronograma/HierarquiaAtividadeTooltip";
+import { Tooltip } from "../ui/Tooltip";
 import { formatHorasCompacto } from "../../lib/cronograma";
 import { tomConsumo } from "../../lib/consumoHoras";
 import { realizadoExibido } from "../../lib/sessaoEmCurso";
@@ -403,7 +405,21 @@ export function AtividadesTable({
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {grupo.atividades.map((row) => (
+                                  {grupo.atividades.map((row) => {
+                                    // Descrição do ITEM (compartilhada por todas as atividades dele —
+                                    // é por isso que a lista mostrava "01-Implantação Mercado" repetido
+                                    // em várias linhas) seguida da descrição da PRÓPRIA atividade
+                                    // (estruturaNome), que é o que de fato distingue uma linha da outra.
+                                    // Quando as duas coincidem (item sem estrutura própria, caiu no
+                                    // fallback — ver escolherDescricaoPadrao no backend) mostra só uma vez.
+                                    const itemDescricao = row.itemDescricao?.trim() || null;
+                                    const descricaoAtividade = row.estruturaNome?.trim() || null;
+                                    const mostrarDescricaoAtividade =
+                                      descricaoAtividade && descricaoAtividade !== itemDescricao;
+                                    const tituloCompleto = mostrarDescricaoAtividade
+                                      ? `${itemDescricao ?? "—"} · ${descricaoAtividade}`
+                                      : itemDescricao ?? undefined;
+                                    return (
                                     <tr key={row.id} className="border-t border-border/60">
                                       {/* Truncate obrigatório, não cosmético: algumas
                                           descrições trazem o escopo inteiro da proposta,
@@ -412,15 +428,34 @@ export function AtividadesTable({
                                           onde ele morava, virou cabeçalho do grupo. */}
                                       <td className="py-1.5 pr-2 text-sm text-foreground">
                                         <div className="flex items-center">
-                                          <span
-                                            className="min-w-0 truncate"
-                                            title={row.itemDescricao ?? undefined}
+                                          {/* Tooltip com a hierarquia (item → pasta(s) → atividade) igual à
+                                              árvore do Cronograma — só quando há nó de estrutura pra mostrar
+                                              (~1/3 das atividades ainda não tem, ver comentário em
+                                              domain/execucaoAtividade.ts) e o usuário tem acesso à proposta
+                                              (mesma permissão do botão "Detalhes"/podeVerCronograma). Sem
+                                              isso, fica só o `title` nativo de sempre. */}
+                                          <Tooltip
+                                            disabled={row.estruturaAtividadeId == null || !row.podeVerCronograma}
+                                            content={
+                                              row.estruturaAtividadeId != null ? (
+                                                <HierarquiaAtividadeTooltip
+                                                  codemp={row.codemp}
+                                                  codpro={row.codpro}
+                                                  estruturaAtividadeId={row.estruturaAtividadeId}
+                                                />
+                                              ) : null
+                                            }
                                           >
-                                            {/* Prefixo "01-" com o seqite do item, zero-padado a 2 dígitos —
-                                                é assim que o consultor identifica o item entre vários da
-                                                mesma proposta sem precisar de uma coluna própria. */}
-                                            {String(row.seqite).padStart(2, "0")}-{row.itemDescricao ?? "—"}
-                                          </span>
+                                            <span className="min-w-0 truncate" title={tituloCompleto}>
+                                              {/* Prefixo "01-" com o seqite do item, zero-padado a 2 dígitos —
+                                                  é assim que o consultor identifica o item entre vários da
+                                                  mesma proposta sem precisar de uma coluna própria. */}
+                                              {String(row.seqite).padStart(2, "0")}-{itemDescricao ?? "—"}
+                                              {mostrarDescricaoAtividade && (
+                                                <span className="text-muted"> · {descricaoAtividade}</span>
+                                              )}
+                                            </span>
+                                          </Tooltip>
                                           <IndicadorSessao row={row} />
                                         </div>
                                       </td>
@@ -511,7 +546,8 @@ export function AtividadesTable({
                                         </div>
                                       </td>
                                     </tr>
-                                  ))}
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>
