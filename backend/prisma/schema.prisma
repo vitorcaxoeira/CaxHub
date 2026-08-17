@@ -507,6 +507,43 @@ model Consultor {
   @@map("consultores")
 }
 
+// Espelho local da view USU_VBI01CTRCS do Senior ERP (Contrato/Valor-hora do consultor) —
+// investigado a pedido do Vitor em 17/08/2026 pro dashboard inicial do consultor (projeção de
+// ganhos). Mesma família de USU_VBI00Cons (acima): traz de novo codemp/codusu/codfor só como
+// chave de casamento, não repetimos nomfor/sitfor/depexe/etc. que já vivem em Consultor — SELECT
+// da sync busca só as colunas abaixo, não a view inteira.
+//
+// Sem registro em r998tbl (mesmo caso de USU_VBI00Cons, ver consultorSync.ts) — sync escrito à
+// mão, não pelo scaffold-table.ts. Chave (codemp, codusu) confirmada contra dado real: 117 linhas,
+// só 3 codfor com 2 linhas (mesma pessoa com 2 codusu/e-mail cadastrados — nenhuma delas tem
+// contrato preenchido), então (codemp, codusu) não teve nenhuma colisão.
+//
+// numctr/codmot/vlrhor/vlrmin vêm NULOS na maioria das linhas: só 31 de 117 consultores têm
+// contrato de valor-hora cadastrado (os demais são CLT ou sem contrato configurado no Senior) —
+// widget de valor-hora/projeção de ganhos PRECISA tratar ausência como estado normal, não erro.
+// `codmot` (motivo do contrato) observado com os valores 16/12/0 no dado real — sem domínio
+// mapeado ainda (não é um dos USU_L* documentados em propostasDominio.ts), guardado como código
+// opaco por ora.
+model ContratoConsultor {
+  codemp Int
+  codusu Int
+  codfor Int?
+  numctr Int?
+  codmot Int?
+  vlrhor Decimal? @db.Decimal(15, 5)
+  // "Valor por Minuto" no Senior — sempre vlrhor/60 (conferido no dado real), guardado do
+  // jeito que a origem manda em vez de recalculado aqui, mesmo espírito de nunca duplicar
+  // conta que a origem já fez.
+  vlrmin Decimal? @db.Decimal(15, 8)
+
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codemp, codusu])
+  @@index([codfor])
+  @@map("contratos_consultores")
+}
+
 // Espelho local da tabela E600CCO do Senior ERP (Tesouraria - Conta - Cadastro).
 model ContaCorrente {
   codemp Int

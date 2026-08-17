@@ -8,6 +8,7 @@ import { JOB_NAME as ATIVIDADE_CONSULTOR_JOB, CRON_EXPR as ATIVIDADE_CONSULTOR_C
 import { JOB_NAME as CENTRO_CUSTO_JOB, CRON_EXPR as CENTRO_CUSTO_CRON, CAMPO_DATA as CENTRO_CUSTO_DATA, runCentroCustoSync } from "./centroCustoSync";
 import { JOB_NAME as CLIENTE_JOB, CRON_EXPR as CLIENTE_CRON, CAMPO_DATA as CLIENTE_DATA, runClienteSync } from "./clienteSync";
 import { JOB_NAME as CONSULTOR_JOB, CRON_EXPR as CONSULTOR_CRON, CAMPO_DATA as CONSULTOR_DATA, runConsultorSync } from "./consultorSync";
+import { JOB_NAME as CONTRATO_CONSULTOR_JOB, CRON_EXPR as CONTRATO_CONSULTOR_CRON, CAMPO_DATA as CONTRATO_CONSULTOR_DATA, runContratoConsultorSync } from "./contratoConsultorSync";
 import { JOB_NAME as CONDICAO_PAGAMENTO_JOB, CRON_EXPR as CONDICAO_PAGAMENTO_CRON, CAMPO_DATA as CONDICAO_PAGAMENTO_DATA, runCondicaoPagamentoSync } from "./condicaoPagamentoSync";
 import { JOB_NAME as CONTA_CORRENTE_JOB, CRON_EXPR as CONTA_CORRENTE_CRON, CAMPO_DATA as CONTA_CORRENTE_DATA, runContaCorrenteSync } from "./contaCorrenteSync";
 import { JOB_NAME as DEPARTAMENTO_GESTOR_JOB, CRON_EXPR as DEPARTAMENTO_GESTOR_CRON, CAMPO_DATA as DEPARTAMENTO_GESTOR_DATA, runDepartamentoGestorSync } from "./departamentoGestorSync";
@@ -106,6 +107,9 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   { jobName: PROPOSTA_JOB, displayName: "Propostas", cronExpr: PROPOSTA_CRON, suportaAlterados: PROPOSTA_DATA != null, run: runPropostaSync, contarRegistros: () => prisma.proposta.count() },
   { jobName: PROPOSTA_ITEM_JOB, displayName: "Itens de Proposta", cronExpr: PROPOSTA_ITEM_CRON, suportaAlterados: PROPOSTA_ITEM_DATA != null, run: runPropostaItemSync, contarRegistros: () => prisma.propostaItem.count() },
   { jobName: CONSULTOR_JOB, displayName: "Consultores", cronExpr: CONSULTOR_CRON, suportaAlterados: CONSULTOR_DATA != null, run: runConsultorSync, contarRegistros: () => prisma.consultor.count() },
+  // Contrato/valor-hora do consultor (dashboard inicial, 17/08/2026) — mesma chave de
+  // Consultor, sem FK formal (mesmo espírito de casamento por valor do resto do projeto).
+  { jobName: CONTRATO_CONSULTOR_JOB, displayName: "Contratos de Consultores (Valor-hora)", cronExpr: CONTRATO_CONSULTOR_CRON, suportaAlterados: CONTRATO_CONSULTOR_DATA != null, run: runContratoConsultorSync, contarRegistros: () => prisma.contratoConsultor.count() },
   { jobName: DEPARTAMENTO_GESTOR_JOB, displayName: "Gestores de Departamento", cronExpr: DEPARTAMENTO_GESTOR_CRON, suportaAlterados: DEPARTAMENTO_GESTOR_DATA != null, run: runDepartamentoGestorSync, contarRegistros: () => prisma.departamentoGestor.count() },
   { jobName: DEPARTAMENTO_TIME_JOB, displayName: "Time por Departamento", cronExpr: DEPARTAMENTO_TIME_CRON, suportaAlterados: DEPARTAMENTO_TIME_DATA != null, run: runDepartamentoTimeSync, contarRegistros: () => prisma.departamentoTime.count() },
   // FaseProposta roda antes de AtividadeConsultor: AtividadeConsultor.fasid é FK pra fases_proposta.

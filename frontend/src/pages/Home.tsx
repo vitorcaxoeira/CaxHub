@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { DashboardConsultor } from "../components/dashboard/DashboardConsultor";
 
 interface Integrante {
   codusu: number;
@@ -28,6 +29,15 @@ export function Home() {
       .then(({ data }) => setPerfil(data))
       .catch(() => setPerfil(null));
   }, []);
+
+  // Dashboard novo só pra quem é consultor de execução puro: tem cadastro de Consultor,
+  // não gerencia departamento nenhum (senão a prioridade dele é a visão de time, não a
+  // pessoal) e não é admin (que tem a tela inteira do sistema como "painel"). Enquanto
+  // `perfil` não chegou, mostra a Home de sempre — não dá pra decidir sem saber o contexto.
+  const ehConsultorComum = user?.role !== "admin" && !!perfil?.consultor && perfil.departamentosGerenciados.length === 0;
+  if (ehConsultorComum) {
+    return <DashboardConsultor />;
+  }
 
   return (
     <div className="space-y-6">

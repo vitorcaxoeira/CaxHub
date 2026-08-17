@@ -47,6 +47,7 @@ import { scheduleTransacaoSync } from "./sync/transacaoSync";
 import { schedulePropostaSync } from "./sync/propostaSync";
 import { schedulePropostaItemSync } from "./sync/propostaItemSync";
 import { scheduleConsultorSync } from "./sync/consultorSync";
+import { scheduleContratoConsultorSync } from "./sync/contratoConsultorSync";
 import { scheduleDepartamentoGestorSync } from "./sync/departamentoGestorSync";
 import { scheduleDepartamentoTimeSync } from "./sync/departamentoTimeSync";
 import { scheduleAtividadeConsultorSync } from "./sync/atividadeConsultorSync";
@@ -131,6 +132,7 @@ app.listen(port, () => {
   schedulePropostaSync();
   schedulePropostaItemSync();
   scheduleConsultorSync();
+  scheduleContratoConsultorSync();
   scheduleDepartamentoGestorSync();
   scheduleDepartamentoTimeSync();
   scheduleFasePropostaSync();
