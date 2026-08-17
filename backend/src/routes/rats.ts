@@ -479,6 +479,39 @@ async function desvincularItensAusentesNoSenior(
   return seqrats;
 }
 
+// Mesma lógica do desvincularItensAusentesNoSenior acima, mas pro CABEÇALHO: quando a RAT
+// inteira não volta mais na consulta ao Senior (documento apagado/cancelado lá), limpar
+// Rat.numrat pra permitir reintegrar — nunca apagar a linha local, ela é o registro do
+// trabalho que aconteceu de verdade. `encontrouNoSenior` vem de runRatSyncPorNumrat (true =
+// a consulta por numrat trouxe pelo menos 1 linha).
+async function desvincularRatAusenteNoSenior(
+  rat: { id: number; codemp: number; codpro: number | null; numrat: number | null },
+  encontrouNoSenior: boolean,
+  req: AuthenticatedRequest
+): Promise<boolean> {
+  if (encontrouNoSenior || rat.numrat == null) return false;
+
+  const numratAnterior = rat.numrat;
+  await prisma.$transaction([
+    prisma.rat.update({ where: { id: rat.id }, data: { numrat: null } }),
+    criarEventoAuditoria({
+      origem: "tela",
+      usuarioId: req.user!.userId,
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${numratAnterior}`,
+      eventoTipo: EVENTOS_AUDITORIA.RAT_DESVINCULADA_SENIOR,
+      alteracoes: { numrat: { de: numratAnterior, para: null, rotulo: "Nº no ERP" } },
+      metadata: null,
+      correlationId: req.correlationId!,
+    }),
+  ]);
+
+  return true;
+}
+
 // POST /:id/sincronizar — "Sinc. ERP": puxa de novo o cabeçalho e os itens dessa RAT
 // específica do Senior (filtrado por numrat, ver runRatSyncPorNumrat/
 // runRatItemSyncPorNumrat), pra quando o consultor sabe que algo mudou lá e não quer
@@ -486,6 +519,10 @@ async function desvincularItensAusentesNoSenior(
 // confirmado no Senior) — mesma visibilidade de GET /:id/itens, não fica restrito a
 // gestor/admin porque é uma ação só de leitura (atualiza o espelho local, não escreve
 // nada no Senior).
+//
+// Se o CABEÇALHO não voltar mais na consulta (a RAT inteira foi apagada/cancelada no
+// Senior), Rat.numrat é desvinculado (ver desvincularRatAusenteNoSenior) — 17/08/2026,
+// mesmo espírito de desvincularItensAusentesNoSenior, que já cobria só os itens.
 ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
   try {
     const id = Number(req.params.id);
@@ -510,9 +547,10 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    let encontrouCabecalho: boolean;
     let seqratsNoSenior: number[];
     try {
-      await runRatSyncPorNumrat(rat.codemp, rat.numrat);
+      encontrouCabecalho = await runRatSyncPorNumrat(rat.codemp, rat.numrat);
       seqratsNoSenior = await runRatItemSyncPorNumrat(rat.codemp, rat.numrat);
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : String(syncError);
@@ -520,9 +558,17 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    // Ordem não importa entre as duas (mexem em campos/tabelas diferentes) — cabeçalho
+    // primeiro só porque é a checagem "mais grave" (RAT inteira sumiu, não só um item).
+    const ratDesvinculada = await desvincularRatAusenteNoSenior(rat, encontrouCabecalho, req);
     const desvinculados = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
 
-    res.json({ ok: true, desvinculados: desvinculados.length, seqratsDesvinculados: desvinculados });
+    res.json({
+      ok: true,
+      ratDesvinculada,
+      desvinculados: desvinculados.length,
+      seqratsDesvinculados: desvinculados,
+    });
   } catch (error) {
     handleError(res, error, "sincronizar");
   }

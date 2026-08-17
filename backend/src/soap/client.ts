@@ -194,6 +194,18 @@ export interface ItemAtividadeSenior {
   horIni: string;
   horFim: string;
   desAti: string;
+  /**
+   * Vincula o apontamento à alocação (AtividadeConsultor.seqati) que ele executa — campo
+   * novo no contrato do Senior, publicado em 17/08/2026 (confirmado contra o `?xsd` real
+   * antes de usar: `CaxHubregistrarAtividadesInitens` ganhou `seqAti` ao lado de `seqite`).
+   * Opcional pra não quebrar reprocessamento de pendência antiga da fila (enfileirada antes
+   * deste campo existir) — mas `confirmarSessao` (routes/apontamentos.ts) passa a garantir
+   * que toda sessão nova nasce com ele preenchido. Sem isso, o Senior não tinha como linkar
+   * o apontamento a uma alocação específica e gravava USU_SeqAti=0 na IAT, quebrando "horas
+   * realizadas" do nosso lado (domain/tetoAtividade.ts casa RatItem.seqati com
+   * AtividadeConsultor.seqati — sem bater, a hora trabalhada não entra na conta).
+   */
+  seqAti?: number;
 }
 
 export interface RegistrarAtividadesPayload {
@@ -274,6 +286,7 @@ export function montarEnvelopeRegistrarAtividades(payload: RegistrarAtividadesPa
         `<horFim>${escapeXml(i.horFim)}</horFim>` +
         `<horIni>${escapeXml(i.horIni)}</horIni>` +
         `<ideExt>${escapeXml(i.ideExt)}</ideExt>` +
+        (i.seqAti != null ? `<seqAti>${i.seqAti}</seqAti>` : "") +
         `<seqite>${i.seqite}</seqite>` +
         `</itens>`
     )

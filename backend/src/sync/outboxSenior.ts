@@ -120,6 +120,9 @@ interface RatItemPronto {
   ratId: number;
   codemp: number;
   seqite: number | null;
+  // Gravado em confirmarSessao (routes/apontamentos.ts) a partir de AtividadeConsultor.seqati
+  // — vira o seqAti que a Senior recebe, ver montarPayloadApontamento logo abaixo.
+  seqati: bigint | null;
   datati: Date;
   horini: number;
   horfim: number;
@@ -142,6 +145,7 @@ function montarPayloadApontamento(ratItem: RatItemPronto): RegistrarAtividadesPa
       {
         ideExt: ideExtItem(ratItem.id),
         seqite: ratItem.seqite ?? 0,
+        ...(ratItem.seqati != null ? { seqAti: Number(ratItem.seqati) } : {}),
         datAti: formatarDataSenior(ratItem.datati),
         horIni: formatarHoraSenior(ratItem.horini),
         horFim: formatarHoraSenior(ratItem.horfim),

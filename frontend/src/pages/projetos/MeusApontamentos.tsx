@@ -491,6 +491,15 @@ export function MeusApontamentos() {
         ),
       };
     });
+
+    // A coluna "RAT" da linha-cabeçalho (tabela de fora) mostra `rat.numrat`, que fica
+    // parado no que veio do último `carregarRats()` — sem isto, o número só aparece depois
+    // de um F5. Atualiza sempre que o Senior confirmar um número, mesmo que a RAT já
+    // tivesse um antes e o novo venha diferente (ex.: a RAT foi desvinculada — ver
+    // desvincularRatAusenteNoSenior no backend — e o reenvio criou uma RAT NOVA lá).
+    if (dados.status === "registrado" && dados.numrat != null) {
+      setRats((atual) => atual.map((r) => (r.id !== ratId ? r : { ...r, numrat: dados.numrat })));
+    }
   }
 
   // O apontamento é enviado ao Senior em segundo plano, então a releitura que acontece
@@ -746,9 +755,17 @@ export function MeusApontamentos() {
         const { data: itensData } = await axios.get(`/api/rats/${rat.id}/itens`);
         setItensPorRat((i) => ({ ...i, [rat.id]: itensData.itens }));
       }
-      // Apontamento apagado no Senior perde o vínculo aqui e volta a poder ser enviado —
-      // isso precisa ser dito, senão o item muda de estado sem explicação nenhuma.
-      if (data?.desvinculados > 0) {
+      // RAT inteira apagada/cancelada no Senior: o cabeçalho perde o vínculo (numrat),
+      // mais grave que um item sumir sozinho — mensagem própria, e sai na frente da de
+      // itens (que também dispara junto, já que sem RAT no Senior nenhum item volta).
+      if (data?.ratDesvinculada) {
+        setAvisoSinc(
+          "Esta RAT não existe mais no Senior — o vínculo com o número do ERP foi removido. " +
+            "Os apontamentos dela podem ser enviados de novo, e vão gerar uma RAT nova por lá."
+        );
+      } else if (data?.desvinculados > 0) {
+        // Apontamento apagado no Senior perde o vínculo aqui e volta a poder ser enviado —
+        // isso precisa ser dito, senão o item muda de estado sem explicação nenhuma.
         const seqrats = (data.seqratsDesvinculados ?? []).join(", ");
         setAvisoSinc(
           `${data.desvinculados} apontamento(s) não existem mais no Senior (sequência ${seqrats}) — ` +
@@ -928,7 +945,7 @@ export function MeusApontamentos() {
                   />
                   {opcoesFiltroSessoes.length > 1 && (
                     <MultiSelectDropdown
-                      opcoes={opcoesFiltroSessoes.map((c) => ({ value: c.codfor, label: c.nome }))}
+                      opcoes={opcoesFiltroSessoes.map((c) => ({ value: c.codfor, label: `${c.codfor} - ${c.nome}` }))}
                       selecionados={codforsFiltroSessoes}
                       onChange={setCodforsFiltroSessoes}
                       labelTodos="Todos os consultores"
@@ -1191,7 +1208,7 @@ export function MeusApontamentos() {
             <div className="flex items-center gap-3">
               {opcoesFiltro.length > 1 && (
                 <MultiSelectDropdown
-                  opcoes={opcoesFiltro.map((c) => ({ value: c.codfor, label: c.nome }))}
+                  opcoes={opcoesFiltro.map((c) => ({ value: c.codfor, label: `${c.codfor} - ${c.nome}` }))}
                   selecionados={codforsFiltro}
                   onChange={onMudarFiltroConsultor}
                   labelTodos="Todos os consultores"

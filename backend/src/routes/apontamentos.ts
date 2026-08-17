@@ -215,8 +215,23 @@ async function confirmarSessao(
   if (!podeExecutarAcao(role, contexto, "lancarApontamento", { depexe: item.depexe, codfor: atividade.codfor })) {
     return { status: 403, body: { error: "Sem permissão para lançar apontamento nesta atividade" } };
   }
-  // Sem seqati (atividade ainda não confirmada pelo Senior) também pode virar
-  // apontamento — RatItem.seqati fica null nesse caso, sem bloquear o fluxo.
+  // A alocação ainda não foi confirmada pelo Senior (seqati chega assíncrono, via o outbox
+  // processando o "criar_atividade" enfileirado na hora de alocar) — bloqueado desde
+  // 17/08/2026: sem seqati aqui, RatItem.seqati nasceria nulo, o registrarAtividades não tem
+  // como mandar `seqAti` pro Senior, e a Senior grava USU_SeqAti=0 na IAT — as horas
+  // trabalhadas ficam para sempre fora do cálculo de "realizado" (RatItem.seqati precisa
+  // bater com AtividadeConsultor.seqati, ver domain/tetoAtividade.ts). Curto na maioria dos
+  // casos (segundos a minutos), mas travar aqui é melhor que confirmar um apontamento que já
+  // nasce com o vínculo quebrado sem conserto.
+  if (atividade.seqati == null) {
+    return {
+      status: 409,
+      body: {
+        error:
+          "A alocação desta atividade ainda está sendo confirmada pelo Senior — tente novamente em instantes.",
+      },
+    };
+  }
 
   const inicio = ajustes.ajusteInicio ? new Date(ajustes.ajusteInicio) : sessao.inicio;
   const fim = ajustes.ajusteFim ? new Date(ajustes.ajusteFim) : sessao.fim;
