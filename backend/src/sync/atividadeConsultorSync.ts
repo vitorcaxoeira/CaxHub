@@ -6,11 +6,19 @@ import { reconciliarAlocacoesOrfas, resumirReconciliacao } from "../domain/recon
 export const JOB_NAME = "atividades_consultor-sync";
 export const CRON_EXPR = "0 4 * * *";
 export const CAMPO_DATA: string | null = "USU_DatGer";
-const BASE_QUERY = `SELECT USU_QtdHor AS qtdhor, USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_CODFOR AS codfor, USU_SeqAti AS seqati, USU_SitReg AS sitreg, USU_DatGer AS datger, USU_HorGer AS horger, USU_UsuGer AS usuger, USU_PerLib AS perlib, USU_FasId AS fasid, USU_SelSol AS selsol FROM USU_TE077ATI`;
+// USU_SeqIte > 0 direto na query, não só filtrado depois em memória: seqite=0 é "sem item de
+// proposta vinculado" (nunca vira AtividadeConsultor de verdade, ver `validas` abaixo), e
+// trazer essa linha da API SOAP só pra descartar é tráfego à toa — a mesma razão que já
+// motivou paginar essa sync (>30 mil linhas fazem o Senior truncar a resposta). Regra de
+// preferência do Vitor (17/08/2026): filtro de negócio sempre na query enviada ao ERP, nunca
+// só em memória depois — ver [[filtro-de-negocio-na-query-nao-so-em-memoria]] no segundo
+// cérebro. Foi um filtro em memória desse tipo, escondendo o dado que ainda vinha por inteiro,
+// que deixou passar despercebida uma alocação duplicada (proposta 8749, 14/08/2026).
+const BASE_QUERY = `SELECT USU_QtdHor AS qtdhor, USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_CODFOR AS codfor, USU_SeqAti AS seqati, USU_SitReg AS sitreg, USU_DatGer AS datger, USU_HorGer AS horger, USU_UsuGer AS usuger, USU_PerLib AS perlib, USU_FasId AS fasid, USU_SelSol AS selsol FROM USU_TE077ATI WHERE USU_SeqIte > 0`;
 
 function montarQuery(desde?: Date): string {
   if (!desde) return BASE_QUERY;
-  return `${BASE_QUERY} WHERE ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
+  return `${BASE_QUERY} AND ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
 }
 
 interface AtividadeConsultorRow {
@@ -40,7 +48,9 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
     // pela chave primária real da tabela no Senior (USU_SeqAti / seqati).
     const rows = (await runSqlViaSoapPaginated(query, ["seqati"])) as AtividadeConsultorRow[];
 
-    // seqite=0 no Senior significa "sem item de proposta vinculado" — ignorado.
+    // Rede de segurança, não a barreira principal: a query já filtra USU_SeqIte > 0 (ver
+    // BASE_QUERY acima) — isso aqui só cobre a hipótese de o Senior devolver algo fora do
+    // combinado (paginação, versão de serviço diferente etc.), sem custo de manter.
     const validas = rows.filter((row) => row.seqite !== 0);
 
     for (const row of validas) {
