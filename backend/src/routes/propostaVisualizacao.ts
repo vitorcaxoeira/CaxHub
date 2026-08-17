@@ -132,6 +132,7 @@ propostaVisualizacaoRouter.get("/:codemp/:codpro", async (req, res) => {
         centroCustoNome: centroCusto ? `${centroCusto.codccu} - ${centroCusto.desccu}` : null,
         qtdhor: proposta.qtdhor,
         numped: proposta.numped,
+        idbpm: proposta.idbpm,
         codlev2: proposta.codlev2,
         obssit: textoOuNulo(proposta.obssit),
         obspro: textoOuNulo(proposta.obspro),

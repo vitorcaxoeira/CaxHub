@@ -43,6 +43,7 @@ interface PropostaDetalhe {
   centroCustoNome: string | null;
   qtdhor: number | null;
   numped: number;
+  idbpm: number | null;
   codlev2: number | null;
   obssit: string | null;
   obspro: string | null;
@@ -220,6 +221,7 @@ export function PropostaVisualizacao() {
               <Campo label="Nro. Pedido/OC Cliente" valor={proposta.pedcli} />
               <Campo label="Horas Previstas" valor={proposta.qtdhor != null ? formatHoras(proposta.qtdhor / 60) : null} />
               <Campo label="Nro. Pedido" valor={String(proposta.numped)} />
+              <Campo label="ID BPM" valor={proposta.idbpm != null ? String(proposta.idbpm) : null} />
             </Secao>
 
             {(proposta.obssit || proposta.obspro || proposta.hispro) && (
