@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Modal } from "../../components/ui/Modal";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
@@ -10,7 +11,9 @@ import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 interface ItemSincronizacao {
   id: number;
   atividadeId: number;
+  codemp: number;
   codpro: number;
+  seqite: number | null;
   tipo: string;
   payload: Record<string, unknown>;
   status: string;
@@ -50,6 +53,46 @@ const TIPO_LABEL: Record<string, string> = {
 const TIPO_OPCOES: MultiSelectOption<string>[] = Object.entries(TIPO_LABEL).map(([value, label]) => ({ value, label }));
 
 const PAGE_SIZE = 30;
+
+// "07/08" — dia/mês de uma data (ISO) vinda do payload congelado da pendência.
+function formatarDataCurta(valor: unknown): string | null {
+  if (typeof valor !== "string" || valor === "") return null;
+  const data = new Date(valor);
+  if (Number.isNaN(data.getTime())) return null;
+  return `${String(data.getUTCDate()).padStart(2, "0")}/${String(data.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+// Minutos -> "HH:MM". Serve tanto pra hora do dia (RatItem.horini/horfim, minutos desde
+// meia-noite de parede brasileira — mesmo cálculo de formatHoraDoDia em MeusApontamentos.tsx)
+// quanto pra duração (AtividadeConsultor.qtdhor no payload congelado é minutos, cru — só vira
+// string "HH:MM" pro Senior no envio de verdade, ver horasParaQtdHorSenior em outboxSenior.ts).
+function formatarMinutos(valor: unknown): string | null {
+  if (typeof valor !== "number" || !Number.isFinite(valor)) return null;
+  return `${String(Math.trunc(valor / 60)).padStart(2, "0")}:${String(valor % 60).padStart(2, "0")}`;
+}
+
+const TIPOS_APONTAMENTO = new Set(["criar_apontamento", "aprovar_rat"]);
+
+// Resumo essencial de cada tipo de pendência, lido do payload já carregado (sem rota nova):
+// família apontamento/RAT (criar_apontamento, aprovar_rat) é sobre QUANDO foi trabalhado;
+// família alocação (criar_atividade, editar_atividade, remover_atividade) é sobre
+// QUANTO/período foi alocado. `null` quando o payload não tem os campos esperados — melhor
+// célula vazia que quebrar a tela num JSON solto.
+function detalheEssencial(item: ItemSincronizacao): string | null {
+  const p = item.payload;
+  if (TIPOS_APONTAMENTO.has(item.tipo)) {
+    const data = formatarDataCurta(p.datati);
+    const horIni = formatarMinutos(p.horini);
+    const horFim = formatarMinutos(p.horfim);
+    if (!data || !horIni || !horFim) return null;
+    return `${data} ${horIni}–${horFim}`;
+  }
+  const qtdhor = formatarMinutos(p.qtdhor);
+  const inicio = formatarDataCurta(p.dataPrevistaInicio);
+  const fim = formatarDataCurta(p.dataPrevistaFim);
+  const periodo = inicio && fim ? `${inicio}–${fim}` : inicio || fim || null;
+  return [qtdhor ? `${qtdhor}h` : null, periodo].filter(Boolean).join(" · ") || null;
+}
 
 export function SincronizacaoSenior() {
   const [itens, setItens] = useState<ItemSincronizacao[]>([]);
@@ -254,66 +297,90 @@ export function SincronizacaoSenior() {
           <table className="w-full border-collapse">
             <thead>
               <tr>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   ID
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Proposta
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Tipo
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                  Detalhes
+                </th>
+                <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Tentativas
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Último erro
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Criado em
                 </th>
-                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                <th className="whitespace-nowrap bg-surface-2 px-3 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Status
                 </th>
-                <th className="bg-surface-2 px-5 py-3" />
+                <th className="bg-surface-2 px-3 py-3" />
               </tr>
             </thead>
             <tbody>
               {loading &&
                 Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i} className="border-t border-border/60">
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 py-3.5">
                       <Skeleton className="h-4 w-10" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 py-3.5">
                       <Skeleton className="h-4 w-16" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 py-3.5">
                       <Skeleton className="h-4 w-24" />
                     </td>
-                    <td className="px-5 py-3.5 text-right">
+                    <td className="px-3 py-3.5">
+                      <Skeleton className="h-4 w-28" />
+                    </td>
+                    <td className="px-3 py-3.5 text-right">
                       <Skeleton className="ml-auto h-4 w-8" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 py-3.5">
                       <Skeleton className="h-4 w-40" />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 py-3.5">
                       <Skeleton className="h-4 w-24" />
                     </td>
-                    <td className="px-5 py-3.5 text-right">
+                    <td className="px-3 py-3.5 text-right">
                       <Skeleton className="ml-auto h-5 w-16 rounded" />
                     </td>
-                    <td className="px-5 py-3.5" />
+                    <td className="px-3 py-3.5" />
                   </tr>
                 ))}
               {!loading &&
-                itens.map((item) => (
+                itens.map((item) => {
+                  const detalhe = detalheEssencial(item);
+                  return (
                 <tr key={item.id} className="border-t border-border/60 transition hover:bg-surface-2">
-                  <td className="px-5 py-3.5 font-mono text-sm tabular-nums text-muted">{item.id}</td>
-                  <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{item.codpro}</td>
-                  <td className="px-5 py-3.5 text-sm text-muted">{TIPO_LABEL[item.tipo] ?? item.tipo}</td>
-                  <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{item.tentativas}</td>
-                  <td className="max-w-[280px] px-5 py-3.5 text-[12px]">
+                  <td className="whitespace-nowrap px-3 py-3.5 font-mono text-sm tabular-nums text-muted">{item.id}</td>
+                  <td className="whitespace-nowrap px-3 py-3.5 text-sm font-semibold">
+                    <Link to={`/projetos/alocacao/${item.codemp}/${item.codpro}`} className="text-primary hover:underline">
+                      {item.codpro}
+                    </Link>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-3.5 text-sm text-muted">{TIPO_LABEL[item.tipo] ?? item.tipo}</td>
+                  <td className="px-3 py-3.5 text-[12.5px]">
+                    <p className="whitespace-nowrap font-mono tabular-nums text-muted">
+                      <Link
+                        to={`/projetos/alocacao/${item.codemp}/${item.codpro}/cronograma`}
+                        className="text-primary hover:underline"
+                      >
+                        Ativ. #{item.atividadeId}
+                      </Link>{" "}
+                      · Seq. {item.seqite ?? "—"}
+                    </p>
+                    {detalhe && <p className="mt-0.5 whitespace-nowrap text-foreground">{detalhe}</p>}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{item.tentativas}</td>
+                  <td className="max-w-[280px] px-3 py-3.5 text-[12px]">
                     {item.ultimoErro ? (
                       <button
                         onClick={() => setItemDoErro(item)}
@@ -326,8 +393,8 @@ export function SincronizacaoSenior() {
                       <span className="text-muted">—</span>
                     )}
                   </td>
-                  <td className="px-5 py-3.5 text-[12px] text-muted">{dateTimeFormatter.format(new Date(item.criadoEm))}</td>
-                  <td className="px-5 py-3.5 text-right">
+                  <td className="whitespace-nowrap px-3 py-3.5 text-[12px] text-muted">{dateTimeFormatter.format(new Date(item.criadoEm))}</td>
+                  <td className="whitespace-nowrap px-3 py-3.5 text-right">
                     <span
                       className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
                         statusTone[item.status] ?? statusTone.pendente
@@ -336,7 +403,7 @@ export function SincronizacaoSenior() {
                       {item.status}
                     </span>
                   </td>
-                  <td className="px-5 py-3.5 text-right">
+                  <td className="px-3 py-3.5 text-right">
                     <div className="flex items-center justify-end gap-3">
                       <button onClick={() => abrirPayload(item)} className="text-sm text-primary hover:underline">
                         Ver payload
@@ -353,10 +420,11 @@ export function SincronizacaoSenior() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                  );
+                })}
               {!loading && itens.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
+                  <td colSpan={9} className="px-3 py-8 text-center text-sm text-muted">
                     Nenhum item encontrado com esses filtros.
                   </td>
                 </tr>

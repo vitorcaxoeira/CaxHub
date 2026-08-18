@@ -72,7 +72,9 @@ sincronizacaoRouter.get("/", async (req, res) => {
       itens: itens.map((i) => ({
         id: i.id,
         atividadeId: i.atividadeId,
+        codemp: i.atividade.codemp,
         codpro: i.atividade.codpro,
+        seqite: i.atividade.seqite,
         tipo: i.tipo,
         payload: i.payload,
         status: i.status,
