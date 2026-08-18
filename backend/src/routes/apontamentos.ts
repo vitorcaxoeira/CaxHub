@@ -260,6 +260,26 @@ async function confirmarSessao(
   const recusa = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao);
   if (recusa) return recusa;
 
+  // O check de `fim > inicio` logo acima (linha 234) é em MILISSEGUNDOS; horini/horfim são
+  // minutos desde a meia-noite (ver comentário de minutosDesdeMeiaNoite acima). Uma sessão de
+  // poucos segundos passa naquele check mas trunca pro MESMO minuto nos dois lados — RatItem
+  // nasceria com duração zero pro Senior (e pra nós), o que não tem informação nenhuma e já
+  // causou colisão real de sincronização (RatItem 2336686 x 2336685, proposta 8568,
+  // 18/08/2026 — dois "zero minuto" no mesmo minuto do mesmo dia, Senior trata como o mesmo
+  // registro, o segundo nunca consegue gravar `numrat/seqrat` porque o primeiro já é dono
+  // daquele par). Vale tanto pra confirmação normal quanto pra `ajusteInicio/ajusteFim`.
+  const horini = minutosDesdeMeiaNoite(inicio);
+  const horfim = minutosDesdeMeiaNoite(fim);
+  if (horfim <= horini) {
+    return {
+      status: 400,
+      body: {
+        error:
+          "Sessão dura menos de 1 minuto — o Senior só registra por minuto cheio. Ajuste o horário antes de confirmar.",
+      },
+    };
+  }
+
   const rat = await buscarOuCriarRatRascunho(atividade, atividade.codfor, item.depexe, inicio);
   const ratNovo = rat.origemCaxHub && rat.numrat == null;
 
@@ -273,8 +293,8 @@ async function confirmarSessao(
       codfas: atividade.fasid,
       seqati: atividade.seqati,
       datati: diaBrasilComoData(inicio),
-      horini: minutosDesdeMeiaNoite(inicio),
-      horfim: minutosDesdeMeiaNoite(fim),
+      horini,
+      horfim,
       // Sem fallback AQUI porque a herança já aconteceu antes: desde 03/08/2026 toda
       // parada grava a descrição da atividade na sessão quando ninguém digita nada (ver
       // descricaoPadraoDaAtividade em domain/execucaoAtividade.ts), e é ela que chega neste
