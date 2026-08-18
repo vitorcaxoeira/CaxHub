@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useDashboardConsultor, ResumoConsultor } from "../../hooks/useDashboardConsultor";
 import { formatHorasCompacto } from "../../lib/cronograma";
-import { carregarFeriadosDoPeriodo, Feriado } from "../../lib/feriados";
+import { carregarFeriados, Feriado } from "../../lib/feriados";
+import { rotuloMesAno } from "../../lib/periodos";
 import { DonutChart, DonutItem } from "../ui/DonutChart";
 import { SerieTemporalBarra, SeriePonto } from "../ui/SerieTemporalBarra";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
@@ -105,25 +106,38 @@ function ListaFeriados({ feriados }: { feriados: Feriado[] }) {
   );
 }
 
-// Dashboard inicial pro consultor comum (Home) — inspirado num dashboard pessoal de
-// produtividade (extensão de Chrome, ver conversa de 17/08/2026), adaptado ao dado que o
-// CaxHub já tem + valor-hora vindo do Senior (ContratoConsultor). Gestor/admin continuam
-// vendo a Home padrão (ver Home.tsx) — esta tela é só pra quem não gerencia departamento
-// nenhum.
-export function DashboardConsultor() {
-  const { resumo, semConsultor, loading, erro } = useDashboardConsultor();
+interface DashboardConsultorProps {
+  anos: number[];
+  meses: number[];
+  // Ausente = o próprio usuário logado (caso do consultor comum, sempre assim). Presente =
+  // gestor/admin olhando o painel de outro consultor do time (ver Home.tsx).
+  codfor?: number;
+  nomeExibido?: string;
+}
+
+// Dashboard inicial (Home) — inspirado num dashboard pessoal de produtividade (extensão de
+// Chrome, ver conversa de 17/08/2026), adaptado ao dado que o CaxHub já tem + valor-hora
+// vindo do Senior (ContratoConsultor). Nasceu só pro consultor comum; gestor/admin ganharam
+// acesso depois, escolhendo QUEM ver via `codfor` (ver Home.tsx).
+export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: DashboardConsultorProps) {
+  const { resumo, semConsultor, loading, erro } = useDashboardConsultor({ anos, meses, codfor });
   const [feriados, setFeriados] = useState<Feriado[]>([]);
 
   useEffect(() => {
     if (!resumo) return;
     let cancelado = false;
-    carregarFeriadosDoPeriodo(resumo.periodo.de, resumo.periodo.ate).then((lista) => {
-      if (!cancelado) setFeriados(lista);
+    const mesesSelecionados = new Set(resumo.periodo.meses);
+    // Um combo pode não ter feriado nenhum dentro dele mesmo tendo feriado no ano — busca por
+    // ano inteiro (com cache, ver lib/feriados.ts) e filtra só os meses realmente selecionados,
+    // pra não misturar feriado de um mês fora do filtro quando o período tem lacunas.
+    Promise.all(resumo.periodo.anos.map((ano) => carregarFeriados(ano))).then((listas) => {
+      if (cancelado) return;
+      setFeriados(listas.flat().filter((f) => mesesSelecionados.has(Number(f.date.slice(5, 7)))));
     });
     return () => {
       cancelado = true;
     };
-  }, [resumo?.periodo.de, resumo?.periodo.ate]);
+  }, [resumo?.periodo.anos.join(","), resumo?.periodo.meses.join(",")]);
 
   if (loading) {
     return (
@@ -155,13 +169,14 @@ export function DashboardConsultor() {
 
   const pontosSerieDia: SeriePonto[] = resumo.porDia.map((p) => ({ label: formatarDiaCurto(p.data), valores: [p.minutos] }));
 
+  const combosRotulo = resumo.periodo.anos.flatMap((ano) => resumo.periodo.meses.map((mes) => rotuloMesAno(ano, mes)));
+  const rotuloPeriodo = combosRotulo.length <= 4 ? combosRotulo.join(", ") : `${combosRotulo.length} meses selecionados`;
+
   return (
     <div className="space-y-6">
       <div className="flex items-baseline justify-between">
-        <h1 className="font-display text-xl font-bold text-foreground">Meu painel</h1>
-        <p className="font-mono text-[11px] text-muted">
-          {formatarDiaCurto(resumo.periodo.de)} – {formatarDiaCurto(resumo.periodo.ate)}
-        </p>
+        <h1 className="font-display text-xl font-bold text-foreground">{nomeExibido ? `Painel de ${nomeExibido}` : "Meu painel"}</h1>
+        <p className="font-mono text-[11px] text-muted">{rotuloPeriodo}</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
@@ -171,7 +186,16 @@ export function DashboardConsultor() {
           valor={resumo.saldoMinutos == null ? "—" : `${resumo.saldoMinutos >= 0 ? "+" : ""}${formatHorasCompacto(resumo.saldoMinutos)} h`}
           destaque={resumo.saldoMinutos == null ? undefined : resumo.saldoMinutos >= 0 ? "success" : "warning"}
         />
-        <Estatistica label="Meta diária" valor={resumo.metaDiariaMinutos == null ? "Sem jornada" : `${formatHorasCompacto(resumo.metaDiariaMinutos)} h`} />
+        <Estatistica
+          label="Meta diária"
+          valor={
+            resumo.metaDiariaMinutos != null
+              ? `${formatHorasCompacto(resumo.metaDiariaMinutos)} h`
+              : combosRotulo.length > 1
+                ? "Vários meses"
+                : "Sem jornada"
+          }
+        />
         <Estatistica
           label="Sessões pendentes"
           valor={String(resumo.sessoesPendentes)}

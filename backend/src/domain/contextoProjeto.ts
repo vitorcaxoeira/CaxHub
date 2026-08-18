@@ -89,6 +89,43 @@ export async function codforsDoTime(role: string, contexto: ContextoConsultor): 
   return codfors;
 }
 
+export function nomeConsultor(c: { codfor: number | null; nomcom: string | null; nomfor: string | null }): string {
+  return c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`;
+}
+
+export interface ConsultorFiltravel {
+  codfor: number;
+  nome: string;
+}
+
+// Consultores que este usuário pode escolher pra agir/ver em nome deles: admin recebe todo
+// mundo com codfor cadastrado; senão, o time dos departamentos que gerencia. O próprio
+// usuário entra sempre, mesmo fora do time (gestor também aponta/vê o painel dele). Mora
+// aqui, não numa rota, porque mais de uma tela precisa da MESMA definição — hoje o seletor
+// de consultor do apontamento manual (GET /apontamentos/consultores) e o filtro de
+// consultor do Dashboard inicial (GET /dashboard/consultores-filtraveis); divergir entre
+// elas ofereceria nomes diferentes pro mesmo usuário em telas diferentes.
+//
+// `conhab = 1` (USU_VBI00Cons do Senior) é quem filtra aqui — 18/08/2026, a pedido do Vitor.
+// Aplicado igual pra todo mundo, inclusive o próprio usuário: se ele mesmo não estiver
+// habilitado, também não entra na lista, pra não ter uma exceção difícil de explicar.
+export async function consultoresFiltraveis(role: string, contexto: ContextoConsultor): Promise<ConsultorFiltravel[]> {
+  const doTime =
+    role === "admin"
+      ? await prisma.consultor.findMany({ where: { codfor: { not: null }, conhab: 1 } })
+      : (await consultoresDosDepartamentos(contexto.departamentosGerenciados)).filter((c) => c.conhab === 1);
+
+  const porCodfor = new Map<number, string>();
+  if (contexto.consultor?.codfor != null && contexto.consultor.conhab === 1) {
+    porCodfor.set(contexto.consultor.codfor, nomeConsultor(contexto.consultor));
+  }
+  for (const c of doTime) {
+    if (c.codfor != null) porCodfor.set(c.codfor, nomeConsultor(c));
+  }
+
+  return [...porCodfor.entries()].map(([codfor, nome]) => ({ codfor, nome })).sort((a, b) => a.nome.localeCompare(b.nome));
+}
+
 // "Sou o gestor DESTE departamento" — a pergunta que não passa por podeExecutarAcao.
 // Existe porque `editar` deixou de servir pra isso: desde 31/07/2026 ela também é
 // liberada pro dono da atividade, e há decisões que só o gestor pode tomar (autorizar

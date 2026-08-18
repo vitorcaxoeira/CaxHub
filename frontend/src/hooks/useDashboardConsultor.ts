@@ -13,7 +13,7 @@ export interface PontoPorProjeto {
 }
 
 export interface ResumoConsultor {
-  periodo: { de: string; ate: string };
+  periodo: { anos: number[]; meses: number[] };
   totalMinutos: number;
   porDia: PontoPorDia[];
   porProjeto: PontoPorProjeto[];
@@ -33,17 +33,30 @@ export interface ResumoConsultor {
 // Consultor — a Home decide não montar o dashboard nesse caso (ver DashboardConsultor.tsx).
 type RespostaResumo = ResumoConsultor | { semConsultor: true };
 
-export function useDashboardConsultor(periodo?: { de: string; ate: string }) {
+export interface FiltroDashboard {
+  anos: number[];
+  meses: number[];
+  // Ausente = o próprio usuário logado. Presente = gestor/admin olhando o painel de outro
+  // consultor do time (ver GET /dashboard/consultores-filtraveis e a checagem de permissão
+  // em resolverConsultorAlvo, backend/src/routes/dashboard.ts).
+  codfor?: number;
+}
+
+export function useDashboardConsultor(filtro: FiltroDashboard) {
   const [resumo, setResumo] = useState<ResumoConsultor | null>(null);
   const [semConsultor, setSemConsultor] = useState(false);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
+  const anosChave = filtro.anos.join(",");
+  const mesesChave = filtro.meses.join(",");
+
   const carregar = useCallback(() => {
     setLoading(true);
-    const params = periodo ? { de: periodo.de, ate: periodo.ate } : undefined;
     axios
-      .get<RespostaResumo>("/api/dashboard/meu-resumo", { params })
+      .get<RespostaResumo>("/api/dashboard/meu-resumo", {
+        params: { anos: anosChave, meses: mesesChave, codfor: filtro.codfor },
+      })
       .then(({ data }) => {
         if ("semConsultor" in data) {
           setSemConsultor(true);
@@ -56,7 +69,8 @@ export function useDashboardConsultor(periodo?: { de: string; ate: string }) {
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Não foi possível carregar o resumo"))
       .finally(() => setLoading(false));
-  }, [periodo?.de, periodo?.ate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anosChave, mesesChave, filtro.codfor]);
 
   useEffect(() => {
     carregar();

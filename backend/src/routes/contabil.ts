@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { SITRAT_CONTABILIZADO, defgruBucket } from "../domain/contabilDominio";
+import { parseIntListParam } from "../lib/queryParams";
 import {
   montarMatrizResultado,
   montarMatrizCentroCusto,
@@ -17,15 +18,6 @@ contabilRouter.use(requireAuth, requireRole("admin"));
 function parseStringListParam(value: unknown): string[] | null {
   if (typeof value !== "string" || value === "") return null;
   const items = value.split(",").filter((v) => v !== "");
-  return items.length > 0 ? items : null;
-}
-
-function parseIntListParam(value: unknown): number[] | null {
-  if (typeof value !== "string" || value === "") return null;
-  const items = value
-    .split(",")
-    .map((v) => Number(v))
-    .filter((n) => Number.isFinite(n));
   return items.length > 0 ? items : null;
 }
 

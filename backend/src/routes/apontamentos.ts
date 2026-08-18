@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos } from "../domain/contextoProjeto";
+import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis } from "../domain/contextoProjeto";
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
 import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
@@ -47,10 +47,6 @@ function minutosDesdeMeiaNoite(data: Date): number {
 export function diaBrasilComoData(data: Date): Date {
   const { ano, mes, dia } = paraHoraBrasil(data);
   return new Date(Date.UTC(ano, mes - 1, dia));
-}
-
-function nomeConsultor(c: { codfor: number | null; nomcom: string | null; nomfor: string | null }): string {
-  return c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`;
 }
 
 // "07/08 09:00–10:30 (1:30)" — hora de parede brasileira, nunca o relógio do servidor.
@@ -347,31 +343,11 @@ apontamentosRouter.get("/consultores", async (req: AuthenticatedRequest, res) =>
     }
     const { contexto, role } = ctx;
 
-    // Admin não tem departamento gerenciado por definição, mas pode lançar por qualquer um
-    // (podeExecutarAcao devolve true pra ele) — então recebe a lista inteira de consultores.
-    const doTime =
-      role === "admin"
-        ? await prisma.consultor.findMany({ where: { codfor: { not: null } } })
-        : await consultoresDosDepartamentos(contexto.departamentosGerenciados);
-
-    const porCodfor = new Map<number, string>();
-    // O próprio usuário entra sempre: gestor também aponta o tempo dele.
-    if (contexto.consultor?.codfor != null) {
-      porCodfor.set(contexto.consultor.codfor, nomeConsultor(contexto.consultor));
-    }
-    for (const c of doTime) {
-      // codfor nulo não tem como se ligar a atividade nenhuma — deixar na lista faria o
-      // gestor escolher um nome que nunca listaria atividades.
-      if (c.codfor != null) porCodfor.set(c.codfor, nomeConsultor(c));
-    }
-
     res.json({
       // A tela usa isso pra decidir se mostra o botão "+ Apontamento manual" — quem decide
       // é o servidor, que é quem também recusa o POST.
       podeLancarManual: podeLancarManual(role, contexto),
-      consultores: [...porCodfor.entries()]
-        .map(([codfor, nome]) => ({ codfor, nome }))
-        .sort((a, b) => a.nome.localeCompare(b.nome)),
+      consultores: await consultoresFiltraveis(role, contexto),
     });
   } catch (error) {
     handleError(res, error, "consultores");

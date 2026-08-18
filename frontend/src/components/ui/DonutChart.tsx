@@ -53,11 +53,11 @@ export function DonutChart({ titulo, itens, formatarValor = formatarValorPadrao,
             <div className="absolute inset-[18%] rounded-full bg-surface" />
           </div>
 
-          <div className="flex-1 space-y-2">
+          <div className="min-w-0 flex-1 space-y-2">
             {itens.map((item, i) => (
               <div key={item.chave} className="flex items-center gap-2 text-sm">
                 <span className="h-2.5 w-2.5 flex-none rounded-sm" style={{ background: cores[i] }} />
-                <span className="flex-1 truncate text-foreground">{item.nome}</span>
+                <span className="min-w-0 flex-1 truncate text-foreground">{item.nome}</span>
                 <span className="flex-none font-mono text-[12.5px] tabular-nums text-muted">
                   {formatarValor(item.valor)} · {item.pct.toFixed(1)}%
                 </span>

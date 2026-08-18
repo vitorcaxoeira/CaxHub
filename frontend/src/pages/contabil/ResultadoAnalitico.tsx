@@ -2,27 +2,12 @@ import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
+import { MESES_OPCOES } from "../../lib/periodos";
 import { MatrizTab } from "../../components/contabil/MatrizTab";
 import { OrcadoRealizadoTab } from "../../components/contabil/OrcadoRealizadoTab";
 import { DreTab } from "../../components/contabil/DreTab";
 import { CentroCustoTab } from "../../components/contabil/CentroCustoTab";
 import { DashContabilTab } from "../../components/contabil/DashContabilTab";
-
-// Opções fixas do filtro de mês — não vêm do backend (o domínio é sempre 1-12).
-const MESES_OPCOES: MultiSelectOption<number>[] = [
-  { value: 1, label: "Janeiro" },
-  { value: 2, label: "Fevereiro" },
-  { value: 3, label: "Março" },
-  { value: 4, label: "Abril" },
-  { value: 5, label: "Maio" },
-  { value: 6, label: "Junho" },
-  { value: 7, label: "Julho" },
-  { value: 8, label: "Agosto" },
-  { value: 9, label: "Setembro" },
-  { value: 10, label: "Outubro" },
-  { value: 11, label: "Novembro" },
-  { value: 12, label: "Dezembro" },
-];
 
 type Visao = "matriz" | "orcado" | "dre" | "cc" | "dash";
 const VISOES: { value: Visao; label: string }[] = [
