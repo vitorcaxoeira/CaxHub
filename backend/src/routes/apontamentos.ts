@@ -313,37 +313,34 @@ async function confirmarSessao(
     data: { confirmada: true, ratItemId: ratItem.id },
   });
 
-  const pendenciaId = await enfileirar(atividade.id, "criar_apontamento", {
-    ratItemId: ratItem.id,
-    ratId: rat.id,
-    seqati: atividade.seqati?.toString() ?? null,
-    codemp: atividade.codemp,
-    codpro: atividade.codpro,
-    seqite: atividade.seqite,
-    codfas: atividade.fasid,
-    datati: ratItem.datati,
-    horini: ratItem.horini,
-    horfim: ratItem.horfim,
-    desati: ratItem.desati,
-    ratNovo,
-    codfor: rat.codfor,
-    codcli: rat.codcli,
-    depexe: item.depexe,
-  });
-
   // Envia pro Senior em segundo plano, sem segurar a resposta: o consultor não deveria
-  // esperar o ERP pra ver o apontamento confirmado na tela, e o estado do envio aparece
-  // no próximo carregamento. O cron de 15 min continua como rede de segurança pro que
-  // falhar aqui — mesmo padrão "fire and forget" de syncErp.ts e POST /pedidos/sincronizar.
-  //
-  // `adiarEnvio`: a confirmação em lote pula isto aqui pra não disparar N chamadas SOAP
-  // concorrentes — quem chama com o parâmetro roda processarFilaSincronizacao() uma vez só,
-  // depois do laço inteiro.
-  if (!ajustes.adiarEnvio) {
-    processarFilaSincronizacao({ apenasId: pendenciaId }).catch((erro) => {
-      console.error("[apontamentos] envio imediato ao Senior falhou:", erro instanceof Error ? erro.message : erro);
-    });
-  }
+  // esperar o ERP pra ver o apontamento confirmado na tela, e o estado do envio aparece no
+  // próximo carregamento (ver `enfileirar`, que já dispara sozinha). `adiarEnvio`: a
+  // confirmação em lote pula o disparo individual pra não abrir N chamadas SOAP concorrentes
+  // — quem chama com o parâmetro roda processarFilaSincronizacao() uma vez só, depois do
+  // laço inteiro (ver POST /confirmar-lote).
+  await enfileirar(
+    atividade.id,
+    "criar_apontamento",
+    {
+      ratItemId: ratItem.id,
+      ratId: rat.id,
+      seqati: atividade.seqati?.toString() ?? null,
+      codemp: atividade.codemp,
+      codpro: atividade.codpro,
+      seqite: atividade.seqite,
+      codfas: atividade.fasid,
+      datati: ratItem.datati,
+      horini: ratItem.horini,
+      horfim: ratItem.horfim,
+      desati: ratItem.desati,
+      ratNovo,
+      codfor: rat.codfor,
+      codcli: rat.codcli,
+      depexe: item.depexe,
+    },
+    { adiarEnvio: ajustes.adiarEnvio }
+  );
 
   return { status: 201, body: { ratItemId: ratItem.id, ratId: rat.id } };
 }
@@ -880,24 +877,31 @@ apontamentosRouter.post("/envio/:ratItemId/reenviar", async (req: AuthenticatedR
     } else {
       // Sem pendência = apontamento desvinculado porque foi apagado no Senior (ver
       // desvincularItensAusentesNoSenior em routes/rats.ts, que remove a pendência
-      // obsoleta). Enfileira de novo pra reintegrar.
-      pendenciaId = await enfileirar(atividadeId, "criar_apontamento", {
-        ratItemId: ratItem.id,
-        ratId: ratItem.ratId,
-        seqati: ratItem.seqati?.toString() ?? null,
-        codemp: ratItem.codemp,
-        codpro: ratItem.codpro,
-        seqite: ratItem.seqite,
-        codfas: ratItem.codfas,
-        datati: ratItem.datati,
-        horini: ratItem.horini,
-        horfim: ratItem.horfim,
-        desati: ratItem.desati,
-        ratNovo: ratItem.rat.numrat == null,
-        codfor: ratItem.rat.codfor,
-        codcli: ratItem.rat.codcli,
-        depexe: ratItem.rat.depexe,
-      });
+      // obsoleta). Enfileira de novo pra reintegrar. `adiarEnvio: true` porque o disparo
+      // logo abaixo já cobre os dois branches (pendência reaproveitada OU recém-criada) —
+      // sem isso, este branch dispararia duas vezes em paralelo.
+      pendenciaId = await enfileirar(
+        atividadeId,
+        "criar_apontamento",
+        {
+          ratItemId: ratItem.id,
+          ratId: ratItem.ratId,
+          seqati: ratItem.seqati?.toString() ?? null,
+          codemp: ratItem.codemp,
+          codpro: ratItem.codpro,
+          seqite: ratItem.seqite,
+          codfas: ratItem.codfas,
+          datati: ratItem.datati,
+          horini: ratItem.horini,
+          horfim: ratItem.horfim,
+          desati: ratItem.desati,
+          ratNovo: ratItem.rat.numrat == null,
+          codfor: ratItem.rat.codfor,
+          codcli: ratItem.rat.codcli,
+          depexe: ratItem.rat.depexe,
+        },
+        { adiarEnvio: true }
+      );
     }
 
     processarFilaSincronizacao({ apenasId: pendenciaId }).catch((erro) => {

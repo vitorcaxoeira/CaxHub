@@ -11,7 +11,7 @@ import {
   ContextoConsultor,
 } from "../domain/contextoProjeto";
 import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
-import { enfileirar } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
 import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
 import { runPropostaItemSyncPorCodpro } from "../sync/propostaItemSync";
 import { TIP_EVE_ALTERAR, TIP_EVE_EXCLUIR, TIP_EVE_INCLUIR } from "../soap/client";
@@ -2328,17 +2328,31 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
       throw error;
     }
 
+    // adiarEnvio: alocar em lote enfileira 1 criar_atividade por consultor escolhido —
+    // sem isso, cada um dispararia o envio na hora e abriria N chamadas SOAP concorrentes.
+    // Uma varredura só, depois do laço inteiro (mesmo padrão de POST /confirmar-lote em
+    // routes/apontamentos.ts).
     for (const c of criadas) {
-      await enfileirar(c.id, "criar_atividade", {
-        codemp,
-        codpro,
-        seqite,
-        codfor: c.codfor,
-        qtdhor: c.qtdhor,
-        fasid,
-        dataPrevistaInicio: dataPrevistaInicio?.toISOString() ?? null,
-        dataPrevistaFim: dataPrevistaFim?.toISOString() ?? null,
-        tipEve: TIP_EVE_INCLUIR,
+      await enfileirar(
+        c.id,
+        "criar_atividade",
+        {
+          codemp,
+          codpro,
+          seqite,
+          codfor: c.codfor,
+          qtdhor: c.qtdhor,
+          fasid,
+          dataPrevistaInicio: dataPrevistaInicio?.toISOString() ?? null,
+          dataPrevistaFim: dataPrevistaFim?.toISOString() ?? null,
+          tipEve: TIP_EVE_INCLUIR,
+        },
+        { adiarEnvio: true }
+      );
+    }
+    if (criadas.length > 0) {
+      processarFilaSincronizacao().catch((erro) => {
+        console.error("[alocacao] envio em lote ao Senior falhou:", erro instanceof Error ? erro.message : erro);
       });
     }
 

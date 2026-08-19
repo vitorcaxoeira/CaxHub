@@ -6,7 +6,7 @@ import { sitratLabel, sitratTone } from "../domain/ratDominio";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdRat } from "../audit/identidadeEntidade";
-import { enfileirar } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
 import { runRatSyncPorNumrat } from "../sync/ratSync";
 import { runRatItemSyncPorNumrat } from "../sync/ratItemSync";
 import {
@@ -369,24 +369,38 @@ ratsRouter.patch("/:id/aprovar", async (req: AuthenticatedRequest, res) => {
     for (const item of itens) {
       const atividadeId = item.sessoes[0]?.atividadeId;
       if (atividadeId == null) continue;
-      await enfileirar(atividadeId, "aprovar_rat", {
-        ratId: rat.id,
-        ratItemId: item.id,
-        numrat: rat.numrat,
-        seqati: item.seqati?.toString() ?? null,
-        codemp: item.codemp,
-        codpro: item.codpro,
-        seqite: item.seqite,
-        codfas: item.codfas,
-        datati: item.datati,
-        horini: item.horini,
-        horfim: item.horfim,
-        desati: item.desati,
-        codfor: rat.codfor,
-        codcli: rat.codcli,
-        depexe: rat.depexe,
-      });
+      // adiarEnvio: aprovar uma RAT com vários itens enfileira todos aqui — sem isso,
+      // cada um dispararia o envio na hora e abriria N chamadas SOAP concorrentes. Uma
+      // varredura só, depois do laço inteiro (mesmo padrão de POST /confirmar-lote em
+      // routes/apontamentos.ts).
+      await enfileirar(
+        atividadeId,
+        "aprovar_rat",
+        {
+          ratId: rat.id,
+          ratItemId: item.id,
+          numrat: rat.numrat,
+          seqati: item.seqati?.toString() ?? null,
+          codemp: item.codemp,
+          codpro: item.codpro,
+          seqite: item.seqite,
+          codfas: item.codfas,
+          datati: item.datati,
+          horini: item.horini,
+          horfim: item.horfim,
+          desati: item.desati,
+          codfor: rat.codfor,
+          codcli: rat.codcli,
+          depexe: rat.depexe,
+        },
+        { adiarEnvio: true }
+      );
       itensEnfileirados += 1;
+    }
+    if (itensEnfileirados > 0) {
+      processarFilaSincronizacao().catch((erro) => {
+        console.error("[rats] envio em lote ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+      });
     }
 
     await criarEventoAuditoria({

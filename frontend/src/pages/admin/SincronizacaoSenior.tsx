@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Modal } from "../../components/ui/Modal";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
@@ -37,6 +38,10 @@ const statusTone: Record<string, string> = {
   pendente: "bg-warning/15 text-warning",
   enviado: "bg-success/15 text-success",
   bloqueado: "bg-destructive/15 text-destructive",
+  // Nem sucesso nem falha de envio — dado ausente (ex.: alocação sem horas) que nunca
+  // chega a ser tentada. Tom neutro de propósito, pra não se confundir com "bloqueado"
+  // (que É uma falha real de envio, esgotou tentativas).
+  invalido: "bg-muted/15 text-muted",
 };
 
 // As 5 constantes reais usadas em enfileirar(...) pelo backend (routes/alocacao.ts,
@@ -109,6 +114,10 @@ export function SincronizacaoSenior() {
   const [copiadoPreview, setCopiadoPreview] = useState(false);
   const [itemDoErro, setItemDoErro] = useState<ItemSincronizacao | null>(null);
   const [copiadoErro, setCopiadoErro] = useState(false);
+  const [itemParaInvalidar, setItemParaInvalidar] = useState<ItemSincronizacao | null>(null);
+  const [motivoInvalido, setMotivoInvalido] = useState("");
+  const [invalidando, setInvalidando] = useState(false);
+  const [erroInvalidar, setErroInvalidar] = useState<string | null>(null);
 
   // Situação vem de um clique num KPI (só um valor por vez, ver handleKpiClick); Tipo é
   // multi-select; Proposta é texto livre (aceita vários números separados por vírgula, mesmo
@@ -121,7 +130,7 @@ export function SincronizacaoSenior() {
   // Totais por situação da fila INTEIRA (não reagem a statusFiltro/tipoFiltro/codproDebounced)
   // — mesma regra de GET /pedidos/indicadores: o KPI mostra sempre o todo, só a lista abaixo
   // reage aos filtros.
-  const [indicadores, setIndicadores] = useState({ pendente: 0, enviando: 0, enviado: 0, bloqueado: 0 });
+  const [indicadores, setIndicadores] = useState({ pendente: 0, enviando: 0, enviado: 0, bloqueado: 0, invalido: 0 });
   const [loadingIndicadores, setLoadingIndicadores] = useState(true);
 
   function carregar() {
@@ -203,6 +212,28 @@ export function SincronizacaoSenior() {
     }
   }
 
+  function abrirInvalidar(item: ItemSincronizacao) {
+    setItemParaInvalidar(item);
+    setMotivoInvalido("");
+    setErroInvalidar(null);
+  }
+
+  async function confirmarInvalidar() {
+    if (!itemParaInvalidar || !motivoInvalido.trim()) return;
+    setInvalidando(true);
+    setErroInvalidar(null);
+    try {
+      await axios.post(`/api/sincronizacao/${itemParaInvalidar.id}/invalidar`, { motivo: motivoInvalido.trim() });
+      setItemParaInvalidar(null);
+      carregar();
+      carregarIndicadores();
+    } catch (err: any) {
+      setErroInvalidar(err.response?.data?.error ?? "Falha ao marcar como inválido");
+    } finally {
+      setInvalidando(false);
+    }
+  }
+
   return (
     <div>
       <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
@@ -219,8 +250,8 @@ export function SincronizacaoSenior() {
       </div>
 
       {loadingIndicadores ? (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-border bg-surface p-5">
               <Skeleton className="mb-2 h-3.5 w-20" />
               <Skeleton className="h-7 w-12" />
@@ -228,7 +259,7 @@ export function SincronizacaoSenior() {
           ))}
         </div>
       ) : (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {/* Clicáveis: filtram a lista abaixo por situação (mesmo espírito do bucket
               clicável de AgingDashboard/ContasReceber) — o total de cada cartão nunca muda
               com o clique, só o da fila inteira, igual a /pedidos/indicadores. */}
@@ -249,6 +280,16 @@ export function SincronizacaoSenior() {
           >
             <p className="mb-2 text-[11.5px] text-muted">Bloqueados</p>
             <span className="block font-mono text-2xl font-semibold tabular-nums text-destructive">{indicadores.bloqueado}</span>
+          </button>
+          <button
+            onClick={() => alternarStatusFiltro("invalido")}
+            className={`rounded-lg border p-5 text-left transition ${
+              statusFiltro === "invalido" ? "border-muted ring-2 ring-muted/40" : "border-border hover:bg-surface-2"
+            } ${statusFiltro && statusFiltro !== "invalido" ? "opacity-40" : ""}`}
+            title="Dado ausente (ex.: alocação sem horas) — nunca chega a ser enviado, precisa de correção manual"
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Inválidos</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-muted">{indicadores.invalido}</span>
           </button>
           <button
             onClick={() => alternarStatusFiltro("enviado")}
@@ -404,20 +445,33 @@ export function SincronizacaoSenior() {
                     </span>
                   </td>
                   <td className="px-3 py-3.5 text-right">
-                    <div className="flex items-center justify-end gap-3">
-                      <button onClick={() => abrirPayload(item)} className="text-sm text-primary hover:underline">
-                        Ver payload
-                      </button>
-                      {(item.status === "bloqueado" || item.status === "pendente") && (
+                    <DropdownMenu placement="bottom-end">
+                      <DropdownMenu.Trigger>
                         <button
-                          onClick={() => reprocessar(item.id)}
-                          disabled={reprocessando === item.id}
-                          className="text-sm text-primary hover:underline disabled:opacity-50"
+                          className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          aria-label="Ações da pendência"
                         >
-                          {reprocessando === item.id ? "Enviando..." : "Enviar para o Senior"}
+                          ⋯
                         </button>
-                      )}
-                    </div>
+                      </DropdownMenu.Trigger>
+                      <DropdownMenu.Content>
+                        <DropdownMenu.Item onSelect={() => abrirPayload(item)}>Ver payload</DropdownMenu.Item>
+                        {(item.status === "bloqueado" || item.status === "pendente") && (
+                          <DropdownMenu.Item onSelect={() => reprocessar(item.id)} disabled={reprocessando === item.id}>
+                            {reprocessando === item.id ? "Enviando..." : "Enviar para o Senior"}
+                          </DropdownMenu.Item>
+                        )}
+                        {/* Só pra item que já falhou pelo menos uma vez (tem ultimoErro) —
+                            "pendente sem erro nenhum" é só uma pendência recém-criada
+                            esperando a primeira tentativa, não faz sentido desistir dela
+                            ainda. Bloqueado sempre tem ultimoErro (esgotou tentativas). */}
+                        {(item.status === "pendente" || item.status === "bloqueado") && item.ultimoErro && (
+                          <DropdownMenu.Item onSelect={() => abrirInvalidar(item)} destructive>
+                            Marcar como inválido
+                          </DropdownMenu.Item>
+                        )}
+                      </DropdownMenu.Content>
+                    </DropdownMenu>
                   </td>
                 </tr>
                   );
@@ -528,6 +582,52 @@ export function SincronizacaoSenior() {
                 className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
               >
                 {copiadoErro ? "Copiado!" : "Copiar"}
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
+
+      <Modal
+        open={itemParaInvalidar != null}
+        onClose={() => {
+          setItemParaInvalidar(null);
+          setErroInvalidar(null);
+        }}
+        title="Marcar como inválido"
+        subtitulo={itemParaInvalidar ? `Proposta ${itemParaInvalidar.codpro} · pendência #${itemParaInvalidar.id}` : undefined}
+      >
+        {itemParaInvalidar && (
+          <>
+            <p className="mb-2 text-[12.5px] text-muted">
+              Esse item para de ser tentado e some da fila de envio — não é reversível pela tela. Descreva o motivo;
+              fica registrado no lugar do erro técnico.
+            </p>
+            <textarea
+              value={motivoInvalido}
+              onChange={(e) => setMotivoInvalido(e.target.value)}
+              rows={3}
+              autoFocus
+              placeholder="Ex.: alocação sem horas, item de teste, dado incorreto no Senior..."
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {erroInvalidar && <p className="mt-2 text-[12.5px] text-destructive">{erroInvalidar}</p>}
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setItemParaInvalidar(null);
+                  setErroInvalidar(null);
+                }}
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmarInvalidar}
+                disabled={invalidando || !motivoInvalido.trim()}
+                className="rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {invalidando ? "Salvando..." : "Marcar como inválido"}
               </button>
             </div>
           </>

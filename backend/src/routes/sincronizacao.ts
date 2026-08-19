@@ -34,7 +34,7 @@ function parseStringListParam(value: unknown): string[] | null {
 }
 
 // Situações possíveis de SincronizacaoPendente.status (ver model no schema.prisma).
-const STATUS_VALIDOS = ["pendente", "enviando", "enviado", "bloqueado"] as const;
+const STATUS_VALIDOS = ["pendente", "enviando", "enviado", "bloqueado", "invalido"] as const;
 
 // GET / — lista paginada, com filtro de situação (um valor, vem do clique num KPI da tela),
 // tipo (multi-select) e proposta (lista de números). `codpro` não é coluna própria desta
@@ -95,7 +95,7 @@ sincronizacaoRouter.get("/", async (req, res) => {
 sincronizacaoRouter.get("/indicadores", async (_req, res) => {
   try {
     const grupos = await prisma.sincronizacaoPendente.groupBy({ by: ["status"], _count: true });
-    const totais: Record<string, number> = { pendente: 0, enviando: 0, enviado: 0, bloqueado: 0 };
+    const totais: Record<string, number> = { pendente: 0, enviando: 0, enviado: 0, bloqueado: 0, invalido: 0 };
     for (const g of grupos) {
       if (g.status in totais) totais[g.status] = g._count;
     }
@@ -145,5 +145,43 @@ sincronizacaoRouter.post("/:id/reprocessar", async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error, "reprocessar");
+  }
+});
+
+// "Marcar como inválido" — desistência manual, pra item que já falhou (pendente com erro, ou
+// bloqueado) e o admin decidiu que não faz sentido continuar tentando. Diferente da
+// invalidação automática de payloadDeAlocacaoInvalido (outboxSenior.ts, qtdhor ausente): essa
+// aqui é uma decisão humana com motivo — gravado no mesmo campo `ultimoErro` que já mostra o
+// erro técnico, pra não duplicar coluna. `status` continua fora de STATUS_VALIDOS de origem
+// (só pendente/bloqueado entram) — de "invalido" pra frente só dá pra sair reprocessando de
+// novo? Não: hoje não há ação de "reverter", intencional, é decisão definitiva.
+sincronizacaoRouter.post("/:id/invalidar", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim() : "";
+    if (!motivo) {
+      res.status(400).json({ error: "Motivo é obrigatório" });
+      return;
+    }
+    const item = await prisma.sincronizacaoPendente.findUnique({ where: { id } });
+    if (!item) {
+      res.status(404).json({ error: "Pendência não encontrada" });
+      return;
+    }
+    if (item.status !== "pendente" && item.status !== "bloqueado") {
+      res.status(400).json({ error: "Só é possível invalidar um item pendente ou bloqueado" });
+      return;
+    }
+    await prisma.sincronizacaoPendente.update({
+      where: { id },
+      data: { status: "invalido", ultimoErro: motivo },
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "invalidar");
   }
 });

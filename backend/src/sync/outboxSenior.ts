@@ -35,12 +35,46 @@ const MAX_TENTATIVAS = 5;
 // Enfileira uma mudança feita no CaxHub que precisa ser propagada de volta pro Senior.
 // Só faz sentido enfileirar quando a atividade já tem `seqati` (veio do ERP originalmente)
 // — sem isso não há registro no Senior pra atualizar.
-// Devolve o id da pendência criada pra quem quiser disparar o envio DELA na hora, sem
-// varrer a fila inteira (ver processarFilaSincronizacao).
-export async function enfileirar(atividadeId: number, tipo: string, payload: Record<string, unknown>): Promise<number> {
+//
+// Dispara o envio DESSA pendência na hora, sem segurar quem chamou (fire-and-forget) — só 2
+// dos 13 chamadores desta função replicavam isso manualmente antes (17/08/2026: os outros 11
+// só enfileiravam e esperavam o cron de 15 min, sem motivo técnico real). Central aqui:
+// chamador novo não precisa lembrar de disparar. `adiarEnvio` existe só pros pontos que
+// enfileiram vários itens por request (aprovar RAT inteira, alocar em lote) — esses disparam
+// UMA varredura no fim (`processarFilaSincronizacao()` sem `apenasId`), não N chamadas SOAP
+// concorrentes.
+// "Criar alocação" sem horas (qtdhor nulo ou <= 0) não tem o que mandar pro Senior — em vez
+// de nascer "pendente" e gastar 5 tentativas até "bloqueado" (dando a entender que é um
+// problema de rede/canal, quando na verdade é dado ausente), a pendência já nasce "invalido"
+// (18/08/2026, pedido do Vitor): some da fila de envio, nunca é tentada, e fica visível na
+// tela só pra quem for corrigir a alocação. Só `criar_atividade` tem essa regra hoje — é o
+// único tipo cujo payload carrega `qtdhor` como a informação central do envio.
+function payloadDeAlocacaoInvalido(tipo: string, payload: Record<string, unknown>): boolean {
+  if (tipo !== "criar_atividade") return false;
+  const qtdhor = payload.qtdhor as number | null | undefined;
+  return qtdhor == null || qtdhor <= 0;
+}
+
+export async function enfileirar(
+  atividadeId: number,
+  tipo: string,
+  payload: Record<string, unknown>,
+  opcoes: { adiarEnvio?: boolean } = {}
+): Promise<number> {
+  const invalido = payloadDeAlocacaoInvalido(tipo, payload);
   const criada = await prisma.sincronizacaoPendente.create({
-    data: { atividadeId, tipo, payload: payload as Prisma.InputJsonValue },
+    data: {
+      atividadeId,
+      tipo,
+      payload: payload as Prisma.InputJsonValue,
+      ...(invalido ? { status: "invalido" } : {}),
+    },
   });
+  if (!invalido && !opcoes.adiarEnvio) {
+    processarFilaSincronizacao({ apenasId: criada.id }).catch((erro) => {
+      console.error(`[outbox] envio imediato (${tipo}) falhou:`, erro instanceof Error ? erro.message : erro);
+    });
+  }
   return criada.id;
 }
 
@@ -60,8 +94,12 @@ class CanalIndisponivelError extends Error {}
 // precisa ser atômico com a baixa da fila.
 //
 // Duas formas hoje: apontamento (write-back em Rat/RatItem) e criação de alocação
-// (write-back em AtividadeConsultor.seqati). Editar/remover alocação não geram write-back
-// nenhum — `enviarParaSenior` devolve `null` nesses casos, e a fila só baixa pra "enviado".
+// (write-back em AtividadeConsultor.seqati). Remover alocação não gera write-back nenhum —
+// `enviarParaSenior` devolve `null` nesse caso, e a fila só baixa pra "enviado". Editar
+// TAMBÉM pode gerar esse mesmo write-back (18/08/2026): o Senior aceita "Alterar" pra um
+// registro que ainda não existe do lado dele — insere e devolve `seqAti`, igual a um
+// "Incluir" — então `enviarEditarAtividade` devolve o mesmo formato quando a alocação local
+// ainda não tinha `seqAti` antes do envio.
 interface ResultadoEnvioApontamento {
   tipo: "apontamento";
   ratId: number;
@@ -305,6 +343,15 @@ async function enviarCriarAtividade(item: SincronizacaoPendente): Promise<Result
     return null;
   }
 
+  // Segunda trava contra a mesma regra de enfileirar() (payloadDeAlocacaoInvalido) — aqui
+  // relendo do banco, não do payload congelado. Nunca deveria disparar sozinho (pendência já
+  // nasce "invalido" e processarFilaSincronizacao não pega esse status), só protege contra
+  // reprocessar() manual numa pendência que foi resetada pra "pendente" sem a alocação ter
+  // ganhado horas de verdade nesse meio-tempo.
+  if (alocacao.qtdhor == null || alocacao.qtdhor <= 0) {
+    throw new Error(`Alocação ${alocacao.id} sem horas (qtdhor=${alocacao.qtdhor ?? "nulo"}) — não é enviada ao Senior`);
+  }
+
   const meuIdeExt = ideExtAlocacao(alocacao.id);
   const resposta = await alocarAtividadesViaSoap(
     montarPayloadAlocacao(alocacao, TIP_EVE_INCLUIR, { incluirSeqAti: false, incluirHoras: true })
@@ -325,20 +372,16 @@ async function enviarCriarAtividade(item: SincronizacaoPendente): Promise<Result
   return { tipo: "alocacao_criada", atividadeConsultorId: alocacao.id, seqAti: itemRetornado.seqAti };
 }
 
-// Altera qtdHor/horasExcedentes de uma alocação já existente no Senior (tipEve A).
-async function enviarEditarAtividade(item: SincronizacaoPendente): Promise<null> {
+// Altera qtdHor/horasExcedentes de uma alocação no Senior (tipEve A). NÃO exige `seqAti`
+// local (18/08/2026, pedido do Vitor — antes recusava com CanalIndisponivelError e ficava
+// esperando pra sempre o criar_atividade correspondente resolver, o que nem sempre acontece:
+// esse create pode ter sido marcado "invalido" ou ficado "bloqueado", e o editar ficaria
+// pendente para sempre por uma dependência morta). O Senior aceita "Alterar" pra um registro
+// que ainda não existe do lado dele — insere e devolve `seqAti`, igual a um "Incluir" — então
+// este envio FAZ o papel do create que faltou quando for o caso.
+async function enviarEditarAtividade(item: SincronizacaoPendente): Promise<ResultadoEnvioAlocacaoCriada | null> {
   const alocacao = await buscarAlocacao(item.atividadeId);
-
-  // A alocação ainda não foi criada lá (o criar_atividade correspondente ainda não
-  // processou) — não é um canal inexistente de verdade, é uma dependência que ainda não
-  // resolveu. Reusa CanalIndisponivelError de propósito: mesmo efeito desejado (não
-  // consome tentativa, fica pendente) até o create resolver — a fila processa em ordem de
-  // criação, então o create sempre foi enfileirado antes.
-  if (alocacao.seqati == null) {
-    throw new CanalIndisponivelError(
-      `Alocação ${alocacao.id} ainda não foi criada no Senior (seqAti pendente) — aguardando o criar_atividade correspondente`
-    );
-  }
+  const jaTinhaSeqAti = alocacao.seqati != null;
 
   const meuIdeExt = ideExtAlocacao(alocacao.id);
   const resposta = await alocarAtividadesViaSoap(
@@ -350,7 +393,19 @@ async function enviarEditarAtividade(item: SincronizacaoPendente): Promise<null>
   const recusa = mensagemDeRecusa(resposta, itemRetornado?.msg);
   if (recusa) throw new Error(recusa);
 
-  return null; // nada novo pra gravar localmente — qtdhor/horasExcedentes já estão certos.
+  // Edição normal (a alocação já tinha identidade lá) — qtdhor/horasExcedentes já estão
+  // certos, nada novo pra gravar localmente.
+  if (jaTinhaSeqAti) return null;
+
+  // Não tinha seqAti local: este "Alterar" fez o papel de criação. Mesmo write-back de
+  // enviarCriarAtividade — sem isso, a alocação fica pra sempre sem identidade mesmo já
+  // existindo de verdade no Senior.
+  if (itemRetornado?.seqAti == null) {
+    throw new Error(
+      `Senior respondeu sucesso mas sem seqAti (alocação ${alocacao.id} não tinha seqAti local e a resposta não trouxe um novo)`
+    );
+  }
+  return { tipo: "alocacao_criada", atividadeConsultorId: alocacao.id, seqAti: itemRetornado.seqAti };
 }
 
 // Exclui a alocação no Senior (tipEve E). Sem operação de exclusão pra reconciliar contra
