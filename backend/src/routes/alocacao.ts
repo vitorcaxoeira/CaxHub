@@ -1180,6 +1180,9 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
           faseDes: a.fase.fasdes,
           dataPrevistaInicio: a.dataPrevistaInicio,
           dataPrevistaFim: a.dataPrevistaFim,
+          // BigInt não serializa em JSON direto — string, igual ao resto da base (ver
+          // outboxSenior.ts). null = alocação ainda não confirmada pelo Senior.
+          seqati: a.seqati != null ? a.seqati.toString() : null,
         })),
       };
     }

@@ -14,6 +14,13 @@ function dataParaInput(iso: string | null): string {
   return iso ? iso.slice(0, 10) : "";
 }
 
+// "69778 (seqati 11209)" — por alocação, já que uma tarefa compartilhada pode ter mais de
+// uma AtividadeConsultor, cada uma com seu próprio seqati (ou ainda sem, se não confirmado
+// pelo Senior). Usado tanto na linha visível quanto no tooltip do cabeçalho do drawer.
+function formatarAlocacoes(alocacoes: { id: number; seqati: string | null }[]): string {
+  return alocacoes.map((a) => `${a.id}${a.seqati != null ? ` (seqati ${a.seqati})` : ""}`).join(", ");
+}
+
 interface DrawerAtividadeProps {
   no: NoCronogramaCompleto;
   // Item dono da atividade — pra projetar o saldo do orçamento em tempo real enquanto o
@@ -155,10 +162,27 @@ export function DrawerAtividade({
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-foreground/20" onClick={onFechar} />
       <div className="relative flex h-full w-full flex-col overflow-y-auto border-l border-border bg-surface p-5 shadow-xl sm:w-[420px]">
-        <div className="mb-4 flex items-center justify-between">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-            {no.tipo === "pasta" ? "Pasta" : "Atividade"}
-          </p>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+              {no.tipo === "pasta" ? "Pasta" : "Atividade"}
+            </p>
+            {/* Ids técnicos — EstruturaAtividade (o nó em si), AtividadeConsultor (a
+                alocação vinculada) e o seqati dela (identidade que o Senior atribui à
+                alocação confirmada — null enquanto isso não acontece). Uma tarefa
+                compartilhada pode ter mais de uma AtividadeConsultor — lista todas. */}
+            {no.tipo === "atividade" && (
+              <p
+                className="mt-0.5 font-mono text-[10.5px] text-muted"
+                title={`Id. da atividade na estrutura: ${no.id}${
+                  no.alocacoesResumo.length > 0 ? ` · Id. da atividade (seqati): ${formatarAlocacoes(no.alocacoesResumo)}` : ""
+                }`}
+              >
+                Est. {no.id}
+                {no.alocacoesResumo.length > 0 && ` · Ativ. ${formatarAlocacoes(no.alocacoesResumo)}`}
+              </p>
+            )}
+          </div>
           <button
             onClick={onFechar}
             className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

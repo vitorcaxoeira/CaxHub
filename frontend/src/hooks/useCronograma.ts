@@ -36,6 +36,12 @@ export interface NoCronogramaCompleto extends NoCronograma {
   podeEditarItem: boolean;
   depexe: number | null;
   depexeLabel: string | null;
+  // AtividadeConsultor vinculada(s) a este nó — normalmente 1, pode ser mais de uma numa
+  // tarefa compartilhada entre consultores, e nenhuma numa atividade ainda sem responsável
+  // alocado. `id` é distinto de `no.id` (EstruturaAtividade, o nó da árvore em si). `seqati`
+  // null = a alocação ainda não foi confirmada pelo Senior (ver confirmarSessao,
+  // routes/apontamentos.ts) — string porque é BigInt na origem.
+  alocacoesResumo: { id: number; seqati: string | null }[];
 }
 
 interface NoApi {
@@ -58,6 +64,9 @@ interface NoApi {
   horasRealizadas: number;
   saldo: number | null;
   horasDivergentes: boolean;
+  // Só `id`/`seqati` interessam aqui — o resto do objeto (nome do consultor, horas etc.)
+  // já chega por outros campos deste mesmo nó.
+  alocacoes?: { id: number; seqati: string | null }[];
 }
 
 interface ItemApi {
@@ -161,6 +170,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             podeEditarItem: p.podeEditar,
             depexe: null,
             depexeLabel: null,
+            alocacoesResumo: [],
           });
         }
 
@@ -189,6 +199,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             podeEditarItem: item.podeEditar,
             depexe: item.depexe,
             depexeLabel: item.depexeLabel,
+            alocacoesResumo: [],
           });
 
           for (const n of item.nos) {
@@ -215,6 +226,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
               podeEditarItem: item.podeEditar,
               depexe: item.depexe,
               depexeLabel: item.depexeLabel,
+              alocacoesResumo: n.alocacoes ?? [],
             });
           }
         }
@@ -337,6 +349,8 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
           podeEditarItem: itemDoNo ? itemDoNo.podeEditarItem : proposta?.podeGerenciarProposta ?? false,
           depexe: itemDoNo?.depexe ?? null,
           depexeLabel: itemDoNo?.depexeLabel ?? null,
+          // Nó recém-criado não tem alocação ainda — isso só existe depois de "Alocar consultores".
+          alocacoesResumo: [],
         };
         setNos((atual) => [...atual, criado]);
         return criado;
