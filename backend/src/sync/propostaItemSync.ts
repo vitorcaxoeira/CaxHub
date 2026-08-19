@@ -106,3 +106,16 @@ export async function runPropostaItemSync(): Promise<void> {
 export function schedulePropostaItemSync(): void {
   cron.schedule(CRON_EXPR, runPropostaItemSync);
 }
+
+// Sincroniza só os itens desta proposta — par de runPropostaSyncPorCodpro, mesmo uso (ação
+// manual "Sync. ERP" da lista de Alocação) e mesma propagação de erro pro chamador. Sem
+// "desvincular": diferente de RatItem (numrat/seqrat é uma identidade separada da PK),
+// PropostaItem já É a chave natural (codemp+codpro+seqite) — não tem o que desvincular, só
+// atualizar. Devolve quantos itens vieram do Senior.
+export async function runPropostaItemSyncPorCodpro(codemp: number, codpro: number): Promise<number> {
+  const query = `${QUERY} WHERE USU_CodEmp = ${codemp} AND USU_CodPro = ${codpro}`;
+  const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codpro", "seqite"])) as PropostaItemRow[];
+  await processarLinhasPropostaItem(rows);
+  await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
+  return rows.length;
+}

@@ -9,6 +9,9 @@ import { Skeleton } from "../../components/ui/Skeleton";
 import { toneBadge } from "../../components/ui/badges";
 import { formatHoras } from "../../utils/horas";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { useSincronizarErp } from "../../hooks/useSincronizarErp";
+import { useToast } from "../../components/ui/Toast";
+import { DropdownMenu } from "../../components/ui/DropdownMenu";
 
 interface OpcaoFiltro {
   value: number;
@@ -90,6 +93,8 @@ const formatHorasCompacto = (horasDecimais: number) => formatHoras(horasDecimais
 export function Alocacao() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const toast = useToast();
+  const { sincronizar, estaSincronizando } = useSincronizarErp<{ ok: boolean; encontrada: boolean; totalItens: number }>();
   // Filtros ficam sincronizados na URL — assim, ao voltar da tela de detalhe da
   // proposta (via histórico do navegador), a lista reaparece com os mesmos filtros
   // em vez de resetar.
@@ -601,16 +606,47 @@ export function Alocacao() {
                       >
                         {formatHorasCompacto(row.saldo / 60)}
                       </td>
-                      <td className={`whitespace-nowrap px-2.5 py-1.5 text-right ${expandida ? "border-r border-primary" : ""}`}>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/projetos/alocacao/${row.codemp}/${row.codpro}`);
-                          }}
-                          className="whitespace-nowrap text-sm text-primary hover:underline"
-                        >
-                          Ver itens →
-                        </button>
+                      <td
+                        className={`whitespace-nowrap px-2.5 py-1.5 text-right ${expandida ? "border-r border-primary" : ""}`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <DropdownMenu placement="bottom-end">
+                          <DropdownMenu.Trigger>
+                            <button
+                              className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              aria-label="Ações da proposta"
+                            >
+                              ⋯
+                            </button>
+                          </DropdownMenu.Trigger>
+                          <DropdownMenu.Content>
+                            <DropdownMenu.Item
+                              onSelect={async () => {
+                                const resultado = await sincronizar(
+                                  chave,
+                                  `/api/alocacao/propostas/${row.codemp}/${row.codpro}/sincronizar`
+                                );
+                                if (resultado.ok) {
+                                  toast.mostrar(
+                                    resultado.data.encontrada
+                                      ? `Sincronizado — ${resultado.data.totalItens} item(ns)`
+                                      : "Proposta não encontrada mais no Senior",
+                                    resultado.data.encontrada ? "success" : "warning"
+                                  );
+                                  carregar();
+                                } else {
+                                  toast.mostrar(resultado.erro, "destructive");
+                                }
+                              }}
+                              disabled={estaSincronizando(chave)}
+                            >
+                              {estaSincronizando(chave) ? "Sincronizando..." : "Sync. ERP"}
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item onSelect={() => navigate(`/projetos/alocacao/${row.codemp}/${row.codpro}/cronograma`)}>
+                              Cronograma
+                            </DropdownMenu.Item>
+                          </DropdownMenu.Content>
+                        </DropdownMenu>
                       </td>
                     </tr>
                     {expandida && (

@@ -187,3 +187,21 @@ export async function runPropostaSync(): Promise<void> {
 export function schedulePropostaSync(): void {
   cron.schedule(CRON_EXPR, runPropostaSync);
 }
+
+// Sincroniza só esta proposta — usado pela ação manual "Sync. ERP" na lista de Alocação
+// (ver POST /alocacao/propostas/:codemp/:codpro/sincronizar). Diferente de runPropostaSync
+// (job agendado, engole erro e só loga em SyncLog), propaga erro pro chamador: é uma ação
+// síncrona disparada por clique, a rota HTTP precisa saber se falhou pra avisar o usuário.
+// `codemp`/`codpro` vêm da própria Proposta já gravada localmente (nunca input direto do
+// usuário), interpolados como number — mesmo padrão de runRatSyncPorNumrat.
+//
+// Devolve se a proposta ainda existe no Senior (rows.length > 0) — o chamador decide o que
+// fazer (hoje, só avisa; não desvincula/apaga nada, mesmo espírito conservador do resto da
+// base).
+export async function runPropostaSyncPorCodpro(codemp: number, codpro: number): Promise<boolean> {
+  const query = `${QUERY} WHERE USU_CodEmp = ${codemp} AND USU_CodPro = ${codpro}`;
+  const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codpro"])) as PropostaRow[];
+  await processarLinhasProposta(rows);
+  await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
+  return rows.length > 0;
+}

@@ -12,6 +12,8 @@ import {
 } from "../domain/contextoProjeto";
 import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
 import { enfileirar } from "../sync/outboxSenior";
+import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
+import { runPropostaItemSyncPorCodpro } from "../sync/propostaItemSync";
 import { TIP_EVE_ALTERAR, TIP_EVE_EXCLUIR, TIP_EVE_INCLUIR } from "../soap/client";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
@@ -741,6 +743,48 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
     });
   } catch (error) {
     handleError(res, error, "proposta-itens");
+  }
+});
+
+// POST /propostas/:codemp/:codpro/sincronizar — "Sync. ERP" da lista de Alocação: busca de
+// novo no Senior os dados desta proposta e dos itens dela, sem esperar o job noturno.
+// Mesma checagem de acesso de GET /propostas/:codemp/:codpro/itens (visão de detalhe) —
+// quem enxerga a proposta na lista pode sincronizá-la.
+alocacaoRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    if (!Number.isFinite(codemp) || !Number.isFinite(codpro)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await departamentosPermitidos(role, contexto);
+    if (!(await podeVerProposta(permitidos, codemp, codpro))) {
+      res.status(403).json({ error: "Sem acesso a esta proposta" });
+      return;
+    }
+
+    let encontrada: boolean;
+    let totalItens: number;
+    try {
+      encontrada = await runPropostaSyncPorCodpro(codemp, codpro);
+      totalItens = await runPropostaItemSyncPorCodpro(codemp, codpro);
+    } catch (syncError) {
+      const message = syncError instanceof Error ? syncError.message : String(syncError);
+      res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
+      return;
+    }
+
+    res.json({ ok: true, encontrada, totalItens });
+  } catch (error) {
+    handleError(res, error, "proposta-sincronizar");
   }
 });
 
