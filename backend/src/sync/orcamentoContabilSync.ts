@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { carimbo } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "orcamentos_contabeis-sync";
 // Só tem DatGer no dicionário do Senior pra esta tabela — mesma lógica conservadora do
@@ -20,6 +20,37 @@ interface OrcamentoContabilRow {
   vlrrat: number;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
+// schema.prisma (OrcamentoContabil): vlrrat Decimal(17,2), codccu VarChar(9) (por isso
+// ::text, nunca ::varchar(9) — trunca em silêncio).
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codfil", cast: "int" },
+  { nome: "mesano", cast: "date" },
+  { nome: "ctared", cast: "int" },
+  { nome: "codccu", cast: "text" },
+  { nome: "ctafin", cast: "int" },
+  { nome: "vlrrat", cast: "numeric" },
+];
+
+// `String(...).slice(0,10)` pra data, nunca `new Date(v)` — "2025-03-14" é UTC mas
+// "2025-03-14T00:00:00" é local, e em America/Sao_Paulo isso desloca o dia (mesano já vem
+// 100% alinhado no dia 1, então o recorte é seguro). `vlrrat.toFixed(2)` nunca number cru.
+function linhaDe(row: OrcamentoContabilRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codfil}-${row.mesano}-${row.ctared}-${row.codccu}-${row.ctafin}`,
+    valores: [
+      String(row.codemp),
+      String(row.codfil),
+      String(row.mesano).slice(0, 10),
+      String(row.ctared),
+      row.codccu,
+      String(row.ctafin),
+      row.vlrrat.toFixed(2),
+    ],
+  };
+}
+
 export async function runOrcamentoContabilSync(): Promise<void> {
   // Instante da execução, carimbado em toda linha vista nesta rodada — é o que permite
   // descobrir depois quem NÃO veio (ver src/sync/varrerRemovidos.ts). Tem que ser
@@ -29,16 +60,25 @@ export async function runOrcamentoContabilSync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
-    const rows = (await runSqlViaSoapPaginated(QUERY, ["codemp", "codfil", "mesano", "ctared", "codccu", "ctafin"])) as OrcamentoContabilRow[];
+    const inicioFetch = Date.now();
+    const rows = (await runSqlViaSoapPaginated(QUERY, [
+      "codemp",
+      "codfil",
+      "mesano",
+      "ctared",
+      "codccu",
+      "ctafin",
+    ])) as OrcamentoContabilRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, codfil: row.codfil, mesano: new Date(row.mesano), ctared: row.ctared, codccu: row.codccu, ctafin: row.ctafin, vlrrat: row.vlrrat, ...carimbo(inicio) };
-      await prisma.orcamentoContabil.upsert({
-        where: { codemp_codfil_mesano_ctared_codccu_ctafin: { codemp: row.codemp, codfil: row.codfil, mesano: new Date(row.mesano), ctared: row.ctared, codccu: row.codccu, ctafin: row.ctafin } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "orcamentos_contabeis",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "codfil", "mesano", "ctared", "codccu", "ctafin"],
+      carimbo: inicio,
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — vem comentada de
     // propósito: ligar a varredura exige duas decisões que um gerador não tem como
@@ -52,7 +92,7 @@ export async function runOrcamentoContabilSync(): Promise<void> {
     //
     // Pra ligar: descomentar o bloco, acrescentar aos imports
     //   import { Prisma } from "@prisma/client";
-    //   import { carimbo, varrerRemovidos } from "./varrerRemovidos";
+    //   import { varrerRemovidos } from "./varrerRemovidos";
     // e registrar o JOB_NAME em src/sync/politicaVarredura.ts começando por "simular" —
     // nunca direto em "marcar", sem antes conferir os detectados contra o ERP.
     //
@@ -66,11 +106,19 @@ export async function runOrcamentoContabilSync(): Promise<void> {
 
     await prisma.syncLog.create({
       // Ao ligar a varredura, acrescentar aqui pra ela aparecer no painel:
-      //   message: varredura.resumo,
+      //   message: `${resultado.linhasProcessadas} linhas em ...s — ${varredura.resumo}`,
       //   varreduraModo: varredura.modo,
       //   varreduraDetectados: varredura.candidatos,
       //   varreduraInicio: inicio,
-      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query: QUERY,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

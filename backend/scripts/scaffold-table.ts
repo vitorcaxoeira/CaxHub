@@ -25,14 +25,52 @@ function tsInterfaceType(prismaType: string): string {
   }
 }
 
-function upsertValueExpr(prismaType: string, accessor: string, optional: boolean): string {
-  if (prismaType === "BigInt") {
-    return optional ? `${accessor} != null ? BigInt(${accessor}) : null` : `BigInt(${accessor})`;
+// Cast SQL explícito por tipo Prisma, usado pelo upsert em lote (sync/upsertEmLote.ts).
+// String vira sempre "text", NUNCA o varchar(N) declarado na coluna — cast largo pra coluna
+// estreita preserva o erro de truncamento (22001) em vez de truncar em silêncio (mesma razão
+// de codccu::text em vez de ::varchar(9), ver upsertEmLote.ts).
+function sqlCast(prismaType: string): string {
+  switch (prismaType) {
+    case "Int":
+      return "int";
+    case "BigInt":
+      return "bigint";
+    case "Decimal":
+      return "numeric";
+    case "Boolean":
+      return "boolean";
+    case "DateTime":
+      // mapSeniorType só produz DateTime com @db.Date (dattyp=4) — nunca Timestamptz pra
+      // coluna de dado (Timestamptz é só pro carimbo de varredura, à parte).
+      return "date";
+    case "String":
+    default:
+      return "text";
   }
-  if (prismaType === "DateTime") {
-    return optional ? `${accessor} != null ? new Date(${accessor}) : null` : `new Date(${accessor})`;
+}
+
+// Valor já formatado como string (ou null) pronto pro upsert em lote — nunca number/bigint/
+// Date cru (tira BigInt/Decimal/Date do caminho de serialização do driver, ver
+// upsertEmLote.ts). `!= null` (não `!== undefined`) trata ausência de chave e null da mesma
+// forma — os dois colapsam pra null explícito.
+function upsertLoteValueExpr(mapped: { prismaType: string }, field: SeniorField, accessor: string, optional: boolean): string {
+  if (mapped.prismaType === "BigInt" || mapped.prismaType === "Int" || mapped.prismaType === "Boolean") {
+    return optional ? `${accessor} != null ? String(${accessor}) : null` : `String(${accessor})`;
   }
-  return accessor;
+  if (mapped.prismaType === "Decimal") {
+    // prefld = casas decimais reais do campo no Senior; dattyp=10 (customizado) não informa
+    // prefld, por isso o default 2 (mesmo default de mapSeniorType pro Decimal(18,2)).
+    const casas = field.prefld > 0 ? field.prefld : 2;
+    return optional ? `${accessor} != null ? ${accessor}.toFixed(${casas}) : null` : `${accessor}.toFixed(${casas})`;
+  }
+  if (mapped.prismaType === "DateTime") {
+    // String(v).slice(0,10), nunca new Date(v) — "2025-03-14" é UTC mas
+    // "2025-03-14T00:00:00" é local, e em America/Sao_Paulo isso desloca o dia.
+    return optional ? `${accessor} != null ? String(${accessor}).slice(0, 10) : null` : `String(${accessor}).slice(0, 10)`;
+  }
+  // String — já é string, só normaliza null/undefined. NÃO mapeia "" pra null: uma string
+  // vazia pode ter significado próprio no domínio (ex.: despar em plano_contabil).
+  return optional ? `${accessor} != null ? ${accessor} : null` : accessor;
 }
 
 async function main() {
@@ -172,37 +210,51 @@ ${modelLines.join("\n")}${colunasVarredura}${idLine}
     })
     .join("\n");
 
-  const resolvedByAlias = new Map(resolved.map((r) => [r.alias.toLowerCase(), r]));
-  const pkValueExpr = (pkAlias: string) => {
-    const pkMapped = resolvedByAlias.get(pkAlias)?.mapped.prismaType ?? "String";
-    return upsertValueExpr(pkMapped, `row.${pkAlias}`, false);
-  };
+  // Colunas do INSERT em lote (sync/upsertEmLote.ts), na ordem usada em LinhaUpsert.valores.
+  const colunasLiteral = resolved
+    .map(({ alias, mapped }) => `  { nome: "${alias}", cast: "${sqlCast(mapped.prismaType)}" },`)
+    .join("\n");
 
-  const pkWhere = isComposite
-    ? `${pkAliases.join("_")}: { ${pkAliases.map((a) => `${a}: ${pkValueExpr(a)}`).join(", ")} }`
-    : `${pkAliases[0]}: ${pkValueExpr(pkAliases[0])}`;
+  // Chave de dedup dentro do lote — concatenação dos valores de PK (ver upsertEmLote.ts:
+  // ON CONFLICT derruba o lote inteiro se a mesma PK aparecer 2x no mesmo VALUES).
+  const chaveExpr = "`" + pkAliases.map((a) => "${row." + a + "}").join("-") + "`";
 
-  const dataAssignments = resolved
+  const valoresLiteral = resolved
     .map(({ alias, field, mapped }) => {
       const optional = field.cannul === 1 && !pkFieldsLower.includes(alias.toLowerCase());
-      return `${alias}: ${upsertValueExpr(mapped.prismaType, `row.${alias}`, optional)}`;
+      return `      ${upsertLoteValueExpr(mapped, field, `row.${alias}`, optional)},`;
     })
-    .join(", ");
+    .join("\n");
 
   const modelAccessor = `${modelName.charAt(0).toLowerCase()}${modelName.slice(1)}`;
 
   const orderByColumns = pkAliases.map((a) => `"${a}"`).join(", ");
+  const pkColunas = pkAliases.map((a) => `"${a}"`).join(", ");
 
   const syncFileContent = `import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { carimbo } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 const JOB_NAME = "${jobName}";
 const QUERY = \`${query.replace(/`/g, "\\`")}\`;
 
 interface ${modelName}Row {
 ${interfaceFields}
+}
+
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores.
+const COLUNAS: ColunaUpsert[] = [
+${colunasLiteral}
+];
+
+function linhaDe(row: ${modelName}Row): LinhaUpsert {
+  return {
+    chave: ${chaveExpr},
+    valores: [
+${valoresLiteral}
+    ],
+  };
 }
 
 export async function run${modelName}Sync(): Promise<void> {
@@ -214,16 +266,18 @@ export async function run${modelName}Sync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(QUERY, [${orderByColumns}])) as ${modelName}Row[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { ${dataAssignments}, ...carimbo(inicio) };
-      await prisma.${modelAccessor}.upsert({
-        where: { ${pkWhere} },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "${localTableName}",
+      colunas: COLUNAS,
+      colunasPk: [${pkColunas}],
+      carimbo: inicio,
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — vem comentada de
     // propósito: ligar a varredura exige duas decisões que um gerador não tem como
@@ -237,7 +291,7 @@ export async function run${modelName}Sync(): Promise<void> {
     //
     // Pra ligar: descomentar o bloco, acrescentar aos imports
     //   import { Prisma } from "@prisma/client";
-    //   import { carimbo, varrerRemovidos } from "./varrerRemovidos";
+    //   import { varrerRemovidos } from "./varrerRemovidos";
     // e registrar o JOB_NAME em src/sync/politicaVarredura.ts começando por "simular" —
     // nunca direto em "marcar", sem antes conferir os detectados contra o ERP.
     //
@@ -251,11 +305,18 @@ export async function run${modelName}Sync(): Promise<void> {
 
     await prisma.syncLog.create({
       // Ao ligar a varredura, acrescentar aqui pra ela aparecer no painel:
-      //   message: varredura.resumo,
+      //   message: \`\${resultado.linhasProcessadas} linhas em ...s — \${varredura.resumo}\`,
       //   varreduraModo: varredura.modo,
       //   varreduraDetectados: varredura.candidatos,
       //   varreduraInicio: inicio,
-      data: { jobName: JOB_NAME, query: QUERY, status: "success" },
+      data: {
+        jobName: JOB_NAME,
+        query: QUERY,
+        status: "success",
+        message:
+          \`\${resultado.linhasProcessadas} linhas em \${((msFetch + msEscrita) / 1000).toFixed(1)}s \` +
+          \`(fetch \${(msFetch / 1000).toFixed(1)}s, escrita \${(msEscrita / 1000).toFixed(1)}s, \${resultado.lotes} lotes)\`,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
