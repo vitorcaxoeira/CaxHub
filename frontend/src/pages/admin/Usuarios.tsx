@@ -1,8 +1,10 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../../auth/AuthContext";
+import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { copiarParaAreaDeTransferencia } from "../../utils/clipboard";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 
 interface Role {
   id: number;
@@ -65,9 +67,31 @@ export function Usuarios() {
   const [linkGerado, setLinkGerado] = useState<string | null>(null);
   const [linkCopiado, setLinkCopiado] = useState(false);
 
+  // Situação vem de um clique num KPI (só um valor por vez, ver alternarStatusFiltro); Papel
+  // é multi-select; busca é texto livre debounced — mesmo padrão de SincronizacaoSenior.tsx.
+  const [statusFiltro, setStatusFiltro] = useState<string | null>(null);
+  const [roleFiltro, setRoleFiltro] = useState<number[]>([]);
+  const [buscaInput, setBuscaInput] = useState("");
+  const buscaDebounced = useDebouncedValue(buscaInput, 350);
+
+  // Totais por situação da base INTEIRA (não reagem a statusFiltro/roleFiltro/buscaDebounced)
+  // — mesma regra de GET /sincronizacao/indicadores: o KPI mostra sempre o todo, só a lista
+  // abaixo reage aos filtros.
+  const [indicadores, setIndicadores] = useState({ ativo: 0, pendente: 0 });
+  const [loadingIndicadores, setLoadingIndicadores] = useState(true);
+
   function carregar() {
     setLoading(true);
-    Promise.all([axios.get("/api/users"), axios.get("/api/users/roles")])
+    Promise.all([
+      axios.get("/api/users", {
+        params: {
+          busca: buscaDebounced || undefined,
+          roleId: roleFiltro.length > 0 ? roleFiltro.join(",") : undefined,
+          status: statusFiltro || undefined,
+        },
+      }),
+      axios.get("/api/users/roles"),
+    ])
       .then(([usersRes, rolesRes]) => {
         setUsuarios(usersRes.data.users);
         setRoles(rolesRes.data.roles);
@@ -77,9 +101,29 @@ export function Usuarios() {
       .finally(() => setLoading(false));
   }
 
+  function carregarIndicadores() {
+    setLoadingIndicadores(true);
+    axios
+      .get("/api/users/indicadores")
+      .then(({ data }) => setIndicadores(data))
+      .catch(() => {})
+      .finally(() => setLoadingIndicadores(false));
+  }
+
+  // Indicadores carregam só uma vez ao montar — não dependem dos filtros da tela.
+  useEffect(() => {
+    carregarIndicadores();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     carregar();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFiltro, roleFiltro, buscaDebounced]);
+
+  function alternarStatusFiltro(status: string) {
+    setStatusFiltro((atual) => (atual === status ? null : status));
+  }
 
   function abrirCriar() {
     setEditando(null);
@@ -153,6 +197,9 @@ export function Usuarios() {
     try {
       await axios.delete(`/api/users/${usuario.id}`);
       carregar();
+      // Excluir muda a contagem por situação (um ativo ou um pendente a menos) — sem isso o
+      // KPI ficaria visivelmente errado logo depois da própria ação que esta tela oferece.
+      carregarIndicadores();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao excluir usuário");
     }
@@ -206,6 +253,9 @@ export function Usuarios() {
       setLinkGerado(`${window.location.origin}${data.inviteLink}`);
       setLinkCopiado(false);
       carregar();
+      // Novo convite é um usuário "pendente" a mais — mesma razão de carregarIndicadores()
+      // em excluir().
+      carregarIndicadores();
     } catch (err: any) {
       setErroConvite(err.response?.data?.error ?? "Falha ao criar convite");
     } finally {
@@ -265,6 +315,65 @@ export function Usuarios() {
             Novo usuário
           </button>
         </div>
+      </div>
+
+      {loadingIndicadores ? (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-5">
+              <Skeleton className="mb-2 h-3.5 w-20" />
+              <Skeleton className="h-7 w-12" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {/* Clicáveis: filtram a lista abaixo por situação (mesmo espírito do KPI de
+              SincronizacaoSenior.tsx) — o total de cada cartão nunca muda com o clique, só o
+              da base inteira. */}
+          <button
+            onClick={() => alternarStatusFiltro("ativo")}
+            className={`rounded-lg border p-5 text-left transition ${
+              statusFiltro === "ativo" ? "border-success ring-2 ring-success/40" : "border-border hover:bg-surface-2"
+            } ${statusFiltro && statusFiltro !== "ativo" ? "opacity-40" : ""}`}
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Ativos</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-success">{indicadores.ativo}</span>
+          </button>
+          <button
+            onClick={() => alternarStatusFiltro("pendente")}
+            className={`rounded-lg border p-5 text-left transition ${
+              statusFiltro === "pendente" ? "border-warning ring-2 ring-warning/40" : "border-border hover:bg-surface-2"
+            } ${statusFiltro && statusFiltro !== "pendente" ? "opacity-40" : ""}`}
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Convites pendentes</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-warning">{indicadores.pendente}</span>
+          </button>
+        </div>
+      )}
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          value={buscaInput}
+          onChange={(e) => setBuscaInput(e.target.value)}
+          placeholder="Buscar por nome ou e-mail..."
+          className="w-56 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <MultiSelectDropdown
+          opcoes={roles.map<MultiSelectOption<number>>((role) => ({ value: role.id, label: role.name }))}
+          selecionados={roleFiltro}
+          onChange={setRoleFiltro}
+          labelTodos="Todos os papéis"
+          labelSufixo="papéis"
+        />
+        {statusFiltro && (
+          <button
+            onClick={() => setStatusFiltro(null)}
+            className="font-mono text-[10.5px] uppercase tracking-wide text-muted underline hover:text-foreground"
+          >
+            limpar filtro de situação
+          </button>
+        )}
       </div>
 
       {erro && (
@@ -362,7 +471,7 @@ export function Usuarios() {
               {!loading && usuarios.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-5 py-8 text-center text-sm text-muted">
-                    Nenhum usuário cadastrado.
+                    Nenhum usuário encontrado com esses filtros.
                   </td>
                 </tr>
               )}

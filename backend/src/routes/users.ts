@@ -1,16 +1,22 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { signToken } from "../auth/jwt";
 import { prisma } from "../db/prisma";
 import { papelSugeridoPorTipusurat } from "../domain/usuariosDominio";
+import { parseIntListParam } from "../lib/queryParams";
 
 export const usersRouter = Router();
 usersRouter.use(requireAuth, requireRole("admin"));
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CONVITE_VALIDADE_DIAS = 7;
+
+// Situações possíveis de User.status (ver model no schema.prisma) — mesmo estilo de
+// STATUS_VALIDOS em routes/sincronizacao.ts.
+const STATUS_VALIDOS = ["ativo", "pendente"] as const;
 
 function toPublicUser(user: {
   id: number;
@@ -45,6 +51,22 @@ usersRouter.get("/roles", async (_req, res) => {
     res.json({ roles });
   } catch (error) {
     handleError(res, error, "roles");
+  }
+});
+
+// Totais por situação da base INTEIRA, sem nenhum filtro da tela — mesma decisão já tomada em
+// GET /sincronizacao/indicadores: o KPI mostra sempre o todo, só a lista abaixo dele reage aos
+// filtros. Carregado uma vez pela tela, não a cada mudança de filtro.
+usersRouter.get("/indicadores", async (_req, res) => {
+  try {
+    const grupos = await prisma.user.groupBy({ by: ["status"], _count: true });
+    const totais: Record<string, number> = { ativo: 0, pendente: 0 };
+    for (const g of grupos) {
+      if (g.status in totais) totais[g.status] = g._count;
+    }
+    res.json(totais);
+  } catch (error) {
+    handleError(res, error, "indicadores");
   }
 });
 
@@ -192,9 +214,28 @@ usersRouter.post("/:id/token-servico", async (req, res) => {
 });
 
 // ---------- Listagem ----------
-usersRouter.get("/", async (_req, res) => {
+// Filtros opcionais e combináveis (AND): busca (nome OU email), roleId (lista via
+// parseIntListParam, "1,4" -> [1,4]) e status (um valor só, vindo do clique num KPI).
+usersRouter.get("/", async (req, res) => {
   try {
-    const users = await prisma.user.findMany({ include: { role: true }, orderBy: { nome: "asc" } });
+    const busca = typeof req.query.busca === "string" ? req.query.busca.trim() : "";
+    const roleIds = parseIntListParam(req.query.roleId);
+    const status =
+      typeof req.query.status === "string" && (STATUS_VALIDOS as readonly string[]).includes(req.query.status)
+        ? req.query.status
+        : null;
+
+    const where: Prisma.UserWhereInput = {};
+    if (busca) {
+      where.OR = [
+        { nome: { contains: busca, mode: "insensitive" } },
+        { email: { contains: busca, mode: "insensitive" } },
+      ];
+    }
+    if (roleIds) where.roleId = { in: roleIds };
+    if (status) where.status = status;
+
+    const users = await prisma.user.findMany({ where, include: { role: true }, orderBy: { nome: "asc" } });
     res.json({ users: users.map(toPublicUser) });
   } catch (error) {
     handleError(res, error, "list");
