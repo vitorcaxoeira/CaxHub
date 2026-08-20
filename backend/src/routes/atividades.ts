@@ -126,7 +126,11 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   // umas das outras, só desse array, então disparam todas juntas num único Promise.all.
   const codempsUnicos = [...new Set(atividades.map((a) => a.codemp))];
   const codprosUnicos = [...new Set(atividades.map((a) => a.codpro))];
-  const seqatisValidos = [...new Set(atividades.map((a) => a.seqati).filter((s): s is bigint => s != null))];
+  // `> 0n`, não só `!= null`: seqati=0 não é um seqAti real (AtividadeConsultor.seqati é
+  // @unique, então só existe 1 linha zerada no sistema por vez, mas essa 1 linha já basta
+  // pra "roubar" a soma de todo RatItem de seqati=0 do banco pra si — ver mesmo comentário
+  // em routes/alocacao.ts.
+  const seqatisValidos = [...new Set(atividades.map((a) => a.seqati).filter((s): s is bigint => s != null && s > 0n))];
   const atividadeIds = atividades.map((a) => a.id);
   const idsEstrutura = [...new Set(atividades.map((a) => a.estruturaAtividadeId).filter((id): id is number => id != null))];
   const codforUnicos = [...new Set(atividades.map((a) => a.codfor))];
@@ -218,7 +222,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   const minutosRealizadosPorAtividadeId = new Map<number, number>();
   for (const [id, ms] of msRealizadosPorAtividadeId) minutosRealizadosPorAtividadeId.set(id, Math.round(ms / 60000));
   function horasRealizadasDaAtividade(a: (typeof atividades)[number]): number {
-    return (a.seqati != null ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) + (minutosRealizadosPorAtividadeId.get(a.id) ?? 0);
+    return (
+      (a.seqati != null && a.seqati > 0n ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) +
+      (minutosRealizadosPorAtividadeId.get(a.id) ?? 0)
+    );
   }
 
   // Sessão ABERTA (fim: null) de cada atividade — alimenta o cronômetro ao vivo no

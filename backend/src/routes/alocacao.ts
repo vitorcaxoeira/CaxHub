@@ -572,7 +572,11 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
     // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
     // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão), somado por
     // TODAS as alocações do consultor nesta proposta (pode ter mais de um item).
-    const seqatisValidos = [...new Set(alocacoes.map((a) => a.seqati).filter((s): s is bigint => s != null))];
+    // `> 0n`, não só `!= null`: seqati=0 não é um seqAti real (AtividadeConsultor.seqati é
+    // @unique, então só pode existir 1 linha zerada no sistema inteiro, mas essa 1 linha já
+    // basta pra "roubar" a soma de TODO RatItem de seqati=0 do banco pra si — casos reais
+    // documentados em audit/taxonomia.ts, RAT_ITEM_SEQATI_CORRIGIDO).
+    const seqatisValidos = [...new Set(alocacoes.map((a) => a.seqati).filter((s): s is bigint => s != null && s > 0n))];
     const ratItemsComHoras =
       seqatisValidos.length > 0
         ? await prisma.ratItem.findMany({
@@ -605,7 +609,8 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
       horasPorCodfor.set(a.codfor, (horasPorCodfor.get(a.codfor) ?? 0) + (a.qtdhor ?? 0));
       excedentesPorCodfor.set(a.codfor, (excedentesPorCodfor.get(a.codfor) ?? 0) + a.horasExcedentes);
       const realizadoDaAlocacao =
-        (a.seqati != null ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) + Math.round((msRealizadosPorAtividadeId.get(a.id) ?? 0) / 60000);
+        (a.seqati != null && a.seqati > 0n ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) +
+        Math.round((msRealizadosPorAtividadeId.get(a.id) ?? 0) / 60000);
       realizadoPorCodfor.set(a.codfor, (realizadoPorCodfor.get(a.codfor) ?? 0) + realizadoDaAlocacao);
     }
 
@@ -1149,7 +1154,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     // "Horas realizadas" por alocação — mesmo cálculo de carregarAtividadesVisiveis em
     // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
     // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão).
-    const seqatisValidos = [...new Set(alocacoes.map((a) => a.seqati).filter((s): s is bigint => s != null))];
+    // `> 0n`, não só `!= null`: ver comentário equivalente na rota /consultores, mais acima
+    // neste arquivo — seqati=0 não é um seqAti real, e sem essa guarda uma única alocação
+    // zerada rouba pra si a soma de todo RatItem de seqati=0 do banco inteiro.
+    const seqatisValidos = [...new Set(alocacoes.map((a) => a.seqati).filter((s): s is bigint => s != null && s > 0n))];
     const ratItemsComHoras =
       seqatisValidos.length > 0
         ? await prisma.ratItem.findMany({
@@ -1179,7 +1187,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     const minutosRealizadosPorAtividadeId = new Map<number, number>();
     for (const [id, ms] of msRealizadosPorAtividadeId) minutosRealizadosPorAtividadeId.set(id, Math.round(ms / 60000));
     function horasRealizadasDaAlocacao(a: (typeof alocacoes)[number]): number {
-      return (a.seqati != null ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) + (minutosRealizadosPorAtividadeId.get(a.id) ?? 0);
+      return (
+        (a.seqati != null && a.seqati > 0n ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) +
+        (minutosRealizadosPorAtividadeId.get(a.id) ?? 0)
+      );
     }
 
     function mapNo(n: (typeof todosOsNos)[number]) {

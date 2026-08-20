@@ -363,9 +363,13 @@ async function enviarCriarAtividade(item: SincronizacaoPendente): Promise<Result
   const recusa = mensagemDeRecusa(resposta, itemRetornado?.msg);
   if (recusa) throw new Error(recusa);
 
-  if (itemRetornado?.seqAti == null) {
+  // `=== 0` também é rejeitado, não só `== null`: um seqAti zero não é um seqAti real — se
+  // gravado, "rouba" pra si (nos cálculos de realizado que buscam RatItem por seqati) a soma
+  // de todo RatItem de seqati=0 do banco inteiro, de qualquer consultor/proposta (caso real
+  // já corrigido: alocação 78035/estrutura 2440, ver routes/alocacao.ts).
+  if (itemRetornado?.seqAti == null || itemRetornado.seqAti === 0) {
     throw new Error(
-      `Senior respondeu sucesso mas sem seqAti (item: ${itemRetornado?.msg ?? "sem detalhe"}) — não dá pra confirmar a alocação`
+      `Senior respondeu sucesso mas sem seqAti válido (item: ${itemRetornado?.msg ?? "sem detalhe"}, seqAti=${itemRetornado?.seqAti}) — não dá pra confirmar a alocação`
     );
   }
 
@@ -399,10 +403,11 @@ async function enviarEditarAtividade(item: SincronizacaoPendente): Promise<Resul
 
   // Não tinha seqAti local: este "Alterar" fez o papel de criação. Mesmo write-back de
   // enviarCriarAtividade — sem isso, a alocação fica pra sempre sem identidade mesmo já
-  // existindo de verdade no Senior.
-  if (itemRetornado?.seqAti == null) {
+  // existindo de verdade no Senior. Mesma rejeição de `seqAti === 0`, ver comentário em
+  // enviarCriarAtividade acima.
+  if (itemRetornado?.seqAti == null || itemRetornado.seqAti === 0) {
     throw new Error(
-      `Senior respondeu sucesso mas sem seqAti (alocação ${alocacao.id} não tinha seqAti local e a resposta não trouxe um novo)`
+      `Senior respondeu sucesso mas sem seqAti válido (alocação ${alocacao.id} não tinha seqAti local e a resposta não trouxe um novo válido, seqAti=${itemRetornado?.seqAti})`
     );
   }
   return { tipo: "alocacao_criada", atividadeConsultorId: alocacao.id, seqAti: itemRetornado.seqAti };

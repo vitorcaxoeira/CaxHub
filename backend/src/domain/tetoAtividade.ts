@@ -30,7 +30,10 @@ export async function realizadoDaAtividade(atividade: Pick<AtividadeConsultor, "
       where: { atividadeId: atividade.id, confirmada: false, fim: { not: null }, excluidaEm: null },
       select: { inicio: true, fim: true },
     }),
-    atividade.seqati != null
+    // `> 0n`, não só `!= null`: seqati=0 não é um seqAti real — ver mesmo comentário em
+    // routes/alocacao.ts e routes/atividades.ts. Uma atividade com seqati=0 buscaria aqui
+    // TODO RatItem de seqati=0 do banco inteiro, não só os dela.
+    atividade.seqati != null && atividade.seqati > 0n
       ? prisma.ratItem.findMany({
           where: { seqati: atividade.seqati, horini: { not: null }, horfim: { not: null } },
           select: { horini: true, horfim: true },
