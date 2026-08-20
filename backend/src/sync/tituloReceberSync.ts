@@ -33,6 +33,7 @@ interface TituloReceberRow {
 
 export async function runTituloReceberSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
+  const inicio = new Date();
   try {
     const rows = (await runSqlViaSoapPaginated(query, [
       "codemp",
@@ -51,12 +52,12 @@ export async function runTituloReceberSync(desde?: Date): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success" },
+      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "error", message },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

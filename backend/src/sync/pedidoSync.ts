@@ -98,12 +98,13 @@ export async function runPedidoSync(desde?: Date): Promise<void> {
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
       },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "error", message },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
@@ -211,13 +212,14 @@ export async function runPedidoSyncPorClientes(codclis: number[]): Promise<Resul
         varreduraModo: varredura.modo,
         varreduraDetectados: varredura.candidatos,
         varreduraInicio: inicio,
+        duracaoMs: Date.now() - inicio.getTime(),
       },
     });
     return resultado;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME_CLIENTE, query: queryLog, status: "error", message },
+      data: { jobName: JOB_NAME_CLIENTE, query: queryLog, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME_CLIENTE}] falhou (${alvos.length} cliente(s)):`, message);
     throw error;

@@ -98,6 +98,13 @@ model SyncLog {
   // tabela, porque um sync parcial (por cliente) carimba um subconjunto com um instante
   // mais novo e envenenaria o máximo.
   varreduraInicio     DateTime?
+  // Quanto a execução levou, do início do try (antes do primeiro fetch/upsert) até o
+  // syncLog.create de sucesso ou erro — sempre gravada nos dois casos, pra uma falha a
+  // meio caminho também dizer quanto tempo levou até falhar. NULL = log anterior a
+  // 20/08/2026, ou uma das duas funções de sync unitário (runPropostaSyncPorCodpro,
+  // runRatSyncPorNumrat, runRatItemSyncPorNumrat) que reaproveitam o jobName do job
+  // agendado sem passar por esse carimbo — não são a execução "oficial" do job.
+  duracaoMs           Int?
 }
 
 // Espelho local da tabela E070EMP do Senior ERP (empresas cadastradas).

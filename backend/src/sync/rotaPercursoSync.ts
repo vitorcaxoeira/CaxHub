@@ -19,6 +19,7 @@ interface RotaPercursoRow {
 // 13/08/2026. Roda depois de RotaViagem/PercursoViagem na fila de "Sincronizar tudo" (ver
 // sync/registry.ts) só por organização; sem FK formal, então a ordem não é obrigatória.
 export async function runRotaPercursoSync(): Promise<void> {
+  const inicio = new Date();
   try {
     const rows = (await runSqlViaSoapPaginated(QUERY, ["id"])) as RotaPercursoRow[];
 
@@ -32,12 +33,12 @@ export async function runRotaPercursoSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success" },
+      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message },
+      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

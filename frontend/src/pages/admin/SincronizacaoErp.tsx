@@ -14,6 +14,10 @@ interface JobSync {
   // "error") quanto o resumo da varredura de removidos (quando é "success"). Quem decide
   // a cor é o status, não a presença da mensagem.
   ultimaMensagem: string | null;
+  // Quanto a última execução levou, do início ao fim — inclusive quando terminou em erro.
+  // null: log anterior a 20/08/2026, ou uma sync unitária que reaproveita o jobName do job
+  // agendado sem passar pelo carimbo (ex.: "Sinc. ERP" de 1 proposta em Alocação).
+  ultimaDuracaoMs: number | null;
   // null = tabela ainda sem detecção de exclusão no Senior (a maioria hoje).
   totalRemovidos: number | null;
   // Resultado da última VARREDURA, que pode ser bem mais antiga que a última
@@ -67,6 +71,17 @@ function varreduraDefasada(job: JobSync): boolean {
   if (!job.ultimaVarredura) return true; // tem detecção e nunca varreu
   const atraso = new Date(job.ultimaSincronizacao).getTime() - new Date(job.ultimaVarredura.em).getTime();
   return atraso > DIAS_VARREDURA_DEFASADA * 24 * 60 * 60 * 1000;
+}
+
+// "14,7s" abaixo de 1 min, "8m 40s" a partir daí — mesmo formato usado nas mensagens de
+// SyncLog dos jobs já instrumentados (ex.: "308.244 linhas em 58s (fetch 44s, escrita
+// 12s...)").
+function formatarDuracao(ms: number): string {
+  const segundos = ms / 1000;
+  if (segundos < 60) return `${segundos.toFixed(1).replace(".", ",")}s`;
+  const minutos = Math.floor(segundos / 60);
+  const resto = Math.round(segundos % 60);
+  return `${minutos}m ${resto}s`;
 }
 
 function formatTempoAtras(iso: string | null): string {
@@ -304,6 +319,9 @@ export function SincronizacaoErp() {
                 <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Última sincronização
                 </th>
+                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                  Duração
+                </th>
                 <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Próxima execução
                 </th>
@@ -333,6 +351,9 @@ export function SincronizacaoErp() {
                     </td>
                     <td className="px-5 py-3.5">
                       <Skeleton className="h-4 w-28" />
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-4 w-12" />
                     </td>
                     <td className="px-5 py-3.5">
                       <Skeleton className="h-4 w-28" />
@@ -433,6 +454,9 @@ export function SincronizacaoErp() {
                       </p>
                     )}
                   </td>
+                  <td className="px-5 py-3.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
+                    {job.ultimaDuracaoMs != null ? formatarDuracao(job.ultimaDuracaoMs) : "—"}
+                  </td>
                   <td className="px-5 py-3.5 text-[12.5px] text-muted">
                     {dateTimeFormatter.format(new Date(job.proximaExecucao))}
                   </td>
@@ -477,7 +501,7 @@ export function SincronizacaoErp() {
                 </tr>
                 {expandido === job.jobName && (
                   <tr className="border-t border-border/60 bg-surface-2/40">
-                    <td colSpan={8} className="px-5 py-3">
+                    <td colSpan={9} className="px-5 py-3">
                       <p className="mb-2 text-[11.5px] text-muted">
                         Registros que não vieram mais na consulta ao Senior. Confira alguns direto no ERP: se eles
                         realmente não existem mais lá, a detecção está correta.
@@ -512,14 +536,14 @@ export function SincronizacaoErp() {
               ))}
               {!loading && jobs.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
+                  <td colSpan={9} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhuma tabela cadastrada.
                   </td>
                 </tr>
               )}
               {!loading && jobs.length > 0 && jobsFiltrados.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-8 text-center text-sm text-muted">
+                  <td colSpan={9} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhuma tabela encontrada para "{busca.trim()}".
                   </td>
                 </tr>

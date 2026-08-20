@@ -107,12 +107,12 @@ export async function runPlanoContabilSync(desde?: Date): Promise<void> {
       //   varreduraModo: varredura.modo,
       //   varreduraDetectados: varredura.candidatos,
       //   varreduraInicio: inicio,
-      data: { jobName: JOB_NAME, query: QUERY, status: "success" },
+      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message },
+      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

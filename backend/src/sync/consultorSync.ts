@@ -27,6 +27,7 @@ interface ConsultorRow {
 // então este job foi escrito manualmente em vez de gerado pelo scaffold-table.ts.
 // Chave (codemp, codusu) inferida a partir dos dados reais (sem duplicatas).
 export async function runConsultorSync(): Promise<void> {
+  const inicio = new Date();
   try {
     const rows = (await runSqlViaSoap(QUERY)) as ConsultorRow[];
 
@@ -52,12 +53,12 @@ export async function runConsultorSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success" },
+      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message },
+      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

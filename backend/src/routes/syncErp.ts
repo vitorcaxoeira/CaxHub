@@ -68,6 +68,11 @@ syncErpRouter.get("/", async (_req, res) => {
           // Por isso vira `ultimaMensagem` e quem decide a cor na tela é `ultimoStatus` —
           // mandar isso como `ultimoErro` pintaria resumo de sucesso de vermelho.
           ultimaMensagem: ultimo?.message ?? null,
+          // Quanto a última execução (a mesma que ultimaSincronizacao/ultimaMensagem se
+          // referem) levou, do início ao fim — inclusive quando terminou em erro. NULL:
+          // log anterior a 20/08/2026, ou uma sync unitária que reaproveita este jobName
+          // sem passar pelo carimbo (ver SyncLog.duracaoMs no schema).
+          ultimaDuracaoMs: ultimo?.duracaoMs ?? null,
           totalRemovidos: removidos[indice],
           // Resultado da ÚLTIMA VARREDURA (não da última sincronização). `detectados`
           // conta o que ela achou, inclusive em modo "simular", quando nada foi gravado —

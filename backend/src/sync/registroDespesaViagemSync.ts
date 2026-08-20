@@ -30,6 +30,7 @@ interface RegistroDespesaViagemRow {
 // Despesa de viagem lançada numa RAT — 15.034 linhas em 13/08/2026 (paginado por segurança,
 // mesmo abaixo do limite de ~30 mil onde o Senior costuma truncar a resposta).
 export async function runRegistroDespesaViagemSync(): Promise<void> {
+  const inicio = new Date();
   try {
     const rows = (await runSqlViaSoapPaginated(BASE_QUERY, ["codemp", "numrat", "seqrdv"])) as RegistroDespesaViagemRow[];
 
@@ -63,12 +64,12 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: BASE_QUERY, status: "success" },
+      data: { jobName: JOB_NAME, query: BASE_QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: BASE_QUERY, status: "error", message },
+      data: { jobName: JOB_NAME, query: BASE_QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
