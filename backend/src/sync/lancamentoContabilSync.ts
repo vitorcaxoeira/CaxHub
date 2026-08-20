@@ -1,7 +1,9 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { carimbo } from "./varrerRemovidos";
+import { varrerRemovidos } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "lancamentos_contabeis-sync";
 // Sem campo de "última alteração" confiável no dicionário do Senior pra esta tabela —
@@ -20,6 +22,33 @@ interface LancamentoContabilRow {
   numlot?: number;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
+// schema.prisma (LancamentoContabil): numlct BigInt.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "numlct", cast: "bigint" },
+  { nome: "sitlct", cast: "int" },
+  { nome: "orilct", cast: "text" },
+  { nome: "cpllct", cast: "text" },
+  { nome: "numlot", cast: "int" },
+];
+
+// `!= null` (não `!== undefined`) pra tratar ausência de chave e null da mesma forma — os
+// dois colapsam pra null explícito no lote.
+function linhaDe(row: LancamentoContabilRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.numlct}`,
+    valores: [
+      String(row.codemp),
+      String(row.numlct),
+      String(row.sitlct),
+      row.orilct,
+      row.cpllct != null ? row.cpllct : null,
+      row.numlot != null ? String(row.numlot) : null,
+    ],
+  };
+}
+
 export async function runLancamentoContabilSync(): Promise<void> {
   // Instante da execução, carimbado em toda linha vista nesta rodada — é o que permite
   // descobrir depois quem NÃO veio (ver src/sync/varrerRemovidos.ts). Tem que ser
@@ -29,48 +58,46 @@ export async function runLancamentoContabilSync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(QUERY, ["codemp", "numlct"])) as LancamentoContabilRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, numlct: BigInt(row.numlct), sitlct: row.sitlct, orilct: row.orilct, cpllct: row.cpllct, numlot: row.numlot, ...carimbo(inicio) };
-      await prisma.lancamentoContabil.upsert({
-        where: { codemp_numlct: { codemp: row.codemp, numlct: BigInt(row.numlct) } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "lancamentos_contabeis",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "numlct"],
+      carimbo: inicio,
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
-    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — vem comentada de
-    // propósito: ligar a varredura exige duas decisões que um gerador não tem como
-    // adivinhar, e o default de politicaVarredura.ts é "desligada" justamente pra tabela
-    // nova nunca começar a marcar registro sozinha.
-    //   1. ESCOPO — precisa excluir registro nascido no CaxHub, se esta tabela for de mão
-    //      dupla (ex.: { origemCaxHub: false }), senão ele é acusado de removido.
-    //   2. CONTAGEM NA ORIGEM — tem que repetir exatamente o mesmo FROM/WHERE da QUERY
-    //      acima, incluindo filtro aplicado às linhas dentro do laço, senão a guarda
-    //      acusa truncamento onde não houve.
-    //
-    // Pra ligar: descomentar o bloco, acrescentar aos imports
-    //   import { Prisma } from "@prisma/client";
-    //   import { carimbo, varrerRemovidos } from "./varrerRemovidos";
-    // e registrar o JOB_NAME em src/sync/politicaVarredura.ts começando por "simular" —
-    // nunca direto em "marcar", sem antes conferir os detectados contra o ERP.
-    //
-    // const varredura = await varrerRemovidos<Prisma.LancamentoContabilWhereInput>(prisma.lancamentoContabil, {
-    //   jobName: JOB_NAME,
-    //   inicio,
-    //   linhasProcessadas: rows.length,
-    //   escopo: {},
-    //   queryContagemOrigem: `SELECT COUNT(*) AS total FROM e640lct`,
-    // });
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 20/08/2026 a
+    // pedido do Vitor: lançamento contábil tem manutenção pesada do lado do Senior (edição e
+    // remoção frequentes, não é cadastro estático), e o upsert em lote só cobre incluir/
+    // alterar. Sem isso, registro removido no Senior virava fantasma permanente no espelho.
+    // Começa em "simular" (politicaVarredura.ts) — nunca direto em "marcar". Escopo `{}`:
+    // espelho só-leitura (Senior -> CaxHub), sem escrita de volta, então não há registro
+    // "nascido no CaxHub" pra excluir do escopo.
+    const varredura = await varrerRemovidos<Prisma.LancamentoContabilWhereInput>(prisma.lancamentoContabil, {
+      jobName: JOB_NAME,
+      inicio,
+      linhasProcessadas: rows.length,
+      escopo: {},
+      queryContagemOrigem: `SELECT COUNT(*) AS total FROM e640lct`,
+    });
 
     await prisma.syncLog.create({
-      // Ao ligar a varredura, acrescentar aqui pra ela aparecer no painel:
-      //   message: varredura.resumo,
-      //   varreduraModo: varredura.modo,
-      //   varreduraDetectados: varredura.candidatos,
-      //   varreduraInicio: inicio,
-      data: { jobName: JOB_NAME, query: QUERY, status: "success" },
+      data: {
+        jobName: JOB_NAME,
+        query: QUERY,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes) — ${varredura.resumo}`,
+        varreduraModo: varredura.modo,
+        varreduraDetectados: varredura.candidatos,
+        varreduraInicio: inicio,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

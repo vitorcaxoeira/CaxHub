@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "centros_custo-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -29,25 +30,68 @@ interface CentroCustoRow {
   mskccu?: string;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores. Sem carimbo (`carimbo`
+// omitido abaixo) — esta tabela não grava visto_em_sync/removido_em_senior hoje, e a
+// conversão pra lote não muda esse comportamento (ligar carimbo aqui é decisão à parte).
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codccu", cast: "text" },
+  { nome: "desccu", cast: "text" },
+  { nome: "abrccu", cast: "text" },
+  { nome: "tipccu", cast: "int" },
+  { nome: "ccupai", cast: "text" },
+  { nome: "anasin", cast: "text" },
+  { nome: "claccu", cast: "text" },
+  { nome: "nivccu", cast: "int" },
+  { nome: "mskccu", cast: "text" },
+];
+
+// `!= null` (não `!== undefined`) pra tratar ausência de chave e null da mesma forma.
+function linhaDe(row: CentroCustoRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codccu}`,
+    valores: [
+      String(row.codemp),
+      row.codccu,
+      row.desccu,
+      row.abrccu,
+      String(row.tipccu),
+      row.ccupai != null ? row.ccupai : null,
+      row.anasin != null ? row.anasin : null,
+      row.claccu != null ? row.claccu : null,
+      row.nivccu != null ? String(row.nivccu) : null,
+      row.mskccu != null ? row.mskccu : null,
+    ],
+  };
+}
+
 export async function runCentroCustoSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codccu"])) as CentroCustoRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, codccu: row.codccu, desccu: row.desccu, abrccu: row.abrccu, tipccu: row.tipccu, ccupai: row.ccupai, anasin: row.anasin, claccu: row.claccu, nivccu: row.nivccu, mskccu: row.mskccu };
-      await prisma.centroCusto.upsert({
-        where: { codemp_codccu: { codemp: row.codemp, codccu: row.codccu } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "centros_custo",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "codccu"],
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success" },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

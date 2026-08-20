@@ -17,6 +17,13 @@ const MODOS: Record<string, ModoVarredura> = {
   "pedidos-sync": "marcar",
   // Sync sob demanda de clientes (ações "Sinc. ERP" em Mercado > Listar Pedidos).
   "pedidos-sync-cliente": "marcar",
+  // Ligadas em 20/08/2026 a pedido do Vitor: rateio/lançamento contábil tem manutenção
+  // pesada do lado do Senior (edição e remoção frequentes) — sem varredura, registro
+  // removido lá virava fantasma permanente no espelho local. Começam em "simular"; só
+  // promovem pra "marcar" depois de alguns dias com número estável no painel e chaves
+  // conferidas manualmente no Senior (mesma disciplina de pedidos-sync).
+  "rateios_lancamento-sync": "simular",
+  "lancamentos_contabeis-sync": "simular",
 };
 
 export function modoVarredura(jobName: string): ModoVarredura {

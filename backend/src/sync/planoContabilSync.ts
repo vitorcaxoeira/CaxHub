@@ -1,8 +1,8 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { carimbo } from "./varrerRemovidos";
 import { derivarPais } from "../domain/hierarquiaPlano";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "plano_contabil-sync";
 export const CRON_EXPR = "50 4 * * *";
@@ -32,6 +32,46 @@ interface PlanoContabilRow {
   sitcta?: string;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "ctared", cast: "int" },
+  { nome: "descta", cast: "text" },
+  { nome: "clacta", cast: "text" },
+  { nome: "defgru", cast: "text" },
+  { nome: "natcta", cast: "text" },
+  { nome: "anasin", cast: "text" },
+  { nome: "despar", cast: "text" },
+  { nome: "nivcta", cast: "int" },
+  { nome: "mskgcc", cast: "text" },
+  { nome: "gructa", cast: "int" },
+  { nome: "sitcta", cast: "text" },
+];
+
+// `!= null` (não `!== undefined`) pra tratar ausência de chave e null da mesma forma. NÃO
+// mapear `""` pra null: `despar` usa `''` com significado próprio (routes/contabil.ts:101,
+// "conta sem grupo próprio, geralmente patrimonial") — `!= null` já preserva isso, só troca
+// null/undefined por null explícito, nunca toca em string vazia.
+function linhaDe(row: PlanoContabilRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.ctared}`,
+    valores: [
+      String(row.codemp),
+      String(row.ctared),
+      row.descta,
+      row.clacta,
+      row.defgru,
+      row.natcta,
+      row.anasin,
+      row.despar != null ? row.despar : null,
+      row.nivcta != null ? String(row.nivcta) : null,
+      row.mskgcc != null ? row.mskgcc : null,
+      row.gructa != null ? String(row.gructa) : null,
+      row.sitcta != null ? row.sitcta : null,
+    ],
+  };
+}
+
 export async function runPlanoContabilSync(desde?: Date): Promise<void> {
   // Instante da execução, carimbado em toda linha vista nesta rodada — é o que permite
   // descobrir depois quem NÃO veio (ver src/sync/varrerRemovidos.ts). Tem que ser
@@ -42,22 +82,25 @@ export async function runPlanoContabilSync(desde?: Date): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(QUERY, ["codemp", "ctared"])) as PlanoContabilRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, ctared: row.ctared, descta: row.descta, clacta: row.clacta, defgru: row.defgru, natcta: row.natcta, anasin: row.anasin, despar: row.despar, nivcta: row.nivcta, mskgcc: row.mskgcc, gructa: row.gructa, sitcta: row.sitcta, ...carimbo(inicio) };
-      await prisma.planoContabil.upsert({
-        where: { codemp_ctared: { codemp: row.codemp, ctared: row.ctared } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "plano_contabil",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "ctared"],
+      carimbo: inicio,
+    });
 
     // Conta-pai: único campo derivado desta tabela — o Senior não tem "CtaPai" em E045PLA
-    // (só E044CCU.CcuPai, pro centro de custo). Roda DEPOIS do laço de upsert porque precisa
+    // (só E044CCU.CcuPai, pro centro de custo). Roda DEPOIS do lote de upsert porque precisa
     // do plano inteiro em mãos pra achar o pai de cada conta, e por empresa porque `clacta`
     // só é único dentro de uma empresa. Num sync incremental (`desde` preenchido) as contas
-    // não alteradas continuam no banco, então lê do banco em vez de usar `rows`.
+    // não alteradas continuam no banco, então lê do banco em vez de usar `rows`. Sem
+    // conversão pra lote: são só 547 linhas, e o volume de UPDATE real é bem menor (só
+    // conta cujo pai mudou), não é o gargalo medido.
     const empresasTocadas = [...new Set(rows.map((r) => r.codemp))];
     for (const codemp of empresasTocadas) {
       const contas = await prisma.planoContabil.findMany({
@@ -76,6 +119,7 @@ export async function runPlanoContabilSync(desde?: Date): Promise<void> {
         });
       }
     }
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — vem comentada de
     // propósito: ligar a varredura exige duas decisões que um gerador não tem como
@@ -89,7 +133,7 @@ export async function runPlanoContabilSync(desde?: Date): Promise<void> {
     //
     // Pra ligar: descomentar o bloco, acrescentar aos imports
     //   import { Prisma } from "@prisma/client";
-    //   import { carimbo, varrerRemovidos } from "./varrerRemovidos";
+    //   import { varrerRemovidos } from "./varrerRemovidos";
     // e registrar o JOB_NAME em src/sync/politicaVarredura.ts começando por "simular" —
     // nunca direto em "marcar", sem antes conferir os detectados contra o ERP.
     //
@@ -103,11 +147,18 @@ export async function runPlanoContabilSync(desde?: Date): Promise<void> {
 
     await prisma.syncLog.create({
       // Ao ligar a varredura, acrescentar aqui pra ela aparecer no painel:
-      //   message: varredura.resumo,
+      //   message: `${resultado.linhasProcessadas} linhas em ...s — ${varredura.resumo}`,
       //   varreduraModo: varredura.modo,
       //   varreduraDetectados: varredura.candidatos,
       //   varreduraInicio: inicio,
-      data: { jobName: JOB_NAME, query: QUERY, status: "success" },
+      data: {
+        jobName: JOB_NAME,
+        query: QUERY,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
