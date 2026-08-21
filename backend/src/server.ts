@@ -68,6 +68,8 @@ import { scheduleRotaPercursoSync } from "./sync/rotaPercursoSync";
 import { scheduleOutboxSeniorSync } from "./sync/outboxSenior";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
+import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
+import { SYNC_JOBS } from "./sync/registry";
 
 garantirDiretorioUploads();
 
@@ -111,49 +113,65 @@ app.use("/auditoria", auditoriaRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 
-app.listen(port, () => {
-  console.log(`CaxHub backend rodando na porta ${port}`);
-  // Mesma ordem de dependência do registry (sync/registry.ts) — ver lá o porquê de
-  // Portador e Transação virem antes dos Títulos.
-  scheduleEmpresaSync();
-  scheduleFilialSync();
-  scheduleClienteSync();
-  scheduleTipoTituloSync();
-  schedulePortadorSync();
-  scheduleTransacaoSync();
-  scheduleTituloReceberSync();
-  scheduleMovimentoTituloReceberSync();
-  scheduleRepresentanteSync();
-  scheduleCentroCustoSync();
-  scheduleMovimentoContaSync();
-  scheduleNaturezaFinanceiraSync();
-  scheduleMoedaSync();
-  scheduleContaCorrenteSync();
-  schedulePropostaSync();
-  schedulePropostaItemSync();
-  scheduleConsultorSync();
-  scheduleContratoConsultorSync();
-  scheduleDepartamentoGestorSync();
-  scheduleDepartamentoTimeSync();
-  scheduleFasePropostaSync();
-  scheduleAtividadeConsultorSync();
-  scheduleRatSync();
-  scheduleRatItemSync();
-  schedulePedidoSync();
-  scheduleFormaPagamentoSync();
-  scheduleCondicaoPagamentoSync();
-  schedulePlanoContabilSync();
-  scheduleLancamentoContabilSync();
-  scheduleRateioLancamentoSync();
-  scheduleOrcamentoContabilSync();
-  scheduleRotaViagemSync();
-  schedulePercursoViagemSync();
-  scheduleRotaPercursoSync();
-  scheduleRegistroDespesaViagemSync();
-  scheduleOutboxSeniorSync();
-  // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do
-  // fim do expediente (5 em 5 min), e a que ficou sem resposta depois de a aba fechar
-  // (15 em 15s — cadência bem mais curta, ver o comentário no arquivo).
-  agendarParadaAutomatica();
-  agendarParadaPorFechamento();
-});
+// Fase 3 do plano de filtros na importação: carrega o snapshot de filtros ativos ANTES de
+// aceitar qualquer requisição/agendar qualquer cron — senão a primeira sincronização
+// disparada logo após o boot rodaria sem filtro nenhum até o carregamento terminar. Hoje é
+// instantâneo (só pedidos-sync pode ter filtro salvo, ver JOBS_COM_FILTRO em registry.ts);
+// se falhar, loga bem alto e sobe do mesmo jeito sem filtro nenhum — sem filtro é o estado
+// seguro (espelho completo), travar o boot por causa disso seria pior que o problema.
+async function iniciar() {
+  try {
+    await carregarFiltrosAtivos(SYNC_JOBS);
+  } catch (error) {
+    console.error("[boot] falhou ao carregar filtros ativos — subindo sem filtro nenhum:", error instanceof Error ? error.message : error);
+  }
+
+  app.listen(port, () => {
+    console.log(`CaxHub backend rodando na porta ${port}`);
+    // Mesma ordem de dependência do registry (sync/registry.ts) — ver lá o porquê de
+    // Portador e Transação virem antes dos Títulos.
+    scheduleEmpresaSync();
+    scheduleFilialSync();
+    scheduleClienteSync();
+    scheduleTipoTituloSync();
+    schedulePortadorSync();
+    scheduleTransacaoSync();
+    scheduleTituloReceberSync();
+    scheduleMovimentoTituloReceberSync();
+    scheduleRepresentanteSync();
+    scheduleCentroCustoSync();
+    scheduleMovimentoContaSync();
+    scheduleNaturezaFinanceiraSync();
+    scheduleMoedaSync();
+    scheduleContaCorrenteSync();
+    schedulePropostaSync();
+    schedulePropostaItemSync();
+    scheduleConsultorSync();
+    scheduleContratoConsultorSync();
+    scheduleDepartamentoGestorSync();
+    scheduleDepartamentoTimeSync();
+    scheduleFasePropostaSync();
+    scheduleAtividadeConsultorSync();
+    scheduleRatSync();
+    scheduleRatItemSync();
+    schedulePedidoSync();
+    scheduleFormaPagamentoSync();
+    scheduleCondicaoPagamentoSync();
+    schedulePlanoContabilSync();
+    scheduleLancamentoContabilSync();
+    scheduleRateioLancamentoSync();
+    scheduleOrcamentoContabilSync();
+    scheduleRotaViagemSync();
+    schedulePercursoViagemSync();
+    scheduleRotaPercursoSync();
+    scheduleRegistroDespesaViagemSync();
+    scheduleOutboxSeniorSync();
+    // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do
+    // fim do expediente (5 em 5 min), e a que ficou sem resposta depois de a aba fechar
+    // (15 em 15s — cadência bem mais curta, ver o comentário no arquivo).
+    agendarParadaAutomatica();
+    agendarParadaPorFechamento();
+  });
+}
+
+iniciar();

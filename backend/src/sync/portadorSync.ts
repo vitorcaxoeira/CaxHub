@@ -1,12 +1,14 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "portadores-sync";
 export const CRON_EXPR = "0 4 * * *";
 // Único campo de data é "DatPal" (alteração pro Palmtop, não do registro em si).
 export const CAMPO_DATA: string | null = null;
-const QUERY = `SELECT codemp AS codemp, codpor AS codpor, despor AS despor, abrpor AS abrpor, codban AS codban, codage AS codage, numcco AS numcco FROM e039por`;
+export const QUERY =`SELECT codemp AS codemp, codpor AS codpor, despor AS despor, abrpor AS abrpor, codban AS codban, codage AS codage, numcco AS numcco FROM e039por`;
 
 interface PortadorRow {
   codemp: number;
@@ -20,11 +22,13 @@ interface PortadorRow {
 
 export async function runPortadorSync(): Promise<void> {
   const inicio = new Date();
+  // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
+  const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
-    const rows = (await runSqlViaSoapPaginated(QUERY, ["codemp", "codpor"])) as PortadorRow[];
+    const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codpor"])) as PortadorRow[];
 
     for (const row of rows) {
       const data = { codemp: row.codemp, codpor: row.codpor, despor: row.despor, abrpor: row.abrpor, codban: row.codban, codage: row.codage, numcco: row.numcco };
@@ -36,12 +40,12 @@ export async function runPortadorSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

@@ -3,6 +3,8 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { reconciliarAlocacoesOrfas, resumirReconciliacao } from "../domain/reconciliarEstrutura";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "atividades_consultor-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -15,11 +17,22 @@ export const CAMPO_DATA: string | null = "USU_DatGer";
 // só em memória depois — ver [[filtro-de-negocio-na-query-nao-so-em-memoria]] no segundo
 // cérebro. Foi um filtro em memória desse tipo, escondendo o dado que ainda vinha por inteiro,
 // que deixou passar despercebida uma alocação duplicada (proposta 8749, 14/08/2026).
-const BASE_QUERY = `SELECT USU_QtdHor AS qtdhor, USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_CODFOR AS codfor, USU_SeqAti AS seqati, USU_SitReg AS sitreg, USU_DatGer AS datger, USU_HorGer AS horger, USU_UsuGer AS usuger, USU_PerLib AS perlib, USU_FasId AS fasid, USU_SelSol AS selsol FROM USU_TE077ATI WHERE USU_SeqIte > 0`;
+export const BASE_QUERY =`SELECT USU_QtdHor AS qtdhor, USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_CODFOR AS codfor, USU_SeqAti AS seqati, USU_SitReg AS sitreg, USU_DatGer AS datger, USU_HorGer AS horger, USU_UsuGer AS usuger, USU_PerLib AS perlib, USU_FasId AS fasid, USU_SelSol AS selsol FROM USU_TE077ATI WHERE USU_SeqIte > 0`;
 
+// Fase 1 do plano de filtros na importação: acumulador de predicados
+// (sync/consultaSenior.ts), não concatenação — antes esta era a única query com WHERE já
+// embutido na BASE_QUERY (por isso usava "AND" à mão); montarQuerySenior detecta isso
+// sozinho, então o corpo desta função fica idêntico ao dos outros 13 jobs com montarQuery.
 function montarQuery(desde?: Date): string {
-  if (!desde) return BASE_QUERY;
-  return `${BASE_QUERY} AND ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
+  const predicados: string[] = [];
+  const filtro = filtroDoJob(JOB_NAME, desde ? "alterados" : "todos", desde);
+  // Pedido do Vitor (21/08/2026): se o admin já salvou um predicado explícito no campo de
+  // data (Filtro(Alterados), inclusive com a variável "última sincronização"), ele substitui
+  // a injeção automática por inteiro em vez de empilhar os dois — "editável de verdade".
+  const admJaConfigurouCorte = desde != null && CAMPO_DATA != null && filtro.camposCobertos.has(CAMPO_DATA.toLowerCase());
+  if (desde && !admJaConfigurouCorte) predicados.push(`${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`);
+  predicados.push(...filtro.predicadosSql);
+  return montarQuerySenior(BASE_QUERY, predicados);
 }
 
 interface AtividadeConsultorRow {

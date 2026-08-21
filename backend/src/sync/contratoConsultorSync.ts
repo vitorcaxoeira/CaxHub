@@ -2,6 +2,8 @@ import cron from "node-cron";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { carimbo } from "./varrerRemovidos";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "contratos-consultores-sync";
 export const CRON_EXPR = "20 3 * * *";
@@ -10,7 +12,7 @@ export const CRON_EXPR = "20 3 * * *";
 export const CAMPO_DATA: string | null = null;
 // Só as colunas de chave (pra casar com Consultor por codemp+codusu/codfor) + as 4 novas —
 // nomfor/sitfor/depexe/etc. da mesma view já vivem em Consultor, não duplicamos aqui.
-const QUERY = `SELECT codemp AS codemp, codusu AS codusu, codfor AS codfor, numctr AS numctr, codmot AS codmot, vlrhor AS vlrhor, vlrmin AS vlrmin FROM USU_VBI01CTRCS`;
+export const QUERY =`SELECT codemp AS codemp, codusu AS codusu, codfor AS codfor, numctr AS numctr, codmot AS codmot, vlrhor AS vlrhor, vlrmin AS vlrmin FROM USU_VBI01CTRCS`;
 
 interface ContratoConsultorRow {
   codemp: number;
@@ -27,8 +29,10 @@ interface ContratoConsultorRow {
 // não precisa de runSqlViaSoapPaginated.
 export async function runContratoConsultorSync(): Promise<void> {
   const inicio = new Date();
+  // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
+  const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
-    const rows = (await runSqlViaSoap(QUERY)) as ContratoConsultorRow[];
+    const rows = (await runSqlViaSoap(query)) as ContratoConsultorRow[];
 
     for (const row of rows) {
       const data = {
@@ -62,12 +66,12 @@ export async function runContratoConsultorSync(): Promise<void> {
     // });
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

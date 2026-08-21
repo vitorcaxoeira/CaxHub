@@ -8,6 +8,8 @@ import { CAMPOS_AUDITADOS_PROPOSTA } from "../audit/camposAuditados";
 import { EVENTOS_AUDITORIA, ENTIDADES_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdProposta } from "../audit/identidadeEntidade";
 import { sitproLabel } from "../domain/propostasDominio";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "propostas-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -15,7 +17,7 @@ export const CRON_EXPR = "0 4 * * *";
 // campo de geração/alteração do registro em si — e a proposta muda de situação com
 // frequência sem nenhuma dessas datas ser atualizada.
 export const CAMPO_DATA: string | null = null;
-const QUERY = `SELECT USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_CodCli AS codcli, USU_QtdHor AS qtdhor, USU_DatPro AS datpro, USU_UsuGer AS usuger, USU_ForAte AS forate, USU_SitPro AS sitpro, USU_HorPro AS horpro, USU_TipPro AS tippro, USU_DesSol AS dessol, USU_ConSol AS consol, USU_PraRea AS prarea, USU_DatEnv AS datenv, USU_DatRet AS datret, USU_NumPrj AS numprj, USU_DatVal AS datval, USU_CodFpj AS codfpj, USU_SisPro AS sispro, USU_DesPro AS despro, usu_Numero AS numero, USU_ObrFas AS obrfas, USU_Executor AS executor, USU_ObsSit AS obssit, USU_LiqBru AS liqbru, USU_CodCcu AS codccu, USU_CtaFin AS ctafin, USU_ClaPro AS clapro, USU_AreExe AS areexe, USU_IdCom AS idcom, USU_CodRep AS codrep, USU_ForFat AS forfat, USU_DscFpg AS dscfpg, USU_HisPro AS hispro, USU_ObsPro AS obspro, USU_PreEnt AS preent, USU_PriPro AS pripro, USU_StaPro AS stapro, USU_TipVen AS tipven, USU_OrdemCns AS ordemcns, USU_SitMot AS sitmot, USU_TipPrj AS tipprj, USU_FrmPrj AS frmprj, USU_CodLev2 AS codlev2, USU_CliFat AS clifat, USU_ExiPedCli AS exipedcli, USU_PedCli AS pedcli, USU_ForFatRdv AS forfatrdv, USU_ModPro AS modpro, USU_ForFatLev AS forfatlev, USU_NumPed AS numped, USU_IdBpm AS idbpm, USU_DepExe AS depexe, USU_FatHrsDes AS fathrsdes FROM USU_TE077PRO`;
+export const QUERY =`SELECT USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_CodCli AS codcli, USU_QtdHor AS qtdhor, USU_DatPro AS datpro, USU_UsuGer AS usuger, USU_ForAte AS forate, USU_SitPro AS sitpro, USU_HorPro AS horpro, USU_TipPro AS tippro, USU_DesSol AS dessol, USU_ConSol AS consol, USU_PraRea AS prarea, USU_DatEnv AS datenv, USU_DatRet AS datret, USU_NumPrj AS numprj, USU_DatVal AS datval, USU_CodFpj AS codfpj, USU_SisPro AS sispro, USU_DesPro AS despro, usu_Numero AS numero, USU_ObrFas AS obrfas, USU_Executor AS executor, USU_ObsSit AS obssit, USU_LiqBru AS liqbru, USU_CodCcu AS codccu, USU_CtaFin AS ctafin, USU_ClaPro AS clapro, USU_AreExe AS areexe, USU_IdCom AS idcom, USU_CodRep AS codrep, USU_ForFat AS forfat, USU_DscFpg AS dscfpg, USU_HisPro AS hispro, USU_ObsPro AS obspro, USU_PreEnt AS preent, USU_PriPro AS pripro, USU_StaPro AS stapro, USU_TipVen AS tipven, USU_OrdemCns AS ordemcns, USU_SitMot AS sitmot, USU_TipPrj AS tipprj, USU_FrmPrj AS frmprj, USU_CodLev2 AS codlev2, USU_CliFat AS clifat, USU_ExiPedCli AS exipedcli, USU_PedCli AS pedcli, USU_ForFatRdv AS forfatrdv, USU_ModPro AS modpro, USU_ForFatLev AS forfatlev, USU_NumPed AS numped, USU_IdBpm AS idbpm, USU_DepExe AS depexe, USU_FatHrsDes AS fathrsdes FROM USU_TE077PRO`;
 
 export interface PropostaRow {
   codemp: number;
@@ -165,20 +167,22 @@ export async function processarLinhasProposta(rows: PropostaRow[]): Promise<void
 
 export async function runPropostaSync(): Promise<void> {
   const inicio = new Date();
+  // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
+  const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
-    const rows = (await runSqlViaSoapPaginated(QUERY, ["codemp", "codpro"])) as PropostaRow[];
+    const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codpro"])) as PropostaRow[];
     await processarLinhasProposta(rows);
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

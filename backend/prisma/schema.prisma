@@ -1608,3 +1608,25 @@ model RotaPercurso {
 
   @@map("rotas_percursos")
 }
+
+// Filtro de sincronização aplicado na importação do ERP Senior — Fase 3 do plano de filtros
+// (~/.claude/plans/se-liga-na-necessidade-resilient-lark.md), refinado na Fase 6 (21/08/2026):
+// até 2 filtros INDEPENDENTES por tabela, um por `modo` ("todos" — vale pro cron também, já
+// que o cron sempre roda sem `desde` — e "alterados" — só quando a sincronização incremental
+// roda). Mesmo vocabulário "todos"/"alterados" já usado em `POST /:jobName/run`
+// (routes/syncErp.ts), não um enum novo. `predicados` guarda a estrutura EDITÁVEL (campo de
+// origem + operador + valores, ver sync/filtroSenior.ts:PredicadoFiltro); o fragmento SQL de
+// verdade nunca é gravado aqui, só montado em runtime — assim uma mudança na regra de
+// validação vale pra filtro salvo antes dela existir, sem precisar migrar dado. Propagar
+// "todos" pra "alterados" é uma CÓPIA única (rota própria, sync/filtrosAtivos.ts) — depois de
+// propagado, os dois evoluem independentes, não ficam vinculados.
+model FiltroSincronizacao {
+  jobName       String   @map("job_name")
+  modo          String
+  predicados    Json
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+  atualizadoPor Int?     @map("atualizado_por")
+
+  @@id([jobName, modo])
+  @@map("filtros_sincronizacao")
+}

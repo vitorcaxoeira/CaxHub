@@ -15,6 +15,9 @@ interface SelectBuscavelProps<T extends string | number> {
   placeholder: string;
   /** Texto quando não há NENHUMA opção — diferente de "a busca não achou nada". */
   textoVazio: string;
+  /** Placeholder do campo de busca — default cobre o caso original (atividade por proposta/
+   * cliente); outros usos (ex.: campo de filtro por nome/descrição) devem passar o próprio. */
+  placeholderBusca?: string;
   desabilitado?: boolean;
   className?: string;
 }
@@ -43,6 +46,7 @@ export function SelectBuscavel<T extends string | number>({
   onChange,
   placeholder,
   textoVazio,
+  placeholderBusca = "Buscar por proposta, cliente ou descrição...",
   desabilitado = false,
   className = "",
 }: SelectBuscavelProps<T>) {
@@ -160,7 +164,7 @@ export function SelectBuscavel<T extends string | number>({
                 setIndiceAtivo(0);
               }}
               onKeyDown={onKeyDown}
-              placeholder="Buscar por proposta, cliente ou descrição..."
+              placeholder={placeholderBusca}
               className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>

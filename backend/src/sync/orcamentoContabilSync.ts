@@ -2,13 +2,15 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "orcamentos_contabeis-sync";
 // Só tem DatGer no dicionário do Senior pra esta tabela — mesma lógica conservadora do
 // comentário sobre DatPal em empresaSync.ts: não dá pra confiar nele como "alterado desde".
 export const CRON_EXPR = "10 5 * * *";
 export const CAMPO_DATA: string | null = null;
-const QUERY = `SELECT codemp AS codemp, codfil AS codfil, mesano AS mesano, ctared AS ctared, codccu AS codccu, ctafin AS ctafin, vlrrat AS vlrrat FROM e650rto`;
+export const QUERY =`SELECT codemp AS codemp, codfil AS codfil, mesano AS mesano, ctared AS ctared, codccu AS codccu, ctafin AS ctafin, vlrrat AS vlrrat FROM e650rto`;
 
 interface OrcamentoContabilRow {
   codemp: number;
@@ -56,12 +58,14 @@ export async function runOrcamentoContabilSync(): Promise<void> {
   // descobrir depois quem NÃO veio (ver src/sync/varrerRemovidos.ts). Tem que ser
   // capturado antes do primeiro upsert.
   const inicio = new Date();
+  // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
+  const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
     const inicioFetch = Date.now();
-    const rows = (await runSqlViaSoapPaginated(QUERY, [
+    const rows = (await runSqlViaSoapPaginated(query, [
       "codemp",
       "codfil",
       "mesano",
@@ -112,7 +116,7 @@ export async function runOrcamentoContabilSync(): Promise<void> {
       //   varreduraInicio: inicio,
       data: {
         jobName: JOB_NAME,
-        query: QUERY,
+        query,
         status: "success",
         message:
           `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
@@ -123,7 +127,7 @@ export async function runOrcamentoContabilSync(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
