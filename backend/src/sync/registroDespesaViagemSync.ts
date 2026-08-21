@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "registros_despesa_viagem-sync";
 export const CRON_EXPR = "20 5 * * *";
@@ -27,44 +28,87 @@ interface RegistroDespesaViagemRow {
   nidpso?: number;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
+// schema.prisma (RegistroDespesaViagem): vlrunt/vlrtot Decimal(9,2). Sem carimbo — esta
+// tabela não tem vistoEmSync/removidoEmSenior. `id` (autoincrement) e `origemCaxHub`/
+// `enviadoEmSenior` (nunca tocados por este sync, nem no upsert antigo — origemCaxHub
+// protege despesa lançada pelo consultor no CaxHub) ficam de fora de propósito: uma
+// coluna ausente do lote não é tocada pelo DO UPDATE e, no INSERT, recebe o DEFAULT do
+// schema — mesmo comportamento que o upsert linha-a-linha já tinha.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "numrat", cast: "int" },
+  { nome: "seqrdv", cast: "int" },
+  { nome: "datemi", cast: "date" },
+  { nome: "desrdv", cast: "text" },
+  { nome: "tipdes", cast: "int" },
+  { nome: "moddes", cast: "text" },
+  { nome: "qtdrdv", cast: "int" },
+  { nome: "vlrunt", cast: "numeric" },
+  { nome: "vlrtot", cast: "numeric" },
+  { nome: "fatrdv", cast: "text" },
+  { nome: "reerdv", cast: "text" },
+  { nome: "rotid", cast: "int" },
+  { nome: "hordes", cast: "int" },
+  { nome: "nidpso", cast: "int" },
+];
+
+// `String(...).slice(0,10)` pra data, nunca `new Date(v)`. `!= null` (não `!== undefined`)
+// trata ausência de chave e null da mesma forma.
+function linhaDe(row: RegistroDespesaViagemRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.numrat}-${row.seqrdv}`,
+    valores: [
+      String(row.codemp),
+      String(row.numrat),
+      String(row.seqrdv),
+      row.datemi ? String(row.datemi).slice(0, 10) : null,
+      row.desrdv != null ? row.desrdv : null,
+      row.tipdes != null ? String(row.tipdes) : null,
+      row.moddes != null ? row.moddes : null,
+      row.qtdrdv != null ? String(row.qtdrdv) : null,
+      row.vlrunt != null ? row.vlrunt.toFixed(2) : null,
+      row.vlrtot != null ? row.vlrtot.toFixed(2) : null,
+      row.fatrdv != null ? row.fatrdv : null,
+      row.reerdv != null ? row.reerdv : null,
+      row.rotid != null ? String(row.rotid) : null,
+      row.hordes != null ? String(row.hordes) : null,
+      row.nidpso != null ? String(row.nidpso) : null,
+    ],
+  };
+}
+
 // Despesa de viagem lançada numa RAT — 15.034 linhas em 13/08/2026 (paginado por segurança,
 // mesmo abaixo do limite de ~30 mil onde o Senior costuma truncar a resposta).
 export async function runRegistroDespesaViagemSync(): Promise<void> {
   const inicio = new Date();
   try {
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(BASE_QUERY, ["codemp", "numrat", "seqrdv"])) as RegistroDespesaViagemRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = {
-        codemp: row.codemp,
-        numrat: row.numrat,
-        seqrdv: row.seqrdv,
-        datemi: row.datemi ? new Date(row.datemi) : null,
-        desrdv: row.desrdv,
-        tipdes: row.tipdes,
-        moddes: row.moddes,
-        qtdrdv: row.qtdrdv,
-        vlrunt: row.vlrunt,
-        vlrtot: row.vlrtot,
-        fatrdv: row.fatrdv,
-        reerdv: row.reerdv,
-        rotid: row.rotid,
-        hordes: row.hordes,
-        nidpso: row.nidpso,
-      };
-      // Casa pela chave natural DO SENIOR (@@unique), não pela PK local `id` — mesma lógica
-      // de ratItemSync. Despesa criada no CaxHub tem seqrdv nulo, então nunca entra neste
-      // upsert: é isso que a impede de ser sobrescrita por uma despesa do ERP que tenha
-      // calhado de receber o mesmo número.
-      await prisma.registroDespesaViagem.upsert({
-        where: { codemp_numrat_seqrdv: { codemp: row.codemp, numrat: row.numrat, seqrdv: row.seqrdv } },
-        update: data,
-        create: data,
-      });
-    }
+    // Casa pela chave natural DO SENIOR (@@unique), não pela PK local `id` — mesma lógica
+    // de ratItemSync. Despesa criada no CaxHub tem seqrdv nulo, então nunca entra neste
+    // upsert: é isso que a impede de ser sobrescrita por uma despesa do ERP que tenha
+    // calhado de receber o mesmo número.
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "registros_despesa_viagem",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "numrat", "seqrdv"],
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: BASE_QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query: BASE_QUERY,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "rat-sync";
 export const CRON_EXPR = "15 4 * * *"; // logo depois de atividades_consultor-sync (0 4 * * *)
@@ -28,6 +29,52 @@ interface RatRow {
   depexe?: number;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores. `"dataApr"` precisa das
+// aspas que upsertEmLote já aplica em todo nome de coluna — é a única coluna do projeto sem
+// @map, então o Postgres guarda o nome exatamente como está no schema Prisma (misto), não
+// lowercase. `origemCaxHub` sempre "false": o upsert antigo também forçava isso em TODO
+// update, não só create — mesmo comportamento preservado aqui (ver runRat abaixo).
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codfor", cast: "int" },
+  { nome: "numprj", cast: "int" },
+  { nome: "codfpj", cast: "int" },
+  { nome: "numrat", cast: "int" },
+  { nome: "datemi", cast: "date" },
+  { nome: "dataApr", cast: "date" },
+  { nome: "sitrat", cast: "int" },
+  { nome: "obsrat", cast: "text" },
+  { nome: "usufor", cast: "int" },
+  { nome: "codpro", cast: "int" },
+  { nome: "codcli", cast: "int" },
+  { nome: "depexe", cast: "int" },
+  { nome: "origemCaxHub", cast: "boolean" },
+];
+
+// `String(...).slice(0,10)` pra data, nunca `new Date(v)`. `!= null` (não `!== undefined`)
+// trata ausência de chave e null da mesma forma.
+function linhaDe(row: RatRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.numprj}-${row.codfpj}-${row.numrat}`,
+    valores: [
+      String(row.codemp),
+      String(row.codfor),
+      String(row.numprj),
+      String(row.codfpj),
+      String(row.numrat),
+      row.datemi != null ? String(row.datemi).slice(0, 10) : null,
+      row.dataapr != null ? String(row.dataapr).slice(0, 10) : null,
+      row.sitrat != null ? String(row.sitrat) : null,
+      row.obsrat != null ? row.obsrat : null,
+      row.usufor != null ? String(row.usufor) : null,
+      row.codpro != null ? String(row.codpro) : null,
+      row.codcli != null ? String(row.codcli) : null,
+      row.depexe != null ? String(row.depexe) : null,
+      "false",
+    ],
+  };
+}
+
 // Cabeçalho de RAT (Registro de Atividade Técnica) — espelho parcial de USU_TE777RAT
 // (só os campos usados hoje, ver comentário do model Rat no schema.prisma). Igual a
 // AtividadeConsultor, é uma tabela de mão dupla, mas aqui a chave natural completa
@@ -36,47 +83,27 @@ interface RatRow {
 // NUNCA cria linha com numrat nulo (as 4 colunas da chave são NOT NULL na origem).
 async function executarUpsert(query: string): Promise<number> {
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat"])) as RatRow[];
-
-  for (const row of rows) {
-    const data = {
-      codemp: row.codemp,
-      codfor: row.codfor,
-      numprj: row.numprj,
-      codfpj: row.codfpj,
-      numrat: row.numrat,
-      datemi: row.datemi != null ? new Date(row.datemi) : null,
-      dataApr: row.dataapr != null ? new Date(row.dataapr) : null,
-      sitrat: row.sitrat ?? null,
-      obsrat: row.obsrat ?? null,
-      usufor: row.usufor ?? null,
-      codpro: row.codpro ?? null,
-      codcli: row.codcli ?? null,
-      depexe: row.depexe ?? null,
-      origemCaxHub: false,
-    };
-    await prisma.rat.upsert({
-      where: {
-        codemp_numprj_codfpj_numrat: {
-          codemp: row.codemp,
-          numprj: row.numprj,
-          codfpj: row.codfpj,
-          numrat: row.numrat,
-        },
-      },
-      update: data,
-      create: data,
-    });
-  }
-  return rows.length;
+  const resultado = await upsertEmLote(rows.map(linhaDe), {
+    tabela: "rats",
+    colunas: COLUNAS,
+    colunasPk: ["codemp", "numprj", "codfpj", "numrat"],
+  });
+  return resultado.linhasProcessadas;
 }
 
 export async function runRatSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
   try {
-    await executarUpsert(query);
+    const total = await executarUpsert(query);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: `${total} linha(s) em ${((Date.now() - inicio.getTime()) / 1000).toFixed(1)}s`,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

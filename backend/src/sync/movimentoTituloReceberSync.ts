@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "movimentos_receber-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -34,10 +35,68 @@ interface MovimentoTituloReceberRow {
   numcco?: string;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — casts conferidos contra
+// schema.prisma (MovimentoTituloReceber): vlrmov/vlrliq/vlrjrs/vlrmul/vlrdsc Decimal(15,2),
+// codpor/codcrt/codccu/numcco VarChar (por isso ::text, nunca ::varchar(N) — cast largo pra
+// coluna estreita preserva o erro de truncamento em vez de truncar em silêncio). Sem carimbo
+// — esta tabela não tem vistoEmSync/removidoEmSenior.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codfil", cast: "int" },
+  { nome: "numtit", cast: "text" },
+  { nome: "codtpt", cast: "text" },
+  { nome: "seqmov", cast: "int" },
+  { nome: "codtns", cast: "text" },
+  { nome: "datmov", cast: "date" },
+  { nome: "datpgt", cast: "date" },
+  { nome: "codfpg", cast: "int" },
+  { nome: "vlrmov", cast: "numeric" },
+  { nome: "vlrliq", cast: "numeric" },
+  { nome: "vlrjrs", cast: "numeric" },
+  { nome: "vlrmul", cast: "numeric" },
+  { nome: "vlrdsc", cast: "numeric" },
+  { nome: "diaatr", cast: "int" },
+  { nome: "codpor", cast: "text" },
+  { nome: "codcrt", cast: "text" },
+  { nome: "codccu", cast: "text" },
+  { nome: "numcco", cast: "text" },
+];
+
+// `String(...).slice(0,10)` pra data, nunca `new Date(v)` — desloca o dia em
+// America/Sao_Paulo. `.toFixed(2)` pra decimal, nunca number cru. `!= null` (não
+// `!== undefined`) trata ausência de chave e null da mesma forma.
+function linhaDe(row: MovimentoTituloReceberRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codfil}-${row.numtit}-${row.codtpt}-${row.seqmov}`,
+    valores: [
+      String(row.codemp),
+      String(row.codfil),
+      row.numtit,
+      row.codtpt,
+      String(row.seqmov),
+      row.codtns,
+      String(row.datmov).slice(0, 10),
+      row.datpgt != null ? String(row.datpgt).slice(0, 10) : null,
+      row.codfpg != null ? String(row.codfpg) : null,
+      row.vlrmov.toFixed(2),
+      row.vlrliq != null ? row.vlrliq.toFixed(2) : null,
+      row.vlrjrs != null ? row.vlrjrs.toFixed(2) : null,
+      row.vlrmul != null ? row.vlrmul.toFixed(2) : null,
+      row.vlrdsc != null ? row.vlrdsc.toFixed(2) : null,
+      row.diaatr != null ? String(row.diaatr) : null,
+      row.codpor != null ? row.codpor : null,
+      row.codcrt != null ? row.codcrt : null,
+      row.codccu != null ? row.codccu : null,
+      row.numcco != null ? row.numcco : null,
+    ],
+  };
+}
+
 export async function runMovimentoTituloReceberSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
   try {
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, [
       "codemp",
       "codfil",
@@ -45,18 +104,26 @@ export async function runMovimentoTituloReceberSync(desde?: Date): Promise<void>
       "codtpt",
       "seqmov",
     ])) as MovimentoTituloReceberRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, codfil: row.codfil, numtit: row.numtit, codtpt: row.codtpt, seqmov: row.seqmov, codtns: row.codtns, datmov: new Date(row.datmov), datpgt: row.datpgt != null ? new Date(row.datpgt) : null, codfpg: row.codfpg, vlrmov: row.vlrmov, vlrliq: row.vlrliq, vlrjrs: row.vlrjrs, vlrmul: row.vlrmul, vlrdsc: row.vlrdsc, diaatr: row.diaatr, codpor: row.codpor, codcrt: row.codcrt, codccu: row.codccu, numcco: row.numcco };
-      await prisma.movimentoTituloReceber.upsert({
-        where: { codemp_codfil_numtit_codtpt_seqmov: { codemp: row.codemp, codfil: row.codfil, numtit: row.numtit, codtpt: row.codtpt, seqmov: row.seqmov } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "movimentos_receber",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "codfil", "numtit", "codtpt", "seqmov"],
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

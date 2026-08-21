@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "titulos_receber-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -31,28 +32,77 @@ interface TituloReceberRow {
   codpor?: string;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
+// schema.prisma (TituloReceber): vlrori/vlrabe Decimal(15,2). Sem carimbo — esta tabela não
+// tem vistoEmSync/removidoEmSenior.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codfil", cast: "int" },
+  { nome: "numtit", cast: "text" },
+  { nome: "codtpt", cast: "text" },
+  { nome: "codcli", cast: "int" },
+  { nome: "sittit", cast: "text" },
+  { nome: "datemi", cast: "date" },
+  { nome: "vctori", cast: "date" },
+  { nome: "vctpro", cast: "date" },
+  { nome: "vlrori", cast: "numeric" },
+  { nome: "vlrabe", cast: "numeric" },
+  { nome: "codpor", cast: "text" },
+];
+
+// `String(...).slice(0,10)` pra data, nunca `new Date(v)`. `!= null` (não `!== undefined`)
+// trata ausência de chave e null da mesma forma.
+function linhaDe(row: TituloReceberRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codfil}-${row.numtit}-${row.codtpt}`,
+    valores: [
+      String(row.codemp),
+      String(row.codfil),
+      row.numtit,
+      row.codtpt,
+      String(row.codcli),
+      row.sittit,
+      String(row.datemi).slice(0, 10),
+      String(row.vctori).slice(0, 10),
+      String(row.vctpro).slice(0, 10),
+      row.vlrori.toFixed(2),
+      row.vlrabe != null ? row.vlrabe.toFixed(2) : null,
+      row.codpor != null ? row.codpor : null,
+    ],
+  };
+}
+
 export async function runTituloReceberSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
   try {
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, [
       "codemp",
       "codfil",
       "numtit",
       "codtpt",
     ])) as TituloReceberRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, codfil: row.codfil, numtit: row.numtit, codtpt: row.codtpt, codcli: row.codcli, sittit: row.sittit, datemi: new Date(row.datemi), vctori: new Date(row.vctori), vctpro: new Date(row.vctpro), vlrori: row.vlrori, vlrabe: row.vlrabe, codpor: row.codpor };
-      await prisma.tituloReceber.upsert({
-        where: { codemp_codfil_numtit_codtpt: { codemp: row.codemp, codfil: row.codfil, numtit: row.numtit, codtpt: row.codtpt } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "titulos_receber",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "codfil", "numtit", "codtpt"],
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

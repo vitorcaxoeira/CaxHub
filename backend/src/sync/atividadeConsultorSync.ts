@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { reconciliarAlocacoesOrfas, resumirReconciliacao } from "../domain/reconciliarEstrutura";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "atividades_consultor-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -37,6 +38,49 @@ interface AtividadeConsultorRow {
   selsol?: string;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores. `seqati` é a PK do
+// lote (não a natural codemp+codpro+seqite+codfor) — casa exatamente como o upsert antigo,
+// que sempre resolvia por `where: { seqati: ... } }` (AtividadeConsultor.seqati é @unique;
+// a PK local `id` autoincrement nunca é tocada por esta sync, mesmo comportamento de antes).
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "seqati", cast: "bigint" },
+  { nome: "codemp", cast: "int" },
+  { nome: "codpro", cast: "int" },
+  { nome: "seqite", cast: "int" },
+  { nome: "codfor", cast: "int" },
+  { nome: "qtdhor", cast: "int" },
+  { nome: "sitreg", cast: "text" },
+  { nome: "datger", cast: "date" },
+  { nome: "horger", cast: "int" },
+  { nome: "usuger", cast: "int" },
+  { nome: "perlib", cast: "int" },
+  { nome: "fasid", cast: "int" },
+  { nome: "selsol", cast: "text" },
+];
+
+// `String(...).slice(0,10)` pra data, nunca `new Date(v)`. `!= null` (não `!== undefined`)
+// trata ausência de chave e null da mesma forma.
+function linhaDe(row: AtividadeConsultorRow): LinhaUpsert {
+  return {
+    chave: String(row.seqati),
+    valores: [
+      String(row.seqati),
+      String(row.codemp),
+      String(row.codpro),
+      String(row.seqite),
+      String(row.codfor),
+      row.qtdhor != null ? String(row.qtdhor) : null,
+      row.sitreg != null ? row.sitreg : null,
+      row.datger != null ? String(row.datger).slice(0, 10) : null,
+      row.horger != null ? String(row.horger) : null,
+      row.usuger != null ? String(row.usuger) : null,
+      row.perlib != null ? String(row.perlib) : null,
+      String(row.fasid),
+      row.selsol != null ? row.selsol : null,
+    ],
+  };
+}
+
 // Essa tabela é a única de mão dupla do projeto (ver comentário do model
 // AtividadeConsultor no schema.prisma) — a PK local é o `id` autoincrement do CaxHub,
 // não o `seqati` do Senior. O upsert casa por `seqati` (único), não por `id`.
@@ -47,34 +91,22 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária real da tabela no Senior (USU_SeqAti / seqati).
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["seqati"])) as AtividadeConsultorRow[];
+    const msFetch = Date.now() - inicioFetch;
 
     // Rede de segurança, não a barreira principal: a query já filtra USU_SeqIte > 0 (ver
     // BASE_QUERY acima) — isso aqui só cobre a hipótese de o Senior devolver algo fora do
     // combinado (paginação, versão de serviço diferente etc.), sem custo de manter.
     const validas = rows.filter((row) => row.seqite !== 0);
 
-    for (const row of validas) {
-      const data = {
-        codemp: row.codemp,
-        codpro: row.codpro,
-        seqite: row.seqite,
-        codfor: row.codfor,
-        qtdhor: row.qtdhor,
-        sitreg: row.sitreg,
-        datger: row.datger != null ? new Date(row.datger) : null,
-        horger: row.horger,
-        usuger: row.usuger,
-        perlib: row.perlib,
-        fasid: row.fasid,
-        selsol: row.selsol,
-      };
-      await prisma.atividadeConsultor.upsert({
-        where: { seqati: BigInt(row.seqati) },
-        update: data,
-        create: { ...data, seqati: BigInt(row.seqati) },
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(validas.map(linhaDe), {
+      tabela: "atividades_consultor",
+      colunas: COLUNAS,
+      colunasPk: ["seqati"],
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // O Senior não tem como mandar `estruturaAtividadeId` — é conceito 100% CaxHub —, então
     // toda alocação importada nasce sem nó na EAP e fica invisível no cronograma (que
@@ -87,7 +119,9 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: resumirReconciliacao(reconciliacao),
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes) — ${resumirReconciliacao(reconciliacao)}`,
         duracaoMs: Date.now() - inicio.getTime(),
       },
     });

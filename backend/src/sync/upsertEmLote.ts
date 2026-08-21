@@ -73,8 +73,8 @@ export async function upsertEmLote(linhas: LinhaUpsert[], opcoes: OpcoesUpsertEm
 
   const colunasNaoPk = opcoes.colunas.filter((c) => !opcoes.colunasPk.includes(c.nome));
   const setUpdate = [
-    ...colunasNaoPk.map((c) => `${c.nome} = EXCLUDED.${c.nome}`),
-    ...(opcoes.carimbo ? ["visto_em_sync = EXCLUDED.visto_em_sync", "removido_em_senior = NULL"] : []),
+    ...colunasNaoPk.map((c) => `"${c.nome}" = EXCLUDED."${c.nome}"`),
+    ...(opcoes.carimbo ? ['"visto_em_sync" = EXCLUDED."visto_em_sync"', '"removido_em_senior" = NULL'] : []),
   ];
   if (setUpdate.length === 0) {
     throw new Error(`upsertEmLote(${opcoes.tabela}): nenhuma coluna fora da PK pra atualizar — DO UPDATE ficaria vazio`);
@@ -169,10 +169,16 @@ function montarStatement(
     return `(${partes.join(", ")})`;
   });
 
+  // Nomes de coluna sempre entre aspas duplas — a maioria é lowercase (aspas não mudam
+  // nada aí), mas existe pelo menos uma exceção real (Rat."dataApr", sem @map): sem aspas,
+  // o Postgres dobra pra minúsculo e a coluna certa nunca é encontrada.
+  const colunasInsertQuoted = colunasInsert.map((c) => `"${c}"`).join(", ");
+  const colunasPkQuoted = opcoes.colunasPk.map((c) => `"${c}"`).join(", ");
+
   const sql = `
-    INSERT INTO ${opcoes.tabela} (${colunasInsert.join(", ")})
+    INSERT INTO "${opcoes.tabela}" (${colunasInsertQuoted})
     VALUES ${tuplas.join(",\n           ")}
-    ON CONFLICT (${opcoes.colunasPk.join(", ")}) DO UPDATE SET
+    ON CONFLICT (${colunasPkQuoted}) DO UPDATE SET
       ${setUpdate.join(",\n      ")}
   `;
 

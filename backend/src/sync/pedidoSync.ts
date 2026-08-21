@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { runSqlViaSoap, runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { carimbo, varrerRemovidos } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 
 export const JOB_NAME = "pedidos-sync";
 // jobName separado pro sync sob demanda de um cliente só (runPedidoSyncPorCliente): o
@@ -46,8 +47,65 @@ export interface PedidoRow {
   numrat?: number;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
+// schema.prisma (Pedido): vlrliq Decimal(15,2), numrat BigInt.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codfil", cast: "int" },
+  { nome: "numped", cast: "int" },
+  { nome: "tipped", cast: "int" },
+  { nome: "prcped", cast: "int" },
+  { nome: "tnspro", cast: "text" },
+  { nome: "tnsser", cast: "text" },
+  { nome: "datemi", cast: "date" },
+  { nome: "horemi", cast: "int" },
+  { nome: "datprv", cast: "date" },
+  { nome: "obsped", cast: "text" },
+  { nome: "vlrliq", cast: "numeric" },
+  { nome: "obsmot", cast: "text" },
+  { nome: "codcli", cast: "int" },
+  { nome: "pedcli", cast: "text" },
+  { nome: "codcpg", cast: "text" },
+  { nome: "codfpg", cast: "int" },
+  { nome: "sitped", cast: "int" },
+  { nome: "numrat", cast: "bigint" },
+];
+
+// `String(...).slice(0,10)` pra data, nunca `new Date(v)`. `!= null` (não `!== undefined`)
+// trata ausência de chave e null da mesma forma — é o que faz a linha sintética mínima do
+// script prisma/verificarVarreduraRemocoes.ts (só codemp/codfil/numped/datemi/codcli/
+// codcpg/sitped) funcionar sem quebrar nos campos ausentes.
+function linhaDe(row: PedidoRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codfil}-${row.numped}`,
+    valores: [
+      String(row.codemp),
+      String(row.codfil),
+      String(row.numped),
+      row.tipped != null ? String(row.tipped) : null,
+      row.prcped != null ? String(row.prcped) : null,
+      row.tnspro != null ? row.tnspro : null,
+      row.tnsser != null ? row.tnsser : null,
+      String(row.datemi).slice(0, 10),
+      row.horemi != null ? String(row.horemi) : null,
+      row.datprv != null ? String(row.datprv).slice(0, 10) : null,
+      row.obsped != null ? row.obsped : null,
+      row.vlrliq != null ? row.vlrliq.toFixed(2) : null,
+      row.obsmot != null ? row.obsmot : null,
+      String(row.codcli),
+      row.pedcli != null ? row.pedcli : null,
+      row.codcpg,
+      row.codfpg != null ? String(row.codfpg) : null,
+      String(row.sitped),
+      row.numrat != null ? String(row.numrat) : null,
+    ],
+  };
+}
+
 // `inicio` é o instante em que a execução começou; vai pro carimbo `vistoEmSync` de toda
 // linha vista nesta rodada, e é o que a varredura usa depois pra descobrir quem não veio.
+// Só usada por runPedidoSyncPorClientes (pull sob demanda, linha a linha — volume pequeno
+// por natureza, não é o gargalo que motivou o upsert em lote).
 async function upsertPedido(row: PedidoRow, inicio: Date): Promise<void> {
   const data = { codemp: row.codemp, codfil: row.codfil, numped: row.numped, tipped: row.tipped, prcped: row.prcped, tnspro: row.tnspro, tnsser: row.tnsser, datemi: new Date(row.datemi), horemi: row.horemi, datprv: row.datprv != null ? new Date(row.datprv) : null, obsped: row.obsped, vlrliq: row.vlrliq, obsmot: row.obsmot, codcli: row.codcli, pedcli: row.pedcli, codcpg: row.codcpg, codfpg: row.codfpg, sitped: row.sitped, numrat: row.numrat != null ? BigInt(row.numrat) : null, ...carimbo(inicio) };
   await prisma.pedido.upsert({
@@ -59,11 +117,16 @@ async function upsertPedido(row: PedidoRow, inicio: Date): Promise<void> {
 
 // Extraído do laço pra poder ser exercitado com linhas sintéticas, sem SOAP, pelo script
 // backend/prisma/verificarVarreduraRemocoes.ts — mesmo motivo pelo qual propostaSync.ts
-// separou processarLinhasProposta.
+// separou processarLinhasProposta. Assinatura preservada (Promise<void>, mesmos parâmetros)
+// mesmo depois de trocar o laço por upsertEmLote — o script chama isso repetidas vezes
+// simulando rodadas de sync com `inicio` diferente a cada chamada, sem olhar retorno.
 export async function processarLinhasPedido(rows: PedidoRow[], inicio: Date): Promise<void> {
-  for (const row of rows) {
-    await upsertPedido(row, inicio);
-  }
+  await upsertEmLote(rows.map(linhaDe), {
+    tabela: "pedidos",
+    colunas: COLUNAS,
+    colunasPk: ["codemp", "codfil", "numped"],
+    carimbo: inicio,
+  });
 }
 
 export async function runPedidoSync(desde?: Date): Promise<void> {
@@ -73,9 +136,13 @@ export async function runPedidoSync(desde?: Date): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codfil", "numped"])) as PedidoRow[];
+    const msFetch = Date.now() - inicioFetch;
 
+    const inicioEscrita = Date.now();
     await processarLinhasPedido(rows, inicio);
+    const msEscrita = Date.now() - inicioEscrita;
 
     // Varredura só faz sentido no modo COMPLETO: no incremental a query é um recorte por
     // DatEmi, então quase toda a tabela ficaria sem carimbo e seria acusada de removida.
@@ -89,12 +156,15 @@ export async function runPedidoSync(desde?: Date): Promise<void> {
           queryContagemOrigem: QUERY_CONTAGEM_ORIGEM,
         });
 
+    const tempo = `${((msFetch + msEscrita) / 1000).toFixed(1)}s (fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s)`;
     await prisma.syncLog.create({
       data: {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura?.resumo ?? `${rows.length} linha(s), sem varredura (sync incremental)`,
+        message: varredura
+          ? `${rows.length} linhas em ${tempo} — ${varredura.resumo}`
+          : `${rows.length} linha(s) em ${tempo}, sem varredura (sync incremental)`,
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,
@@ -128,7 +198,8 @@ const CLIENTES_POR_LOTE = 300;
 // outboxSenior.ts): traz pedidos novos e atualiza os que já existem localmente.
 //
 // Não apaga pedidos locais que sumiram do Senior — mesmo comportamento do job completo,
-// que também só faz upsert.
+// que também só faz upsert. Fora do escopo da conversão pra lote: volume pequeno por
+// natureza (no máximo os pedidos do filtro atual da tela), não é o gargalo medido.
 export async function runPedidoSyncPorClientes(codclis: number[]): Promise<ResultadoSyncPorCliente> {
   // Os códigos entram direto na query (o serviço SOAP não aceita bind de parâmetros),
   // então só segue adiante se forem mesmo inteiros — as rotas já validam, isso aqui é a
