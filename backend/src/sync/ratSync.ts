@@ -2,15 +2,26 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "rat-sync";
 export const CRON_EXPR = "15 4 * * *"; // logo depois de atividades_consultor-sync (0 4 * * *)
 export const CAMPO_DATA: string | null = "USU_DATEMI";
-const BASE_QUERY = `SELECT USU_CODEMP AS codemp, USU_CODFOR AS codfor, USU_NUMPRJ AS numprj, USU_CODFPJ AS codfpj, USU_NUMRAT AS numrat, USU_DATEMI AS datemi, USU_DATAPR AS dataapr, USU_SITRAT AS sitrat, USU_OBSRAT AS obsrat, USU_USUFOR AS usufor, USU_CodPro AS codpro, USU_CodCli AS codcli, USU_DepExe AS depexe FROM USU_TE777RAT`;
+export const BASE_QUERY =`SELECT USU_CODEMP AS codemp, USU_CODFOR AS codfor, USU_NUMPRJ AS numprj, USU_CODFPJ AS codfpj, USU_NUMRAT AS numrat, USU_DATEMI AS datemi, USU_DATAPR AS dataapr, USU_SITRAT AS sitrat, USU_OBSRAT AS obsrat, USU_USUFOR AS usufor, USU_CodPro AS codpro, USU_CodCli AS codcli, USU_DepExe AS depexe FROM USU_TE777RAT`;
 
+// Fase 1 do plano de filtros na importação: acumulador de predicados
+// (sync/consultaSenior.ts), não concatenação — lista vazia devolve BASE_QUERY intacta.
 function montarQuery(desde?: Date): string {
-  if (!desde) return BASE_QUERY;
-  return `${BASE_QUERY} WHERE ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
+  const predicados: string[] = [];
+  const filtro = filtroDoJob(JOB_NAME, desde ? "alterados" : "todos", desde);
+  // Pedido do Vitor (21/08/2026): se o admin já salvou um predicado explícito no campo de
+  // data (Filtro(Alterados), inclusive com a variável "última sincronização"), ele substitui
+  // a injeção automática por inteiro em vez de empilhar os dois — "editável de verdade".
+  const admJaConfigurouCorte = desde != null && CAMPO_DATA != null && filtro.camposCobertos.has(CAMPO_DATA.toLowerCase());
+  if (desde && !admJaConfigurouCorte) predicados.push(`${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`);
+  predicados.push(...filtro.predicadosSql);
+  return montarQuerySenior(BASE_QUERY, predicados);
 }
 
 interface RatRow {

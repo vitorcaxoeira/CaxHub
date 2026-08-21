@@ -1,6 +1,8 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "moedas-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -8,7 +10,7 @@ export const CRON_EXPR = "0 4 * * *";
 // pra taxas de conversão históricas), não uma data de geração/alteração do cadastro
 // da moeda em si.
 export const CAMPO_DATA: string | null = null;
-const QUERY = `SELECT codmoe AS codmoe, desmoe AS desmoe, sigmoe AS sigmoe, tipmoe AS tipmoe FROM e031moe`;
+export const QUERY =`SELECT codmoe AS codmoe, desmoe AS desmoe, sigmoe AS sigmoe, tipmoe AS tipmoe FROM e031moe`;
 
 interface MoedaRow {
   codmoe: string;
@@ -19,11 +21,13 @@ interface MoedaRow {
 
 export async function runMoedaSync(): Promise<void> {
   const inicio = new Date();
+  // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
+  const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
-    const rows = (await runSqlViaSoapPaginated(QUERY, ["codmoe"])) as MoedaRow[];
+    const rows = (await runSqlViaSoapPaginated(query, ["codmoe"])) as MoedaRow[];
 
     for (const row of rows) {
       const data = { codmoe: row.codmoe, desmoe: row.desmoe, sigmoe: row.sigmoe, tipmoe: row.tipmoe };
@@ -35,12 +39,12 @@ export async function runMoedaSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

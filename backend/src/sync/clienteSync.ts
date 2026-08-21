@@ -1,11 +1,13 @@
 import cron from "node-cron";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "cliente-sync";
 export const CRON_EXPR = "20 3 * * *";
 export const CAMPO_DATA: string | null = "DatAtu";
-const BASE_QUERY = `SELECT
+export const BASE_QUERY =`SELECT
   codcli AS codcli, nomcli AS nomcli, apecli AS apecli, sencli AS sencli,
   tipcli AS tipcli, tipmer AS tipmer, tipemc AS tipemc, codram AS codram,
   insest AS insest, cgccpf AS cgccpf, endcli AS endcli, cplend AS cplend,
@@ -13,9 +15,20 @@ const BASE_QUERY = `SELECT
   codpai AS codpai
 FROM e085cli`;
 
+// Fase 1 do plano de filtros na importação: a montagem passa a ser um acumulador de
+// predicados (sync/consultaSenior.ts), não concatenação — lista vazia devolve BASE_QUERY
+// intacta, byte a byte. `predicados` ganha mais itens quando a Fase 3 ligar
+// sync/filtrosAtivos.ts; nenhuma mudança de comportamento até lá.
 function montarQuery(desde?: Date): string {
-  if (!desde) return BASE_QUERY;
-  return `${BASE_QUERY} WHERE ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
+  const predicados: string[] = [];
+  const filtro = filtroDoJob(JOB_NAME, desde ? "alterados" : "todos", desde);
+  // Pedido do Vitor (21/08/2026): se o admin já salvou um predicado explícito no campo de
+  // data (Filtro(Alterados), inclusive com a variável "última sincronização"), ele substitui
+  // a injeção automática por inteiro em vez de empilhar os dois — "editável de verdade".
+  const admJaConfigurouCorte = desde != null && CAMPO_DATA != null && filtro.camposCobertos.has(CAMPO_DATA.toLowerCase());
+  if (desde && !admJaConfigurouCorte) predicados.push(`${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`);
+  predicados.push(...filtro.predicadosSql);
+  return montarQuerySenior(BASE_QUERY, predicados);
 }
 
 interface ClienteRow {

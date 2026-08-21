@@ -2,15 +2,26 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "movimentos_receber-sync";
 export const CRON_EXPR = "0 4 * * *";
 export const CAMPO_DATA: string | null = "DatGer";
-const BASE_QUERY = `SELECT codemp AS codemp, codfil AS codfil, numtit AS numtit, codtpt AS codtpt, seqmov AS seqmov, codtns AS codtns, datmov AS datmov, datpgt AS datpgt, codfpg AS codfpg, vlrmov AS vlrmov, vlrliq AS vlrliq, vlrjrs AS vlrjrs, vlrmul AS vlrmul, vlrdsc AS vlrdsc, diaatr AS diaatr, codpor AS codpor, codcrt AS codcrt, codccu AS codccu, numcco AS numcco FROM e301mcr`;
+export const BASE_QUERY =`SELECT codemp AS codemp, codfil AS codfil, numtit AS numtit, codtpt AS codtpt, seqmov AS seqmov, codtns AS codtns, datmov AS datmov, datpgt AS datpgt, codfpg AS codfpg, vlrmov AS vlrmov, vlrliq AS vlrliq, vlrjrs AS vlrjrs, vlrmul AS vlrmul, vlrdsc AS vlrdsc, diaatr AS diaatr, codpor AS codpor, codcrt AS codcrt, codccu AS codccu, numcco AS numcco FROM e301mcr`;
 
+// Fase 1 do plano de filtros na importação: acumulador de predicados
+// (sync/consultaSenior.ts), não concatenação — lista vazia devolve BASE_QUERY intacta.
 function montarQuery(desde?: Date): string {
-  if (!desde) return BASE_QUERY;
-  return `${BASE_QUERY} WHERE ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
+  const predicados: string[] = [];
+  const filtro = filtroDoJob(JOB_NAME, desde ? "alterados" : "todos", desde);
+  // Pedido do Vitor (21/08/2026): se o admin já salvou um predicado explícito no campo de
+  // data (Filtro(Alterados), inclusive com a variável "última sincronização"), ele substitui
+  // a injeção automática por inteiro em vez de empilhar os dois — "editável de verdade".
+  const admJaConfigurouCorte = desde != null && CAMPO_DATA != null && filtro.camposCobertos.has(CAMPO_DATA.toLowerCase());
+  if (desde && !admJaConfigurouCorte) predicados.push(`${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`);
+  predicados.push(...filtro.predicadosSql);
+  return montarQuerySenior(BASE_QUERY, predicados);
 }
 
 interface MovimentoTituloReceberRow {

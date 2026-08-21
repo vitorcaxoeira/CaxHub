@@ -2,13 +2,15 @@ import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "registros_despesa_viagem-sync";
 export const CRON_EXPR = "20 5 * * *";
 // Sem campo de "última alteração" no dicionário desta tabela — só sincroniza no modo
 // completo (mesma lógica conservadora do DatPal em empresaSync.ts).
 export const CAMPO_DATA: string | null = null;
-const BASE_QUERY = `SELECT USU_CODEMP AS codemp, USU_NUMRAT AS numrat, USU_SEQRDV AS seqrdv, USU_DATEMI AS datemi, USU_DESRDV AS desrdv, USU_TIPDES AS tipdes, USU_MODDES AS moddes, USU_QTDRDV AS qtdrdv, USU_VLRUNT AS vlrunt, USU_VLRTOT AS vlrtot, USU_FATRDV AS fatrdv, USU_REERDV AS reerdv, USU_ROTID AS rotid, USU_HORDES AS hordes, USU_NIDPSO AS nidpso FROM USU_TE777RDV`;
+export const BASE_QUERY =`SELECT USU_CODEMP AS codemp, USU_NUMRAT AS numrat, USU_SEQRDV AS seqrdv, USU_DATEMI AS datemi, USU_DESRDV AS desrdv, USU_TIPDES AS tipdes, USU_MODDES AS moddes, USU_QTDRDV AS qtdrdv, USU_VLRUNT AS vlrunt, USU_VLRTOT AS vlrtot, USU_FATRDV AS fatrdv, USU_REERDV AS reerdv, USU_ROTID AS rotid, USU_HORDES AS hordes, USU_NIDPSO AS nidpso FROM USU_TE777RDV`;
 
 interface RegistroDespesaViagemRow {
   codemp: number;
@@ -82,9 +84,11 @@ function linhaDe(row: RegistroDespesaViagemRow): LinhaUpsert {
 // mesmo abaixo do limite de ~30 mil onde o Senior costuma truncar a resposta).
 export async function runRegistroDespesaViagemSync(): Promise<void> {
   const inicio = new Date();
+  // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve BASE_QUERY intacta.
+  const query = montarQuerySenior(BASE_QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
     const inicioFetch = Date.now();
-    const rows = (await runSqlViaSoapPaginated(BASE_QUERY, ["codemp", "numrat", "seqrdv"])) as RegistroDespesaViagemRow[];
+    const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrdv"])) as RegistroDespesaViagemRow[];
     const msFetch = Date.now() - inicioFetch;
 
     // Casa pela chave natural DO SENIOR (@@unique), não pela PK local `id` — mesma lógica
@@ -102,7 +106,7 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
     await prisma.syncLog.create({
       data: {
         jobName: JOB_NAME,
-        query: BASE_QUERY,
+        query,
         status: "success",
         message:
           `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
@@ -113,7 +117,7 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: BASE_QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

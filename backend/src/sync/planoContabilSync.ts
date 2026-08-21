@@ -3,6 +3,8 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { derivarPais } from "../domain/hierarquiaPlano";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "plano_contabil-sync";
 export const CRON_EXPR = "50 4 * * *";
@@ -10,11 +12,20 @@ export const CAMPO_DATA: string | null = "DatAlt";
 // nivcta/mskgcc/gructa/sitcta acrescentados em 13/08/2026: o Senior já entrega o nível da
 // conta e a máscara do grupo, então a hierarquia deixou de ser deduzida do comprimento de
 // `clacta` com larguras chumbadas no código (ver domain/hierarquiaPlano.ts).
-const BASE_QUERY = `SELECT codemp AS codemp, ctared AS ctared, descta AS descta, clacta AS clacta, defgru AS defgru, natcta AS natcta, anasin AS anasin, despar AS despar, nivcta AS nivcta, mskgcc AS mskgcc, gructa AS gructa, sitcta AS sitcta FROM e045pla`;
+export const BASE_QUERY =`SELECT codemp AS codemp, ctared AS ctared, descta AS descta, clacta AS clacta, defgru AS defgru, natcta AS natcta, anasin AS anasin, despar AS despar, nivcta AS nivcta, mskgcc AS mskgcc, gructa AS gructa, sitcta AS sitcta FROM e045pla`;
 
+// Fase 1 do plano de filtros na importação: acumulador de predicados
+// (sync/consultaSenior.ts), não concatenação — lista vazia devolve BASE_QUERY intacta.
 function montarQuery(desde?: Date): string {
-  if (!desde) return BASE_QUERY;
-  return `${BASE_QUERY} WHERE ${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`;
+  const predicados: string[] = [];
+  const filtro = filtroDoJob(JOB_NAME, desde ? "alterados" : "todos", desde);
+  // Pedido do Vitor (21/08/2026): se o admin já salvou um predicado explícito no campo de
+  // data (Filtro(Alterados), inclusive com a variável "última sincronização"), ele substitui
+  // a injeção automática por inteiro em vez de empilhar os dois — "editável de verdade".
+  const admJaConfigurouCorte = desde != null && CAMPO_DATA != null && filtro.camposCobertos.has(CAMPO_DATA.toLowerCase());
+  if (desde && !admJaConfigurouCorte) predicados.push(`${CAMPO_DATA} >= '${desde.toISOString().slice(0, 10)}'`);
+  predicados.push(...filtro.predicadosSql);
+  return montarQuerySenior(BASE_QUERY, predicados);
 }
 
 interface PlanoContabilRow {

@@ -1,12 +1,14 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "rotas_percursos-sync";
 export const CRON_EXPR = "35 5 * * *";
 // Sem campo de "última alteração" no dicionário desta tabela.
 export const CAMPO_DATA: string | null = null;
-const QUERY = `SELECT USU_ID AS id, USU_ROTID AS rotid, USU_PERID AS perid, USU_ORDSEQ AS ordseq FROM USU_TRDVROTPER`;
+export const QUERY =`SELECT USU_ID AS id, USU_ROTID AS rotid, USU_PERID AS perid, USU_ORDSEQ AS ordseq FROM USU_TRDVROTPER`;
 
 interface RotaPercursoRow {
   id: number;
@@ -20,8 +22,10 @@ interface RotaPercursoRow {
 // sync/registry.ts) só por organização; sem FK formal, então a ordem não é obrigatória.
 export async function runRotaPercursoSync(): Promise<void> {
   const inicio = new Date();
+  // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
+  const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
-    const rows = (await runSqlViaSoapPaginated(QUERY, ["id"])) as RotaPercursoRow[];
+    const rows = (await runSqlViaSoapPaginated(query, ["id"])) as RotaPercursoRow[];
 
     for (const row of rows) {
       const data = { id: row.id, rotid: row.rotid, perid: row.perid, ordseq: row.ordseq };
@@ -33,12 +37,12 @@ export async function runRotaPercursoSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }

@@ -1,12 +1,14 @@
 import cron from "node-cron";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
+import { montarQuerySenior } from "./consultaSenior";
+import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "fases_proposta-sync";
 export const CRON_EXPR = "50 3 * * *";
 // Tabela de domínio simples (fasid/fasdes) — sem campo de data de geração/alteração.
 export const CAMPO_DATA: string | null = null;
-const QUERY = `SELECT USU_FasId AS fasid, USU_FasDes AS fasdes FROM USU_TFasesPro`;
+export const QUERY =`SELECT USU_FasId AS fasid, USU_FasDes AS fasdes FROM USU_TFasesPro`;
 
 interface FasePropostaRow {
   fasid: number;
@@ -15,11 +17,13 @@ interface FasePropostaRow {
 
 export async function runFasePropostaSync(): Promise<void> {
   const inicio = new Date();
+  // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
+  const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
-    const rows = (await runSqlViaSoapPaginated(QUERY, ["fasid"])) as FasePropostaRow[];
+    const rows = (await runSqlViaSoapPaginated(query, ["fasid"])) as FasePropostaRow[];
 
     for (const row of rows) {
       const data = { fasid: row.fasid, fasdes: row.fasdes };
@@ -31,12 +35,12 @@ export async function runFasePropostaSync(): Promise<void> {
     }
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query: QUERY, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
+      data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
