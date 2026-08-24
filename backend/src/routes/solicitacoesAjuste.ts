@@ -2,7 +2,7 @@ import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { resolverContextoConsultor, gerenciaDepartamento } from "../domain/contextoProjeto";
+import { resolverContextoConsultor, gerenciaDepartamento, gestorNomePorDepartamento } from "../domain/contextoProjeto";
 import { conflitosDoIntervalo, mensagemDeConflito } from "../domain/conflitoApontamento";
 import { saldoDaAtividade, formatarMinutos } from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
@@ -11,7 +11,7 @@ import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { processarFilaSincronizacao } from "../sync/outboxSenior";
-import { depexeLabel } from "../domain/propostasDominio";
+import { depexeLabel, modproLabel } from "../domain/propostasDominio";
 import { diaBrasilComoData } from "./apontamentos";
 
 // Correção de horário de um apontamento JÁ confirmado. O consultor pede, o gestor decide.
@@ -78,22 +78,25 @@ function descreverIntervalo(inicio: Date, fim: Date): string {
 interface PropostaInfo {
   clienteNome: string | null;
   despro: string | null;
+  modproLabel: string;
 }
 
-// Cliente e descrição da proposta (Proposta.despro) pra dar contexto no card de Aprovações —
-// mesmo caminho (Proposta.cliente.nomcli) já usado em atividades.ts/alocacao.ts/apontamentos.ts.
+// Cliente, descrição e modalidade da proposta pra dar contexto no card de Aprovações — mesmo
+// caminho (Proposta.cliente.nomcli) já usado em atividades.ts/alocacao.ts/apontamentos.ts.
+// Modalidade no mesmo estilo badge da coluna Modalidade de Alocacao.tsx (24/08/2026).
 async function propostaInfoPorAtividades(atividades: { codemp: number; codpro: number }[]): Promise<Map<string, PropostaInfo>> {
   const mapa = new Map<string, PropostaInfo>();
   if (atividades.length === 0) return mapa;
   const pares = [...new Map(atividades.map((a) => [`${a.codemp}-${a.codpro}`, a])).values()];
   const propostas = await prisma.proposta.findMany({
     where: { OR: pares.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
-    select: { codemp: true, codpro: true, despro: true, cliente: { select: { codcli: true, nomcli: true } } },
+    select: { codemp: true, codpro: true, despro: true, modpro: true, cliente: { select: { codcli: true, nomcli: true } } },
   });
   for (const p of propostas) {
     mapa.set(`${p.codemp}-${p.codpro}`, {
       clienteNome: p.cliente ? `${p.cliente.codcli} - ${p.cliente.nomcli}` : null,
       despro: p.despro ?? null,
+      modproLabel: modproLabel(p.modpro),
     });
   }
   return mapa;
@@ -230,7 +233,13 @@ const INCLUDE_LISTA = {
 
 type AjusteComRelacoes = Prisma.SolicitacaoAjusteApontamentoGetPayload<{ include: typeof INCLUDE_LISTA }>;
 
-function serializar(s: AjusteComRelacoes, depexe: number | null, podeDecidir: boolean, propostaInfo?: PropostaInfo) {
+function serializar(
+  s: AjusteComRelacoes,
+  depexe: number | null,
+  gestorNome: string | null,
+  podeDecidir: boolean,
+  propostaInfo?: PropostaInfo
+) {
   return {
     id: s.id,
     sessaoId: s.sessaoId,
@@ -255,6 +264,8 @@ function serializar(s: AjusteComRelacoes, depexe: number | null, podeDecidir: bo
     seqite: s.sessao.atividade.seqite,
     depexe,
     depexeLabel: depexeLabel(depexe),
+    gestorNome,
+    modproLabel: propostaInfo?.modproLabel ?? "—",
     clienteNome: propostaInfo?.clienteNome ?? null,
     despro: propostaInfo?.despro ?? null,
     podeDecidir,
@@ -291,6 +302,14 @@ solicitacoesAjusteRouter.get("/", async (req: AuthenticatedRequest, res) => {
     });
     const depexePorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i.depexe]));
     const mapaProposta = await propostaInfoPorAtividades(todas.map((s) => s.sessao.atividade));
+    const mapaGestor = await gestorNomePorDepartamento(
+      todas
+        .map((s) => {
+          const a = s.sessao.atividade;
+          return { codemp: a.codemp, depexe: depexePorChave.get(`${a.codemp}-${a.codpro}-${a.seqite}`) ?? null };
+        })
+        .filter((p): p is { codemp: number; depexe: number } => p.depexe != null)
+    );
 
     const visiveis = todas
       .map((s) => {
@@ -300,7 +319,8 @@ solicitacoesAjusteRouter.get("/", async (req: AuthenticatedRequest, res) => {
         const minha = s.solicitanteId === user.id;
         if (!gerencia && !minha) return null;
         const propostaInfo = mapaProposta.get(`${a.codemp}-${a.codpro}`);
-        return serializar(s, depexe, gerencia, propostaInfo);
+        const gestorNome = depexe != null ? mapaGestor.get(`${a.codemp}-${depexe}`) ?? null : null;
+        return serializar(s, depexe, gestorNome, gerencia, propostaInfo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -323,7 +343,7 @@ solicitacoesAjusteRouter.get("/sessao/:sessaoId", async (req: AuthenticatedReque
       include: INCLUDE_LISTA,
       orderBy: { criadoEm: "desc" },
     });
-    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, null, false)) });
+    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, null, null, false)) });
   } catch (error) {
     handleError(res, error, "por-sessao");
   }

@@ -2,6 +2,7 @@ import axios from "axios";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "../../components/ui/Toast";
+import { toneBadge } from "../../components/ui/badges";
 import {
   AtividadeDetalhe,
   SolicitacaoApontamento,
@@ -64,6 +65,8 @@ export interface SolicitacaoAjuste {
   seqite: number;
   depexe: number | null;
   depexeLabel: string;
+  gestorNome: string | null;
+  modproLabel: string;
   clienteNome: string | null;
   despro: string | null;
   podeDecidir: boolean;
@@ -111,6 +114,8 @@ function CabecalhoLinha({
   codpro,
   seqite,
   depexeLabel,
+  gestorNome,
+  modproLabel,
   atividadeId,
   criadoEm,
   onVerAtividade,
@@ -124,6 +129,8 @@ function CabecalhoLinha({
   codpro: number;
   seqite: number;
   depexeLabel: string;
+  gestorNome: string | null;
+  modproLabel: string;
   atividadeId: number;
   criadoEm: string;
   onVerAtividade: (id: number) => void;
@@ -155,13 +162,43 @@ function CabecalhoLinha({
     </button>
   );
 
+  // Badge de modalidade da proposta — mesmo componente (mesmo estilo pill, toneBadge.neutral)
+  // da coluna Modalidade em Alocacao.tsx, reaproveitado igual ao badge de departamento abaixo.
+  const badgeModalidade = (
+    <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+      {modproLabel}
+    </span>
+  );
+
+  // Badge de departamento — mesmo estilo da coluna Departamento em Alocacao.tsx
+  // (toneBadge.neutral), com mais destaque que o texto corrido ao redor: é o dado que
+  // decide QUEM (qual gestor) deveria estar olhando esta solicitação.
+  const badgeDepartamento = (
+    <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+      {depexeLabel}
+    </span>
+  );
+
+  // Badge do gestor do departamento — mesma lógica de apresentação do badge de
+  // departamento acima (mesmo pill, mesmo tom), badge PRÓPRIO (elemento separado) porque são
+  // duas informações distintas. Prefixo "Gestor:" pra não ficar ambíguo com dois pills cinza
+  // iguais lado a lado (mesma convenção "Label: valor" usada logo abaixo em "Cliente: ...").
+  // Sem gestor cadastrado pro departamento = sem badge, em vez de um pill vazio.
+  const badgeGestor = gestorNome ? (
+    <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+      Gestor: {gestorNome}
+    </span>
+  ) : null;
+
   if (!cabecalhoEstendido) {
     return (
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         {linhaId}
         <span className="text-[12.5px] text-muted">
-          Proposta {linkProposta} · Item {String(seqite).padStart(2, "0")} · {depexeLabel}
+          Proposta {linkProposta} · Item {String(seqite).padStart(2, "0")}
         </span>
+        {badgeDepartamento}
+        {badgeGestor}
         <button onClick={() => onVerAtividade(atividadeId)} className="text-[12.5px] font-medium text-primary hover:underline">
           Ver atividade
         </button>
@@ -176,20 +213,20 @@ function CabecalhoLinha({
         {linhaId}
         <span className="ml-auto font-mono text-[12.5px] text-muted">{dateTimeFormatter.format(new Date(criadoEm))}</span>
       </div>
-      <p className="text-[12.5px] text-muted">
-        Proposta {linkProposta}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">
+        <span>Proposta {linkProposta}</span>
+        {badgeModalidade}
         {clienteNome && (
-          <>
-            {" Cliente: "}
-            <span className="text-foreground">{clienteNome}</span>
-          </>
+          <span>
+            Cliente: <span className="text-foreground">{clienteNome}</span>
+          </span>
         )}
       </p>
       {despro && <p className="text-[12.5px] text-muted">Descrição da Proposta: {despro}</p>}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="text-[12.5px] text-muted">
-          Item {String(seqite).padStart(2, "0")} : {depexeLabel}
-        </span>
+        <span className="text-[12.5px] text-muted">Item {String(seqite).padStart(2, "0")}</span>
+        {badgeDepartamento}
+        {badgeGestor}
         {/* Abre o painel AQUI, sem navegar: quem decide está no meio de uma fila de pedidos,
             e ir pra tela de Atividades carregaria quadro, KPIs e filtros inteiros só pra
             mostrar um painel lateral — e na volta o filtro e a rolagem já se perderam. */}

@@ -134,6 +134,37 @@ export function gerenciaDepartamento(role: string, contexto: ContextoConsultor, 
   return role === "admin" || contexto.departamentosGerenciados.includes(depexe);
 }
 
+// Nome de quem gerencia um departamento — o mesmo JOIN que notificarGestoresDoDepartamento
+// (domain/notificacoes.ts) já faz para notificação, aqui para EXIBIÇÃO (badge de gestor no
+// card de Aprovações, 24/08/2026). Em lote: uma query para todos os departamentos pedidos,
+// não uma por solicitação — mesmo espírito de depexePorAtividade (duplicada nos 3 routers
+// de solicitações), chaveado por "codemp-depexe" porque DepartamentoGestor é PK composta.
+export async function gestorNomePorDepartamento(pares: { codemp: number; depexe: number }[]): Promise<Map<string, string>> {
+  const resultado = new Map<string, string>();
+  const unicos = [...new Map(pares.map((p) => [`${p.codemp}-${p.depexe}`, p])).values()];
+  if (unicos.length === 0) return resultado;
+
+  const gestores = await prisma.departamentoGestor.findMany({
+    where: { OR: unicos.map((p) => ({ codemp: p.codemp, depexe: p.depexe })) },
+  });
+  if (gestores.length === 0) return resultado;
+
+  const consultores = await prisma.consultor.findMany({
+    where: { OR: gestores.map((g) => ({ codemp: g.codemp, codusu: Number(g.usuges) })) },
+  });
+  const nomePorConsultor = new Map(consultores.map((c) => [`${c.codemp}-${c.codusu}`, nomeConsultor(c)]));
+
+  const porDepartamento = new Map<string, string[]>();
+  for (const g of gestores) {
+    const nome = nomePorConsultor.get(`${g.codemp}-${Number(g.usuges)}`);
+    if (!nome) continue; // usuges sem Consultor casando — mesmo silêncio de notificarGestoresDoDepartamento
+    const chave = `${g.codemp}-${g.depexe}`;
+    porDepartamento.set(chave, [...(porDepartamento.get(chave) ?? []), nome]);
+  }
+  for (const [chave, nomes] of porDepartamento) resultado.set(chave, nomes.join(" e "));
+  return resultado;
+}
+
 export type AcaoProjeto =
   | "visualizar"
   | "criar"

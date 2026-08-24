@@ -2,7 +2,7 @@ import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { resolverContextoConsultor, gerenciaDepartamento } from "../domain/contextoProjeto";
+import { resolverContextoConsultor, gerenciaDepartamento, gestorNomePorDepartamento } from "../domain/contextoProjeto";
 import { formatarMinutos } from "../domain/tetoAtividade";
 import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { enfileirar } from "../sync/outboxSenior";
@@ -10,7 +10,7 @@ import { TIP_EVE_ALTERAR } from "../soap/client";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
-import { depexeLabel } from "../domain/propostasDominio";
+import { depexeLabel, modproLabel } from "../domain/propostasDominio";
 
 // Pedido de horas excedentes: quem executa pede, o gestor do departamento decide.
 //
@@ -75,22 +75,25 @@ function lerMinutos(valor: unknown): number | null {
 interface PropostaInfo {
   clienteNome: string | null;
   despro: string | null;
+  modproLabel: string;
 }
 
-// Cliente e descrição da proposta (Proposta.despro) pra dar contexto no card de Aprovações —
-// mesmo caminho (Proposta.cliente.nomcli) já usado em atividades.ts/alocacao.ts/apontamentos.ts.
+// Cliente, descrição e modalidade da proposta pra dar contexto no card de Aprovações — mesmo
+// caminho (Proposta.cliente.nomcli) já usado em atividades.ts/alocacao.ts/apontamentos.ts.
+// Modalidade no mesmo estilo badge da coluna Modalidade de Alocacao.tsx (24/08/2026).
 async function propostaInfoPorAtividades(atividades: { codemp: number; codpro: number }[]): Promise<Map<string, PropostaInfo>> {
   const mapa = new Map<string, PropostaInfo>();
   if (atividades.length === 0) return mapa;
   const pares = [...new Map(atividades.map((a) => [`${a.codemp}-${a.codpro}`, a])).values()];
   const propostas = await prisma.proposta.findMany({
     where: { OR: pares.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
-    select: { codemp: true, codpro: true, despro: true, cliente: { select: { codcli: true, nomcli: true } } },
+    select: { codemp: true, codpro: true, despro: true, modpro: true, cliente: { select: { codcli: true, nomcli: true } } },
   });
   for (const p of propostas) {
     mapa.set(`${p.codemp}-${p.codpro}`, {
       clienteNome: p.cliente ? `${p.cliente.codcli} - ${p.cliente.nomcli}` : null,
       despro: p.despro ?? null,
+      modproLabel: modproLabel(p.modpro),
     });
   }
   return mapa;
@@ -209,7 +212,13 @@ interface SolicitacaoParaLista {
   atividade: { codemp: number; codpro: number; seqite: number; qtdhor: number | null; horasExcedentes: number; codfor: number };
 }
 
-function serializar(s: SolicitacaoParaLista, depexe: number | null, podeDecidir: boolean, propostaInfo?: PropostaInfo) {
+function serializar(
+  s: SolicitacaoParaLista,
+  depexe: number | null,
+  gestorNome: string | null,
+  podeDecidir: boolean,
+  propostaInfo?: PropostaInfo
+) {
   return {
     id: s.id,
     atividadeId: s.atividadeId,
@@ -227,6 +236,8 @@ function serializar(s: SolicitacaoParaLista, depexe: number | null, podeDecidir:
     seqite: s.atividade.seqite,
     depexe,
     depexeLabel: depexeLabel(depexe),
+    gestorNome,
+    modproLabel: propostaInfo?.modproLabel ?? "—",
     clienteNome: propostaInfo?.clienteNome ?? null,
     despro: propostaInfo?.despro ?? null,
     // Contexto pro gestor decidir sem sair da tela: quanto já está alocado e quanto de
@@ -270,6 +281,11 @@ solicitacoesExcedenteRouter.get("/", async (req: AuthenticatedRequest, res) => {
       todas.map((s) => ({ id: s.atividadeId, ...s.atividade }))
     );
     const mapaProposta = await propostaInfoPorAtividades(todas.map((s) => s.atividade));
+    const mapaGestor = await gestorNomePorDepartamento(
+      todas
+        .map((s) => ({ codemp: s.atividade.codemp, depexe: mapaDepexe.get(s.atividadeId) ?? null }))
+        .filter((p): p is { codemp: number; depexe: number } => p.depexe != null)
+    );
 
     const visiveis = todas
       .map((s) => {
@@ -278,7 +294,8 @@ solicitacoesExcedenteRouter.get("/", async (req: AuthenticatedRequest, res) => {
         const minha = s.solicitanteId === user.id;
         if (!gerencia && !minha) return null;
         const propostaInfo = mapaProposta.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
-        return serializar(s, depexe, gerencia, propostaInfo);
+        const gestorNome = depexe != null ? mapaGestor.get(`${s.atividade.codemp}-${depexe}`) ?? null : null;
+        return serializar(s, depexe, gestorNome, gerencia, propostaInfo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -324,8 +341,12 @@ solicitacoesExcedenteRouter.get("/atividade/:atividadeId", async (req: Authentic
     const propostaInfo = (await propostaInfoPorAtividades([resolvido.atividade])).get(
       `${resolvido.atividade.codemp}-${resolvido.atividade.codpro}`
     );
+    const gestorNome =
+      (await gestorNomePorDepartamento([{ codemp: resolvido.atividade.codemp, depexe: resolvido.depexe }])).get(
+        `${resolvido.atividade.codemp}-${resolvido.depexe}`
+      ) ?? null;
 
-    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gerencia, propostaInfo)) });
+    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gestorNome, gerencia, propostaInfo)) });
   } catch (error) {
     handleError(res, error, "por-atividade");
   }
