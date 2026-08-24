@@ -295,6 +295,10 @@ export function MeusApontamentos() {
   const [buscaSessoesInput, setBuscaSessoesInput] = useState("");
   const buscaSessoesDebounced = useDebouncedValue(buscaSessoesInput, 350);
   const [codforsFiltroSessoes, setCodforsFiltroSessoes] = useState<number[]>([]);
+  // Filtro de período (AtividadeSessaoExecucao.inicio) — sem debounce, é <input type="date">,
+  // seleção discreta, não busca-enquanto-digita.
+  const [dataInicioFiltro, setDataInicioFiltro] = useState("");
+  const [dataFimFiltro, setDataFimFiltro] = useState("");
   const [atividades, setAtividades] = useState<AtividadeResumo[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -877,13 +881,20 @@ export function MeusApontamentos() {
   // contra cliente, nº da proposta e a descrição do item (mesmos campos da busca de RATs).
   const sessoesFiltradas = useMemo(() => {
     const busca = buscaSessoesDebounced.trim().toLowerCase();
+    // Início/fim do dia local do navegador — mesma convenção do resto da tela (paraInputData/
+    // paraInputHora já fazem a mesma leitura de hora local pros formulários de ajuste).
+    const inicioFiltro = dataInicioFiltro ? new Date(`${dataInicioFiltro}T00:00:00`).getTime() : null;
+    const fimFiltro = dataFimFiltro ? new Date(`${dataFimFiltro}T23:59:59.999`).getTime() : null;
     return sessoes.filter((s) => {
       if (codforsFiltroSessoes.length > 0 && !codforsFiltroSessoes.includes(s.codfor)) return false;
+      const inicioSessao = new Date(s.inicio).getTime();
+      if (inicioFiltro != null && inicioSessao < inicioFiltro) return false;
+      if (fimFiltro != null && inicioSessao > fimFiltro) return false;
       if (!busca) return true;
       const alvo = `${s.cliente ?? ""} ${s.codpro} ${rotuloItem(s)}`.toLowerCase();
       return alvo.includes(busca);
     });
-  }, [sessoes, codforsFiltroSessoes, buscaSessoesDebounced]);
+  }, [sessoes, codforsFiltroSessoes, buscaSessoesDebounced, dataInicioFiltro, dataFimFiltro]);
 
   return (
     <div>
@@ -934,6 +945,31 @@ export function MeusApontamentos() {
                 (sessoesFiltradas.length === sessoes.length ? `(${sessoes.length})` : `(${sessoesFiltradas.length} de ${sessoes.length})`)}
             </p>
             <div className="flex flex-wrap items-center gap-3">
+              {/* Período (AtividadeSessaoExecucao.inicio) — diferente da busca/consultor
+                  abaixo, vale pra qualquer usuário, mesmo consultor comum vendo só as
+                  próprias sessões. */}
+              <div className="flex items-center gap-1.5">
+                <label htmlFor="filtro-sessoes-data-inicio" className="text-[12.5px] text-muted">
+                  De
+                </label>
+                <input
+                  id="filtro-sessoes-data-inicio"
+                  type="date"
+                  value={dataInicioFiltro}
+                  onChange={(e) => setDataInicioFiltro(e.target.value)}
+                  className={selectClass}
+                />
+                <label htmlFor="filtro-sessoes-data-fim" className="text-[12.5px] text-muted">
+                  até
+                </label>
+                <input
+                  id="filtro-sessoes-data-fim"
+                  type="date"
+                  value={dataFimFiltro}
+                  onChange={(e) => setDataFimFiltro(e.target.value)}
+                  className={selectClass}
+                />
+              </div>
               {/* Admin ou gestor com time (mostrarConsultor) — pro consultor comum a lista já é só ele, filtro não ajudaria em nada. */}
               {mostrarConsultor && (
                 <>
