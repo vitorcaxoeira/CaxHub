@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis } from "../domain/contextoProjeto";
+import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis, codforsDoTime } from "../domain/contextoProjeto";
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
 import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
@@ -438,22 +438,36 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
   }
 });
 
-// Sessões fechadas (fim != null) e ainda não confirmadas das atividades do consultor
-// logado — o que aparece na tela pra revisão. Admin vê de TODOS os consultores (mesmo
-// espírito de ratsVisiveis em routes/rats.ts: admin não filtra por codfor); os outros
-// papéis continuam vendo só as próprias, e sem Consultor vinculado é lista vazia.
+// Sessões fechadas (fim != null) e ainda não confirmadas das atividades que o usuário logado
+// pode ver — o que aparece na tela pra revisão. Admin vê de TODOS os consultores (mesmo
+// espírito de ratsVisiveis em routes/rats.ts: admin não filtra por codfor); um gestor
+// (contexto.departamentosGerenciados não vazio) vê as próprias E as dos consultores do time
+// que gerencia — mesma definição de "time" que o resto do sistema já usa
+// (codforsDoTime/consultoresFiltraveis, domain/contextoProjeto.ts), não uma regra nova.
+// Consultor comum continua vendo só as próprias (codforsDoTime devolve só o próprio codfor
+// quando não há departamento gerenciado — byte a byte o mesmo filtro de antes); sem Consultor
+// vinculado é lista vazia.
+//
+// Confirmar já é liberado pro gestor sobre sessão do time (podeExecutarAcao, chamado dentro de
+// confirmarSessao) — o problema que isto resolve é só a LISTAGEM nunca mostrar essa sessão pra
+// ele confirmar. Ações "só o dono" (editar descrição/pedir ajuste/excluir) continuam exigindo
+// `codfor` exato nos respectivos endpoints, sem extensão nenhuma — a tela já esconde esses
+// botões via `souDono`, calculado abaixo.
 apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
     if (!ctx) {
-      res.json({ sessoes: [], podeVerTodos: false });
+      res.json({ sessoes: [], mostrarConsultor: false });
       return;
     }
     const { role, contexto } = ctx;
     const meuCodfor = contexto.consultor?.codfor ?? null;
-    const podeVerTodos = role === "admin";
-    if (!podeVerTodos && !meuCodfor) {
-      res.json({ sessoes: [], podeVerTodos: false });
+    const codforsPermitidos = role === "admin" ? null : await codforsDoTime(role, contexto);
+    // Vê mais de uma pessoa (e por isso precisa de nome/coluna/filtro de consultor na tela):
+    // admin, sempre; gestor, quando tem pelo menos um departamento gerenciado.
+    const mostrarConsultor = role === "admin" || contexto.departamentosGerenciados.length > 0;
+    if (role !== "admin" && (!codforsPermitidos || codforsPermitidos.size === 0)) {
+      res.json({ sessoes: [], mostrarConsultor: false });
       return;
     }
 
@@ -462,7 +476,7 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
         fim: { not: null },
         confirmada: false,
         excluidaEm: null,
-        atividade: { sitreg: "A", ...(podeVerTodos ? {} : { codfor: meuCodfor! }) },
+        atividade: { sitreg: "A", ...(role === "admin" ? {} : { codfor: { in: [...codforsPermitidos!] } }) },
       },
       include: { atividade: true, coluna: true },
       orderBy: { id: "desc" },
@@ -482,11 +496,11 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     const itens = chavesItem.length > 0 ? await prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : [];
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
 
-    // Nome do consultor de cada sessão — só usado quando `podeVerTodos` (a lista do
+    // Nome do consultor de cada sessão — só usado quando `mostrarConsultor` (a lista do
     // consultor comum é sempre ele mesmo). Mesmo padrão de GET /rats/opcoes-filtro.
     const codforsUnicos = [...new Set(sessoes.map((s) => s.atividade.codfor))];
     const consultores =
-      podeVerTodos && codforsUnicos.length > 0
+      mostrarConsultor && codforsUnicos.length > 0
         ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } })
         : [];
     const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
@@ -500,7 +514,7 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     const ajustePorSessao = new Map(ajustes.map((a) => [a.sessaoId, a]));
 
     res.json({
-      podeVerTodos,
+      mostrarConsultor,
       sessoes: sessoes.map((s) => {
         const proposta = propostaPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
         const item = itemPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}-${s.atividade.seqite}`);
@@ -525,11 +539,12 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           origem: s.origem,
           observacao: s.observacao,
           codfor: s.atividade.codfor,
-          consultorNome: podeVerTodos ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${s.atividade.codfor}`) : null,
+          consultorNome: mostrarConsultor ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${s.atividade.codfor}`) : null,
           // Ações além de Confirmar (editar descrição, pedir ajuste, excluir) são "só o
           // dono" nos respectivos endpoints — a tela usa isto pra não oferecer botão que
-          // o servidor vai recusar. Pra quem não é admin, sempre true (a lista já é só dele).
-          souDono: !podeVerTodos || s.atividade.codfor === meuCodfor,
+          // o servidor vai recusar. Consultor comum: sempre true (a lista já é só dele).
+          // Gestor/admin: true só na própria sessão, false nas do time.
+          souDono: !mostrarConsultor || s.atividade.codfor === meuCodfor,
           ajustePendente: (() => {
             const a = ajustePorSessao.get(s.id);
             return a

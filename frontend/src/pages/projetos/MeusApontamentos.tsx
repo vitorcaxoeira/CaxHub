@@ -48,8 +48,8 @@ interface SessaoPendente {
   origem: string;
   observacao: string | null;
   codfor: number;
-  // Preenchido só quando `podeVerTodosApontamentos` (admin) — o consultor comum só vê as
-  // próprias sessões, então mostrar o nome dele em toda linha seria ruído.
+  // Preenchido só quando `mostrarConsultor` (admin, ou gestor vendo o time) — o consultor
+  // comum só vê as próprias sessões, então mostrar o nome dele em toda linha seria ruído.
   consultorNome: string | null;
   // Editar descrição, pedir ajuste e excluir são "só o dono" nos respectivos endpoints —
   // controla quais ações do menu "⋯" a tela oferece (Confirmar não depende disto).
@@ -288,9 +288,10 @@ export function MeusApontamentos() {
   // (mesma regra aplicada no backend, ver podeGerenciarDespesas em routes/rats.ts).
   const podeGerenciarDespesas = user?.role === "admin";
   const [sessoes, setSessoes] = useState<SessaoPendente[]>([]);
-  // Admin vê as sessões pendentes de todos os consultores (ver GET /sessoes-pendentes) —
-  // é o que liga a coluna Consultor e a barra de filtros abaixo.
-  const [podeVerTodosApontamentos, setPodeVerTodosApontamentos] = useState(false);
+  // Admin vê as sessões pendentes de todos os consultores; gestor vê as próprias + as do
+  // time que gerencia (ver GET /sessoes-pendentes) — é o que liga a coluna Consultor e a
+  // barra de filtros abaixo.
+  const [mostrarConsultor, setMostrarConsultor] = useState(false);
   const [buscaSessoesInput, setBuscaSessoesInput] = useState("");
   const buscaSessoesDebounced = useDebouncedValue(buscaSessoesInput, 350);
   const [codforsFiltroSessoes, setCodforsFiltroSessoes] = useState<number[]>([]);
@@ -354,7 +355,7 @@ export function MeusApontamentos() {
     Promise.all([axios.get("/api/apontamentos/sessoes-pendentes"), axios.get("/api/apontamentos/minhas-atividades")])
       .then(([sessoesRes, atividadesRes]) => {
         setSessoes(sessoesRes.data.sessoes);
-        setPodeVerTodosApontamentos(Boolean(sessoesRes.data.podeVerTodos));
+        setMostrarConsultor(Boolean(sessoesRes.data.mostrarConsultor));
         setAtividades(atividadesRes.data.atividades);
         setErro(null);
       })
@@ -933,8 +934,8 @@ export function MeusApontamentos() {
                 (sessoesFiltradas.length === sessoes.length ? `(${sessoes.length})` : `(${sessoesFiltradas.length} de ${sessoes.length})`)}
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              {/* Só admin (podeVerTodos) — pro consultor comum a lista já é só ele, filtro não ajudaria em nada. */}
-              {podeVerTodosApontamentos && (
+              {/* Admin ou gestor com time (mostrarConsultor) — pro consultor comum a lista já é só ele, filtro não ajudaria em nada. */}
+              {mostrarConsultor && (
                 <>
                   <input
                     type="text"
@@ -988,7 +989,7 @@ export function MeusApontamentos() {
                     <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
                       Cliente
                     </th>
-                    {podeVerTodosApontamentos && (
+                    {mostrarConsultor && (
                       <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
                         Consultor
                       </th>
@@ -1027,7 +1028,7 @@ export function MeusApontamentos() {
                         <td className="hidden px-2.5 py-3.5 md:table-cell">
                           <Skeleton className="h-4 w-28" />
                         </td>
-                        {podeVerTodosApontamentos && (
+                        {mostrarConsultor && (
                           <td className="hidden px-2.5 py-3.5 md:table-cell">
                             <Skeleton className="h-4 w-24" />
                           </td>
@@ -1085,7 +1086,7 @@ export function MeusApontamentos() {
                           {s.cliente ?? "—"}
                           {s.codcli != null && ` (${s.codcli})`}
                         </td>
-                        {podeVerTodosApontamentos && (
+                        {mostrarConsultor && (
                           <td
                             className="hidden max-w-[180px] truncate px-2.5 py-3.5 text-sm text-muted md:table-cell"
                             title={s.consultorNome ?? undefined}
@@ -1180,7 +1181,7 @@ export function MeusApontamentos() {
                     ))}
                   {!loading && sessoesFiltradas.length === 0 && (
                     <tr>
-                      <td colSpan={podeVerTodosApontamentos ? 11 : 10} className="px-2.5 py-8 text-center text-sm text-muted">
+                      <td colSpan={mostrarConsultor ? 11 : 10} className="px-2.5 py-8 text-center text-sm text-muted">
                         {sessoes.length === 0
                           ? 'Nenhuma sessão pendente — mova um card pra "Em Andamento" pra começar a rastrear tempo.'
                           : "Nenhuma sessão encontrada com os filtros atuais."}
