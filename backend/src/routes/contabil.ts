@@ -123,6 +123,7 @@ contabilRouter.get("/resultado/opcoes-filtro", async (_req, res) => {
         SELECT DISTINCT EXTRACT(YEAR FROM datlct)::int AS ano
         FROM rateios_lancamento
         WHERE sitrat = ${SITRAT_CONTABILIZADO}
+          AND removido_em_senior IS NULL
         ORDER BY ano DESC
       `,
       prisma.$queryRaw<{ despar: string }[]>`
@@ -183,6 +184,7 @@ contabilRouter.get("/resultado", async (req, res) => {
       FROM rateios_lancamento r
       JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
       WHERE r.sitrat = $1
+        AND r.removido_em_senior IS NULL
         AND r.datlct >= $2::date AND r.datlct < $3::date
         AND EXTRACT(YEAR FROM r.datlct) = ANY($4::int[])
         AND EXTRACT(MONTH FROM r.datlct) = ANY($5::int[])
@@ -251,6 +253,7 @@ contabilRouter.get("/orcado-realizado", async (req, res) => {
         FROM rateios_lancamento r
         JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
         WHERE r.sitrat = $1
+          AND r.removido_em_senior IS NULL
           AND r.datlct >= $2::date AND r.datlct < $3::date
           AND EXTRACT(YEAR FROM r.datlct) = ANY($4::int[])
           AND EXTRACT(MONTH FROM r.datlct) = ANY($5::int[])
@@ -355,6 +358,7 @@ contabilRouter.get("/dre", async (req, res) => {
         FROM rateios_lancamento r
         JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
         WHERE r.sitrat = $1
+          AND r.removido_em_senior IS NULL
           AND r.datlct >= $2::date AND r.datlct < $3::date
           AND EXTRACT(YEAR FROM r.datlct) = ANY($4::int[])
           AND EXTRACT(MONTH FROM r.datlct) = ANY($5::int[])
@@ -380,6 +384,7 @@ contabilRouter.get("/dre", async (req, res) => {
         FROM rateios_lancamento r
         JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
         WHERE r.sitrat = $1
+          AND r.removido_em_senior IS NULL
           AND r.datlct >= $2::date AND r.datlct < $3::date
           AND EXTRACT(YEAR FROM r.datlct) = ANY($4::int[])
           AND EXTRACT(MONTH FROM r.datlct) = ANY($5::int[])
@@ -486,6 +491,7 @@ contabilRouter.get("/centros-custo", async (req, res) => {
              SUM(CASE WHEN r.debcre = 'C' THEN r.vlrrat ELSE -r.vlrrat END)::float8 AS valor
       FROM rateios_lancamento r
       WHERE r.sitrat = $1
+        AND r.removido_em_senior IS NULL
         AND r.datlct >= $2::date AND r.datlct < $3::date
         AND EXTRACT(YEAR FROM r.datlct) = ANY($4::int[])
         AND EXTRACT(MONTH FROM r.datlct) = ANY($5::int[])
@@ -539,6 +545,7 @@ contabilRouter.get("/evolucao", async (req, res) => {
       FROM rateios_lancamento r
       JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
       WHERE r.sitrat = $1
+        AND r.removido_em_senior IS NULL
         AND btrim(pc.despar) <> ''
         AND EXTRACT(YEAR FROM r.datlct) IN ($2, $3)
         AND ($4::text[] IS NULL OR btrim(pc.despar) = ANY($4::text[]))

@@ -194,6 +194,13 @@ export interface ItemRemovido {
 // acha o alvo de qualquer jeito. Só aparece em restore pra base limpa, e aí a carga inteira
 // de Títulos a Receber morre por FK e derruba os Movimentos junto (medido no CaxHub_Hedel,
 // que nasceu vazio: 0 de 23.937 linhas).
+
+// Domínio "LSitLot" (mesmo em LancamentoContabil.sitlct e RateioLancamento.sitrat) — só pra
+// tornar o rótulo da conferência manual de removidos legível (ver listarRemovidos dos dois
+// jobs abaixo). Não influencia a detecção de exclusão física em si, que é sobre a linha
+// desaparecer da consulta ao Senior, não sobre o valor deste campo (ver schema.prisma).
+const SITUACAO_LANCAMENTO: Record<number, string> = { 1: "A Contabilizar", 2: "Contabilizado", 3: "Excluído", 4: "Desativado" };
+
 export const SYNC_JOBS: SyncJobDescriptor[] = [
   { jobName: EMPRESA_JOB, displayName: "Empresas", cronExpr: EMPRESA_CRON, suportaAlterados: EMPRESA_DATA != null, campoData: EMPRESA_DATA, ...catalogo(EMPRESA_JOB, EMPRESA_QUERY, "empresa"), run: runEmpresaSync, contarRegistros: () => prisma.empresa.count() },
   { jobName: FILIAL_JOB, displayName: "Filiais", cronExpr: FILIAL_CRON, suportaAlterados: FILIAL_DATA != null, campoData: FILIAL_DATA, ...catalogo(FILIAL_JOB, FILIAL_QUERY, "filial"), run: runFilialSync, contarRegistros: () => prisma.filial.count() },
@@ -263,9 +270,67 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   // é independente das demais. (e043pcm/PlanoContabilParalelo foi avaliada e removida em
   // 12/08/2026 — não era necessária.)
   { jobName: PLANO_CONTABIL_JOB, displayName: "Plano Contábil", cronExpr: PLANO_CONTABIL_CRON, suportaAlterados: PLANO_CONTABIL_DATA != null, campoData: PLANO_CONTABIL_DATA, ...catalogo(PLANO_CONTABIL_JOB, PLANO_CONTABIL_QUERY, "plano_contabil"), run: runPlanoContabilSync, contarRegistros: () => prisma.planoContabil.count() },
-  { jobName: LANCAMENTO_CONTABIL_JOB, displayName: "Lançamentos Contábeis", cronExpr: LANCAMENTO_CONTABIL_CRON, suportaAlterados: LANCAMENTO_CONTABIL_DATA != null, campoData: LANCAMENTO_CONTABIL_DATA, ...catalogo(LANCAMENTO_CONTABIL_JOB, LANCAMENTO_CONTABIL_QUERY, "lancamentos_contabeis"), run: runLancamentoContabilSync, contarRegistros: () => prisma.lancamentoContabil.count() },
-  // RateioLancamento roda depois de Lançamentos Contábeis: é o detalhe do lançamento.
-  { jobName: RATEIO_LANCAMENTO_JOB, displayName: "Rateios de Lançamento", cronExpr: RATEIO_LANCAMENTO_CRON, suportaAlterados: RATEIO_LANCAMENTO_DATA != null, campoData: RATEIO_LANCAMENTO_DATA, ...catalogo(RATEIO_LANCAMENTO_JOB, RATEIO_LANCAMENTO_QUERY, "rateios_lancamento"), run: runRateioLancamentoSync, contarRegistros: () => prisma.rateioLancamento.count() },
+  // Detecção de exclusão física ligada em 20/08/2026 a pedido do Vitor (rateio/lançamento
+  // tem manutenção pesada no Senior, ver lancamentoContabilSync.ts) — rodando em "simular"
+  // (politicaVarredura.ts). `contarRemovidos`/`listarRemovidos` (adicionados 22/08/2026, só
+  // pra ligar a VISIBILIDADE na tela — o mecanismo em si já rodava) seguem o mesmo padrão de
+  // PEDIDO_JOB acima, único outro precedente.
+  {
+    jobName: LANCAMENTO_CONTABIL_JOB,
+    displayName: "Lançamentos Contábeis",
+    cronExpr: LANCAMENTO_CONTABIL_CRON,
+    suportaAlterados: LANCAMENTO_CONTABIL_DATA != null, campoData: LANCAMENTO_CONTABIL_DATA,
+    ...catalogo(LANCAMENTO_CONTABIL_JOB, LANCAMENTO_CONTABIL_QUERY, "lancamentos_contabeis"),
+    run: runLancamentoContabilSync,
+    contarRegistros: () => prisma.lancamentoContabil.count(),
+    contarRemovidos: () => prisma.lancamentoContabil.count({ where: { removidoEmSenior: { not: null } } }),
+    listarRemovidos: async (limite, candidatosDesde) => {
+      const linhas = await prisma.lancamentoContabil.findMany({
+        where: candidatosDesde
+          ? { OR: [{ removidoEmSenior: { not: null } }, { vistoEmSync: { lt: candidatosDesde } }] }
+          : { removidoEmSenior: { not: null } },
+        orderBy: [{ removidoEmSenior: "desc" }, { numlct: "desc" }],
+        take: limite,
+        select: { codemp: true, numlct: true, sitlct: true, orilct: true, cpllct: true, removidoEmSenior: true },
+      });
+      return linhas.map((l) => ({
+        chave: `${l.codemp}/${l.numlct}`,
+        rotulo: `Lançamento ${l.numlct} — ${SITUACAO_LANCAMENTO[l.sitlct] ?? l.sitlct}, origem ${l.orilct}${l.cpllct ? ` (${l.cpllct})` : ""}`,
+        removidoEmSenior: l.removidoEmSenior,
+        marcado: l.removidoEmSenior != null,
+      }));
+    },
+  },
+  // RateioLancamento roda depois de Lançamentos Contábeis: é o detalhe do lançamento. Mesma
+  // detecção de exclusão física ligada em 20/08/2026, mesma visibilidade adicionada agora.
+  {
+    jobName: RATEIO_LANCAMENTO_JOB,
+    displayName: "Rateios de Lançamento",
+    cronExpr: RATEIO_LANCAMENTO_CRON,
+    suportaAlterados: RATEIO_LANCAMENTO_DATA != null, campoData: RATEIO_LANCAMENTO_DATA,
+    ...catalogo(RATEIO_LANCAMENTO_JOB, RATEIO_LANCAMENTO_QUERY, "rateios_lancamento"),
+    run: runRateioLancamentoSync,
+    contarRegistros: () => prisma.rateioLancamento.count(),
+    contarRemovidos: () => prisma.rateioLancamento.count({ where: { removidoEmSenior: { not: null } } }),
+    listarRemovidos: async (limite, candidatosDesde) => {
+      const linhas = await prisma.rateioLancamento.findMany({
+        where: candidatosDesde
+          ? { OR: [{ removidoEmSenior: { not: null } }, { vistoEmSync: { lt: candidatosDesde } }] }
+          : { removidoEmSenior: { not: null } },
+        orderBy: [{ removidoEmSenior: "desc" }, { numlct: "desc" }],
+        take: limite,
+        select: { codemp: true, numlct: true, ctared: true, codccu: true, debcre: true, vlrrat: true, sitrat: true, removidoEmSenior: true },
+      });
+      return linhas.map((r) => ({
+        chave: `${r.codemp}/${r.numlct}/${r.ctared}/${r.codccu}`,
+        rotulo: `Rateio do lançamento ${r.numlct} — conta ${r.ctared}, CC ${r.codccu}, ${
+          r.debcre === "D" ? "débito" : r.debcre === "C" ? "crédito" : "?"
+        } R$ ${Number(r.vlrrat).toFixed(2)} (${SITUACAO_LANCAMENTO[r.sitrat] ?? r.sitrat})`,
+        removidoEmSenior: r.removidoEmSenior,
+        marcado: r.removidoEmSenior != null,
+      }));
+    },
+  },
   { jobName: ORCAMENTO_CONTABIL_JOB, displayName: "Orçamentos Contábeis", cronExpr: ORCAMENTO_CONTABIL_CRON, suportaAlterados: ORCAMENTO_CONTABIL_DATA != null, campoData: ORCAMENTO_CONTABIL_DATA, ...catalogo(ORCAMENTO_CONTABIL_JOB, ORCAMENTO_CONTABIL_QUERY, "orcamentos_contabeis"), run: runOrcamentoContabilSync, contarRegistros: () => prisma.orcamentoContabil.count() },
   // Despesas de viagem lançadas em RAT (USU_TE777RDV) + catálogo de rotas/percursos,
   // identificadas a pedido do Vitor em 13/08/2026. Sem dependência das tabelas acima — RDV
