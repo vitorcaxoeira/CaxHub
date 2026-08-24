@@ -9,6 +9,7 @@ import {
   type ContaParaMatriz,
   type CentroCustoParaMatriz,
 } from "../domain/matrizContabil";
+import { runSincronizacaoContabil, sincronizacaoContabilEmAndamento } from "../sync/contabilSyncOrchestrator";
 
 export const contabilRouter = Router();
 // v1: só admin. O gancho pro "gestor vê só seu departamento" é o filtro de grupo (`despar`)
@@ -604,4 +605,47 @@ contabilRouter.get("/evolucao", async (req, res) => {
   } catch (error) {
     handleError(res, error, "evolucao");
   }
+});
+
+// ---------- Sincronização manual (status + disparo) ----------
+// Mesmo padrão de financeiro.ts (GET/POST /contas-a-receber/sincronizacao) — botão
+// "Atualizar" em Resultado Analítico (24/08/2026, a pedido do Vitor), reaproveitando o
+// componente SincronizacaoStatus.
+const JOBS_CONTABIL = ["lancamentos_contabeis-sync", "rateios_lancamento-sync"];
+
+contabilRouter.get("/sincronizacao", async (_req, res) => {
+  try {
+    const [ultimoLancamento, ultimoRateio] = await Promise.all(
+      JOBS_CONTABIL.map((jobName) =>
+        prisma.syncLog.findFirst({ where: { jobName, status: "success" }, orderBy: { runAt: "desc" } })
+      )
+    );
+    const ultimos = [ultimoLancamento, ultimoRateio].filter((l): l is NonNullable<typeof l> => l != null);
+    // A mais ANTIGA entre as duas tabelas — se uma sincronizou de madrugada e a outra faz
+    // horas, "última atualização" real do CONTEXTO é a mais defasada das duas, não a mais
+    // recente (mesma lógica MIN(MAX(runAt)) que financeiro.ts já usa pros 9 jobs de contas
+    // a receber, só que aqui com 2 jobs e via Prisma em vez de SQL bruto).
+    const ultimaAtualizacao = ultimos.length > 0 ? new Date(Math.min(...ultimos.map((l) => l.runAt.getTime()))) : null;
+    // Só soma a duração quando as DUAS tabelas já têm sincronização de sucesso com duração
+    // registrada — misturar duração de só uma tabela com "última atualização" das duas
+    // daria um número que não representa nada real.
+    const ultimaDuracaoMs =
+      ultimos.length === JOBS_CONTABIL.length && ultimos.every((l) => l.duracaoMs != null)
+        ? ultimos.reduce((soma, l) => soma + (l.duracaoMs ?? 0), 0)
+        : null;
+    res.json({ emAndamento: sincronizacaoContabilEmAndamento(), ultimaAtualizacao, ultimaDuracaoMs });
+  } catch (error) {
+    handleError(res, error, "sincronizacao-status");
+  }
+});
+
+contabilRouter.post("/sincronizacao", async (_req, res) => {
+  if (sincronizacaoContabilEmAndamento()) {
+    res.status(409).json({ error: "Sincronização já em andamento" });
+    return;
+  }
+  runSincronizacaoContabil().catch((error) => {
+    console.error("[sincronizacao-contabil] falhou:", error instanceof Error ? error.message : error);
+  });
+  res.status(202).json({ status: "iniciado" });
 });
