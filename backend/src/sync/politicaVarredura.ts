@@ -19,11 +19,15 @@ const MODOS: Record<string, ModoVarredura> = {
   "pedidos-sync-cliente": "marcar",
   // Ligadas em 20/08/2026 a pedido do Vitor: rateio/lançamento contábil tem manutenção
   // pesada do lado do Senior (edição e remoção frequentes) — sem varredura, registro
-  // removido lá virava fantasma permanente no espelho local. Começam em "simular"; só
-  // promovem pra "marcar" depois de alguns dias com número estável no painel e chaves
-  // conferidas manualmente no Senior (mesma disciplina de pedidos-sync).
-  "rateios_lancamento-sync": "simular",
-  "lancamentos_contabeis-sync": "simular",
+  // removido lá virava fantasma permanente no espelho local. Promovidas pra "marcar" em
+  // 22/08/2026, a pedido do Vitor ("igual ao pedido") — 3 execuções seguidas com número
+  // estável (2.159 / 3.305) e a visibilidade na tela (contarRemovidos/listarRemovidos,
+  // registry.ts) conferida antes de promover. Igual à promoção de Pedidos: junto com isto,
+  // as 7 queries de `routes/contabil.ts` que somam `rateios_lancamento` passaram a excluir
+  // `removido_em_senior IS NOT NULL` — senão lançamento removido no Senior continuaria
+  // entrando nos totais dos relatórios (Resultado Analítico, DRE, Orçado x Realizado etc.).
+  "rateios_lancamento-sync": "marcar",
+  "lancamentos_contabeis-sync": "marcar",
 };
 
 export function modoVarredura(jobName: string): ModoVarredura {

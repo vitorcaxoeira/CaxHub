@@ -37,9 +37,11 @@ function parseStringListParam(value: unknown): string[] | null {
 const STATUS_VALIDOS = ["pendente", "enviando", "enviado", "bloqueado", "invalido"] as const;
 
 // GET / — lista paginada, com filtro de situação (um valor, vem do clique num KPI da tela),
-// tipo (multi-select) e proposta (lista de números). `codpro` não é coluna própria desta
-// tabela — vem de AtividadeConsultor.codpro pela relação já incluída abaixo, por isso o
-// filtro é via `atividade: { codpro: { in } }`.
+// tipo (multi-select), proposta e id da atividade (listas de números). `codpro` não é coluna
+// própria desta tabela — vem de AtividadeConsultor.codpro pela relação já incluída abaixo, por
+// isso o filtro é via `atividade: { codpro: { in } }`. `atividadeId` já É coluna própria
+// (FK direta pra AtividadeConsultor, é o que a coluna "Detalhes" da tela mostra como
+// "Ativ. #..."), filtro direto sem passar pela relação.
 sincronizacaoRouter.get("/", async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
@@ -50,11 +52,13 @@ sincronizacaoRouter.get("/", async (req, res) => {
         : null;
     const tipos = parseStringListParam(req.query.tipo);
     const codpros = parseIntListParam(req.query.codpro);
+    const atividadeIds = parseIntListParam(req.query.atividadeId);
 
     const where: Prisma.SincronizacaoPendenteWhereInput = {};
     if (status) where.status = status;
     if (tipos) where.tipo = { in: tipos };
     if (codpros) where.atividade = { codpro: { in: codpros } };
+    if (atividadeIds) where.atividadeId = { in: atividadeIds };
 
     const [total, itens] = await Promise.all([
       prisma.sincronizacaoPendente.count({ where }),

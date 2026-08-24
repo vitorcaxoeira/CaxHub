@@ -126,6 +126,10 @@ export function SincronizacaoSenior() {
   const [tipoFiltro, setTipoFiltro] = useState<string[]>([]);
   const [codproInput, setCodproInput] = useState("");
   const codproDebounced = useDebouncedValue(codproInput, 350);
+  // Id da atividade — o que a coluna "Detalhes" mostra como "Ativ. #...". Mesmo padrão do
+  // filtro de Proposta (texto livre, aceita vários separados por vírgula, com debounce).
+  const [atividadeIdInput, setAtividadeIdInput] = useState("");
+  const atividadeIdDebounced = useDebouncedValue(atividadeIdInput, 350);
 
   // Totais por situação da fila INTEIRA (não reagem a statusFiltro/tipoFiltro/codproDebounced)
   // — mesma regra de GET /pedidos/indicadores: o KPI mostra sempre o todo, só a lista abaixo
@@ -143,6 +147,7 @@ export function SincronizacaoSenior() {
           status: statusFiltro || undefined,
           tipo: tipoFiltro.length > 0 ? tipoFiltro.join(",") : undefined,
           codpro: codproDebounced || undefined,
+          atividadeId: atividadeIdDebounced || undefined,
         },
       })
       .then(({ data }) => {
@@ -172,14 +177,14 @@ export function SincronizacaoSenior() {
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFiltro, tipoFiltro, codproDebounced]);
+  }, [page, statusFiltro, tipoFiltro, codproDebounced, atividadeIdDebounced]);
 
   // Trocar qualquer filtro volta pra página 1 — senão a busca pode "sumir" numa página que
   // não existe mais no recorte novo (mesmo padrão de ListarPedidos.tsx).
   useEffect(() => {
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFiltro, tipoFiltro, codproDebounced]);
+  }, [statusFiltro, tipoFiltro, codproDebounced, atividadeIdDebounced]);
 
   function alternarStatusFiltro(status: string) {
     setStatusFiltro((atual) => (atual === status ? null : status));
@@ -308,6 +313,12 @@ export function SincronizacaoSenior() {
           value={codproInput}
           onChange={(e) => setCodproInput(e.target.value)}
           placeholder="Nro. da proposta... (separe por vírgula)"
+          className="w-56 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <input
+          value={atividadeIdInput}
+          onChange={(e) => setAtividadeIdInput(e.target.value)}
+          placeholder="Id da atividade... (separe por vírgula)"
           className="w-56 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
         <MultiSelectDropdown
