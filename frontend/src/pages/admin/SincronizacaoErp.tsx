@@ -3,6 +3,7 @@ import { Fragment, useEffect, useState } from "react";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Modal } from "../../components/ui/Modal";
 import { SelectBuscavel, OpcaoBuscavel } from "../../components/ui/SelectBuscavel";
+import { formatarDuracao } from "../../utils/duracao";
 
 interface JobSync {
   jobName: string;
@@ -228,16 +229,6 @@ function varreduraDefasada(job: JobSync): boolean {
   return atraso > DIAS_VARREDURA_DEFASADA * 24 * 60 * 60 * 1000;
 }
 
-// "14,7s" abaixo de 1 min, "8m 40s" a partir daí — mesmo formato usado nas mensagens de
-// SyncLog dos jobs já instrumentados (ex.: "308.244 linhas em 58s (fetch 44s, escrita
-// 12s...)").
-function formatarDuracao(ms: number): string {
-  const segundos = ms / 1000;
-  if (segundos < 60) return `${segundos.toFixed(1).replace(".", ",")}s`;
-  const minutos = Math.floor(segundos / 60);
-  const resto = Math.round(segundos % 60);
-  return `${minutos}m ${resto}s`;
-}
 
 function formatTempoAtras(iso: string | null): string {
   if (!iso) return "nunca sincronizada";

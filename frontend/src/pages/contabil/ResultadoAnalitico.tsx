@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
+import { SincronizacaoStatus } from "../../components/financeiro/SincronizacaoStatus";
 import { MESES_OPCOES } from "../../lib/periodos";
 import { MatrizTab } from "../../components/contabil/MatrizTab";
 import { OrcadoRealizadoTab } from "../../components/contabil/OrcadoRealizadoTab";
@@ -40,6 +41,12 @@ export function ResultadoAnalitico() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [opcoes, setOpcoes] = useState<OpcoesFiltro | null>(null);
+  // Bump depois de "Atualizar" (SincronizacaoStatus) — vira `key` da aba ativa pra forçar
+  // remount e cada aba refazer sua própria busca, sem precisar tocar no código interno delas.
+  const [refreshKey, setRefreshKey] = useState(0);
+  function handleSincronizado() {
+    setRefreshKey((k) => k + 1);
+  }
 
   const visaoInicial = VISOES.some((v) => v.value === searchParams.get("visao")) ? (searchParams.get("visao") as Visao) : "matriz";
   const [visao, setVisao] = useState<Visao>(visaoInicial);
@@ -106,7 +113,10 @@ export function ResultadoAnalitico() {
 
   return (
     <div>
-      <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Contábil · Resultado Analítico</p>
+      <div className="mb-4 flex items-center justify-between">
+        <p className="font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Contábil · Resultado Analítico</p>
+        <SincronizacaoStatus onAtualizado={handleSincronizado} apiBase="/api/contabil/sincronizacao" formato="completo" />
+      </div>
 
       <div className="mb-6 flex flex-wrap gap-1 rounded-md border border-border p-1" style={{ width: "fit-content" }}>
         {VISOES.map((v) => (
@@ -179,10 +189,8 @@ export function ResultadoAnalitico() {
       </div>
 
       {visao === "matriz" && (
-        <MatrizTab anos={anos} meses={meses} niveis={niveis} grupos={grupos} centrosCusto={centrosCusto} incluirSemGrupo={incluirSemGrupo} />
-      )}
-      {visao === "orcado" && (
-        <OrcadoRealizadoTab
+        <MatrizTab
+          key={refreshKey}
           anos={anos}
           meses={meses}
           niveis={niveis}
@@ -191,9 +199,20 @@ export function ResultadoAnalitico() {
           incluirSemGrupo={incluirSemGrupo}
         />
       )}
-      {visao === "dre" && <DreTab anos={anos} meses={meses} grupos={grupos} centrosCusto={centrosCusto} />}
-      {visao === "cc" && <CentroCustoTab anos={anos} meses={meses} centrosCusto={centrosCusto} />}
-      {visao === "dash" && <DashContabilTab ano={anos[0] ?? new Date().getFullYear()} grupos={grupos} />}
+      {visao === "orcado" && (
+        <OrcadoRealizadoTab
+          key={refreshKey}
+          anos={anos}
+          meses={meses}
+          niveis={niveis}
+          grupos={grupos}
+          centrosCusto={centrosCusto}
+          incluirSemGrupo={incluirSemGrupo}
+        />
+      )}
+      {visao === "dre" && <DreTab key={refreshKey} anos={anos} meses={meses} grupos={grupos} centrosCusto={centrosCusto} />}
+      {visao === "cc" && <CentroCustoTab key={refreshKey} anos={anos} meses={meses} centrosCusto={centrosCusto} />}
+      {visao === "dash" && <DashContabilTab key={refreshKey} ano={anos[0] ?? new Date().getFullYear()} grupos={grupos} />}
     </div>
   );
 }
