@@ -890,10 +890,12 @@ model AtividadeSessaoExecucao {
   // Exclusão lógica, feita pelo próprio consultor em Meus Apontamentos. NÃO apaga a linha:
   // a hora trabalhada é registro do que aconteceu, e quem excluiu precisa ficar visível.
   //
-  // Uma sessão excluída some de TRÊS lugares, e os três importam: da fila de "a confirmar"
+  // Uma sessão excluída some de QUATRO lugares, e os quatro importam: da fila de "a confirmar"
   // (GET /apontamentos/sessoes-pendentes), do realizado da atividade (domain/tetoAtividade.ts
   // e o cálculo em lote de routes/atividades.ts — senão a hora excluída segue consumindo o
-  // teto) e da tabela de RATs da tela.
+  // teto), da tabela de RATs da tela, e da checagem de conflito de horário
+  // (domain/conflitoApontamento.ts — corrigido em 24/08/2026: tinha ficado de fora da lista
+  // original e uma sessão excluída bloqueava apontamento novo no mesmo horário).
   excluidaEm    DateTime?
   excluidaPorId Int?
   excluidaPor   User?     @relation("sessaoExcluidaPor", fields: [excluidaPorId], references: [id], onDelete: SetNull)
