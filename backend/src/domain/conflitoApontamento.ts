@@ -88,6 +88,10 @@ export async function conflitosDoIntervalo(
           where: {
             atividadeId: { in: idsAtividade },
             fim: { not: null },
+            // Sessão excluída (Meus Apontamentos) não ocupa horário — mesma regra que já vale
+            // pra fila de confirmação/realizado/teto (ver comentário de excluidaEm no schema),
+            // só que essa checagem de conflito tinha ficado de fora da lista original.
+            excluidaEm: null,
             ...(opcoes.ignorarSessaoId ? { id: { not: opcoes.ignorarSessaoId } } : {}),
           },
           select: { id: true, atividadeId: true, inicio: true, fim: true },

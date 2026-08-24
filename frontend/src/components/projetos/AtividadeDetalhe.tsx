@@ -63,6 +63,13 @@ export interface SolicitacaoApontamento {
   seqite: number;
   depexe: number | null;
   depexeLabel: string;
+  // Nome de quem gerencia o departamento (DepartamentoGestor) — só pra dar contexto no card
+  // de Aprovações, ver badge "Gestor:" em CabecalhoLinha (Aprovacoes.tsx). Nulo quando o
+  // departamento não tem gestor cadastrado.
+  gestorNome: string | null;
+  // Modalidade da proposta (Proposta.modpro) — mesmo badge da coluna Modalidade de
+  // Alocacao.tsx, ver CabecalhoLinha em Aprovacoes.tsx.
+  modproLabel: string;
   // Cliente e descrição da proposta (Proposta.despro) — só pra dar contexto no card de
   // Aprovações, ver CabecalhoLinha em Aprovacoes.tsx. Nulo quando a proposta não tem despro.
   clienteNome: string | null;
@@ -87,6 +94,8 @@ export interface SolicitacaoExcedente {
   seqite: number;
   depexe: number | null;
   depexeLabel: string;
+  gestorNome: string | null;
+  modproLabel: string;
   clienteNome: string | null;
   despro: string | null;
   qtdhor: number | null;

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { depexeLabel, modproLabel, sitproLabel, sitproTone, DEPEXE_COMERCIAL, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
+import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
 import {
   resolverContextoConsultor,
   podeExecutarAcao,
@@ -181,17 +181,18 @@ async function departamentosAlocaveisNoItem(
 ): Promise<number[]> {
   const comTime = new Set(await departamentosComTime());
 
-  // Exceção do Comercial (ver DEPEXE_COMERCIAL em domain/propostasDominio.ts): a proposta
-  // comercial é o ponto de entrada de trabalho pra qualquer área — quem executa o serviço
-  // vendido costuma ser de Consultoria/Suporte/Desenvolvimento —, então o gestor do Comercial
-  // escolhe consultor de qualquer departamento, igual ao admin.
+  // Dono do item pode escolher de qualquer departamento pra alocar (24/08/2026, a pedido do
+  // Vitor): quem gerencia o departamento DO ITEM não fica preso a alocar só gente do próprio
+  // time — pode trazer consultor de qualquer área pra trabalhar no item que é seu. Antes essa
+  // liberdade só existia hardcoded pro Comercial (proposta nasce lá mas executa em outro
+  // lugar); generalizada, o Comercial passa a ser só mais um caso desta mesma condição.
   //
   // Vale SÓ aqui, na escolha de QUEM alocar. A visibilidade de propostas segue por
-  // departamentosPermitidos e não muda: ele continua enxergando só as propostas do Comercial.
-  // Em QUAIS itens ele pode mexer também não muda — isso é podeMexerNoItem.
-  const gerenciaComercial = contexto.departamentosGerenciados.includes(DEPEXE_COMERCIAL);
+  // departamentosPermitidos e não muda. Em QUAIS itens ele pode mexer também não muda — isso é
+  // podeMexerNoItem (que usa um conceito diferente: departamento DA PROPOSTA, não do item).
+  const gerenciaOItem = itemDepexe != null && contexto.departamentosGerenciados.includes(itemDepexe);
   const permitidos =
-    role === "admin" || gerenciaComercial ? await departamentosEmUso() : await departamentosPermitidos(role, contexto);
+    role === "admin" || gerenciaOItem ? await departamentosEmUso() : await departamentosPermitidos(role, contexto);
 
   const candidatos = new Set<number>(permitidos);
   if (itemDepexe != null) candidatos.add(itemDepexe);
