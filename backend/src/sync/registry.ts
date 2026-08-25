@@ -21,6 +21,11 @@ import { JOB_NAME as LANCAMENTO_CONTABIL_JOB, CRON_EXPR as LANCAMENTO_CONTABIL_C
 import { JOB_NAME as MOEDA_JOB, CRON_EXPR as MOEDA_CRON, CAMPO_DATA as MOEDA_DATA, QUERY as MOEDA_QUERY, runMoedaSync } from "./moedaSync";
 import { JOB_NAME as MOVIMENTO_CONTA_JOB, CRON_EXPR as MOVIMENTO_CONTA_CRON, CAMPO_DATA as MOVIMENTO_CONTA_DATA, BASE_QUERY as MOVIMENTO_CONTA_QUERY, runMovimentoContaSync } from "./movimentoContaSync";
 import { JOB_NAME as MOVIMENTO_TITULO_JOB, CRON_EXPR as MOVIMENTO_TITULO_CRON, CAMPO_DATA as MOVIMENTO_TITULO_DATA, BASE_QUERY as MOVIMENTO_TITULO_QUERY, runMovimentoTituloReceberSync } from "./movimentoTituloReceberSync";
+import { JOB_NAME as NOTA_FISCAL_VENDA_JOB, CRON_EXPR as NOTA_FISCAL_VENDA_CRON, CAMPO_DATA as NOTA_FISCAL_VENDA_DATA, BASE_QUERY as NOTA_FISCAL_VENDA_QUERY, runNotaFiscalVendaSync } from "./notaFiscalVendaSync";
+import { JOB_NAME as ITEM_SERVICO_NFV_JOB, CRON_EXPR as ITEM_SERVICO_NFV_CRON, CAMPO_DATA as ITEM_SERVICO_NFV_DATA, BASE_QUERY as ITEM_SERVICO_NFV_QUERY, runItemServicoNfVendaSync } from "./itemServicoNfVendaSync";
+import { JOB_NAME as ITEM_PRODUTO_NFV_JOB, CRON_EXPR as ITEM_PRODUTO_NFV_CRON, CAMPO_DATA as ITEM_PRODUTO_NFV_DATA, BASE_QUERY as ITEM_PRODUTO_NFV_QUERY, runItemProdutoNfVendaSync } from "./itemProdutoNfVendaSync";
+import { JOB_NAME as RATEIO_NFV_JOB, CRON_EXPR as RATEIO_NFV_CRON, CAMPO_DATA as RATEIO_NFV_DATA, BASE_QUERY as RATEIO_NFV_QUERY, runRateioNfVendaSync } from "./rateioNfVendaSync";
+import { JOB_NAME as META_ANUAL_JOB, CRON_EXPR as META_ANUAL_CRON, CAMPO_DATA as META_ANUAL_DATA, BASE_QUERY as META_ANUAL_QUERY, runMetaAnualSync } from "./metaAnualSync";
 import { JOB_NAME as NATUREZA_FINANCEIRA_JOB, CRON_EXPR as NATUREZA_FINANCEIRA_CRON, CAMPO_DATA as NATUREZA_FINANCEIRA_DATA, QUERY as NATUREZA_FINANCEIRA_QUERY, runNaturezaFinanceiraSync } from "./naturezaFinanceiraSync";
 import { JOB_NAME as ORCAMENTO_CONTABIL_JOB, CRON_EXPR as ORCAMENTO_CONTABIL_CRON, CAMPO_DATA as ORCAMENTO_CONTABIL_DATA, QUERY as ORCAMENTO_CONTABIL_QUERY, runOrcamentoContabilSync } from "./orcamentoContabilSync";
 import { JOB_NAME as PEDIDO_JOB, CRON_EXPR as PEDIDO_CRON, CAMPO_DATA as PEDIDO_DATA, BASE_QUERY as PEDIDO_QUERY, runPedidoSync } from "./pedidoSync";
@@ -30,6 +35,9 @@ import { JOB_NAME as PERCURSO_VIAGEM_JOB, CRON_EXPR as PERCURSO_VIAGEM_CRON, CAM
 import { JOB_NAME as ROTA_PERCURSO_JOB, CRON_EXPR as ROTA_PERCURSO_CRON, CAMPO_DATA as ROTA_PERCURSO_DATA, QUERY as ROTA_PERCURSO_QUERY, runRotaPercursoSync } from "./rotaPercursoSync";
 import { JOB_NAME as PLANO_CONTABIL_JOB, CRON_EXPR as PLANO_CONTABIL_CRON, CAMPO_DATA as PLANO_CONTABIL_DATA, BASE_QUERY as PLANO_CONTABIL_QUERY, runPlanoContabilSync } from "./planoContabilSync";
 import { JOB_NAME as PORTADOR_JOB, CRON_EXPR as PORTADOR_CRON, CAMPO_DATA as PORTADOR_DATA, QUERY as PORTADOR_QUERY, runPortadorSync } from "./portadorSync";
+import { JOB_NAME as PRODUTO_JOB, CRON_EXPR as PRODUTO_CRON, CAMPO_DATA as PRODUTO_DATA, BASE_QUERY as PRODUTO_QUERY, runProdutoSync } from "./produtoSync";
+import { JOB_NAME as DERIVACAO_PRODUTO_JOB, CRON_EXPR as DERIVACAO_PRODUTO_CRON, CAMPO_DATA as DERIVACAO_PRODUTO_DATA, BASE_QUERY as DERIVACAO_PRODUTO_QUERY, runDerivacaoProdutoSync } from "./derivacaoProdutoSync";
+import { JOB_NAME as SERVICO_JOB, CRON_EXPR as SERVICO_CRON, CAMPO_DATA as SERVICO_DATA, BASE_QUERY as SERVICO_QUERY, runServicoSync } from "./servicoSync";
 import { JOB_NAME as PROPOSTA_ITEM_JOB, CRON_EXPR as PROPOSTA_ITEM_CRON, CAMPO_DATA as PROPOSTA_ITEM_DATA, QUERY as PROPOSTA_ITEM_QUERY, runPropostaItemSync } from "./propostaItemSync";
 import { JOB_NAME as PROPOSTA_JOB, CRON_EXPR as PROPOSTA_CRON, CAMPO_DATA as PROPOSTA_DATA, QUERY as PROPOSTA_QUERY, runPropostaSync } from "./propostaSync";
 import { JOB_NAME as RAT_JOB, CRON_EXPR as RAT_CRON, CAMPO_DATA as RAT_DATA, BASE_QUERY as RAT_QUERY, runRatSync } from "./ratSync";
@@ -340,4 +348,24 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   { jobName: PERCURSO_VIAGEM_JOB, displayName: "Percursos de Viagem", cronExpr: PERCURSO_VIAGEM_CRON, suportaAlterados: PERCURSO_VIAGEM_DATA != null, campoData: PERCURSO_VIAGEM_DATA, ...catalogo(PERCURSO_VIAGEM_JOB, PERCURSO_VIAGEM_QUERY, "percursos_viagem"), run: runPercursoViagemSync, contarRegistros: () => prisma.percursoViagem.count() },
   { jobName: ROTA_PERCURSO_JOB, displayName: "Rotas x Percursos", cronExpr: ROTA_PERCURSO_CRON, suportaAlterados: ROTA_PERCURSO_DATA != null, campoData: ROTA_PERCURSO_DATA, ...catalogo(ROTA_PERCURSO_JOB, ROTA_PERCURSO_QUERY, "rotas_percursos"), run: runRotaPercursoSync, contarRegistros: () => prisma.rotaPercurso.count() },
   { jobName: REGISTRO_DESPESA_VIAGEM_JOB, displayName: "Despesas de Viagem (RAT)", cronExpr: REGISTRO_DESPESA_VIAGEM_CRON, suportaAlterados: REGISTRO_DESPESA_VIAGEM_DATA != null, campoData: REGISTRO_DESPESA_VIAGEM_DATA, ...catalogo(REGISTRO_DESPESA_VIAGEM_JOB, REGISTRO_DESPESA_VIAGEM_QUERY, "registros_despesa_viagem"), run: runRegistroDespesaViagemSync, contarRegistros: () => prisma.registroDespesaViagem.count() },
+  // Catálogo de Produtos/Derivações/Serviços (e075pro/e075der/e080ser), pedido do Vitor em
+  // 24/08/2026 a partir da mesma família de tabelas do levantamento de Faturamento (NF de
+  // venda) — ver ~/.claude/plans/jaunty-crafting-neumann.md. Produto antes de Derivação: FK
+  // real (DerivacaoProduto.codpro -> Produto), confirmada pela própria query da aplicação
+  // Senior que o Vitor forneceu (JOIN e075der.codpro=e075pro.codpro). Serviço é independente.
+  { jobName: PRODUTO_JOB, displayName: "Produtos", cronExpr: PRODUTO_CRON, suportaAlterados: PRODUTO_DATA != null, campoData: PRODUTO_DATA, ...catalogo(PRODUTO_JOB, PRODUTO_QUERY, "produtos"), run: runProdutoSync, contarRegistros: () => prisma.produto.count() },
+  { jobName: DERIVACAO_PRODUTO_JOB, displayName: "Derivações de Produto", cronExpr: DERIVACAO_PRODUTO_CRON, suportaAlterados: DERIVACAO_PRODUTO_DATA != null, campoData: DERIVACAO_PRODUTO_DATA, ...catalogo(DERIVACAO_PRODUTO_JOB, DERIVACAO_PRODUTO_QUERY, "derivacoes_produto"), run: runDerivacaoProdutoSync, contarRegistros: () => prisma.derivacaoProduto.count() },
+  { jobName: SERVICO_JOB, displayName: "Serviços", cronExpr: SERVICO_CRON, suportaAlterados: SERVICO_DATA != null, campoData: SERVICO_DATA, ...catalogo(SERVICO_JOB, SERVICO_QUERY, "servicos"), run: runServicoSync, contarRegistros: () => prisma.servico.count() },
+  // Família da NF de venda (e140nfv/e140isv/e140ipv/e140rat), completando a query de
+  // Faturamento do início da sessão de 24/08/2026 (Cliente/Produto/Serviço já entraram antes).
+  // Ordem de dependência: NotaFiscalVenda (cabeçalho) -> Item de Serviço/Produto (FK real,
+  // INNER JOIN na query original) -> RateioNfVenda (referencia os itens por SeqIsv/SeqIpv, sem
+  // FK Prisma formal ainda — ver ~/.claude/plans/jaunty-crafting-neumann.md).
+  { jobName: NOTA_FISCAL_VENDA_JOB, displayName: "Notas Fiscais de Venda", cronExpr: NOTA_FISCAL_VENDA_CRON, suportaAlterados: NOTA_FISCAL_VENDA_DATA != null, campoData: NOTA_FISCAL_VENDA_DATA, ...catalogo(NOTA_FISCAL_VENDA_JOB, NOTA_FISCAL_VENDA_QUERY, "notas_fiscais_venda"), run: runNotaFiscalVendaSync, contarRegistros: () => prisma.notaFiscalVenda.count() },
+  { jobName: ITEM_SERVICO_NFV_JOB, displayName: "Itens de Serviço da NF", cronExpr: ITEM_SERVICO_NFV_CRON, suportaAlterados: ITEM_SERVICO_NFV_DATA != null, campoData: ITEM_SERVICO_NFV_DATA, ...catalogo(ITEM_SERVICO_NFV_JOB, ITEM_SERVICO_NFV_QUERY, "itens_servico_nfv"), run: runItemServicoNfVendaSync, contarRegistros: () => prisma.itemServicoNfVenda.count() },
+  { jobName: ITEM_PRODUTO_NFV_JOB, displayName: "Itens de Produto da NF", cronExpr: ITEM_PRODUTO_NFV_CRON, suportaAlterados: ITEM_PRODUTO_NFV_DATA != null, campoData: ITEM_PRODUTO_NFV_DATA, ...catalogo(ITEM_PRODUTO_NFV_JOB, ITEM_PRODUTO_NFV_QUERY, "itens_produto_nfv"), run: runItemProdutoNfVendaSync, contarRegistros: () => prisma.itemProdutoNfVenda.count() },
+  { jobName: RATEIO_NFV_JOB, displayName: "Rateios de NF", cronExpr: RATEIO_NFV_CRON, suportaAlterados: RATEIO_NFV_DATA != null, campoData: RATEIO_NFV_DATA, ...catalogo(RATEIO_NFV_JOB, RATEIO_NFV_QUERY, "rateios_nfv"), run: runRateioNfVendaSync, contarRegistros: () => prisma.rateioNfVenda.count() },
+  // USU_TMetaAnual (tabela customizada) — meta de faturamento por empresa/filial/ano, pedido do
+  // Vitor em 24/08/2026. Independente das demais (sem JOIN na query original).
+  { jobName: META_ANUAL_JOB, displayName: "Metas Anuais", cronExpr: META_ANUAL_CRON, suportaAlterados: META_ANUAL_DATA != null, campoData: META_ANUAL_DATA, ...catalogo(META_ANUAL_JOB, META_ANUAL_QUERY, "metas_anuais"), run: runMetaAnualSync, contarRegistros: () => prisma.metaAnual.count() },
 ];

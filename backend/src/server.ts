@@ -16,6 +16,7 @@ import { atividadesRouter } from "./routes/atividades";
 import { apontamentosRouter } from "./routes/apontamentos";
 import { ratsRouter } from "./routes/rats";
 import { pedidosRouter } from "./routes/pedidos";
+import { analiseFaturamentoRouter } from "./routes/analiseFaturamento";
 import { pedidoVisualizacaoRouter } from "./routes/pedidoVisualizacao";
 import { ratVisualizacaoRouter } from "./routes/ratVisualizacao";
 import { notificacoesRouter } from "./routes/notificacoes";
@@ -65,6 +66,14 @@ import { scheduleRegistroDespesaViagemSync } from "./sync/registroDespesaViagemS
 import { scheduleRotaViagemSync } from "./sync/rotaViagemSync";
 import { schedulePercursoViagemSync } from "./sync/percursoViagemSync";
 import { scheduleRotaPercursoSync } from "./sync/rotaPercursoSync";
+import { scheduleProdutoSync } from "./sync/produtoSync";
+import { scheduleDerivacaoProdutoSync } from "./sync/derivacaoProdutoSync";
+import { scheduleServicoSync } from "./sync/servicoSync";
+import { scheduleNotaFiscalVendaSync } from "./sync/notaFiscalVendaSync";
+import { scheduleItemServicoNfVendaSync } from "./sync/itemServicoNfVendaSync";
+import { scheduleItemProdutoNfVendaSync } from "./sync/itemProdutoNfVendaSync";
+import { scheduleRateioNfVendaSync } from "./sync/rateioNfVendaSync";
+import { scheduleMetaAnualSync } from "./sync/metaAnualSync";
 import { scheduleOutboxSeniorSync } from "./sync/outboxSenior";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
@@ -97,6 +106,7 @@ app.use("/atividades", atividadesRouter);
 app.use("/apontamentos", apontamentosRouter);
 app.use("/rats", ratsRouter);
 app.use("/pedidos", pedidosRouter);
+app.use("/analise-faturamento", analiseFaturamentoRouter);
 app.use("/pedido-visualizacao", pedidoVisualizacaoRouter);
 app.use("/rat-visualizacao", ratVisualizacaoRouter);
 app.use("/notificacoes", notificacoesRouter);
@@ -165,6 +175,17 @@ async function iniciar() {
     schedulePercursoViagemSync();
     scheduleRotaPercursoSync();
     scheduleRegistroDespesaViagemSync();
+    // Catálogo de Produtos/Derivações/Serviços (24/08/2026) — Produto antes de Derivação
+    // (FK real DerivacaoProduto -> Produto, ver registry.ts); Serviço é independente.
+    scheduleProdutoSync();
+    scheduleDerivacaoProdutoSync();
+    scheduleServicoSync();
+    // Família da NF de venda — cabeçalho antes dos itens (FK real), rateio por último.
+    scheduleNotaFiscalVendaSync();
+    scheduleItemServicoNfVendaSync();
+    scheduleItemProdutoNfVendaSync();
+    scheduleRateioNfVendaSync();
+    scheduleMetaAnualSync();
     scheduleOutboxSeniorSync();
     // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do
     // fim do expediente (5 em 5 min), e a que ficou sem resposta depois de a aba fechar
