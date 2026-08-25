@@ -157,8 +157,9 @@ model Cliente {
   sigufs String
   codpai String
 
-  titulosReceber TituloReceber[]
-  propostas      Proposta[]
+  titulosReceber   TituloReceber[]
+  propostas        Proposta[]
+  notasFiscaisVenda NotaFiscalVenda[]
 
   @@map("clientes")
 }
@@ -1631,4 +1632,300 @@ model FiltroSincronizacao {
 
   @@id([jobName, modo])
   @@map("filtros_sincronizacao")
+}
+
+// Espelho local da tabela E075PRO do Senior ERP (Cadastros - Produtos).
+model Produto {
+  codemp Int
+  codpro String @db.VarChar(14)
+  despro String @db.VarChar(100)
+  cplpro String? @db.VarChar(50)
+  desnfv String? @db.VarChar(99)
+  codfam String @db.VarChar(6)
+  unimed String @db.VarChar(3)
+  unime2 String? @db.VarChar(3)
+  unime3 String? @db.VarChar(3)
+  /// Domínio "LTipPro": P=Produzido, C=Comprado, M=Montagem, D=Passagem Direta, S=Serviço
+  tippro String @db.VarChar(1)
+  codori String @db.VarChar(3)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  // FK real confirmada pela própria query da aplicação Senior (JOIN e075der.codpro=e075pro.codpro
+  // dentro da mesma empresa) — ver ~/.claude/plans/jaunty-crafting-neumann.md.
+  derivacoes DerivacaoProduto[]
+
+  @@id([codemp, codpro])
+
+  @@map("produtos")
+}
+
+// Espelho local da tabela E075DER do Senior ERP (Cadastros - Produtos - Derivações).
+model DerivacaoProduto {
+  codemp Int
+  codpro String @db.VarChar(14)
+  codder String @db.VarChar(7)
+  desder String? @db.VarChar(50)
+  descpl String? @db.VarChar(90)
+  codbar String? @db.VarChar(30)
+  /// Domínio "LTipCnv": *=Multiplicar, /=Dividir, R=Regra
+  tipcn2 String? @db.VarChar(1)
+  vlrcn2 Decimal? @db.Decimal(13, 6)
+  /// Domínio "LTipCnv": *=Multiplicar, /=Dividir, R=Regra
+  tipcn3 String? @db.VarChar(1)
+  vlrcn3 Decimal? @db.Decimal(13, 6)
+  pesbru Decimal? @db.Decimal(11, 5)
+  pesliq Decimal? @db.Decimal(11, 5)
+  tolpes Decimal? @db.Decimal(5, 3)
+  volder Decimal? @db.Decimal(11, 5)
+  codemb Int?
+  qtdemb Decimal? @db.Decimal(12, 5)
+  codref String? @db.VarChar(40)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  produto Produto @relation(fields: [codemp, codpro], references: [codemp, codpro])
+
+  @@id([codemp, codpro, codder])
+
+  @@map("derivacoes_produto")
+}
+
+// Espelho local da tabela E080SER do Senior ERP (Cadastros - Serviços).
+model Servico {
+  codemp Int
+  codser String @db.VarChar(14)
+  desser String @db.VarChar(70)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codser])
+
+  @@map("servicos")
+}
+
+// Espelho local da tabela E140NFV do Senior ERP (Vendas - Notas Fiscais de Saída - Dados Gerais).
+model NotaFiscalVenda {
+  codemp Int
+  codfil Int
+  codsnf String @db.VarChar(3)
+  numnfv Int
+  // Campos abaixo acrescentados a pedido do Vitor (24/08/2026, mesma sessão) — ordem seguindo
+  // fldord do dicionário do Senior (r996fld).
+  /// Domínio "LTipNfs": 01=NF Saída, 02=NF Devolução, 03=NF Remessa (Industrialização), 04=NF Remessa (Outros), 05=NF Retorno (Industrialização), 06=NF Retorno (Outros), 09=NF Acerto, 10=NF Carga (Distribuição)
+  tipnfs Int?
+  codedc String? @db.VarChar(3)
+  tnspro String? @db.VarChar(5)
+  tnsser String? @db.VarChar(5)
+  noppro String? @db.VarChar(5)
+  nopser String? @db.VarChar(5)
+  datemi DateTime @db.Date
+  codcli Int
+  // codrep/codcpg/sitnfv são NOT NULL no dicionário do Senior (cannul=0) — backfill das
+  // 21.955 linhas já feito e conferido (0 nulos), travados como NOT NULL (24/08/2026).
+  codrep Int
+  codcpg String @db.VarChar(6)
+  codfpg Int?
+  codmoe String? @db.VarChar(3)
+  codtra Int?
+  vlrfre Decimal? @db.Decimal(15, 2)
+  /// Domínio "LCifFob": C=Por conta do emitente (PAGO), F=Por conta do destinatário (A PAGAR), T=Por conta de terceiros, X=Sem frete
+  ciffob String? @db.VarChar(1)
+  /// Domínio "LSitNfs": 1=Digitada, 2=Fechada, 3=Cancelada, 4=Documento Fiscal Emitido (saída), 5=Aguardando Fechamento (pós-saída), 6=Aguardando Integração WMS, 7=Digitada Integração, 8=Agrupada
+  sitnfv String @db.VarChar(1)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  // FK formalizada depois de checar órfãos com dado real (0 órfãos em 21.955 linhas,
+  // 24/08/2026) — ver ~/.claude/plans/jaunty-crafting-neumann.md.
+  cliente        Cliente               @relation(fields: [codcli], references: [codcli])
+  itensServico   ItemServicoNfVenda[]
+  itensProduto   ItemProdutoNfVenda[]
+
+  @@id([codemp, codfil, codsnf, numnfv])
+
+  @@map("notas_fiscais_venda")
+}
+
+// Espelho local da tabela E140ISV do Senior ERP (Vendas - Notas Fiscais de Saída - Itens de Serviços).
+model ItemServicoNfVenda {
+  codemp Int
+  codfil Int
+  codsnf String @db.VarChar(3)
+  numnfv Int
+  seqisv Int
+  // Campos abaixo acrescentados a pedido do Vitor (24/08/2026, mesma sessão) — "complemente",
+  // aditivo: codser/vlrbru (já existentes) preservados, mesmo o pedido não os tendo relistado.
+  // Ordem seguindo fldord do dicionário do Senior.
+  tnsser String? @db.VarChar(5)
+  nopser String? @db.VarChar(5)
+  filped Int?
+  numped Int?
+  seqisp Int?
+  filctr Int?
+  numctr Int?
+  datcpt DateTime? @db.Date
+  seqcvs Int?
+  codser String? @db.VarChar(14)
+  cplisv String? @db.VarChar(250)
+  qtdfat Decimal? @db.Decimal(14, 5)
+  qtddev Decimal? @db.Decimal(14, 5)
+  // unimed é NOT NULL no dicionário (cannul=0) — backfill das 105.410 linhas já feito e
+  // conferido (0 nulos), travado como NOT NULL (24/08/2026, mesmo padrão de
+  // notas_fiscais_venda.codrep/codcpg/sitnfv).
+  unimed String @db.VarChar(3)
+  codtpr String? @db.VarChar(4)
+  preuni Decimal? @db.Decimal(21, 10)
+  vlrbru Decimal? @db.Decimal(15, 2)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  // FK formalizada depois de checar órfãos com dado real (0 órfãos em 105.410 linhas, 24/08/2026).
+  notaFiscalVenda NotaFiscalVenda @relation(fields: [codemp, codfil, codsnf, numnfv], references: [codemp, codfil, codsnf, numnfv])
+
+  @@id([codemp, codfil, codsnf, numnfv, seqisv])
+
+  @@map("itens_servico_nfv")
+}
+
+// Espelho local da tabela E140IPV do Senior ERP (Vendas - Notas Fiscais de Saída - Itens de Produtos).
+model ItemProdutoNfVenda {
+  codemp Int
+  codfil Int
+  codsnf String @db.VarChar(3)
+  numnfv Int
+  seqipv Int
+  // Campos abaixo acrescentados a pedido do Vitor (24/08/2026, mesma sessão) — "complemente",
+  // aditivo: codpro/cplipv/vlrbru (já existentes) preservados. Ordem seguindo fldord do
+  // dicionário do Senior.
+  tnspro String? @db.VarChar(5)
+  noppro String? @db.VarChar(5)
+  filped Int?
+  numped Int?
+  seqipd Int?
+  filctr Int?
+  numctr Int?
+  datcpt DateTime? @db.Date
+  seqcvp Int?
+  codpro String? @db.VarChar(14)
+  codder String? @db.VarChar(7)
+  cplipv String? @db.VarChar(250)
+  qtdfat Decimal? @db.Decimal(14, 5)
+  qtddev Decimal? @db.Decimal(14, 5)
+  // unimed é NOT NULL no dicionário (cannul=0) — backfill das 146 linhas já feito e
+  // conferido (0 nulos), travado como NOT NULL (24/08/2026, mesmo padrão de sempre).
+  unimed String @db.VarChar(3)
+  uniemi String? @db.VarChar(3)
+  codtpr String? @db.VarChar(4)
+  preuni Decimal? @db.Decimal(21, 10)
+  prebas Decimal? @db.Decimal(21, 10)
+  perdsc Decimal? @db.Decimal(5, 2)
+  perofe Decimal? @db.Decimal(10, 5)
+  univen String? @db.VarChar(3)
+  qtdven Decimal? @db.Decimal(14, 5)
+  preven Decimal? @db.Decimal(21, 10)
+  vlrbru Decimal? @db.Decimal(15, 2)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  // FK formalizada depois de checar órfãos com dado real (0 órfãos em 146 linhas, 24/08/2026).
+  notaFiscalVenda NotaFiscalVenda @relation(fields: [codemp, codfil, codsnf, numnfv], references: [codemp, codfil, codsnf, numnfv])
+
+  @@id([codemp, codfil, codsnf, numnfv, seqipv])
+
+  @@map("itens_produto_nfv")
+}
+
+// Espelho local da tabela E140RAT do Senior ERP (Vendas - Notas Fiscais de Saída - Rateios).
+model RateioNfVenda {
+  codemp Int
+  codfil Int
+  codsnf String @db.VarChar(3)
+  numnfv Int
+  seqrat Int
+  // Campos abaixo acrescentados a pedido do Vitor (24/08/2026, mesma sessão) — ordem seguindo
+  // fldord do dicionário do Senior (r996fld), CriRat/SomSub (domínio) e UsuGer/DatGer/HorGer/
+  // TipOri (auditoria/metadado, DatGer já usado à parte em CAMPO_DATA) ficaram de fora, mesma
+  // exclusão que o Vitor já tinha feito ao listar os campos.
+  datbas DateTime? @db.Date
+  tnspro String?   @db.VarChar(5)
+  tnsser String?   @db.VarChar(5)
+  seqipv Int?
+  seqisv Int?
+  numprj Int?
+  codfpj Int?
+  ctafin Int?
+  ctared Int?
+  percta Decimal? @db.Decimal(7, 4)
+  vlrcta Decimal? @db.Decimal(15, 2)
+  codccu String?  @db.VarChar(9)
+  perrat Decimal? @db.Decimal(7, 4)
+  vlrrat Decimal? @db.Decimal(15, 2)
+  obsrat String?  @db.VarChar(120)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codfil, codsnf, numnfv, seqrat])
+
+  @@map("rateios_nfv")
+}
+
+// Espelho local da tabela USU_TMETAANUAL do Senior ERP (Meta da Empresa/Filial por Ano).
+model MetaAnual {
+  codemp Int
+  codfil Int
+  anomet Int
+  vlrmet Decimal @db.Decimal(10, 2)
+  percre Decimal @db.Decimal(6, 2)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codfil, anomet])
+
+  @@map("metas_anuais")
 }
