@@ -70,7 +70,10 @@ const groups: NavGroup[] = [
   },
   {
     label: "Mercado",
-    items: [{ to: "/mercado/pedidos", label: "Listar Pedidos" }],
+    items: [
+      { to: "/mercado/pedidos", label: "Listar Pedidos" },
+      { to: "/mercado/analise-faturamento", label: "Análise de Faturamento" },
+    ],
     roles: ["admin"],
   },
   {
