@@ -62,11 +62,11 @@ const groups: NavGroup[] = [
   },
   {
     label: "Contábil",
-    items: [{ to: "/contabil/resultado-analitico", label: "Resultado Analítico" }],
-    // v1 é admin-only por pedido do Vitor; a extensão pra gestor de departamento (com o
-    // resultado filtrado só pro depto dele) é um passo futuro combinado, não implementado
-    // ainda — ver DESPAR_PARA_DEPEXE em backend/src/domain/contabilDominio.ts.
-    roles: ["admin"],
+    // Recorte por gestor de departamento ligado em 25/08/2026 (tabela DepartamentoGrupoContabil,
+    // administrada em Administração > Departamento x Grupo Contábil) — o gestor vê a tela com o
+    // filtro de grupos já restrito ao(s) departamento(s) dele; o admin continua vendo tudo.
+    items: [{ to: "/contabil/resultado-analitico", label: "Resultado Analítico", gestorOuAdmin: true }],
+    roles: "*",
   },
   {
     label: "Mercado",
@@ -82,6 +82,7 @@ const groups: NavGroup[] = [
       { to: "/admin/usuarios", label: "Usuários" },
       { to: "/admin/sincronizacao", label: "Exportados para o Senior" },
       { to: "/admin/sincronizacao-erp", label: "Importados do Senior" },
+      { to: "/admin/departamento-grupo-contabil", label: "Departamento x Grupo Contábil" },
     ],
     roles: ["admin"],
   },

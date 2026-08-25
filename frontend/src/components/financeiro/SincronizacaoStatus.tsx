@@ -68,9 +68,15 @@ export function SincronizacaoStatus({ onAtualizado, apiBase = API_BASE_PADRAO, f
     });
   }
 
+  const isAdmin = user?.role === "admin";
+
   useEffect(() => {
+    // O endpoint de status é admin-only (Contábil deixou de ser admin-only em 25/08/2026, mas
+    // /sincronizacao continua sendo — ver plano). Sem isso, um gestor recebe 403 silencioso e o
+    // rótulo fica preso em "carregando..." pra sempre.
+    if (!isAdmin) return;
     buscarStatus().catch(() => {});
-  }, [apiBase]);
+  }, [apiBase, isAdmin]);
 
   function pararPolling() {
     if (pollRef.current) {
@@ -111,7 +117,6 @@ export function SincronizacaoStatus({ onAtualizado, apiBase = API_BASE_PADRAO, f
   }
 
   const emAndamento = status?.emAndamento ?? false;
-  const isAdmin = user?.role === "admin";
   const desatualizado = status ? estaDesatualizado(status.ultimaAtualizacao) : false;
 
   return (

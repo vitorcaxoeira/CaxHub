@@ -592,6 +592,19 @@ model DepartamentoTime {
   @@map("departamento_time")
 }
 
+// Configuração 100% nativa do CaxHub (NUNCA sincronizada do Senior, diferente das duas tabelas
+// acima) — liga cada departamento (depexe) aos grupos contábeis (PlanoContabil.despar) que ele
+// representa, pro RBAC do módulo Contábil (routes/contabil.ts). Editável só por admin, pela tela
+// Administração > Departamento x Grupo Contábil (GET/PUT /contabil/departamentos-grupos).
+model DepartamentoGrupoContabil {
+  codemp Int
+  depexe Int
+  despar String @db.VarChar(80)
+
+  @@id([codemp, depexe, despar])
+  @@map("departamento_grupo_contabil")
+}
+
 // Jornada de trabalho de um consultor, por dia da semana. Conceito só do CaxHub, sem
 // equivalente no Senior — quem mantém é o gestor do departamento do consultor.
 //

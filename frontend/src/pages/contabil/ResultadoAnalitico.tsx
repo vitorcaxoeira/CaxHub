@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useAuth } from "../../auth/AuthContext";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { SincronizacaoStatus } from "../../components/financeiro/SincronizacaoStatus";
 import { MESES_OPCOES } from "../../lib/periodos";
@@ -38,9 +39,13 @@ function listaDeNumeros(valor: string | null): number[] {
 }
 
 export function ResultadoAnalitico() {
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [opcoes, setOpcoes] = useState<OpcoesFiltro | null>(null);
+  // 403 = autenticado mas não gerencia nenhum departamento com grupo contábil configurado (a
+  // tela deixou de ser admin-only em 25/08/2026 — ver domain/contabilDominio.ts).
+  const [semAcesso, setSemAcesso] = useState(false);
   // Bump depois de "Atualizar" (SincronizacaoStatus) — vira `key` da aba ativa pra forçar
   // remount e cada aba refazer sua própria busca, sem precisar tocar no código interno delas.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -48,7 +53,12 @@ export function ResultadoAnalitico() {
     setRefreshKey((k) => k + 1);
   }
 
-  const visaoInicial = VISOES.some((v) => v.value === searchParams.get("visao")) ? (searchParams.get("visao") as Visao) : "matriz";
+  // Centro de Custo continua admin-only (não tem dimensão de despar/departamento hoje — ver
+  // plano) — some da lista de abas pra quem não é admin, inclusive blindando `?visao=cc`
+  // digitado manualmente na URL.
+  const visoesVisiveis = user?.role === "admin" ? VISOES : VISOES.filter((v) => v.value !== "cc");
+  const visaoDaUrl = searchParams.get("visao");
+  const visaoInicial = visoesVisiveis.some((v) => v.value === visaoDaUrl) ? (visaoDaUrl as Visao) : "matriz";
   const [visao, setVisao] = useState<Visao>(visaoInicial);
 
   // Ano e mês são multi-seleção — dá pra comparar vários anos lado a lado (cada
@@ -79,8 +89,13 @@ export function ResultadoAnalitico() {
   useEffect(() => {
     axios
       .get("/api/contabil/resultado/opcoes-filtro")
-      .then(({ data }) => setOpcoes(data))
-      .catch(() => {});
+      .then(({ data }) => {
+        setOpcoes(data);
+        setSemAcesso(false);
+      })
+      .catch((err) => {
+        if (err.response?.status === 403) setSemAcesso(true);
+      });
   }, []);
 
   // Todo filtro + a aba ativa ficam na URL — reabrir o link (ou dar F5) volta exatamente
@@ -109,7 +124,23 @@ export function ResultadoAnalitico() {
   const mostrarGrupo = visao !== "cc";
   const mostrarMeses = visao !== "dash";
   const mostrarCentroCusto = visao !== "dash";
-  const mostrarIncluirSemGrupo = visao === "matriz" || visao === "orcado";
+  // Pra não-admin, `grupos` nunca chega como null no backend (ver gruposPermitidos em
+  // routes/contabil.ts) — o checkbox nunca muda nada nesse caso, então some da tela.
+  const mostrarIncluirSemGrupo = (visao === "matriz" || visao === "orcado") && user?.role === "admin";
+
+  if (semAcesso) {
+    return (
+      <div>
+        <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
+          Contábil · Resultado Analítico
+        </p>
+        <p className="rounded-md border border-border bg-surface p-6 text-sm text-muted">
+          Esta área é só para quem gerencia algum departamento com grupo contábil configurado. Fale com um
+          administrador se você acha que deveria ter acesso.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -119,7 +150,7 @@ export function ResultadoAnalitico() {
       </div>
 
       <div className="mb-6 flex flex-wrap gap-1 rounded-md border border-border p-1" style={{ width: "fit-content" }}>
-        {VISOES.map((v) => (
+        {visoesVisiveis.map((v) => (
           <button
             key={v.value}
             onClick={() => setVisao(v.value)}

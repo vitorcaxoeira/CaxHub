@@ -1,7 +1,9 @@
 import { Router } from "express";
-import { requireAuth, requireRole } from "../auth/middleware";
+import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { SITRAT_CONTABILIZADO, defgruBucket } from "../domain/contabilDominio";
+import { resolverContextoConsultor, gestorNomePorDepartamento, type ContextoConsultor } from "../domain/contextoProjeto";
+import { depexeLabel } from "../domain/propostasDominio";
 import { parseIntListParam } from "../lib/queryParams";
 import {
   montarMatrizResultado,
@@ -12,9 +14,12 @@ import {
 import { runSincronizacaoContabil, sincronizacaoContabilEmAndamento } from "../sync/contabilSyncOrchestrator";
 
 export const contabilRouter = Router();
-// v1: só admin. O gancho pro "gestor vê só seu departamento" é o filtro de grupo (`despar`)
-// + DESPAR_PARA_DEPEXE em contabilDominio.ts — ainda não ligado ao papel do usuário.
-contabilRouter.use(requireAuth, requireRole("admin"));
+// Só autenticado — quem vê O QUÊ é decidido rota a rota por gruposPermitidos/gruposConsultados
+// abaixo (mesmo padrão de departamentosPermitidos em routes/alocacao.ts): admin sem restrição,
+// gestor só os despar dos departamentos que gerencia (tabela DepartamentoGrupoContabil,
+// administrada em Administração > Departamento x Grupo Contábil). /centros-custo,
+// /sincronizacao e /departamentos-grupos continuam admin-only via requireRole na própria rota.
+contabilRouter.use(requireAuth);
 
 function parseStringListParam(value: unknown): string[] | null {
   if (typeof value !== "string" || value === "") return null;
@@ -30,6 +35,43 @@ function handleError(res: import("express").Response, error: unknown, label: str
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[contabil:${label}]`, message);
   res.status(500).json({ error: message });
+}
+
+// ---------- Contexto de autorização por departamento (mesmo padrão de alocacao.ts) ----------
+async function contextoDoUsuario(req: AuthenticatedRequest) {
+  const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+  if (!user) return null;
+  const contexto = await resolverContextoConsultor(user.email);
+  return { user, contexto, role: req.user!.role as string };
+}
+
+const MENSAGEM_SEM_GRUPOS =
+  "Você não gerencia nenhum departamento com grupo contábil configurado nesta tela. Fale com um administrador se acha que deveria ter acesso.";
+
+// Grupos (despar) que o usuário pode ver/filtrar, lidos de DepartamentoGrupoContabil (config
+// 100% nativa do CaxHub, editada em Administração > Departamento x Grupo Contábil — nunca uma
+// constante em código). Admin: null = sem restrição — as queries de valor já tratam
+// `$N::text[] IS NULL` como "não filtra", então null preserva o comportamento de hoje
+// (inclusive "incluir contas sem grupo", que depende de null pra não colidir com o filtro de
+// despar). Gestor: NUNCA null — a lista de despar dos departamentos que gerencia; pode vir vazia
+// (departamento sem grupo contábil configurado ainda).
+async function gruposPermitidos(role: string, contexto: ContextoConsultor): Promise<string[] | null> {
+  if (role === "admin") return null;
+  const { consultor, departamentosGerenciados } = contexto;
+  if (!consultor || departamentosGerenciados.length === 0) return [];
+  const rows = await prisma.departamentoGrupoContabil.findMany({
+    where: { codemp: consultor.codemp, depexe: { in: departamentosGerenciados } },
+    select: { despar: true },
+  });
+  return [...new Set(rows.map((r) => r.despar))];
+}
+
+// Intersecta o que o cliente pediu (`grupo=...`) com o que ele pode ver. Sem pedido explícito:
+// admin cai em null (sem filtro, igual hoje); gestor cai no próprio `permitidos` (o recorte dele
+// já É o default — nunca "todos"). Nunca confia no valor cru do cliente.
+function gruposConsultados(permitidos: string[] | null, pedido: string[] | null): string[] | null {
+  if (permitidos === null) return pedido;
+  return pedido != null ? pedido.filter((g) => permitidos.includes(g)) : permitidos;
 }
 
 // ---------- Período (ano×mês) — compartilhado por todos os endpoints de valor ----------
@@ -117,8 +159,20 @@ async function buscarContasMetadata(): Promise<ContaParaMatriz[]> {
 }
 
 // ---------- Opções de filtro ----------
-contabilRouter.get("/resultado/opcoes-filtro", async (_req, res) => {
+contabilRouter.get("/resultado/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
   try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await gruposPermitidos(role, contexto);
+    if (permitidos != null && permitidos.length === 0) {
+      res.status(403).json({ error: MENSAGEM_SEM_GRUPOS });
+      return;
+    }
+
     const [anosRows, gruposRows, niveisRows, centrosCusto] = await Promise.all([
       prisma.$queryRaw<{ ano: number }[]>`
         SELECT DISTINCT EXTRACT(YEAR FROM datlct)::int AS ano
@@ -150,7 +204,9 @@ contabilRouter.get("/resultado/opcoes-filtro", async (_req, res) => {
 
     res.json({
       anos: anosRows.map((r) => r.ano),
-      grupos: gruposRows.map((r) => ({ value: r.despar, label: r.despar })),
+      grupos: gruposRows
+        .filter((r) => permitidos == null || permitidos.includes(r.despar))
+        .map((r) => ({ value: r.despar, label: r.despar })),
       niveis: niveisRows.map((r) => r.nivel),
       centrosCusto: centrosCusto.map((c) => ({ value: c.codccu, label: `${c.codccu} - ${c.desccu}` })),
     });
@@ -160,10 +216,22 @@ contabilRouter.get("/resultado/opcoes-filtro", async (_req, res) => {
 });
 
 // ---------- Resultado Analítico (realizado por mês) ----------
-contabilRouter.get("/resultado", async (req, res) => {
+contabilRouter.get("/resultado", async (req: AuthenticatedRequest, res) => {
   try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await gruposPermitidos(role, contexto);
+    if (permitidos != null && permitidos.length === 0) {
+      res.status(403).json({ error: MENSAGEM_SEM_GRUPOS });
+      return;
+    }
+
     const periodo = lerFiltroPeriodo(req);
-    const grupos = parseStringListParam(req.query.grupo);
+    const grupos = gruposConsultados(permitidos, parseStringListParam(req.query.grupo));
     const centrosCusto = parseStringListParam(req.query.codccu);
     const incluirSemGrupo = parseBoolParam(req.query.incluirSemGrupo);
     // Níveis do plano visíveis na coluna Conta. Vazio/ausente = todos. Recorte só VISUAL: os
@@ -232,10 +300,22 @@ contabilRouter.get("/resultado", async (req, res) => {
 // (`montarMatrizResultado` não sabe nem precisa saber disso: ele só agrega o que vier no
 // vetor, então concatenar realizado+orçado num vetor de `numColunas*2` e fatiar depois é mais
 // simples que ensinar a função a lidar com "duas séries").
-contabilRouter.get("/orcado-realizado", async (req, res) => {
+contabilRouter.get("/orcado-realizado", async (req: AuthenticatedRequest, res) => {
   try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await gruposPermitidos(role, contexto);
+    if (permitidos != null && permitidos.length === 0) {
+      res.status(403).json({ error: MENSAGEM_SEM_GRUPOS });
+      return;
+    }
+
     const periodo = lerFiltroPeriodo(req);
-    const grupos = parseStringListParam(req.query.grupo);
+    const grupos = gruposConsultados(permitidos, parseStringListParam(req.query.grupo));
     const centrosCusto = parseStringListParam(req.query.codccu);
     const incluirSemGrupo = parseBoolParam(req.query.incluirSemGrupo);
     const niveisFiltro = parseIntListParam(req.query.niveis);
@@ -341,10 +421,22 @@ contabilRouter.get("/orcado-realizado", async (req, res) => {
 });
 
 // ---------- DRE Gerencial (cascata Receitas -> Despesas -> Resultado) ----------
-contabilRouter.get("/dre", async (req, res) => {
+contabilRouter.get("/dre", async (req: AuthenticatedRequest, res) => {
   try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await gruposPermitidos(role, contexto);
+    if (permitidos != null && permitidos.length === 0) {
+      res.status(403).json({ error: MENSAGEM_SEM_GRUPOS });
+      return;
+    }
+
     const periodo = lerFiltroPeriodo(req);
-    const grupos = parseStringListParam(req.query.grupo);
+    const grupos = gruposConsultados(permitidos, parseStringListParam(req.query.grupo));
     const centrosCusto = parseStringListParam(req.query.codccu);
 
     // DRE é sempre só contas com grupo gerencial — não faz sentido "incluir sem grupo" aqui
@@ -458,7 +550,11 @@ contabilRouter.get("/dre", async (req, res) => {
 });
 
 // ---------- Resultado por Centro de Custo ----------
-contabilRouter.get("/centros-custo", async (req, res) => {
+// Admin-only: esta aba não tem hoje nenhuma dimensão de despar/departamento (é a outra
+// dimensão da mesma SQL, centro de custo em vez de conta — ver comentário abaixo). Recortar por
+// departamento exigiria um JOIN novo com plano_contabil e mudaria o significado do total exibido
+// por CC; adiado até isso ser decidido com o Vitor (25/08/2026).
+contabilRouter.get("/centros-custo", requireRole("admin"), async (req, res) => {
   try {
     const periodo = lerFiltroPeriodo(req);
     const centrosCusto = parseStringListParam(req.query.codccu);
@@ -531,11 +627,23 @@ contabilRouter.get("/centros-custo", async (req, res) => {
 });
 
 // ---------- Dash: evolução multi-ano (YoY + acumulado por grupo) ----------
-contabilRouter.get("/evolucao", async (req, res) => {
+contabilRouter.get("/evolucao", async (req: AuthenticatedRequest, res) => {
   try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await gruposPermitidos(role, contexto);
+    if (permitidos != null && permitidos.length === 0) {
+      res.status(403).json({ error: MENSAGEM_SEM_GRUPOS });
+      return;
+    }
+
     const anoAtual = parseIntListParam(req.query.anos)?.[0] ?? new Date().getFullYear();
     const anoAnterior = anoAtual - 1;
-    const grupos = parseStringListParam(req.query.grupo);
+    const grupos = gruposConsultados(permitidos, parseStringListParam(req.query.grupo));
 
     const linhas = await prisma.$queryRawUnsafe<{ despar: string; ano: number; mes: number; valor: number }[]>(
       `
@@ -613,7 +721,7 @@ contabilRouter.get("/evolucao", async (req, res) => {
 // componente SincronizacaoStatus.
 const JOBS_CONTABIL = ["lancamentos_contabeis-sync", "rateios_lancamento-sync"];
 
-contabilRouter.get("/sincronizacao", async (_req, res) => {
+contabilRouter.get("/sincronizacao", requireRole("admin"), async (_req, res) => {
   try {
     const [ultimoLancamento, ultimoRateio] = await Promise.all(
       JOBS_CONTABIL.map((jobName) =>
@@ -639,7 +747,7 @@ contabilRouter.get("/sincronizacao", async (_req, res) => {
   }
 });
 
-contabilRouter.post("/sincronizacao", async (_req, res) => {
+contabilRouter.post("/sincronizacao", requireRole("admin"), async (_req, res) => {
   if (sincronizacaoContabilEmAndamento()) {
     res.status(409).json({ error: "Sincronização já em andamento" });
     return;
@@ -648,4 +756,68 @@ contabilRouter.post("/sincronizacao", async (_req, res) => {
     console.error("[sincronizacao-contabil] falhou:", error instanceof Error ? error.message : error);
   });
   res.status(202).json({ status: "iniciado" });
+});
+
+// ---------- Administração: Departamento x Grupo Contábil ----------
+// Config 100% nativa do CaxHub (tabela DepartamentoGrupoContabil) — liga cada departamento aos
+// grupos contábeis (despar) que ele representa. Nasceu semeada (migration
+// 20260825120000_departamento_grupo_contabil) a partir do mapeamento confirmado em 12/08/2026;
+// daqui em diante é editada só por aqui, sem precisar de deploy pra corrigir/estender.
+contabilRouter.get("/departamentos-grupos", requireRole("admin"), async (_req, res) => {
+  try {
+    const [gestores, mapeamentos, gruposRows] = await Promise.all([
+      prisma.departamentoGestor.findMany({ select: { codemp: true, depexe: true, usuges: true } }),
+      prisma.departamentoGrupoContabil.findMany(),
+      prisma.$queryRaw<{ despar: string }[]>`
+        SELECT DISTINCT despar
+        FROM plano_contabil
+        WHERE despar IS NOT NULL AND btrim(despar) <> ''
+        ORDER BY despar
+      `,
+    ]);
+
+    const gruposPorChave = new Map<string, string[]>();
+    for (const m of mapeamentos) {
+      const chave = `${m.codemp}-${m.depexe}`;
+      gruposPorChave.set(chave, [...(gruposPorChave.get(chave) ?? []), m.despar]);
+    }
+    const nomes = await gestorNomePorDepartamento(gestores.map((g) => ({ codemp: g.codemp, depexe: g.depexe })));
+
+    res.json({
+      departamentos: gestores
+        .map((g) => ({
+          codemp: g.codemp,
+          depexe: g.depexe,
+          depexeLabel: depexeLabel(g.depexe),
+          gestorNome: nomes.get(`${g.codemp}-${g.depexe}`) ?? null,
+          grupos: gruposPorChave.get(`${g.codemp}-${g.depexe}`) ?? [],
+        }))
+        .sort((a, b) => a.depexe - b.depexe),
+      gruposDisponiveis: gruposRows.map((r) => ({ value: r.despar, label: r.despar })),
+    });
+  } catch (error) {
+    handleError(res, error, "departamentos-grupos");
+  }
+});
+
+contabilRouter.put("/departamentos-grupos/:codemp/:depexe", requireRole("admin"), async (req, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const depexe = Number(req.params.depexe);
+    const despares = Array.isArray(req.body?.despares) ? (req.body.despares as string[]) : null;
+    if (!Number.isFinite(codemp) || !Number.isFinite(depexe) || despares === null) {
+      res.status(400).json({ error: "codemp, depexe e despares são obrigatórios" });
+      return;
+    }
+    await prisma.$transaction([
+      prisma.departamentoGrupoContabil.deleteMany({ where: { codemp, depexe } }),
+      prisma.departamentoGrupoContabil.createMany({
+        data: despares.map((despar) => ({ codemp, depexe, despar })),
+        skipDuplicates: true,
+      }),
+    ]);
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "departamentos-grupos:put");
+  }
 });

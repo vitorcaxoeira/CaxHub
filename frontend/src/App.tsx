@@ -31,6 +31,7 @@ import { RatVisualizacao } from "./pages/projetos/RatVisualizacao";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
+import { DepartamentoGrupoContabil } from "./pages/admin/DepartamentoGrupoContabil";
 import { ListarPedidos } from "./pages/mercado/ListarPedidos";
 import { PedidoVisualizacao } from "./pages/mercado/PedidoVisualizacao";
 import { AnaliseFaturamento } from "./pages/mercado/AnaliseFaturamento";
@@ -63,6 +64,11 @@ export default function App() {
               <Route path="/projetos/alocacao/:codemp/:codpro/cronograma" element={<CronogramaProposta />} />
               <Route path="/projetos/proposta/:codemp/:codpro" element={<PropostaVisualizacao />} />
               <Route path="/projetos/rat/:id" element={<RatVisualizacao />} />
+              {/* Sem RequireRole: "gestor de departamento" não é um Role (é derivado de
+                  DepartamentoGestor em runtime) — o backend decide o que cada um vê/faz e o
+                  frontend mostra uma tela "sem acesso" no 403. Mesmo padrão de Alocação/
+                  Aprovações/Jornadas/Auditoria acima. */}
+              <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
               </Route>
@@ -74,10 +80,10 @@ export default function App() {
                 <Route path="/financeiro/clientes" element={<Clientes />} />
                 <Route path="/financeiro/fluxo-caixa" element={<FluxoCaixa />} />
                 <Route path="/financeiro/historico" element={<Historico />} />
-                <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
                 <Route path="/admin/usuarios" element={<Usuarios />} />
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
+                <Route path="/admin/departamento-grupo-contabil" element={<DepartamentoGrupoContabil />} />
                 <Route path="/mercado/pedidos" element={<ListarPedidos />} />
                 <Route path="/mercado/pedido/:codemp/:codfil/:numped" element={<PedidoVisualizacao />} />
                 <Route path="/mercado/analise-faturamento" element={<AnaliseFaturamento />} />

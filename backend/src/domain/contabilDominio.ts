@@ -144,16 +144,8 @@ export function defgruBucket(defgru: string | null): { ordem: string; rotulo: st
   return DEFGRU_BUCKETS[defgru] ?? { ordem: "90", rotulo: defgruLabel(defgru) };
 }
 
-// "Conta Paralela" (PlanoContabil.despar) — hoje coincide 1:1 com departamento (mesmos
-// códigos de USU_LDepExe usados em Proposta.depexe/DEPEXE_LABELS). Confirmado no Senior
-// em 12/08/2026: cada despar cai só num depexe. Ainda NÃO usado pra RBAC — é o gancho
-// pronto pra "gestor só vê o resultado do próprio departamento", quando entrar.
-export const DESPAR_PARA_DEPEXE: Record<string, number> = {
-  ADM: 1, // Administrativo
-  COM: 2, // Comercial
-  SERP: 3, // Suporte ERP
-  SHCM: 4, // Suporte HCM
-  CERP: 8, // Consultoria ERP
-  CHCM: 9, // Consultoria HCM
-  DEV: 10, // Desenvolvimento
-};
+// "Conta Paralela" (PlanoContabil.despar) × departamento (USU_LDepExe): a relação já foi uma
+// constante fixa aqui (DESPAR_PARA_DEPEXE, removida em 25/08/2026) — virou dado, na tabela
+// DepartamentoGrupoContabil (100% nativa do CaxHub, editável em Administração > Departamento x
+// Grupo Contábil, sem precisar de deploy pra corrigir/estender). Ver gruposPermitidos em
+// routes/contabil.ts pra quem lê essa tabela pro RBAC por departamento.
