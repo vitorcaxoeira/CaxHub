@@ -64,11 +64,6 @@ export default function App() {
               <Route path="/projetos/alocacao/:codemp/:codpro/cronograma" element={<CronogramaProposta />} />
               <Route path="/projetos/proposta/:codemp/:codpro" element={<PropostaVisualizacao />} />
               <Route path="/projetos/rat/:id" element={<RatVisualizacao />} />
-              {/* Sem RequireRole: "gestor de departamento" não é um Role (é derivado de
-                  DepartamentoGestor em runtime) — o backend decide o que cada um vê/faz e o
-                  frontend mostra uma tela "sem acesso" no 403. Mesmo padrão de Alocação/
-                  Aprovações/Jornadas/Auditoria acima. */}
-              <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
               </Route>
@@ -80,6 +75,10 @@ export default function App() {
                 <Route path="/financeiro/clientes" element={<Clientes />} />
                 <Route path="/financeiro/fluxo-caixa" element={<FluxoCaixa />} />
                 <Route path="/financeiro/historico" element={<Historico />} />
+                {/* Temporariamente admin-only de novo (26/08/2026) — reverter pra fora deste
+                    bloco (mesmo padrão de Alocação/Aprovações, "gestor" não é um Role) quando o
+                    gestor for liberado (ver contabil.ts). */}
+                <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
                 <Route path="/admin/usuarios" element={<Usuarios />} />
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />

@@ -62,11 +62,10 @@ const groups: NavGroup[] = [
   },
   {
     label: "Contábil",
-    // Recorte por gestor de departamento ligado em 25/08/2026 (tabela DepartamentoGrupoContabil,
-    // administrada em Administração > Departamento x Grupo Contábil) — o gestor vê a tela com o
-    // filtro de grupos já restrito ao(s) departamento(s) dele; o admin continua vendo tudo.
-    items: [{ to: "/contabil/resultado-analitico", label: "Resultado Analítico", gestorOuAdmin: true }],
-    roles: "*",
+    // Temporariamente admin-only de novo (26/08/2026) — reverter pra roles: "*" + item com
+    // gestorOuAdmin: true quando o gestor for liberado (ver contabil.ts).
+    items: [{ to: "/contabil/resultado-analitico", label: "Resultado Analítico" }],
+    roles: ["admin"],
   },
   {
     label: "Mercado",
