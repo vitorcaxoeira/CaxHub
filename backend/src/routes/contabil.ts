@@ -30,6 +30,13 @@ function parseBoolParam(value: unknown): boolean {
   return value === "true" || value === "1";
 }
 
+// "clacta" (default) = Classificação da Conta oficial do Senior (fiel ao plano de contas de
+// origem); "ctared" = código reduzido mostrado no rótulo da linha. Ver comentário em
+// montarMatrizResultado (domain/matrizContabil.ts) pro porquê das duas opções.
+function parseCriterioOrdenacao(value: unknown): "clacta" | "ctared" {
+  return value === "ctared" ? "ctared" : "clacta";
+}
+
 function handleError(res: import("express").Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[contabil:${label}]`, message);
@@ -233,6 +240,7 @@ contabilRouter.get("/resultado", async (req: AuthenticatedRequest, res) => {
     const grupos = gruposConsultados(permitidos, parseStringListParam(req.query.grupo));
     const centrosCusto = parseStringListParam(req.query.codccu);
     const incluirSemGrupo = parseBoolParam(req.query.incluirSemGrupo);
+    const ordenarPor = parseCriterioOrdenacao(req.query.ordenarPor);
     // Níveis do plano visíveis na coluna Conta. Vazio/ausente = todos. Recorte só VISUAL: os
     // valores não mudam, os descendentes de um nível omitido sobem pro ancestral visível mais
     // próximo (ver montarMatrizResultado).
@@ -282,7 +290,7 @@ contabilRouter.get("/resultado", async (req: AuthenticatedRequest, res) => {
       );
     }
 
-    const { linhas, totalGeral } = montarMatrizResultado(contas, valoresPorCtared, periodo.numColunas, niveisVisiveis);
+    const { linhas, totalGeral } = montarMatrizResultado(contas, valoresPorCtared, periodo.numColunas, niveisVisiveis, ordenarPor);
 
     res.json({
       meses: periodo.colunas,
@@ -317,6 +325,7 @@ contabilRouter.get("/orcado-realizado", async (req: AuthenticatedRequest, res) =
     const grupos = gruposConsultados(permitidos, parseStringListParam(req.query.grupo));
     const centrosCusto = parseStringListParam(req.query.codccu);
     const incluirSemGrupo = parseBoolParam(req.query.incluirSemGrupo);
+    const ordenarPor = parseCriterioOrdenacao(req.query.ordenarPor);
     const niveisFiltro = parseIntListParam(req.query.niveis);
     const niveisVisiveis = niveisFiltro ? new Set(niveisFiltro) : null;
     const numColunas = periodo.numColunas;
@@ -393,7 +402,7 @@ contabilRouter.get("/orcado-realizado", async (req: AuthenticatedRequest, res) =
       empilharValor(valoresCombinados, linha.ctared, indice !== undefined ? indice + numColunas : undefined, linha.valor, numColunas * 2);
     }
 
-    const { linhas, totalGeral } = montarMatrizResultado(contas, valoresCombinados, numColunas * 2, niveisVisiveis);
+    const { linhas, totalGeral } = montarMatrizResultado(contas, valoresCombinados, numColunas * 2, niveisVisiveis, ordenarPor);
 
     // O componente de matriz (MatrizContabil.tsx) só entende um vetor `valores`/`total` por
     // linha — a fatia mostrada na tela troca conforme o seletor Realizado/Orçado/Variação, mas

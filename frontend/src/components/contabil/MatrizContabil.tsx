@@ -7,8 +7,10 @@ export interface LinhaMatrizContabil {
   chavePai: string | null;
   nivel: number;
   rotulo: string;
-  // "grupo" = Conta Paralela, "bucket" = Receitas/Despesas (defgru), "conta" = conta contábil.
-  tipo: "grupo" | "bucket" | "conta";
+  // "grupo" = Conta Paralela, "conta" = conta contábil (inclui os níveis reais 1-6 do plano,
+  // sem nível sintético Receitas/Despesas — removido em 26/08/2026, o próprio nível 1 real já
+  // cumpre esse papel).
+  tipo: "grupo" | "conta";
   /** Nível da conta no plano (E045PLA.NivCta); null em grupo/bucket. */
   nivelPlano: number | null;
   anasin: string | null;

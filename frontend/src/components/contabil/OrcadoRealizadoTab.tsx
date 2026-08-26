@@ -9,6 +9,7 @@ interface OrcadoRealizadoTabProps {
   grupos: string[];
   centrosCusto: string[];
   incluirSemGrupo: boolean;
+  ordenarPor: "clacta" | "ctared";
 }
 
 type Modo = "realizado" | "orcado" | "variacaoR" | "variacaoPct";
@@ -70,7 +71,15 @@ function aplicarModo(
   }
 }
 
-export function OrcadoRealizadoTab({ anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo }: OrcadoRealizadoTabProps) {
+export function OrcadoRealizadoTab({
+  anos,
+  meses,
+  niveis,
+  grupos,
+  centrosCusto,
+  incluirSemGrupo,
+  ordenarPor,
+}: OrcadoRealizadoTabProps) {
   const [modo, setModo] = useState<Modo>("realizado");
   const [resultado, setResultado] = useState<RespostaOrcadoRealizado>(RESULTADO_VAZIO);
   const [loading, setLoading] = useState(true);
@@ -85,6 +94,7 @@ export function OrcadoRealizadoTab({ anos, meses, niveis, grupos, centrosCusto, 
     if (grupos.length > 0) params.grupo = grupos.join(",");
     if (centrosCusto.length > 0) params.codccu = centrosCusto.join(",");
     if (incluirSemGrupo) params.incluirSemGrupo = "true";
+    if (ordenarPor !== "clacta") params.ordenarPor = ordenarPor;
     axios
       .get("/api/contabil/orcado-realizado", { params })
       .then(({ data }) => {
@@ -93,7 +103,7 @@ export function OrcadoRealizadoTab({ anos, meses, niveis, grupos, centrosCusto, 
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar orçado x realizado"))
       .finally(() => setLoading(false));
-  }, [anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo]);
+  }, [anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor]);
 
   const linhasNoModo = useMemo(
     () =>

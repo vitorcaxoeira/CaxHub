@@ -2,8 +2,9 @@
 // rota porque é lógica de negócio (agregação em árvore), não parsing de request.
 //
 // Duas árvores hoje, montadas em cima do MESMO construtor genérico (`criarConstrutorArvore`):
-// contas (`montarMatrizResultado`, com Grupo→Receitas/Despesas→níveis do plano) e centro de
-// custo (`montarMatrizCentroCusto`, direto pelos níveis de CC, sem grupo/bucket).
+// contas (`montarMatrizResultado`, Grupo→níveis reais do plano — sem bucket sintético desde
+// 26/08/2026, ver comentário na função) e centro de custo (`montarMatrizCentroCusto`, direto
+// pelos níveis de CC, sem grupo).
 //
 // A árvore de contas é montada A PARTIR DAS FOLHAS ("leaf-driven"), que é como o relatório de
 // origem faz: a conta que recebeu o lançamento carrega o grupo gerencial (`despar`) e o grupo
@@ -21,12 +22,11 @@
 //      relatório de origem, nem marca essa conta; a divergência entre as duas fontes são só 2
 //      contas sintéticas, ambas sem lançamento, então nenhum VALOR estava errado — só a estrutura.)
 //
-// Hierarquia de contas: Grupo (despar) → bucket Receitas/Despesas (defgru) → níveis da conta.
+// Hierarquia de contas: Grupo (despar) → níveis reais da conta (o próprio nível 1 do plano —
+// 173-RECEITAS/220-DESPESAS, anasin='S' — já cumpre o papel que era do bucket sintético).
 // Hierarquia de CC: níveis do centro de custo direto (raiz = nível 1 de verdade do plano de CC).
 
-import { defgruBucket } from "./contabilDominio";
-
-export type TipoLinhaMatriz = "grupo" | "bucket" | "conta";
+export type TipoLinhaMatriz = "grupo" | "conta";
 
 export interface LinhaMatrizResultado {
   chave: string;
@@ -160,7 +160,14 @@ export function montarMatrizResultado(
   contas: ContaParaMatriz[],
   valoresPorCtared: Map<number, number[]>,
   numColunas: number,
-  niveisVisiveis?: Set<number> | null
+  niveisVisiveis?: Set<number> | null,
+  // "clacta" (default) = Classificação da Conta oficial do Senior, mesmo campo que já define a
+  // hierarquia pai/filho — é o critério fiel ao plano de contas de origem, validado célula a
+  // célula em 12/08/2026. "ctared" ordena pelo código reduzido/técnico mostrado no rótulo da
+  // linha (`${ctared} - ${descta}`) — mais fácil de conferir a olho, mas não é a classificação
+  // oficial (pedido explícito do Vitor, 26/08/2026, depois de comparar as duas ordens contra
+  // dado real).
+  criterioOrdenacao: "clacta" | "ctared" = "clacta"
 ): { linhas: LinhaMatrizResultado[]; totalGeral: number[] } {
   const porCtared = new Map(contas.map((c) => [c.ctared, c]));
   const arvore = criarConstrutorArvore(numColunas);
@@ -181,7 +188,6 @@ export function montarMatrizResultado(
     const nivelDoPlano = (c: ContaParaMatriz, indice: number) => c.nivcta ?? indice + 1;
     const cadeiaVisivel = cadeia.filter((c, i) => niveisVisiveis == null || niveisVisiveis.has(nivelDoPlano(c, i)));
 
-    const bucket = defgruBucket(conta.defgru);
     const chaveGrupo = `g:${conta.despar}`;
     arvore.garantirNo(chaveGrupo, null, {
       nivel: 0,
@@ -191,30 +197,26 @@ export function montarMatrizResultado(
       anasin: null,
       ordenacao: conta.despar,
     });
-    const chaveBucket = `${chaveGrupo}|b:${bucket.ordem}`;
-    arvore.garantirNo(chaveBucket, chaveGrupo, {
-      nivel: 1,
-      rotulo: `${bucket.ordem} - ${bucket.rotulo}`,
-      tipo: "bucket",
-      nivelPlano: null,
-      anasin: null,
-      ordenacao: bucket.ordem,
-    });
 
-    // O caminho carrega o grupo, então a MESMA conta aparece em grupos diferentes como nós
-    // distintos — é o que faz "4 - DESPESAS" existir dentro de ADM, COM, SERP… cada um com o
-    // valor do seu próprio grupo.
-    const caminho = [chaveGrupo, chaveBucket];
+    // Sem nível sintético Receitas/Despesas (removido em 26/08/2026): os próprios nós reais de
+    // nível 1 do plano (173-RECEITAS, 220-DESPESAS, anasin='S') já cumprem esse papel — o bucket
+    // sintético só duplicava o total deles com outro rótulo. O caminho carrega o grupo, então a
+    // MESMA conta aparece em grupos diferentes como nós distintos — é o que faz "4 - DESPESAS"
+    // existir dentro de ADM, COM, SERP… cada um com o valor do seu próprio grupo.
+    const caminho = [chaveGrupo];
     cadeiaVisivel.forEach((c, i) => {
       const chavePai = caminho[caminho.length - 1];
       const chave = `${chavePai}|c:${c.ctared}`;
       arvore.garantirNo(chave, chavePai, {
-        nivel: 2 + i,
+        nivel: 1 + i,
         rotulo: `${c.ctared} - ${c.descta}`,
         tipo: "conta",
         nivelPlano: c.nivcta ?? null,
         anasin: c.anasin,
-        ordenacao: c.clacta,
+        // zero-pad: ordenacao é string (localeCompare em emitirTodos) — sem padding, "9" ficaria
+        // depois de "10" na comparação lexicográfica. 10 dígitos é folgado pro tamanho real de
+        // ctared.
+        ordenacao: criterioOrdenacao === "ctared" ? String(c.ctared).padStart(10, "0") : c.clacta,
       });
       caminho.push(chave);
     });

@@ -9,6 +9,7 @@ interface MatrizTabProps {
   grupos: string[];
   centrosCusto: string[];
   incluirSemGrupo: boolean;
+  ordenarPor: "clacta" | "ctared";
 }
 
 interface RespostaResultado {
@@ -19,7 +20,7 @@ interface RespostaResultado {
 
 const RESULTADO_VAZIO: RespostaResultado = { meses: [], linhas: [], totalGeral: { valores: [], total: 0 } };
 
-export function MatrizTab({ anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo }: MatrizTabProps) {
+export function MatrizTab({ anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor }: MatrizTabProps) {
   const [resultado, setResultado] = useState<RespostaResultado>(RESULTADO_VAZIO);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -33,6 +34,7 @@ export function MatrizTab({ anos, meses, niveis, grupos, centrosCusto, incluirSe
     if (grupos.length > 0) params.grupo = grupos.join(",");
     if (centrosCusto.length > 0) params.codccu = centrosCusto.join(",");
     if (incluirSemGrupo) params.incluirSemGrupo = "true";
+    if (ordenarPor !== "clacta") params.ordenarPor = ordenarPor;
     axios
       .get("/api/contabil/resultado", { params })
       .then(({ data }) => {
@@ -41,7 +43,7 @@ export function MatrizTab({ anos, meses, niveis, grupos, centrosCusto, incluirSe
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar o resultado analítico"))
       .finally(() => setLoading(false));
-  }, [anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo]);
+  }, [anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor]);
 
   return (
     <div>

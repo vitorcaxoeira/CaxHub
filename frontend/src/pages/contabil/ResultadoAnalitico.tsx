@@ -79,12 +79,26 @@ export function ResultadoAnalitico() {
     const mesAtual = new Date().getMonth() + 1;
     return Array.from({ length: mesAtual }, (_, i) => i + 1);
   });
-  // Níveis do plano visíveis na hierarquia da coluna Conta. Vazio = todos. Recorte só visual:
-  // omitir um nível não muda valor nenhum, os descendentes sobem pro ancestral visível.
-  const [niveis, setNiveis] = useState<number[]>(() => listaDeNumeros(searchParams.get("niveis")));
+  // Níveis do plano visíveis na hierarquia da coluna Conta. Recorte só visual: omitir um nível
+  // não muda valor nenhum, os descendentes sobem pro ancestral visível mais próximo. Estado
+  // INICIAL (tela recém-aberta, sem nada na URL) cai em [1, 5, 6] — nível 1 (o total de
+  // Receitas/Despesas, real desde que o bucket sintético saiu em 26/08/2026) + níveis 5-6 (onde a
+  // categoria de gasto/receita se diferencia), pulando os agregadores intermediários 2-4. Mesmo
+  // idioma de "default esperto, não vazio genérico" já usado em anos/meses acima.
+  const [niveis, setNiveis] = useState<number[]>(() => {
+    const daUrl = listaDeNumeros(searchParams.get("niveis"));
+    return daUrl.length > 0 ? daUrl : [1, 5, 6];
+  });
   const [grupos, setGrupos] = useState<string[]>(() => searchParams.get("grupo")?.split(",").filter(Boolean) ?? []);
   const [centrosCusto, setCentrosCusto] = useState<string[]>(() => searchParams.get("codccu")?.split(",").filter(Boolean) ?? []);
   const [incluirSemGrupo, setIncluirSemGrupo] = useState(searchParams.get("incluirSemGrupo") === "true");
+  // "clacta" (default) = Classificação da Conta oficial do Senior, mesma que já define a
+  // hierarquia pai/filho — fiel ao plano de contas de origem. "ctared" = código reduzido/técnico
+  // mostrado no rótulo da linha, mais fácil de conferir a olho mas não é a classificação oficial
+  // (seletor pedido pelo Vitor em 26/08/2026, depois de comparar as duas ordens contra dado real).
+  const [ordenarPor, setOrdenarPor] = useState<"clacta" | "ctared">(() =>
+    searchParams.get("ordenarPor") === "ctared" ? "ctared" : "clacta"
+  );
 
   useEffect(() => {
     axios
@@ -107,8 +121,9 @@ export function ResultadoAnalitico() {
     if (grupos.length > 0) params.grupo = grupos.join(",");
     if (centrosCusto.length > 0) params.codccu = centrosCusto.join(",");
     if (incluirSemGrupo) params.incluirSemGrupo = "true";
+    if (ordenarPor !== "clacta") params.ordenarPor = ordenarPor;
     setSearchParams(params, { replace: true });
-  }, [visao, anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, setSearchParams]);
+  }, [visao, anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor, setSearchParams]);
 
   const opcoesAnos = useMemo(() => {
     const todos = new Set([...(opcoes?.anos ?? []), ...anos]);
@@ -127,6 +142,7 @@ export function ResultadoAnalitico() {
   // Pra não-admin, `grupos` nunca chega como null no backend (ver gruposPermitidos em
   // routes/contabil.ts) — o checkbox nunca muda nada nesse caso, então some da tela.
   const mostrarIncluirSemGrupo = (visao === "matriz" || visao === "orcado") && user?.role === "admin";
+  const mostrarOrdenarPor = visao === "matriz" || visao === "orcado";
 
   if (semAcesso) {
     return (
@@ -217,6 +233,29 @@ export function ResultadoAnalitico() {
             Incluir contas sem grupo
           </label>
         )}
+
+        {mostrarOrdenarPor && (
+          <div className="flex items-center gap-1 rounded-md border border-border p-1">
+            {(
+              [
+                { value: "clacta", label: "Classificação" },
+                { value: "ctared", label: "Nro. Conta" },
+              ] as const
+            ).map((opcao) => (
+              <button
+                key={opcao.value}
+                onClick={() => setOrdenarPor(opcao.value)}
+                className={`rounded px-2.5 py-1 text-[12px] font-medium transition ${
+                  ordenarPor === opcao.value
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted hover:bg-surface-2 hover:text-foreground"
+                }`}
+              >
+                {opcao.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {visao === "matriz" && (
@@ -228,6 +267,7 @@ export function ResultadoAnalitico() {
           grupos={grupos}
           centrosCusto={centrosCusto}
           incluirSemGrupo={incluirSemGrupo}
+          ordenarPor={ordenarPor}
         />
       )}
       {visao === "orcado" && (
@@ -239,6 +279,7 @@ export function ResultadoAnalitico() {
           grupos={grupos}
           centrosCusto={centrosCusto}
           incluirSemGrupo={incluirSemGrupo}
+          ordenarPor={ordenarPor}
         />
       )}
       {visao === "dre" && <DreTab key={refreshKey} anos={anos} meses={meses} grupos={grupos} centrosCusto={centrosCusto} />}
