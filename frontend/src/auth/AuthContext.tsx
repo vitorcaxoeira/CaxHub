@@ -46,6 +46,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, [token]);
 
+  // Renovação por deslizamento + auto-logout (27/08/2026) — primeiro interceptor global de
+  // resposta do projeto, registrado uma vez. Backend (requireAuth) manda um token novo no header
+  // X-Renewed-Token quando o atual já passou da metade da vida útil; aqui só troca ele
+  // silenciosamente (localStorage + header padrão + estado). Se um 401 real chegar (token
+  // expirou de vez), desloga — sem precisar de useNavigate (AuthProvider fica fora do
+  // BrowserRouter): ProtectedRoute.tsx já observa `token` do contexto e redireciona pro /login
+  // sozinho assim que ele vira null, mesmo mecanismo que o logout() manual já usa.
+  useEffect(() => {
+    const id = axios.interceptors.response.use(
+      (response) => {
+        const renovado = response.headers["x-renewed-token"];
+        if (renovado) {
+          localStorage.setItem("token", renovado);
+          axios.defaults.headers.common.Authorization = `Bearer ${renovado}`;
+          setToken(renovado);
+        }
+        return response;
+      },
+      (error) => {
+        // Só desloga se já havia sessão — não reage a 401 de chamada anônima (ex.: login errado).
+        if (error.response?.status === 401 && localStorage.getItem("token")) {
+          localStorage.removeItem("token");
+          setToken(null);
+          setUser(null);
+        }
+        return Promise.reject(error);
+      }
+    );
+    return () => axios.interceptors.response.eject(id);
+  }, []);
+
   function login(newToken: string, newUser: AuthUser) {
     localStorage.setItem("token", newToken);
     setToken(newToken);

@@ -1,8 +1,9 @@
 import { NextFunction, Request, Response } from "express";
-import { verifyToken, TokenPayload } from "./jwt";
+import { verifyToken, talvezRenovar, TokenPayload } from "./jwt";
 
 export interface AuthenticatedRequest extends Request {
-  user?: TokenPayload;
+  // Sempre Required (iat/exp inclusos) na prática — vem só de verifyToken, que já devolve assim.
+  user?: Required<TokenPayload>;
   // Preenchido por attachCorrelationId (backend/src/audit/correlationId.ts), registrado
   // globalmente em server.ts antes de qualquer router — disponível em toda rota.
   correlationId?: string;
@@ -19,6 +20,11 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
 
   try {
     req.user = verifyToken(token);
+    // Renovação por deslizamento (27/08/2026): se o token já passou da metade da vida útil,
+    // devolve um novo no header — o frontend troca sozinho (ver AuthContext.tsx). Mantém a
+    // sessão viva pra quem está de fato usando o app, sem refresh token separado.
+    const renovado = talvezRenovar(req.user);
+    if (renovado) res.setHeader("X-Renewed-Token", renovado);
     next();
   } catch {
     res.status(401).json({ error: "Token inválido ou expirado" });
