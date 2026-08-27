@@ -37,6 +37,24 @@ function parseCriterioOrdenacao(value: unknown): "clacta" | "ctared" {
   return value === "ctared" ? "ctared" : "clacta";
 }
 
+// Sinal do realizado — tradução da medida DAX "Valor_Contabil" (Power BI) fornecida pelo Vitor
+// em 27/08/2026. Regra geral: crédito soma, débito subtrai — EXCETO contas de despesa (defgru=D)
+// com natureza Credora (natcta=C, ex. "Ganho Tributário Faturamento Senior" 762/763/776), que
+// sempre somam (é um ganho/redução de despesa, independente do lado do lançamento no Senior).
+// `Grupo`/`Natureza` na DAX são da CONTA-FOLHA que recebeu o lançamento (confirmado no SQL base
+// do BI: `Conta_Contabil.Grupo/Natureza` casam por `a.ctared = Fato.Conta` com `a.anasin='A'`),
+// nunca de um ancestral — por isso não precisa do nível sintético Receitas/Despesas removido em
+// 26/08/2026, `pc.defgru`/`pc.natcta` da própria conta já bastam. Validado célula a célula: só
+// essas 3 contas divergem da fórmula antiga (só debcre); nenhuma outra combinação muda de sinal.
+// Usada como template literal em toda query que soma `rateios_lancamento.vlrrat` (join com
+// `plano_contabil pc` obrigatório).
+const FORMULA_VALOR_REALIZADO = `CASE
+    WHEN pc.defgru = 'R' AND r.debcre = 'D' THEN -r.vlrrat
+    WHEN pc.defgru = 'D' AND pc.natcta = 'C' AND r.debcre = 'C' THEN r.vlrrat
+    WHEN pc.defgru = 'D' AND pc.natcta = 'D' AND r.debcre = 'D' THEN -r.vlrrat
+    ELSE r.vlrrat
+  END`;
+
 function handleError(res: import("express").Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[contabil:${label}]`, message);
@@ -256,7 +274,7 @@ contabilRouter.get("/resultado", async (req: AuthenticatedRequest, res) => {
       SELECT r.ctared AS ctared,
              EXTRACT(YEAR FROM r.datlct)::int AS ano,
              EXTRACT(MONTH FROM r.datlct)::int AS mes,
-             SUM(CASE WHEN r.debcre = 'C' THEN r.vlrrat ELSE -r.vlrrat END)::float8 AS valor
+             SUM(${FORMULA_VALOR_REALIZADO})::float8 AS valor
       FROM rateios_lancamento r
       JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
       WHERE r.sitrat = $1
@@ -338,7 +356,7 @@ contabilRouter.get("/orcado-realizado", async (req: AuthenticatedRequest, res) =
         SELECT r.ctared AS ctared,
                EXTRACT(YEAR FROM r.datlct)::int AS ano,
                EXTRACT(MONTH FROM r.datlct)::int AS mes,
-               SUM(CASE WHEN r.debcre = 'C' THEN r.vlrrat ELSE -r.vlrrat END)::float8 AS valor
+               SUM(${FORMULA_VALOR_REALIZADO})::float8 AS valor
         FROM rateios_lancamento r
         JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
         WHERE r.sitrat = $1
@@ -455,7 +473,7 @@ contabilRouter.get("/dre", async (req: AuthenticatedRequest, res) => {
         SELECT pc.defgru AS defgru,
                EXTRACT(YEAR FROM r.datlct)::int AS ano,
                EXTRACT(MONTH FROM r.datlct)::int AS mes,
-               SUM(CASE WHEN r.debcre = 'C' THEN r.vlrrat ELSE -r.vlrrat END)::float8 AS valor
+               SUM(${FORMULA_VALOR_REALIZADO})::float8 AS valor
         FROM rateios_lancamento r
         JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
         WHERE r.sitrat = $1
@@ -481,7 +499,7 @@ contabilRouter.get("/dre", async (req: AuthenticatedRequest, res) => {
         SELECT btrim(pc.despar) AS despar,
                EXTRACT(YEAR FROM r.datlct)::int AS ano,
                EXTRACT(MONTH FROM r.datlct)::int AS mes,
-               SUM(CASE WHEN r.debcre = 'C' THEN r.vlrrat ELSE -r.vlrrat END)::float8 AS valor
+               SUM(${FORMULA_VALOR_REALIZADO})::float8 AS valor
         FROM rateios_lancamento r
         JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
         WHERE r.sitrat = $1
@@ -559,9 +577,10 @@ contabilRouter.get("/dre", async (req: AuthenticatedRequest, res) => {
 
 // ---------- Resultado por Centro de Custo ----------
 // Admin-only: esta aba não tem hoje nenhuma dimensão de despar/departamento (é a outra
-// dimensão da mesma SQL, centro de custo em vez de conta — ver comentário abaixo). Recortar por
-// departamento exigiria um JOIN novo com plano_contabil e mudaria o significado do total exibido
-// por CC; adiado até isso ser decidido com o Vitor (25/08/2026).
+// dimensão da mesma SQL, centro de custo em vez de conta — ver comentário abaixo). O JOIN com
+// plano_contabil (27/08/2026) existe só pra ler defgru/natcta pra fórmula de sinal do realizado —
+// filtrar por despar/departamento aqui ainda mudaria o significado do total exibido por CC;
+// adiado até isso ser decidido com o Vitor (25/08/2026).
 contabilRouter.get("/centros-custo", requireRole("admin"), async (req, res) => {
   try {
     const periodo = lerFiltroPeriodo(req);
@@ -587,14 +606,18 @@ contabilRouter.get("/centros-custo", requireRole("admin"), async (req, res) => {
 
     // Realizado por CC, cruzando SÓ com sitrat/data — sem filtro de despar/grupo, de propósito:
     // esta aba é a outra dimensão da mesma SQL (centro de custo, não conta), e não deve herdar
-    // o recorte de "Conta Paralela" que só faz sentido do lado da conta.
+    // o recorte de "Conta Paralela" que só faz sentido do lado da conta. O JOIN com
+    // plano_contabil (27/08/2026) é só pra ler defgru/natcta — entram na fórmula de sinal do
+    // realizado (FORMULA_VALOR_REALIZADO), não reintroduz filtro de despar/grupo nenhum. Sem
+    // órfão: todo ctared de rateios_lancamento existe em plano_contabil (conferido no banco).
     const valoresLeaf = await prisma.$queryRawUnsafe<{ codccu: string; ano: number; mes: number; valor: number }[]>(
       `
       SELECT r.codccu AS codccu,
              EXTRACT(YEAR FROM r.datlct)::int AS ano,
              EXTRACT(MONTH FROM r.datlct)::int AS mes,
-             SUM(CASE WHEN r.debcre = 'C' THEN r.vlrrat ELSE -r.vlrrat END)::float8 AS valor
+             SUM(${FORMULA_VALOR_REALIZADO})::float8 AS valor
       FROM rateios_lancamento r
+      JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
       WHERE r.sitrat = $1
         AND r.removido_em_senior IS NULL
         AND r.datlct >= $2::date AND r.datlct < $3::date
@@ -658,7 +681,7 @@ contabilRouter.get("/evolucao", async (req: AuthenticatedRequest, res) => {
       SELECT btrim(pc.despar) AS despar,
              EXTRACT(YEAR FROM r.datlct)::int AS ano,
              EXTRACT(MONTH FROM r.datlct)::int AS mes,
-             SUM(CASE WHEN r.debcre = 'C' THEN r.vlrrat ELSE -r.vlrrat END)::float8 AS valor
+             SUM(${FORMULA_VALOR_REALIZADO})::float8 AS valor
       FROM rateios_lancamento r
       JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
       WHERE r.sitrat = $1
