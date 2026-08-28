@@ -133,10 +133,25 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
       setEhGestorOuAdmin(true);
       return;
     }
+    // Guarda de "efeito superado" (28/08/2026) — mesma classe de corrida já corrigida em
+    // AuthContext.tsx (ver interceptor-global-precisa-validar-identidade-da-requisicao):
+    // este efeito dispara de novo toda vez que `user` muda (login/logout/troca de conta).
+    // Sem isso, a resposta de /meu-perfil de uma sessão ANTERIOR (ex.: um gestor) podia
+    // chegar depois de já estar logado como outra pessoa e marcar `ehGestorOuAdmin` errado
+    // pra sessão nova — foi assim que o menu Contábil apareceu pro Edson, que não gerencia
+    // departamento nenhum.
+    let cancelado = false;
     axios
       .get("/api/dashboard/meu-perfil")
-      .then(({ data }) => setEhGestorOuAdmin((data.departamentosGerenciados ?? []).length > 0))
-      .catch(() => setEhGestorOuAdmin(false));
+      .then(({ data }) => {
+        if (!cancelado) setEhGestorOuAdmin((data.departamentosGerenciados ?? []).length > 0);
+      })
+      .catch(() => {
+        if (!cancelado) setEhGestorOuAdmin(false);
+      });
+    return () => {
+      cancelado = true;
+    };
   }, [user]);
 
   const visibleGroups = groups
