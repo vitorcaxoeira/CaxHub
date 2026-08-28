@@ -19,8 +19,11 @@ export const contabilRouter = Router();
 // gestor só os despar dos departamentos que gerencia (tabela DepartamentoGrupoContabil,
 // administrada em Administração > Departamento x Grupo Contábil). Reaberto em 28/08/2026 —
 // tinha sido restrito a admin temporariamente em 26/08/2026 (commit 3398f74) enquanto o
-// mapeamento era configurado; já está populado de verdade (29 mapeamentos). /centros-custo,
-// /sincronizacao e /departamentos-grupos continuam admin-only via requireRole na própria rota.
+// mapeamento era configurado; já está populado de verdade (29 mapeamentos). /centros-custo e
+// /departamentos-grupos continuam admin-only via requireRole na própria rota; /sincronizacao
+// abriu pra admin OU gestor de qualquer departamento em 28/08/2026 (ver
+// podeGerenciarSincronizacaoContabil, mais abaixo — "gestor" não é um Role estático, por isso
+// não dá pra usar requireRole ali).
 contabilRouter.use(requireAuth);
 
 function parseStringListParam(value: unknown): string[] | null {
@@ -755,8 +758,26 @@ contabilRouter.get("/evolucao", async (req: AuthenticatedRequest, res) => {
 // componente SincronizacaoStatus.
 const JOBS_CONTABIL = ["lancamentos_contabeis-sync", "rateios_lancamento-sync"];
 
-contabilRouter.get("/sincronizacao", requireRole("admin"), async (_req, res) => {
+// Admin ou gestor de QUALQUER departamento (28/08/2026, a pedido do Vitor) — não dá pra usar
+// requireRole aqui porque "gestor" não é um Role estático (é derivado de DepartamentoGestor
+// em runtime, ver resolverContextoConsultor). A ação em si (ver status / disparar sync) é
+// global — atualiza LancamentoContabil/RateioLancamento inteiros, não filtrado por grupo —
+// então qualquer gestor de verdade serve, mesmo que o departamento dele ainda não tenha
+// nenhum despar mapeado em DepartamentoGrupoContabil (isso só afeta o QUE ele vê depois na
+// Matriz, não o "pode disparar o sync"). Extraída porque as duas rotas abaixo (GET e POST)
+// repetem a mesma checagem.
+async function podeGerenciarSincronizacaoContabil(req: AuthenticatedRequest): Promise<boolean> {
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) return false;
+  return ctx.role === "admin" || ctx.contexto.departamentosGerenciados.length > 0;
+}
+
+contabilRouter.get("/sincronizacao", async (req: AuthenticatedRequest, res) => {
   try {
+    if (!(await podeGerenciarSincronizacaoContabil(req))) {
+      res.status(403).json({ error: "Sem permissão para acessar este recurso" });
+      return;
+    }
     const [ultimoLancamento, ultimoRateio] = await Promise.all(
       JOBS_CONTABIL.map((jobName) =>
         prisma.syncLog.findFirst({ where: { jobName, status: "success" }, orderBy: { runAt: "desc" } })
@@ -781,7 +802,11 @@ contabilRouter.get("/sincronizacao", requireRole("admin"), async (_req, res) => 
   }
 });
 
-contabilRouter.post("/sincronizacao", requireRole("admin"), async (_req, res) => {
+contabilRouter.post("/sincronizacao", async (req: AuthenticatedRequest, res) => {
+  if (!(await podeGerenciarSincronizacaoContabil(req))) {
+    res.status(403).json({ error: "Sem permissão para acessar este recurso" });
+    return;
+  }
   if (sincronizacaoContabilEmAndamento()) {
     res.status(409).json({ error: "Sincronização já em andamento" });
     return;

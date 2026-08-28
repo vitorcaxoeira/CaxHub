@@ -53,6 +53,35 @@ export function ResultadoAnalitico() {
     setRefreshKey((k) => k + 1);
   }
 
+  // "Sync. ERP" liberado pra gestor de departamento também, não só admin (28/08/2026) — passa
+  // pro SincronizacaoStatus, que por padrão é admin-only (comportamento de Contas a Receber/
+  // Fluxo de Caixa; ver prop `podeSincronizar` no componente). Não dá pra derivar só de
+  // `user.role` ("gestor" não é um Role estático), então busca o mesmo dado que
+  // Sidebar.tsx/Alocacao.tsx já usam pra decisão parecida.
+  const [podeSincronizar, setPodeSincronizar] = useState(false);
+  useEffect(() => {
+    if (!user) return;
+    if (user.role === "admin") {
+      setPodeSincronizar(true);
+      return;
+    }
+    // Guarda de "efeito superado" — mesma corrida já corrigida em AuthContext.tsx/Sidebar.tsx/
+    // Alocacao.tsx: sem isso, a resposta de uma sessão ANTERIOR podia chegar depois de já
+    // estar logado como outra pessoa e liberar o Sync pra quem não devia.
+    let cancelado = false;
+    axios
+      .get("/api/dashboard/meu-perfil")
+      .then(({ data }) => {
+        if (!cancelado) setPodeSincronizar((data.departamentosGerenciados ?? []).length > 0);
+      })
+      .catch(() => {
+        if (!cancelado) setPodeSincronizar(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [user]);
+
   // Centro de Custo continua admin-only (não tem dimensão de despar/departamento hoje — ver
   // plano) — some da lista de abas pra quem não é admin, inclusive blindando `?visao=cc`
   // digitado manualmente na URL.
@@ -162,7 +191,12 @@ export function ResultadoAnalitico() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <p className="font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Contábil · Resultado Analítico</p>
-        <SincronizacaoStatus onAtualizado={handleSincronizado} apiBase="/api/contabil/sincronizacao" formato="completo" />
+        <SincronizacaoStatus
+          onAtualizado={handleSincronizado}
+          apiBase="/api/contabil/sincronizacao"
+          formato="completo"
+          podeSincronizar={podeSincronizar}
+        />
       </div>
 
       <div className="mb-6 flex flex-wrap gap-1 rounded-md border border-border p-1" style={{ width: "fit-content" }}>

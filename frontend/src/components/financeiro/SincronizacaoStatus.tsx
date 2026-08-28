@@ -52,9 +52,22 @@ interface SincronizacaoStatusProps {
   apiBase?: string;
   /** Ver formatarLabel acima. Default "compacto" preserva o texto original. */
   formato?: Formato;
+  /**
+   * Quem pode ver o status e disparar a sincronização. Default (omitido) é admin-only — mantém
+   * o comportamento original de Contas a Receber/Fluxo de Caixa, cujo endpoint É admin-only de
+   * verdade. Contábil (28/08/2026) passa este prop calculado por fora (admin OU gestor de
+   * algum departamento — "gestor" não é um Role estático, por isso não dá pra derivar aqui
+   * dentro só de `user.role`), porque `/contabil/sincronizacao` abriu pra gestor também.
+   */
+  podeSincronizar?: boolean;
 }
 
-export function SincronizacaoStatus({ onAtualizado, apiBase = API_BASE_PADRAO, formato = "compacto" }: SincronizacaoStatusProps) {
+export function SincronizacaoStatus({
+  onAtualizado,
+  apiBase = API_BASE_PADRAO,
+  formato = "compacto",
+  podeSincronizar,
+}: SincronizacaoStatusProps) {
   const { user } = useAuth();
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [disparando, setDisparando] = useState(false);
@@ -69,14 +82,16 @@ export function SincronizacaoStatus({ onAtualizado, apiBase = API_BASE_PADRAO, f
   }
 
   const isAdmin = user?.role === "admin";
+  const habilitado = podeSincronizar ?? isAdmin;
 
   useEffect(() => {
-    // O endpoint de status é admin-only (Contábil deixou de ser admin-only em 25/08/2026, mas
-    // /sincronizacao continua sendo — ver plano). Sem isso, um gestor recebe 403 silencioso e o
-    // rótulo fica preso em "carregando..." pra sempre.
-    if (!isAdmin) return;
+    // O endpoint de status é admin-only por padrão (Contas a Receber/Fluxo de Caixa) — sem
+    // isso, quem não pode acessar recebe 403 silencioso e o rótulo fica preso em
+    // "carregando..." pra sempre. Contábil manda `podeSincronizar` calculado por fora, que já
+    // inclui gestor de departamento.
+    if (!habilitado) return;
     buscarStatus().catch(() => {});
-  }, [apiBase, isAdmin]);
+  }, [apiBase, habilitado]);
 
   function pararPolling() {
     if (pollRef.current) {
@@ -133,7 +148,7 @@ export function SincronizacaoStatus({ onAtualizado, apiBase = API_BASE_PADRAO, f
       {formato === "completo" && status?.ultimaDuracaoMs != null && (
         <span className="text-[11px] text-muted">· levou {formatarDuracao(status.ultimaDuracaoMs)}</span>
       )}
-      {isAdmin && (
+      {habilitado && (
         <button
           onClick={handleClick}
           disabled={disparando || emAndamento}
