@@ -10,6 +10,9 @@ interface ModalEditarDescricaoProps {
   // apontamento que não pode mais ser editado (já registrado no Senior, RAT fora de
   // "Digitada", ou de outro consultor) — na tabela ele aparece truncado.
   somenteLeitura?: boolean;
+  // Título da janela no modo só leitura — default "Observação". Mesmo componente reaproveitado
+  // (28/08/2026) pra mostrar o erro completo de "falha no envio", que não é uma observação.
+  tituloSomenteLeitura?: string;
 }
 
 // Janela de edição da Descrição em "Sessões pendentes de confirmação" — o input inline
@@ -23,11 +26,12 @@ export function ModalEditarDescricao({
   onSalvar,
   onFechar,
   somenteLeitura = false,
+  tituloSomenteLeitura = "Observação",
 }: ModalEditarDescricaoProps) {
   const [texto, setTexto] = useState(valorInicial);
 
   return (
-    <Modal open onClose={onFechar} title={somenteLeitura ? "Observação" : "Editar descrição"} subtitulo={titulo}>
+    <Modal open onClose={onFechar} title={somenteLeitura ? tituloSomenteLeitura : "Editar descrição"} subtitulo={titulo}>
       <textarea
         autoFocus
         readOnly={somenteLeitura}

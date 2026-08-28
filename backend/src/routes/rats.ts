@@ -2,11 +2,19 @@ import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, codforsDoTime } from "../domain/contextoProjeto";
-import { sitratLabel, sitratTone } from "../domain/ratDominio";
+import {
+  sitratLabel,
+  sitratTone,
+  SITRAT_ORDER,
+  calcularIntegracaoErp,
+  integracaoErpLabel,
+  integracaoErpTone,
+  type IntegracaoErpStatus,
+} from "../domain/ratDominio";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdRat } from "../audit/identidadeEntidade";
-import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
 import { runRatSyncPorNumrat } from "../sync/ratSync";
 import { runRatItemSyncPorNumrat } from "../sync/ratItemSync";
 import {
@@ -63,6 +71,69 @@ function podeVerRat(role: string, contexto: Contexto, rat: { codfor: number; dep
   return rat.depexe != null && contexto.departamentosGerenciados.includes(rat.depexe);
 }
 
+// Itens (campos mínimos) + status agregado de integração com o Senior de um conjunto de RATs.
+// Extraído (28/08/2026) pra poder rodar em dois momentos diferentes de GET / conforme o filtro
+// de integração está ativo ou não — ver comentário no handler. `select` explícito (não
+// `include`) porque essa busca pode rodar sobre o conjunto INTEIRO de RATs visíveis (até
+// dezenas de milhares em produção): buscar todas as colunas de RatItem + a relação `sessoes`
+// inteira nesse volume é o que causava os 3+ segundos medidos antes desta correção — só os
+// campos realmente lidos (numrat/horini/horfim pro total, desati pra "todosComObservacao",
+// atividadeId pra achar a pendência).
+async function buscarItensEIntegracao(ratIds: number[]) {
+  const itens =
+    ratIds.length > 0
+      ? await prisma.ratItem.findMany({
+          where: { ratId: { in: ratIds } },
+          select: {
+            id: true,
+            ratId: true,
+            numrat: true,
+            horini: true,
+            horfim: true,
+            desati: true,
+            sessoes: { select: { atividadeId: true } },
+          },
+        })
+      : [];
+  const itensPorRat = new Map<number, typeof itens>();
+  for (const item of itens) {
+    if (!itensPorRat.has(item.ratId)) itensPorRat.set(item.ratId, []);
+    itensPorRat.get(item.ratId)!.push(item);
+  }
+
+  // Mesmo casamento em memória de GET /:id/itens: a fila é indexada por atividade, o
+  // ratItemId correspondente vive dentro do payload. Só tipo "criar_apontamento" — RAT
+  // aprovada também enfileira "aprovar_rat" (sem canal publicado, fica pendente pra sempre) e
+  // contaminaria o agregado se entrasse aqui (ver comentário de calcularIntegracaoErp).
+  const atividadeIds = [...new Set(itens.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
+  const pendencias =
+    atividadeIds.length > 0
+      ? await prisma.sincronizacaoPendente.findMany({
+          where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIds } },
+          select: { atividadeId: true, status: true, ultimoErro: true, payload: true },
+          orderBy: { id: "desc" },
+        })
+      : [];
+  const pendenciaPorRatItem = new Map<number, { status: string; ultimoErro: string | null }>();
+  for (const pendencia of pendencias) {
+    const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
+    if (Number.isFinite(ratItemId) && !pendenciaPorRatItem.has(ratItemId)) {
+      pendenciaPorRatItem.set(ratItemId, { status: pendencia.status, ultimoErro: pendencia.ultimoErro });
+    }
+  }
+
+  const integracaoPorRat = new Map<number, IntegracaoErpStatus>();
+  for (const ratId of ratIds) {
+    const itensDaRat = itensPorRat.get(ratId) ?? [];
+    integracaoPorRat.set(
+      ratId,
+      calcularIntegracaoErp(itensDaRat.map((item) => ({ numrat: item.numrat, pendencia: pendenciaPorRatItem.get(item.id) })))
+    );
+  }
+
+  return { itensPorRat, integracaoPorRat };
+}
+
 // GET / — lista de RATs visíveis, já com totais agregados por RAT (pra linha do
 // acordeon; os itens em si só carregam sob demanda em GET /:id/itens).
 ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
@@ -85,6 +156,18 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       .filter((v) => Number.isFinite(v) && v !== 0);
     if (codforsFiltro.length > 0) {
       rats = rats.filter((r) => codforsFiltro.includes(r.codfor));
+    }
+
+    // Filtro por situação da RAT (Rat.sitrat) — lista separada por vírgula, mesmo idioma
+    // dos outros filtros multi-seleção. Sem custo nenhum: sitrat já vem no próprio `rat`,
+    // nenhum join/query a mais. RAT sem situação (sitrat null) fica de fora sempre que o
+    // filtro está ativo.
+    const sitratFiltro = (typeof req.query.sitrat === "string" ? req.query.sitrat : "")
+      .split(",")
+      .map((v) => Number(v.trim()))
+      .filter((v) => Number.isFinite(v) && v !== 0);
+    if (sitratFiltro.length > 0) {
+      rats = rats.filter((r) => r.sitrat != null && sitratFiltro.includes(r.sitrat));
     }
 
     // Join com Proposta/Cliente precisa vir ANTES da paginação — busca por cliente
@@ -120,6 +203,45 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       });
     }
 
+    // Busca na observação dos itens (RatItem.desati) — separada da busca livre acima de
+    // propósito: só dispara a query em RatItem quando o campo vem preenchido (28/08/2026,
+    // mesmo cuidado de [[custo-condicional-ao-filtro-nao-ao-request]]); sem termo, este
+    // bloco inteiro é pulado e GET /rats não ganha custo nenhum a mais. Opera sobre `rats`
+    // já reduzido pelos filtros acima, então o alcance da query já sai proporcional ao que
+    // sobrou, não ao total do sistema.
+    const buscaItem = typeof req.query.buscaItem === "string" ? req.query.buscaItem.trim() : "";
+    if (buscaItem) {
+      const ratIdsCandidatos = rats.map((r) => r.id);
+      const itensCorrespondentes =
+        ratIdsCandidatos.length > 0
+          ? await prisma.ratItem.findMany({
+              where: { ratId: { in: ratIdsCandidatos }, desati: { contains: buscaItem, mode: "insensitive" } },
+              select: { ratId: true },
+            })
+          : [];
+      const ratIdsComItem = new Set(itensCorrespondentes.map((i) => i.ratId));
+      rats = rats.filter((r) => ratIdsComItem.has(r.id));
+    }
+
+    // Filtro por situação de sincronização — lista separada por vírgula, mesmo idioma do
+    // filtro de consultor acima (seletor multi-seleção na tela).
+    const integracaoFiltro = (typeof req.query.integracao === "string" ? req.query.integracao : "")
+      .split(",")
+      .filter((v): v is IntegracaoErpStatus => (["sincronizado", "enviando", "falha", "pendente"] as string[]).includes(v));
+
+    // Status de integração (28/08/2026): só busca pro conjunto INTEIRO (antes da paginação)
+    // quando o filtro está de fato ativo — é o único caso em que precisa disso pra filtrar
+    // certo. Sem filtro (o caso comum), fica pra depois da paginação, só com os itens da
+    // página atual — mesmo custo de antes desta feature existir. Ver buscarItensEIntegracao
+    // acima pro porquê do `select` explícito: em produção, "conjunto inteiro" pode ser dezenas
+    // de milhares de RATs, e medimos 3+ segundos quando isso rodava sem essa guarda.
+    let itensPorRat: Awaited<ReturnType<typeof buscarItensEIntegracao>>["itensPorRat"] = new Map();
+    let integracaoPorRat: Awaited<ReturnType<typeof buscarItensEIntegracao>>["integracaoPorRat"] = new Map();
+    if (integracaoFiltro.length > 0) {
+      ({ itensPorRat, integracaoPorRat } = await buscarItensEIntegracao(rats.map((r) => r.id)));
+      rats = rats.filter((r) => integracaoFiltro.includes(integracaoPorRat.get(r.id)!));
+    }
+
     // Ordem pedida: 1) RATs que precisam ser confirmadas primeiro (sitrat=9/Digitado —
     // o resto das situações, já resolvidas, vem depois); 2) dentro de cada grupo, data
     // de emissão decrescente (mais recente primeiro); 3) número da proposta como
@@ -147,18 +269,16 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    // Caso comum (sem filtro de integração): a busca de itens/integração ainda não rodou —
+    // faz agora, só pros ratIds da página atual (mesmo escopo de antes desta feature existir).
+    if (integracaoFiltro.length === 0) {
+      ({ itensPorRat, integracaoPorRat } = await buscarItensEIntegracao(rats.map((r) => r.id)));
+    }
+
     const codforsUnicos = [...new Set(rats.map((r) => r.codfor))];
     const consultores =
       codforsUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } }) : [];
     const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
-
-    const ratIds = rats.map((r) => r.id);
-    const todosItens = ratIds.length > 0 ? await prisma.ratItem.findMany({ where: { ratId: { in: ratIds } } }) : [];
-    const itensPorRat = new Map<number, typeof todosItens>();
-    for (const item of todosItens) {
-      if (!itensPorRat.has(item.ratId)) itensPorRat.set(item.ratId, []);
-      itensPorRat.get(item.ratId)!.push(item);
-    }
 
     res.json({
       total,
@@ -170,6 +290,7 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
           (soma, item) => soma + (item.horini != null && item.horfim != null ? item.horfim - item.horini : 0),
           0
         );
+        const integracao = integracaoPorRat.get(r.id) ?? "pendente";
         return {
           id: r.id,
           numrat: r.numrat,
@@ -188,6 +309,9 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
           podeAprovar:
             r.sitrat === 9 && podeExecutarAcao(role, contexto, "aprovar", { depexe: r.depexe ?? -1, codfor: r.codfor }),
           todosComObservacao: itensDaRat.length > 0 && itensDaRat.every((item) => !!item.desati?.trim()),
+          integracao,
+          integracaoLabel: integracaoErpLabel(integracao),
+          integracaoTone: integracaoErpTone(integracao),
         };
       }),
     });
@@ -222,6 +346,9 @@ ratsRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
       consultores: consultores
         .map((c) => ({ codfor: c.codfor as number, nome: c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}` }))
         .sort((a, b) => a.nome.localeCompare(b.nome)),
+      // Situações da RAT (USU_LSITRAT) — enum fixo do domínio (ratDominio.ts), única fonte
+      // do rótulo/ordem (mesma que já monta sitratLabel/sitratTone de cada linha da lista).
+      situacoesRat: SITRAT_ORDER.map((sitrat) => ({ sitrat, label: sitratLabel(sitrat) })),
     });
   } catch (error) {
     handleError(res, error, "opcoes-filtro");
@@ -526,17 +653,26 @@ async function desvincularRatAusenteNoSenior(
   return true;
 }
 
-// POST /:id/sincronizar — "Sinc. ERP": puxa de novo o cabeçalho e os itens dessa RAT
-// específica do Senior (filtrado por numrat, ver runRatSyncPorNumrat/
-// runRatItemSyncPorNumrat), pra quando o consultor sabe que algo mudou lá e não quer
-// esperar o job noturno. Só disponível depois que a RAT tem numrat (documento já
-// confirmado no Senior) — mesma visibilidade de GET /:id/itens, não fica restrito a
-// gestor/admin porque é uma ação só de leitura (atualiza o espelho local, não escreve
-// nada no Senior).
+// POST /:id/sincronizar — "Sinc. ERP": reorganizada (28/08/2026) em duas fases.
 //
-// Se o CABEÇALHO não voltar mais na consulta (a RAT inteira foi apagada/cancelada no
-// Senior), Rat.numrat é desvinculado (ver desvincularRatAusenteNoSenior) — 17/08/2026,
+// Fase 1 (existente) — puxa de novo o cabeçalho e os itens dessa RAT específica do Senior
+// (filtrado por numrat, ver runRatSyncPorNumrat/runRatItemSyncPorNumrat), pra quando o
+// consultor sabe que algo mudou lá e não quer esperar o job noturno. Só roda se a RAT já
+// tem numrat (documento já confirmado no Senior) — uma RAT onde nenhum item nunca chegou a
+// ser enviado com sucesso ainda não tem o que buscar, e isso deixou de ser erro (400): a
+// fase só é pulada. Se o CABEÇALHO não voltar mais na consulta (RAT inteira apagada/
+// cancelada no Senior), Rat.numrat é desvinculado (ver desvincularRatAusenteNoSenior) —
 // mesmo espírito de desvincularItensAusentesNoSenior, que já cobria só os itens.
+//
+// Fase 2 (nova) — reenvia pro Senior todo item desta RAT que ainda não está lá: "falha"
+// (pendência com erro, inclui bloqueado — reseta e tenta de novo) ou "pendente" (nunca
+// enfileirado — nunca enviado, ou desvinculado pela fase 1 — enfileira agora). Item
+// "enviando" de verdade (em voo, ou recém-enfileirado sem erro ainda) fica de fora: vai
+// fluir sozinho no próximo ciclo da fila, reenviar aqui não ajudaria em nada. Aguardado
+// (não fire-and-forget como o reenvio por item) — escopado só aos ids desta RAT via
+// `apenasIds`, nunca a fila inteira do sistema (ver comentário em processarFilaSincronizacao).
+//
+// Mesma visibilidade de GET /:id/itens — não fica restrito a gestor/admin.
 ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
   try {
     const id = Number(req.params.id);
@@ -556,32 +692,77 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       res.status(404).json({ error: "RAT não encontrada" });
       return;
     }
-    if (rat.numrat == null) {
-      res.status(400).json({ error: "Esta RAT ainda não tem número do ERP — nada pra sincronizar" });
-      return;
+
+    let ratDesvinculada = false;
+    let desvinculados: number[] = [];
+    if (rat.numrat != null) {
+      let encontrouCabecalho: boolean;
+      let seqratsNoSenior: number[];
+      try {
+        encontrouCabecalho = await runRatSyncPorNumrat(rat.codemp, rat.numrat);
+        seqratsNoSenior = await runRatItemSyncPorNumrat(rat.codemp, rat.numrat);
+      } catch (syncError) {
+        const message = syncError instanceof Error ? syncError.message : String(syncError);
+        res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
+        return;
+      }
+
+      // Ordem não importa entre as duas (mexem em campos/tabelas diferentes) — cabeçalho
+      // primeiro só porque é a checagem "mais grave" (RAT inteira sumiu, não só um item).
+      ratDesvinculada = await desvincularRatAusenteNoSenior(rat, encontrouCabecalho, req);
+      desvinculados = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
     }
 
-    let encontrouCabecalho: boolean;
-    let seqratsNoSenior: number[];
-    try {
-      encontrouCabecalho = await runRatSyncPorNumrat(rat.codemp, rat.numrat);
-      seqratsNoSenior = await runRatItemSyncPorNumrat(rat.codemp, rat.numrat);
-    } catch (syncError) {
-      const message = syncError instanceof Error ? syncError.message : String(syncError);
-      res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
-      return;
+    // Fase 2: recarrega os itens (pós fase 1, já refletindo qualquer desvinculação) + a
+    // pendência mais recente de cada um — mesmo casamento em memória de GET /:id/itens.
+    const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { rat: true, sessoes: true } });
+    const atividadeIdsDaRat = [...new Set(itensDaRat.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
+    const pendenciasDaRat =
+      atividadeIdsDaRat.length > 0
+        ? await prisma.sincronizacaoPendente.findMany({
+            where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIdsDaRat } },
+            orderBy: { id: "desc" },
+          })
+        : [];
+    const pendenciaPorRatItem = new Map<number, (typeof pendenciasDaRat)[number]>();
+    for (const pendencia of pendenciasDaRat) {
+      const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
+      if (Number.isFinite(ratItemId) && !pendenciaPorRatItem.has(ratItemId)) {
+        pendenciaPorRatItem.set(ratItemId, pendencia);
+      }
     }
 
-    // Ordem não importa entre as duas (mexem em campos/tabelas diferentes) — cabeçalho
-    // primeiro só porque é a checagem "mais grave" (RAT inteira sumiu, não só um item).
-    const ratDesvinculada = await desvincularRatAusenteNoSenior(rat, encontrouCabecalho, req);
-    const desvinculados = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
+    let itensReenviados = 0;
+    const pendenciaIdsParaProcessar: number[] = [];
+    for (const item of itensDaRat) {
+      if (item.numrat != null) continue; // já sincronizado, nada a reenviar
+      const pendencia = pendenciaPorRatItem.get(item.id);
+      if (pendencia && !pendencia.ultimoErro) continue; // enviando de verdade, deixa fluir sozinho
+      const resultado = await prepararReenvioItem(item, pendencia);
+      if (resultado.ok) {
+        pendenciaIdsParaProcessar.push(resultado.pendenciaId);
+        itensReenviados += 1;
+      }
+    }
+    if (pendenciaIdsParaProcessar.length > 0) {
+      await processarFilaSincronizacao({ apenasIds: pendenciaIdsParaProcessar });
+    }
+
+    // Status agregado pós-tentativa, pra tela montar o aviso final sem precisar de mais uma
+    // chamada — reaproveita o mesmo helper de GET / (buscarItensEIntegracao), escopado só a
+    // esta RAT (conjunto de 1, sem custo de full-set nenhum).
+    const { integracaoPorRat } = await buscarItensEIntegracao([rat.id]);
+    const integracao = integracaoPorRat.get(rat.id) ?? "pendente";
 
     res.json({
       ok: true,
       ratDesvinculada,
       desvinculados: desvinculados.length,
       seqratsDesvinculados: desvinculados,
+      itensReenviados,
+      integracao,
+      integracaoLabel: integracaoErpLabel(integracao),
+      integracaoTone: integracaoErpTone(integracao),
     });
   } catch (error) {
     handleError(res, error, "sincronizar");

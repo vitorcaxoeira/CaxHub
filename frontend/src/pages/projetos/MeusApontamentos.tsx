@@ -67,6 +67,19 @@ interface AtividadeResumo {
   cliente: string | null;
 }
 
+// Espelha backend/src/domain/ratDominio.ts (IntegracaoErpStatus) — status agregado de
+// integração da RAT com o Senior, pior caso entre os itens dela.
+type IntegracaoErpStatus = "sincronizado" | "enviando" | "falha" | "pendente";
+
+// Opções do filtro — enum fixo de 4 valores, sem endpoint de opções dedicado (mesma ideia de
+// MESES_OPCOES em lib/periodos.ts).
+const OPCOES_INTEGRACAO: { value: IntegracaoErpStatus; label: string }[] = [
+  { value: "falha", label: "Falha no envio" },
+  { value: "enviando", label: "Enviando" },
+  { value: "pendente", label: "Pendente" },
+  { value: "sincronizado", label: "Sincronizado" },
+];
+
 interface RatRow {
   id: number;
   numrat: number | null;
@@ -82,6 +95,13 @@ interface RatRow {
   sitratTone: Tone;
   totalItens: number;
   totalMinutos: number;
+  // Status agregado de integração com o Senior (28/08/2026) — pior caso entre os itens da RAT
+  // (ver calcularIntegracaoErp em backend/src/domain/ratDominio.ts). Não é o mesmo domínio de
+  // sitrat: sitrat é a situação da RAT no ERP (Digitado/Aprovado/...), integracao é se os
+  // apontamentos dela já chegaram lá.
+  integracao: IntegracaoErpStatus;
+  integracaoLabel: string;
+  integracaoTone: Tone;
 }
 
 interface RatItemRow {
@@ -112,6 +132,15 @@ interface RatItemRow {
 interface ConsultorFiltro {
   codfor: number;
   nome: string;
+}
+
+// Opções do filtro de situação da RAT (USU_LSITRAT) — vêm do backend (GET
+// /rats/opcoes-filtro), que reaproveita o mesmo domínio de backend/src/domain/ratDominio.ts
+// já usado no rótulo/tom de cada linha (sitratLabel/sitratTone). Sem lista fixa aqui: uma
+// única fonte pro rótulo/ordem.
+interface SituacaoRatOpcao {
+  sitrat: number;
+  label: string;
 }
 
 // Cabeçalho da atividade devolvido por GET /atividades/:id/detalhe — o mesmo conjunto que
@@ -188,11 +217,13 @@ function AcaoIntegracao({
   reenviando,
   onReenviar,
   onExcluir,
+  onVerErro,
 }: {
   item: RatItemRow;
   reenviando: boolean;
   onReenviar: () => void;
   onExcluir: () => void;
+  onVerErro: () => void;
 }) {
   if (item.confirmadoNoSenior) {
     return (
@@ -220,9 +251,13 @@ function AcaoIntegracao({
   if (item.envioErro) {
     return (
       <span className="inline-flex items-center gap-2">
-        <span className="text-[11px] text-destructive" title={item.envioErro}>
+        <button
+          onClick={onVerErro}
+          className="text-[11px] text-destructive underline decoration-dotted hover:decoration-solid"
+          title="Clique para ver o erro completo"
+        >
           falha no envio
-        </span>
+        </button>
         <button onClick={onReenviar} className="text-[11px] text-primary hover:underline">
           Reenviar
         </button>
@@ -330,8 +365,13 @@ export function MeusApontamentos() {
   const [loadingRats, setLoadingRats] = useState(true);
   const [opcoesFiltro, setOpcoesFiltro] = useState<ConsultorFiltro[]>([]);
   const [codforsFiltro, setCodforsFiltro] = useState<number[]>([]);
+  const [situacoesRat, setSituacoesRat] = useState<SituacaoRatOpcao[]>([]);
+  const [sitratFiltro, setSitratFiltro] = useState<number[]>([]);
+  const [integracaoFiltro, setIntegracaoFiltro] = useState<IntegracaoErpStatus[]>([]);
   const [buscaInput, setBuscaInput] = useState("");
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
+  const [buscaItemInput, setBuscaItemInput] = useState("");
+  const buscaItemDebounced = useDebouncedValue(buscaItemInput, 350);
   const [ratsExpandidas, setRatsExpandidas] = useState<Set<number>>(new Set());
   const [itensPorRat, setItensPorRat] = useState<Record<number, RatItemRow[] | "carregando" | "erro">>({});
   const [sincronizando, setSincronizando] = useState<number | null>(null);
@@ -392,7 +432,10 @@ export function MeusApontamentos() {
       .get("/api/rats", {
         params: {
           codfor: codforsFiltro.length > 0 ? codforsFiltro.join(",") : undefined,
+          sitrat: sitratFiltro.length > 0 ? sitratFiltro.join(",") : undefined,
           busca: buscaDebounced || undefined,
+          buscaItem: buscaItemDebounced || undefined,
+          integracao: integracaoFiltro.length > 0 ? integracaoFiltro.join(",") : undefined,
           page: pageRats,
           pageSize: PAGE_SIZE_RATS,
         },
@@ -410,7 +453,10 @@ export function MeusApontamentos() {
     carregar();
     axios
       .get("/api/rats/opcoes-filtro")
-      .then(({ data }) => setOpcoesFiltro(data.consultores))
+      .then(({ data }) => {
+        setOpcoesFiltro(data.consultores);
+        setSituacoesRat(data.situacoesRat ?? []);
+      })
       .catch(() => {});
     axios
       .get("/api/apontamentos/consultores")
@@ -425,7 +471,7 @@ export function MeusApontamentos() {
   useEffect(() => {
     carregarRats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [codforsFiltro, buscaDebounced, pageRats]);
+  }, [codforsFiltro, sitratFiltro, integracaoFiltro, buscaDebounced, buscaItemDebounced, pageRats]);
 
   // Digitar reseta pra página 1 (senão a busca poderia "sumir" numa página que não
   // existe mais no resultado filtrado) — só dispara depois do debounce, pra não
@@ -433,12 +479,22 @@ export function MeusApontamentos() {
   useEffect(() => {
     setPageRats(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buscaDebounced]);
+  }, [buscaDebounced, buscaItemDebounced]);
 
   function onMudarFiltroConsultor(codfors: number[]) {
     setCodforsFiltro(codfors);
     // Volta pra página 1: o resultado filtrado pode ter menos páginas que o atual, e a
     // lista "sumiria" numa página que não existe mais.
+    setPageRats(1);
+  }
+
+  function onMudarFiltroSitrat(valores: number[]) {
+    setSitratFiltro(valores);
+    setPageRats(1);
+  }
+
+  function onMudarFiltroIntegracao(valores: IntegracaoErpStatus[]) {
+    setIntegracaoFiltro(valores);
     setPageRats(1);
   }
 
@@ -457,6 +513,9 @@ export function MeusApontamentos() {
     ratId: number;
     somenteLeitura: boolean;
   } | null>(null);
+  // Item com "falha no envio" cujo erro completo está sendo visualizado — mesmo modal (só
+  // leitura) usado pra ler a observação inteira de um item já confirmado.
+  const [erroEnvioItem, setErroEnvioItem] = useState<RatItemRow | null>(null);
 
   // Timers do acompanhamento, cancelados ao sair da tela pra não bater em endpoint depois
   // que o componente já saiu.
@@ -760,22 +819,37 @@ export function MeusApontamentos() {
         const { data: itensData } = await axios.get(`/api/rats/${rat.id}/itens`);
         setItensPorRat((i) => ({ ...i, [rat.id]: itensData.itens }));
       }
-      // RAT inteira apagada/cancelada no Senior: o cabeçalho perde o vínculo (numrat),
-      // mais grave que um item sumir sozinho — mensagem própria, e sai na frente da de
-      // itens (que também dispara junto, já que sem RAT no Senior nenhum item volta).
+      // Cada situação vira uma linha própria do aviso — as três podem acontecer na mesma
+      // chamada agora (busca + reenvio na mesma ação), em ordem de gravidade: RAT inteira
+      // desvinculada primeiro, depois itens desvinculados, depois o resultado do reenvio.
+      const avisos: string[] = [];
       if (data?.ratDesvinculada) {
-        setAvisoSinc(
+        avisos.push(
           "Esta RAT não existe mais no Senior — o vínculo com o número do ERP foi removido. " +
             "Os apontamentos dela podem ser enviados de novo, e vão gerar uma RAT nova por lá."
         );
-      } else if (data?.desvinculados > 0) {
+      }
+      if (data?.desvinculados > 0) {
         // Apontamento apagado no Senior perde o vínculo aqui e volta a poder ser enviado —
         // isso precisa ser dito, senão o item muda de estado sem explicação nenhuma.
         const seqrats = (data.seqratsDesvinculados ?? []).join(", ");
-        setAvisoSinc(
+        avisos.push(
           `${data.desvinculados} apontamento(s) não existem mais no Senior (sequência ${seqrats}) — ` +
             `o vínculo foi removido e eles podem ser enviados de novo pela ação "Enviar".`
         );
+      }
+      if (data?.itensReenviados > 0) {
+        // `integracao` já vem recalculada pós-tentativa — dá pra dizer se resolveu sem
+        // precisar de outra chamada.
+        avisos.push(
+          data.integracao === "sincronizado"
+            ? `${data.itensReenviados} apontamento(s) pendente(s)/com erro foram reenviados e confirmados no Senior.`
+            : `${data.itensReenviados} apontamento(s) pendente(s)/com erro foram reenviados, mas ainda há falha — ` +
+                `veja o detalhe na lista de itens.`
+        );
+      }
+      if (avisos.length > 0) {
+        setAvisoSinc(avisos.join(" "));
       }
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao sincronizar com o ERP");
@@ -1241,8 +1315,31 @@ export function MeusApontamentos() {
                 onChange={(e) => setBuscaInput(e.target.value)}
                 className={`${selectClass} w-64`}
               />
+              <input
+                type="text"
+                placeholder="Buscar na observação dos itens..."
+                value={buscaItemInput}
+                onChange={(e) => setBuscaItemInput(e.target.value)}
+                className={`${selectClass} w-64`}
+              />
             </div>
             <div className="flex items-center gap-3">
+              {situacoesRat.length > 1 && (
+                <MultiSelectDropdown
+                  opcoes={situacoesRat.map((s) => ({ value: s.sitrat, label: s.label }))}
+                  selecionados={sitratFiltro}
+                  onChange={onMudarFiltroSitrat}
+                  labelTodos="Todas as situações"
+                  labelSufixo="situações"
+                />
+              )}
+              <MultiSelectDropdown
+                opcoes={OPCOES_INTEGRACAO}
+                selecionados={integracaoFiltro}
+                onChange={onMudarFiltroIntegracao}
+                labelTodos="Todas as sincronizações"
+                labelSufixo="sincronizações"
+              />
               {opcoesFiltro.length > 1 && (
                 <MultiSelectDropdown
                   opcoes={opcoesFiltro.map((c) => ({ value: c.codfor, label: `${c.codfor} - ${c.nome}` }))}
@@ -1280,6 +1377,9 @@ export function MeusApontamentos() {
                     <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                       Situação
                     </th>
+                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                      Sinc. ERP
+                    </th>
                     <th className="hidden bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
                       Itens
                     </th>
@@ -1293,7 +1393,7 @@ export function MeusApontamentos() {
                   {loadingRats &&
                     Array.from({ length: 3 }).map((_, i) => (
                       <tr key={i} className="border-t border-border/60">
-                        <td className="px-2.5 py-3.5" colSpan={10}>
+                        <td className="px-2.5 py-3.5" colSpan={11}>
                           <Skeleton className="h-6 w-full" />
                         </td>
                       </tr>
@@ -1344,6 +1444,11 @@ export function MeusApontamentos() {
                                 {rat.sitratLabel}
                               </span>
                             </td>
+                            <td className="px-2.5 py-3.5">
+                              <span className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.integracaoTone]}`}>
+                                {rat.integracaoLabel}
+                              </span>
+                            </td>
                             <td className="hidden px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted sm:table-cell">
                               {rat.totalItens}
                             </td>
@@ -1364,8 +1469,12 @@ export function MeusApontamentos() {
                                 <DropdownMenu.Content>
                                   <DropdownMenu.Item
                                     onSelect={() => sincronizarErp(rat)}
-                                    disabled={rat.numrat == null || sincronizando === rat.id}
-                                    title={rat.numrat == null ? "Só disponível depois que a RAT tem número do ERP" : undefined}
+                                    disabled={rat.integracao === "sincronizado" || sincronizando === rat.id}
+                                    title={
+                                      rat.integracao === "sincronizado"
+                                        ? "Já sincronizada — nada pendente ou com erro"
+                                        : "Busca o que mudou no ERP e reenvia os itens pendentes/com erro"
+                                    }
                                   >
                                     {sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
                                   </DropdownMenu.Item>
@@ -1384,7 +1493,7 @@ export function MeusApontamentos() {
                           </tr>
                           {expandida && (
                             <tr className="border-t border-border/60 bg-surface-2/40">
-                              <td colSpan={10} className="border-b border-l border-r border-primary px-2.5 py-3">
+                              <td colSpan={11} className="border-b border-l border-r border-primary px-2.5 py-3">
                                 {itens === "carregando" && <p className="py-2 text-sm text-muted">Carregando itens...</p>}
                                 {itens === "erro" && <p className="py-2 text-sm text-destructive">Falha ao carregar os itens desta RAT.</p>}
                                 {Array.isArray(itens) && itens.length === 0 && (
@@ -1481,6 +1590,7 @@ export function MeusApontamentos() {
                                               reenviando={reenviando.has(item.id)}
                                               onReenviar={() => reenviarAoSenior(item.id, rat.id)}
                                               onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
+                                              onVerErro={() => setErroEnvioItem(item)}
                                             />
                                           </td>
                                         </tr>
@@ -1496,7 +1606,7 @@ export function MeusApontamentos() {
                     })}
                   {!loadingRats && rats.length === 0 && (
                     <tr>
-                      <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
+                      <td colSpan={11} className="px-2.5 py-8 text-center text-sm text-muted">
                         Nenhuma RAT ainda — confirme uma sessão pendente pra começar.
                       </td>
                     </tr>
@@ -1544,6 +1654,21 @@ export function MeusApontamentos() {
             salvarObservacaoItem(editandoObservacao.item.sessaoId!, editandoObservacao.ratId, texto)
           }
           onFechar={() => setEditandoObservacao(null)}
+        />
+      )}
+
+      {/* Erro completo de "falha no envio" — mesmo modal da observação, só leitura, só
+          trocando o título e o texto mostrado (o erro do Senior, não a observação do item). */}
+      {erroEnvioItem && (
+        <ModalEditarDescricao
+          somenteLeitura
+          tituloSomenteLeitura="Falha no envio ao Senior"
+          titulo={`Apontamento de ${
+            erroEnvioItem.datati ? dateFormatter.format(new Date(erroEnvioItem.datati)) : "—"
+          }`}
+          valorInicial={erroEnvioItem.envioErro ?? ""}
+          onSalvar={() => {}}
+          onFechar={() => setErroEnvioItem(null)}
         />
       )}
 

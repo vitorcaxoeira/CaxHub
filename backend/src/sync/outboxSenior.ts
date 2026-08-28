@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { randomUUID } from "crypto";
-import { AtividadeConsultor, Prisma, SincronizacaoPendente } from "@prisma/client";
+import { AtividadeConsultor, Prisma, RatItem, Rat, AtividadeSessaoExecucao, SincronizacaoPendente } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import {
   AlocarAtividadesPayload,
@@ -76,6 +76,79 @@ export async function enfileirar(
     });
   }
   return criada.id;
+}
+
+/** RatItem com os dois relacionamentos que `prepararReenvioItem` precisa ler. */
+export type RatItemParaReenvio = RatItem & { rat: Rat; sessoes: AtividadeSessaoExecucao[] };
+
+export type ResultadoPreparoReenvio =
+  | { ok: true; pendenciaId: number }
+  | { ok: false; status: 400 | 409; motivo: string };
+
+// Prepara o reenvio de UM RatItem que ainda não está registrado no Senior: se já existe
+// pendência (falhou ou está bloqueada — tentativas esgotadas), reseta pra "pendente" com
+// tentativas zeradas; senão (item desvinculado, ou nunca enfileirado) cria uma
+// "criar_apontamento" nova. NÃO dispara o processamento sozinho — quem chama decide quando
+// (imediato, por item, via processarFilaSincronizacao({ apenasIds: [id] }), ou em lote, por
+// RAT inteira) e assim evita disparos concorrentes quando várias pendências são preparadas
+// em sequência (mesmo motivo do `adiarEnvio` em POST /:id/aprovar de routes/rats.ts).
+//
+// Extraído (28/08/2026) de POST /apontamentos/envio/:ratItemId/reenviar pra ser reaproveitado
+// também pelo reenvio em lote de POST /rats/:id/sincronizar — as duas guardas de negócio
+// (já registrado / envio em andamento) moram aqui agora, não duplicadas nos dois chamadores.
+export async function prepararReenvioItem(
+  ratItem: RatItemParaReenvio,
+  pendenciaAtual: SincronizacaoPendente | undefined
+): Promise<ResultadoPreparoReenvio> {
+  if (ratItem.numrat != null) {
+    return { ok: false, status: 400, motivo: "Apontamento já registrado no Senior — nada a reenviar" };
+  }
+  if (pendenciaAtual?.status === "enviando") {
+    return { ok: false, status: 409, motivo: "Envio já em andamento" };
+  }
+
+  const atividadeId = ratItem.sessoes[0]?.atividadeId;
+  if (atividadeId == null) {
+    return { ok: false, status: 400, motivo: "Apontamento sem sessão de execução vinculada — não dá pra enviar" };
+  }
+
+  if (pendenciaAtual) {
+    // Volta a zero: sem isso um item já "bloqueado" (tentativas esgotadas) continuaria de
+    // fora da varredura da fila.
+    await prisma.sincronizacaoPendente.update({
+      where: { id: pendenciaAtual.id },
+      data: { status: "pendente", tentativas: 0, ultimoErro: null },
+    });
+    return { ok: true, pendenciaId: pendenciaAtual.id };
+  }
+
+  // Sem pendência = apontamento desvinculado porque foi apagado no Senior (ver
+  // desvincularItensAusentesNoSenior em routes/rats.ts, que remove a pendência obsoleta), ou
+  // nunca foi enfileirado. Enfileira de novo pra (re)integrar. `adiarEnvio: true` porque quem
+  // chama decide o disparo (fire-and-forget de 1 item, ou lote aguardado de uma RAT inteira).
+  const pendenciaId = await enfileirar(
+    atividadeId,
+    "criar_apontamento",
+    {
+      ratItemId: ratItem.id,
+      ratId: ratItem.ratId,
+      seqati: ratItem.seqati?.toString() ?? null,
+      codemp: ratItem.codemp,
+      codpro: ratItem.codpro,
+      seqite: ratItem.seqite,
+      codfas: ratItem.codfas,
+      datati: ratItem.datati,
+      horini: ratItem.horini,
+      horfim: ratItem.horfim,
+      desati: ratItem.desati,
+      ratNovo: ratItem.rat.numrat == null,
+      codfor: ratItem.rat.codfor,
+      codcli: ratItem.rat.codcli,
+      depexe: ratItem.rat.depexe,
+    },
+    { adiarEnvio: true }
+  );
+  return { ok: true, pendenciaId };
 }
 
 // Tipo de mudança que ainda não tem operação publicada do lado do Senior. Tratado
@@ -452,17 +525,25 @@ async function enviarParaSenior(item: SincronizacaoPendente): Promise<ResultadoE
 
 // Processa a fila: tenta enviar cada item pendente, com no máximo MAX_TENTATIVAS.
 //
-// `apenasId` restringe a uma pendência só. É o que o disparo imediato da confirmação de
-// apontamento usa: sem isso, cada confirmação varreria a fila inteira, e os tipos que
-// ainda não têm canal ficam `pendente` pra sempre (de propósito, ver CanalIndisponivelError)
-// — ou seja, seriam revisitados a cada confirmação, um UPDATE por item, à toa. O cron
-// continua chamando sem argumento pra varrer tudo.
-export async function processarFilaSincronizacao(opcoes: { apenasId?: number } = {}): Promise<void> {
+// `apenasId`/`apenasIds` restringe a uma pendência (ou a um lote delas) só. É o que o
+// disparo imediato da confirmação de apontamento usa: sem isso, cada confirmação varreria a
+// fila inteira, e os tipos que ainda não têm canal ficam `pendente` pra sempre (de
+// propósito, ver CanalIndisponivelError) — ou seja, seriam revisitados a cada confirmação,
+// um UPDATE por item, à toa. `apenasIds` (28/08/2026) é o mesmo princípio pro reenvio em
+// lote de uma RAT inteira em POST /rats/:id/sincronizar: sem ele, aguardar o reenvio ali
+// varreria a fila do sistema inteiro dentro de uma única requisição do usuário — o mesmo
+// erro de custo incondicional já corrigido em GET /rats (ver
+// Padrões/custo-condicional-ao-filtro-nao-ao-request no segundo cérebro). O cron continua
+// chamando sem argumento nenhum pra varrer tudo.
+export async function processarFilaSincronizacao(
+  opcoes: { apenasId?: number; apenasIds?: number[] } = {}
+): Promise<void> {
+  const ids = opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
   const pendentes = await prisma.sincronizacaoPendente.findMany({
     where: {
       status: "pendente",
       tentativas: { lt: MAX_TENTATIVAS },
-      ...(opcoes.apenasId != null ? { id: opcoes.apenasId } : {}),
+      ...(ids != null ? { id: { in: ids } } : {}),
     },
     orderBy: { criadoEm: "asc" },
   });

@@ -4,7 +4,7 @@ import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis, codforsDoTime } from "../domain/contextoProjeto";
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
-import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
@@ -865,61 +865,18 @@ apontamentosRouter.post("/envio/:ratItemId/reenviar", async (req: AuthenticatedR
     }
     const { ratItem, pendencia } = envio;
 
-    if (ratItem.numrat != null) {
-      res.status(400).json({ error: "Apontamento já registrado no Senior — nada a reenviar" });
-      return;
-    }
-    if (pendencia?.status === "enviando") {
-      res.status(409).json({ error: "Envio já em andamento" });
-      return;
-    }
-
-    const atividadeId = ratItem.sessoes[0]?.atividadeId;
-    if (atividadeId == null) {
-      res.status(400).json({ error: "Apontamento sem sessão de execução vinculada — não dá pra enviar" });
+    // Guardas de negócio (já registrado / envio em andamento) e o branch reset-vs-enfileirar
+    // moram em prepararReenvioItem (28/08/2026) — reaproveitado também pelo reenvio em lote
+    // de POST /rats/:id/sincronizar, ver outboxSenior.ts.
+    const resultado = await prepararReenvioItem(ratItem, pendencia);
+    if (!resultado.ok) {
+      res.status(resultado.status).json({ error: resultado.motivo });
       return;
     }
 
-    let pendenciaId: number;
-    if (pendencia) {
-      // Volta a zero: sem isso um item já "bloqueado" (tentativas esgotadas) continuaria
-      // de fora da varredura da fila.
-      await prisma.sincronizacaoPendente.update({
-        where: { id: pendencia.id },
-        data: { status: "pendente", tentativas: 0, ultimoErro: null },
-      });
-      pendenciaId = pendencia.id;
-    } else {
-      // Sem pendência = apontamento desvinculado porque foi apagado no Senior (ver
-      // desvincularItensAusentesNoSenior em routes/rats.ts, que remove a pendência
-      // obsoleta). Enfileira de novo pra reintegrar. `adiarEnvio: true` porque o disparo
-      // logo abaixo já cobre os dois branches (pendência reaproveitada OU recém-criada) —
-      // sem isso, este branch dispararia duas vezes em paralelo.
-      pendenciaId = await enfileirar(
-        atividadeId,
-        "criar_apontamento",
-        {
-          ratItemId: ratItem.id,
-          ratId: ratItem.ratId,
-          seqati: ratItem.seqati?.toString() ?? null,
-          codemp: ratItem.codemp,
-          codpro: ratItem.codpro,
-          seqite: ratItem.seqite,
-          codfas: ratItem.codfas,
-          datati: ratItem.datati,
-          horini: ratItem.horini,
-          horfim: ratItem.horfim,
-          desati: ratItem.desati,
-          ratNovo: ratItem.rat.numrat == null,
-          codfor: ratItem.rat.codfor,
-          codcli: ratItem.rat.codcli,
-          depexe: ratItem.rat.depexe,
-        },
-        { adiarEnvio: true }
-      );
-    }
-
-    processarFilaSincronizacao({ apenasId: pendenciaId }).catch((erro) => {
+    // Disparo em segundo plano: quem chamou não espera o envio terminar, só sabe que
+    // entrou na fila — a tela consulta GET /envio/:ratItemId depois pra ver o resultado.
+    processarFilaSincronizacao({ apenasIds: [resultado.pendenciaId] }).catch((erro) => {
       console.error("[apontamentos] reenvio ao Senior falhou:", erro instanceof Error ? erro.message : erro);
     });
 
