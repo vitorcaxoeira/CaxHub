@@ -4,7 +4,7 @@ import { tomConsumo } from "../../lib/consumoHoras";
 import { Avatar } from "../ui/Avatar";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { toneBadge, priproTone } from "../ui/badges";
-import { IconePlay, IconeStop } from "../ui/iconesExecucao";
+import { IconePlay, IconeStop, IconeLapis } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
 import { useCronometro } from "../../hooks/useCronometro";
 import {
@@ -113,6 +113,8 @@ interface KanbanBoardProps {
   onAbrirDetalhe: (atividadeId: number, info: DetalheInfo) => void;
   onIniciar: (atividadeId: number) => void;
   onParar: (atividadeId: number) => void;
+  // "O que está sendo feito?" (28/08/2026) — salva progresso sem parar o cronômetro.
+  onEditarNota: (atividadeId: number) => void;
   // Ids com uma requisição de iniciar/parar em andamento — controla spinner + disabled.
   processando: Set<number>;
 }
@@ -136,12 +138,14 @@ function DraggableCard({
   onAbrirDetalhe,
   onIniciar,
   onParar,
+  onEditarNota,
   processando,
 }: {
   atividade: AtividadeKanban;
   onAbrirDetalhe: (id: number, info: DetalheInfo) => void;
   onIniciar: (id: number) => void;
   onParar: (id: number) => void;
+  onEditarNota: (id: number) => void;
   processando: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -331,6 +335,20 @@ function DraggableCard({
             Iniciar
           </button>
         )}
+        {emAndamento && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onEditarNota(atividade.id);
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            disabled={processando}
+            title="O que está sendo feito?"
+            className="flex flex-none items-center justify-center rounded border border-border px-2 py-1 text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:pointer-events-none"
+          >
+            {processando ? <Spinner className="h-3 w-3" /> : <IconeLapis className="h-3 w-3" />}
+          </button>
+        )}
         {(EXIBIR_AMBOS_BOTOES || habilitaParar) && (
           <button
             onClick={(e) => {
@@ -357,6 +375,7 @@ function DroppableColuna({
   onAbrirDetalhe,
   onIniciar,
   onParar,
+  onEditarNota,
   processando,
 }: {
   coluna: ColunaKanban;
@@ -364,6 +383,7 @@ function DroppableColuna({
   onAbrirDetalhe: (id: number, info: DetalheInfo) => void;
   onIniciar: (id: number) => void;
   onParar: (id: number) => void;
+  onEditarNota: (id: number) => void;
   processando: Set<number>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `coluna-${coluna.id}` });
@@ -387,6 +407,7 @@ function DroppableColuna({
             onAbrirDetalhe={onAbrirDetalhe}
             onIniciar={onIniciar}
             onParar={onParar}
+            onEditarNota={onEditarNota}
             processando={processando.has(a.id)}
           />
         ))}
@@ -396,7 +417,16 @@ function DroppableColuna({
   );
 }
 
-export function KanbanBoard({ colunas, atividades, onMover, onAbrirDetalhe, onIniciar, onParar, processando }: KanbanBoardProps) {
+export function KanbanBoard({
+  colunas,
+  atividades,
+  onMover,
+  onAbrirDetalhe,
+  onIniciar,
+  onParar,
+  onEditarNota,
+  processando,
+}: KanbanBoardProps) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   function handleDragEnd(event: DragEndEvent) {
@@ -431,6 +461,7 @@ export function KanbanBoard({ colunas, atividades, onMover, onAbrirDetalhe, onIn
             onAbrirDetalhe={onAbrirDetalhe}
             onIniciar={onIniciar}
             onParar={onParar}
+            onEditarNota={onEditarNota}
             processando={processando}
           />
         ))}

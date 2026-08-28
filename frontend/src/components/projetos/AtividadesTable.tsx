@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Avatar } from "../ui/Avatar";
 import { Pagination } from "../ui/Pagination";
 import { Skeleton } from "../ui/Skeleton";
-import { IconePlay, IconeStop } from "../ui/iconesExecucao";
+import { IconePlay, IconeStop, IconeLapis } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { HierarquiaAtividadeTooltip } from "../cronograma/HierarquiaAtividadeTooltip";
@@ -127,6 +127,8 @@ interface AtividadesTableProps {
   onAbrirDetalhe: (atividadeId: number, info: DetalheInfo) => void;
   onIniciar: (atividadeId: number) => void;
   onParar: (atividadeId: number) => void;
+  // "O que está sendo feito?" (28/08/2026) — salva progresso sem parar o cronômetro.
+  onEditarNota: (atividadeId: number) => void;
   processando: Set<number>;
 }
 
@@ -194,6 +196,7 @@ export function AtividadesTable({
   onAbrirDetalhe,
   onIniciar,
   onParar,
+  onEditarNota,
   processando,
 }: AtividadesTableProps) {
   const navigate = useNavigate();
@@ -502,6 +505,16 @@ export function AtividadesTable({
                                             >
                                               {processando.has(row.id) ? <Spinner className="h-3 w-3" /> : <IconePlay />}
                                               Iniciar
+                                            </button>
+                                          )}
+                                          {row.coluna?.nome === RAIA_EM_ANDAMENTO && (
+                                            <button
+                                              onClick={() => onEditarNota(row.id)}
+                                              disabled={processando.has(row.id)}
+                                              title="O que está sendo feito?"
+                                              className="flex items-center justify-center rounded border border-border px-2 py-0.5 text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:pointer-events-none"
+                                            >
+                                              {processando.has(row.id) ? <Spinner className="h-3 w-3" /> : <IconeLapis className="h-3 w-3" />}
                                             </button>
                                           )}
                                           {(EXIBIR_AMBOS_BOTOES || podeParar(row)) && (

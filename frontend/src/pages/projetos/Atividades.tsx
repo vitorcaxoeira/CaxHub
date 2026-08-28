@@ -34,9 +34,11 @@ interface DetalheSelecionado extends DetalheInfo {
 interface PedidoObservacao {
   atividadeId: number;
   novaColunaId?: number; // presente só quando tipo === "mover"
-  tipo: "mover" | "parar";
+  // "nota" (28/08/2026): salva progresso SEM parar — ver editarNotaEmAndamento abaixo.
+  tipo: "mover" | "parar" | "nota";
   titulo: string;
-  // Descrição da atividade, pra abrir o campo já preenchido. Vem do servidor na linha.
+  // Descrição da atividade (ou a nota de progresso já salva, se houver — o servidor decide
+  // qual das duas), pra abrir o campo já preenchido. Vem do servidor na linha.
   descricaoPadrao: string | null;
 }
 
@@ -432,12 +434,44 @@ export function Atividades() {
     });
   }
 
+  // Salva um rascunho do que está sendo feito SEM parar o cronômetro (28/08/2026) — mesmo
+  // modal do "Parar", pergunta e rótulo de fechar diferentes (ver resolverPedidoObservacao e
+  // o render do modal mais abaixo).
+  function editarNotaEmAndamento(atividadeId: number) {
+    const alvo = atividades.find((a) => a.id === atividadeId);
+    setPedidoObservacao({
+      atividadeId,
+      tipo: "nota",
+      titulo: `Proposta ${alvo?.codpro ?? atividadeId}`,
+      descricaoPadrao: alvo?.descricaoPadrao ?? null,
+    });
+  }
+
+  async function executarSalvarNota(atividadeId: number, texto: string) {
+    setProcessando((atual) => new Set(atual).add(atividadeId));
+    try {
+      await axios.patch(`/api/atividades/${atividadeId}/observacao`, { observacao: texto });
+      // Recarrega pra já vir com o texto fresco do servidor — reabrir o lápis (mesmo depois
+      // de F5) precisa mostrar o que acabou de ser salvo, não a descrição genérica.
+      carregar();
+    } catch (err: any) {
+      toast.mostrar(err.response?.data?.error ?? "Falha ao salvar a observação", "destructive");
+    } finally {
+      setProcessando((atual) => {
+        const proximo = new Set(atual);
+        proximo.delete(atividadeId);
+        return proximo;
+      });
+    }
+  }
+
   function resolverPedidoObservacao(observacao: string | null) {
     if (!pedidoObservacao) return;
     const { atividadeId, novaColunaId, tipo } = pedidoObservacao;
     setPedidoObservacao(null);
     if (tipo === "mover" && novaColunaId != null) executarMovimentacao(atividadeId, novaColunaId, observacao);
     else if (tipo === "parar") executarParada(atividadeId, observacao);
+    else if (tipo === "nota") executarSalvarNota(atividadeId, observacao ?? "");
   }
 
   function abrirDetalhe(atividadeId: number, info: DetalheInfo) {
@@ -508,6 +542,7 @@ export function Atividades() {
           onAbrirDetalhe={abrirDetalhe}
           onIniciar={iniciarAtividade}
           onParar={pararAtividade}
+          onEditarNota={editarNotaEmAndamento}
           processando={processando}
         />
       ) : loading && atividades.length === 0 ? (
@@ -531,6 +566,7 @@ export function Atividades() {
             onAbrirDetalhe={abrirDetalhe}
             onIniciar={iniciarAtividade}
             onParar={pararAtividade}
+            onEditarNota={editarNotaEmAndamento}
             processando={processando}
           />
         </div>
@@ -578,7 +614,12 @@ export function Atividades() {
           titulo={pedidoObservacao.titulo}
           descricaoPadrao={pedidoObservacao.descricaoPadrao}
           onConfirmar={(texto) => resolverPedidoObservacao(texto || null)}
-          onFechar={() => resolverPedidoObservacao(null)}
+          // "nota": fechar é cancelar de verdade, sem salvar nada — diferente de
+          // "parar"/"mover", onde "Pular" ainda executa a ação (só sem texto digitado).
+          onFechar={() => (pedidoObservacao.tipo === "nota" ? setPedidoObservacao(null) : resolverPedidoObservacao(null))}
+          {...(pedidoObservacao.tipo === "nota"
+            ? { pergunta: "O que está sendo feito?", rotuloFechar: "Cancelar" }
+            : {})}
         />
       )}
     </div>

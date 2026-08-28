@@ -752,10 +752,18 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
   }
 });
 
-// POST /propostas/:codemp/:codpro/sincronizar — "Sync. ERP" da lista de Alocação: busca de
-// novo no Senior os dados desta proposta e dos itens dela, sem esperar o job noturno.
-// Mesma checagem de acesso de GET /propostas/:codemp/:codpro/itens (visão de detalhe) —
-// quem enxerga a proposta na lista pode sincronizá-la.
+// POST /propostas/:codemp/:codpro/sincronizar — "Sync. ERP": busca de novo no Senior os
+// dados desta proposta e dos itens dela, sem esperar o job noturno. Dois pontos de entrada
+// hoje: a linha já existente na lista de Alocação (proposta já local), e o campo de "Nº da
+// proposta" (28/08/2026) que aceita um número AVULSO, que o CaxHub pode nunca ter visto.
+//
+// `runPropostaSyncPorCodpro`/`runPropostaItemSyncPorCodpro` fazem upsert de verdade — criam
+// a proposta/itens se não existirem — então funcionam pros dois casos sem mudança. O que
+// muda é a ORDEM da checagem de acesso: só dá pra saber o depexe da proposta DEPOIS de
+// trazê-la do Senior (pra uma proposta nova, não tem nada local pra checar antes). Por isso
+// o guard roda depois do sync agora, não antes — bloqueia a RESPOSTA se a proposta não for
+// de um departamento permitido, mas a chamada ao Senior em si já aconteceu. Pro caso já
+// existente (proposta já local) o resultado é idêntico a antes, só a ordem mudou.
 alocacaoRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req: AuthenticatedRequest, res) => {
   try {
     const codemp = Number(req.params.codemp);
@@ -772,10 +780,6 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req: Authen
     }
     const { contexto, role } = ctx;
     const permitidos = await departamentosPermitidos(role, contexto);
-    if (!(await podeVerProposta(permitidos, codemp, codpro))) {
-      res.status(403).json({ error: "Sem acesso a esta proposta" });
-      return;
-    }
 
     let encontrada: boolean;
     let totalItens: number;
@@ -785,6 +789,16 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req: Authen
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : String(syncError);
       res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
+      return;
+    }
+
+    // Só checa acesso quando a proposta realmente existe no Senior (`encontrada`) — sem
+    // isso, uma proposta que não existe em lugar nenhum (número avulso digitado errado,
+    // por exemplo) faria `podeVerProposta` achar `null` e devolver 403 "Sem acesso", uma
+    // mensagem enganosa pro que é, na verdade, "não encontrada" (bug pego na verificação
+    // manual antes de fechar esta entrega, 28/08/2026).
+    if (encontrada && !(await podeVerProposta(permitidos, codemp, codpro))) {
+      res.status(403).json({ error: "Sem acesso a esta proposta" });
       return;
     }
 

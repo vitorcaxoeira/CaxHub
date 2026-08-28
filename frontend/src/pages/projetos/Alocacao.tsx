@@ -132,6 +132,11 @@ export function Alocacao() {
   // o carregamento completo do escopo do usuário.
   const [buscaInput, setBuscaInput] = useState(busca);
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
+  // Nº da proposta pro "Sync. ERP" avulso (28/08/2026) — diferente da busca acima (que só
+  // filtra o que já está carregado), este dispara uma sincronização real contra o Senior
+  // pra um número que o CaxHub pode nunca ter visto. Chave fixa "avulso" no
+  // useSincronizarErp, sem colisão com as chaves por linha (`${codemp}-${codpro}`).
+  const [codproDigitado, setCodproDigitado] = useState("");
   const [apenasComSaldo, setApenasComSaldoState] = useState(searchParams.get("apenasComSaldo") !== "false");
   const modproParam = searchParams.get("modpro");
   const modproInicial = modproParam
@@ -281,6 +286,31 @@ export function Alocacao() {
       .finally(() => setLoading(false));
   }
 
+  // "Sync. ERP" por número digitado (28/08/2026) — mesma rota da ação por linha, mas o
+  // número pode não existir localmente ainda (codemp=1 fixo, única empresa hoje). Só
+  // habilitado com o campo preenchido (ver disabled do botão no JSX).
+  async function sincronizarPropostaAvulsa() {
+    const codpro = codproDigitado.trim();
+    if (!codpro) return;
+    const resultado = await sincronizar("avulso", `/api/alocacao/propostas/1/${codpro}/sincronizar`);
+    if (resultado.ok) {
+      if (resultado.data.encontrada) {
+        toast.mostrar(`Sincronizado — ${resultado.data.totalItens} item(ns)`, "success");
+        // Traz a proposta recém-trazida pra tela na hora, sem o usuário precisar procurar.
+        setBuscaInput(codpro);
+        setCodproDigitado("");
+        carregar();
+      } else {
+        toast.mostrar("Proposta não encontrada no Senior", "warning");
+        setCodproDigitado("");
+      }
+    } else {
+      // Mantém o campo preenchido (403 sem acesso ou 502 falha no Senior) — facilita
+      // tentar de novo sem redigitar o número.
+      toast.mostrar(resultado.erro, "destructive");
+    }
+  }
+
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -329,11 +359,44 @@ export function Alocacao() {
         Gestão de Projetos · Alocação
       </p>
 
-      <div className="mb-6">
-        <h1 className="font-display text-2xl font-bold text-foreground">Alocação de Atividades</h1>
-        <p className="mt-1 text-sm text-muted">
-          Escolha uma proposta pra distribuir as horas dos itens dela entre os consultores do seu time.
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-foreground">Alocação de Atividades</h1>
+          <p className="mt-1 text-sm text-muted">
+            Escolha uma proposta pra distribuir as horas dos itens dela entre os consultores do seu time.
+          </p>
+        </div>
+        <div className="flex flex-none items-center gap-2">
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="Nº da proposta..."
+            value={codproDigitado}
+            onChange={(e) => setCodproDigitado(e.target.value)}
+            className={`${selectClass} w-32`}
+          />
+          <button
+            onClick={sincronizarPropostaAvulsa}
+            disabled={codproDigitado.trim() === "" || estaSincronizando("avulso")}
+            className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Sync. ERP — busca no Senior a proposta e os itens deste número"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={estaSincronizando("avulso") ? "animate-spin" : ""}
+            >
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {loading ? (

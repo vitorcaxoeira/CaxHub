@@ -8,6 +8,12 @@ interface ModalObservacaoAtividadeProps {
   descricaoPadrao?: string | null;
   onConfirmar: (observacao: string) => void;
   onFechar: () => void;
+  // "O que foi feito?" (parar/mover) por padrão; "O que está sendo feito?" (28/08/2026) pra
+  // salvar nota de progresso sem parar — ver Atividades.tsx.
+  pergunta?: string;
+  // "Pular" (parar/mover) ainda executa a ação, só sem texto — "Cancelar" (nota de progresso)
+  // não executa nada. O rótulo muda junto pra não confundir os dois comportamentos.
+  rotuloFechar?: string;
 }
 
 // Abre ao sair de "Em Andamento" (mover o card ou clicar Parar, ver Atividades.tsx) —
@@ -20,11 +26,18 @@ interface ModalObservacaoAtividadeProps {
 //
 // Vem com a descrição da atividade já escrita: o que a pessoa editar prevalece, e "Pular"
 // deixa a herança acontecer do lado do servidor de qualquer forma.
-export function ModalObservacaoAtividade({ titulo, descricaoPadrao, onConfirmar, onFechar }: ModalObservacaoAtividadeProps) {
+export function ModalObservacaoAtividade({
+  titulo,
+  descricaoPadrao,
+  onConfirmar,
+  onFechar,
+  pergunta = "O que foi feito?",
+  rotuloFechar = "Pular",
+}: ModalObservacaoAtividadeProps) {
   const [texto, setTexto] = useState(descricaoPadrao ?? "");
 
   return (
-    <Modal open onClose={onFechar} fecharPorFora={false} title="O que foi feito?" subtitulo={titulo}>
+    <Modal open onClose={onFechar} fecharPorFora={false} title={pergunta} subtitulo={titulo}>
       <textarea
         autoFocus
         value={texto}
@@ -41,7 +54,7 @@ export function ModalObservacaoAtividade({ titulo, descricaoPadrao, onConfirmar,
           onClick={onFechar}
           className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          Pular
+          {rotuloFechar}
         </button>
         <button
           onClick={() => onConfirmar(texto.trim())}

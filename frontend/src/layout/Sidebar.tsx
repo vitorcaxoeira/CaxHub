@@ -114,9 +114,15 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
 
 interface SidebarProps {
   open: boolean;
+  // Estado do drawer mobile (abaixo do breakpoint `lg`) — independente de `open`, que só
+  // colapsa/expande o painel de desktop. Ver AppShell.tsx.
+  mobileOpen?: boolean;
+  // Fecha o drawer mobile ao navegar (clique num link). Sem efeito no desktop — lá não há
+  // drawer pra fechar, é só um setState que não muda nada visualmente.
+  onNavigate?: () => void;
 }
 
-export function Sidebar({ open }: SidebarProps) {
+export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) {
   const { user } = useAuth();
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro a Receber"]));
   const [ehGestorOuAdmin, setEhGestorOuAdmin] = useState(false);
@@ -150,17 +156,21 @@ export function Sidebar({ open }: SidebarProps) {
   }
 
   return (
+    // Dois comportamentos no mesmo elemento, um por breakpoint: abaixo de `lg` é um drawer
+    // fixo que desliza por transform (`mobileOpen`); a partir de `lg` volta a ser o painel em
+    // fluxo normal de sempre, que só colapsa/expande a largura (`open`) — nunca os dois ao
+    // mesmo tempo, o breakpoint decide (28/08/2026, ver AppShell.tsx pro backdrop/estado).
     <aside
-      className={`hidden flex-none flex-col overflow-hidden border-border bg-surface transition-[width] duration-200 lg:flex ${
-        open ? "w-60 border-r" : "w-0 border-r-0"
-      }`}
+      className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-none flex-col overflow-hidden border-r border-border bg-surface transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:transition-[width] ${
+        mobileOpen ? "translate-x-0" : "-translate-x-full"
+      } ${open ? "lg:w-60 lg:border-r" : "lg:w-0 lg:border-r-0"}`}
     >
       <div className="flex h-16 items-center border-b border-border px-5">
         <p className="whitespace-nowrap font-display text-lg font-bold text-foreground">CaxHub</p>
       </div>
       <nav className="flex-1 space-y-1 whitespace-nowrap px-3 py-4">
         {topLevel.map((item) => (
-          <NavLink key={item.to} to={item.to} end className={linkClass}>
+          <NavLink key={item.to} to={item.to} end className={linkClass} onClick={onNavigate}>
             {item.label}
           </NavLink>
         ))}
@@ -180,7 +190,7 @@ export function Sidebar({ open }: SidebarProps) {
               {isOpen && (
                 <div className="mt-1 space-y-1 border-l border-border pl-3">
                   {group.items.map((item) => (
-                    <NavLink key={item.to} to={item.to} className={linkClass}>
+                    <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate}>
                       {item.label}
                     </NavLink>
                   ))}

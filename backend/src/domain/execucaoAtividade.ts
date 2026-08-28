@@ -34,8 +34,9 @@ export function podeParar(nomeColunaAtual: string | null | undefined): boolean {
 
 // Tamanho de AtividadeSessaoExecucao.observacao e de RatItem.desati — o texto passa pelos
 // dois. `despro` chega a 1.833 caracteres na base (19 itens passam de 1.000), então sem o
-// corte o insert quebraria justamente nos maiores.
-const LIMITE_OBSERVACAO = 1000;
+// corte o insert quebraria justamente nos maiores. Exportado (28/08/2026) pro mesmo corte
+// valer na rota de salvar nota de progresso (routes/atividades.ts, PATCH /:id/observacao).
+export const LIMITE_OBSERVACAO = 1000;
 
 // Descrição que a atividade "empresta" pra observação de uma parada: a mais específica que
 // existir. O nome do nó no cronograma descreve a atividade em si; o `despro` descreve o
@@ -195,12 +196,16 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
     ? Math.round((fimEfetivo.getTime() - sessaoAbertaAntes.inicio.getTime()) / 60000)
     : null;
 
-  // Observação vazia herda a descrição da atividade. Vale pra TODA parada — a automática
-  // (fim de expediente, teto, varredura, auto-pausa ao iniciar outra) não tem ninguém pra
-  // digitar, e era ali que a sessão fechava em branco. Consulta o banco só quando há
-  // sessão aberta pra fechar e não veio texto.
+  // Observação vazia herda, nesta ordem: (1) o que já estava salvo na sessão (nota de
+  // progresso gravada em andamento, ver PATCH /:id/observacao — sem isso, clicar "Pular" ao
+  // parar sobrescrevia com a descrição genérica uma nota que o consultor vinha escrevendo
+  // com cuidado, 28/08/2026); (2) a descrição da atividade. Vale pra TODA parada — a
+  // automática (fim de expediente, teto, varredura, auto-pausa ao iniciar outra) não tem
+  // ninguém pra digitar, e era ali que a sessão fechava em branco. Consulta o banco só
+  // quando há sessão aberta pra fechar e não veio texto nem observação prévia.
   const observacaoDaSessao =
     observacaoFechamento?.trim() ||
+    sessaoAbertaAntes?.observacao?.trim() ||
     (sessaoAbertaAntes ? await descricaoPadraoDaAtividade(atividade) : null);
 
   const entidadeId = entidadeIdAtividade(atividade.id);
@@ -327,7 +332,9 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
           limiteOutra && agora.getTime() > limiteOutra.instante.getTime() ? limiteOutra.instante : agora;
 
         const duracaoOutraMin = Math.round((fimOutra.getTime() - sessaoOutra.inicio.getTime()) / 60000);
-        const observacaoOutra = await descricaoPadraoDaAtividade(atividadeOutra);
+        // Mesma ordem de fallback do fechamento principal acima: nota já salva na sessão
+        // antes de cair pra descrição genérica.
+        const observacaoOutra = sessaoOutra.observacao?.trim() || (await descricaoPadraoDaAtividade(atividadeOutra));
 
         operacoes.push(
           prisma.atividadeConsultor.update({ where: { id: atividadeOutra.id }, data: { colunaId: colunaAFazer.id } }),

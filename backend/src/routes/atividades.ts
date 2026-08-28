@@ -36,6 +36,7 @@ import {
   montarOperacoesMovimentacao,
   podeIniciar,
   podeParar,
+  LIMITE_OBSERVACAO,
 } from "../domain/execucaoAtividade";
 
 // Router à parte de `projetosRouter` (que hoje é admin+comercial só, por causa de
@@ -164,8 +165,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
           where: { atividadeId: { in: atividadeIds }, fim: null },
           // expedienteProrrogadoAte entra aqui porque o limite depende dela: sem a
           // prorrogacao o card continuaria travando o cronometro no fim do expediente
-          // mesmo depois do consultor confirmar que segue trabalhando.
-          select: { atividadeId: true, inicio: true, expedienteProrrogadoAte: true },
+          // mesmo depois do consultor confirmar que segue trabalhando. `observacao` entra
+          // (28/08/2026) pro "descricaoPadrao" preferir a nota de progresso já salva na
+          // sessão aberta, em vez de sempre cair na descrição genérica da atividade.
+          select: { atividadeId: true, inicio: true, expedienteProrrogadoAte: true, observacao: true },
         })
       : Promise.resolve([]),
     idsEstrutura.length > 0
@@ -232,6 +235,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   // Kanban/Lista (card em "Em Andamento" mostra o timer contando a partir daqui). No
   // máximo 1 por atividade (a regra de start/stop garante isso), então um Map simples.
   const sessaoAbertaPorAtividadeId = new Map(sessoesAbertas.map((s) => [s.atividadeId, s.inicio]));
+  // Nota de progresso já salva na sessão aberta (PATCH /:id/observacao) — prefere isso sobre
+  // a descrição genérica ao montar `descricaoPadrao` mais abaixo, senão o texto salvo
+  // "desaparece" da tela ao reabrir o modal mesmo estando gravado no banco.
+  const observacaoAbertaPorAtividadeId = new Map(sessoesAbertas.map((s) => [s.atividadeId, s.observacao]));
 
   // Até quando cada sessão aberta pode contar — é o instante em que o cronômetro do card
   // trava e a tela pede a baixa, sem esperar a varredura de 5 em 5 minutos.
@@ -356,10 +363,16 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         estruturaAtividadeId: a.estruturaAtividadeId,
         estruturaNome: noEstrutura?.nome ?? null,
         estruturaPercentual: noEstrutura?.percentualConcluido ?? null,
-        // Texto com que o modal "O que foi feito?" abre preenchido ao parar. Sai do
-        // servidor, e não de um `estruturaNome ?? itemDescricao` no front, porque é a MESMA
-        // escolha que a parada automática grava — em dois lugares elas divergiriam.
-        descricaoPadrao: escolherDescricaoPadrao(noEstrutura?.nome ?? null, item?.despro ?? null),
+        // Texto com que o modal "O que foi feito?"/"O que está sendo feito?" abre
+        // preenchido. Sai do servidor, e não de um `estruturaNome ?? itemDescricao` no
+        // front, porque é a MESMA escolha que a parada automática grava — em dois lugares
+        // elas divergiriam. Prefere a nota de progresso já salva na sessão aberta (28/08/2026,
+        // ver PATCH /:id/observacao) sobre a descrição genérica — sem isso, reabrir o modal
+        // enquanto ainda em execução sempre mostrava a descrição da atividade, nunca o que
+        // já tinha sido digitado.
+        descricaoPadrao:
+          observacaoAbertaPorAtividadeId.get(a.id)?.trim() ||
+          escolherDescricaoPadrao(noEstrutura?.nome ?? null, item?.despro ?? null),
         // Mesma regra de acesso da Alocação (departamentosPermitidos/podeGerenciarProposta
         // em alocacao.ts) — evita mandar um consultor comum pra rota do cronograma, que
         // devolveria 403 por não gerenciar o departamento.
@@ -1056,8 +1069,9 @@ atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, r
           limitePorExpediente(sessao.inicio, jornada)?.getTime() === sessao.inicio.getTime(),
         opcoesProrrogacao: OPCOES_PRORROGACAO_MIN,
         // Pré-preenche o "O que foi feito?" do "Encerrar agora" — mesma origem do modal de
-        // parada no quadro e da herança da parada automática.
-        descricaoPadrao: await descricaoPadraoDaAtividade(sessao.atividade),
+        // parada no quadro e da herança da parada automática. Prefere a nota de progresso já
+        // salva na sessão (28/08/2026) sobre a descrição genérica, mesma regra de GET /.
+        descricaoPadrao: sessao.observacao?.trim() || (await descricaoPadraoDaAtividade(sessao.atividade)),
       },
     });
   } catch (error) {
@@ -1233,6 +1247,60 @@ atividadesRouter.post("/:id/encerrar-automatico", async (req: AuthenticatedReque
     });
   } catch (error) {
     handleError(res, error, "encerrar-automatico");
+  }
+});
+
+// PATCH /:id/observacao — "O que está sendo feito?" (28/08/2026): salva um rascunho de
+// observação na sessão aberta SEM parar o cronômetro (diferente de /stop, que sempre fecha
+// a sessão junto). Mesma permissão/estado de /stop — só faz sentido enquanto a atividade
+// está de fato "Em Andamento". Sem evento de auditoria: é um rascunho que muda várias vezes
+// na mesma sessão; o evento ATIVIDADE_PARADA já audita a observação FINAL ao fechar (ver
+// montarOperacoesMovimentacao, que agora também prefere esta observação sobre a descrição
+// genérica quando "Pular" é clicado no fechamento).
+atividadesRouter.patch("/:id/observacao", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeParaExecucao(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const { atividade, depexe, colunaAtual } = resolvido;
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { role, contexto } = ctx;
+
+    if (!podeExecutarAcao(role, contexto, "mover", { depexe, codfor: atividade.codfor })) {
+      res.status(403).json({ error: "Sem permissão para editar esta atividade" });
+      return;
+    }
+    if (!podeParar(colunaAtual?.nome)) {
+      res.status(409).json({ error: `Atividade não está em "${RAIA_EM_ANDAMENTO}" — nada em execução pra anotar.` });
+      return;
+    }
+
+    const texto = (typeof req.body?.observacao === "string" ? req.body.observacao.trim() : "").slice(0, LIMITE_OBSERVACAO);
+    const resultado = await prisma.atividadeSessaoExecucao.updateMany({
+      where: { atividadeId: id, fim: null },
+      data: { observacao: texto || null },
+    });
+    if (resultado.count === 0) {
+      res.status(409).json({ error: "Atividade não está mais em execução — a sessão foi fechada por outra ação." });
+      return;
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "observacao");
   }
 });
 

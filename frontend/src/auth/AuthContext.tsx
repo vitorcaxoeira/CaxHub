@@ -36,14 +36,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
+    // Guarda de "efeito superado" (28/08/2026, segunda corrida da mesma família — ver
+    // [[interceptor-global-precisa-validar-identidade-da-requisicao]]): este efeito dispara em
+    // TODA troca de sessão (logout → token vira null, login → token vira o novo). Se a chamada
+    // /me da sessão ANTERIOR ainda está em voo quando a sessão NOVA já foi montada, a resposta
+    // atrasada aplicaria `setUser` de quem já não é mais a sessão atual — sobrescrevendo login
+    // recém-feito com outra conta pelo perfil de quem estava logado antes. `cancelado` fecha
+    // isso: o React roda a limpeza do efeito ANTERIOR antes de montar o novo, então a resposta
+    // atrasada do efeito velho encontra `cancelado === true` e não aplica nada.
+    let cancelado = false;
     axios
       .get("/api/auth/me")
-      .then(({ data }) => setUser(data.user))
-      .catch(() => {
-        localStorage.removeItem("token");
-        setToken(null);
+      .then(({ data }) => {
+        if (!cancelado) setUser(data.user);
       })
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (!cancelado) {
+          localStorage.removeItem("token");
+          setToken(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelado) setLoading(false);
+      });
+    return () => {
+      cancelado = true;
+    };
   }, [token]);
 
   // Corrige corrida de tempo pré-existente (28/08/2026, incidente em produção): login() grava o
@@ -74,7 +92,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const id = axios.interceptors.response.use(
       (response) => {
         const renovado = response.headers["x-renewed-token"];
-        if (renovado) {
+        // BUG REAL (28/08/2026): uma requisição disparada pela sessão ANTERIOR (ex.: admin)
+        // pode ainda estar "em voo" no momento em que o usuário desloga e entra com OUTRA
+        // conta — a resposta dela chega DEPOIS do login novo, e sem esta checagem o
+        // interceptor (global, não sabe "de quem" é a resposta) trocava o token da sessão
+        // NOVA pelo token renovado da sessão VELHA, silenciosamente. Só aplica a renovação
+        // se o token que ESTA requisição enviou ainda for o token ativo agora — senão é
+        // resposta de uma sessão que já não é mais a atual, e descarta.
+        const tokenEnviado = (response.config.headers?.Authorization as string | undefined)?.replace(/^Bearer /, "");
+        const tokenAtual = localStorage.getItem("token");
+        if (renovado && tokenEnviado === tokenAtual) {
           localStorage.setItem("token", renovado);
           axios.defaults.headers.common.Authorization = `Bearer ${renovado}`;
           setToken(renovado);
@@ -85,9 +112,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Só desloga se ESTA requisição realmente mandou um Authorization e ainda assim foi
         // rejeitada (token de verdade inválido/expirado) — nunca baseado em "existe token no
         // localStorage agora", que também é verdade na corrida acima (login() já gravou lá antes
-        // do header estar pronto) e faria deslogar um login que acabou de funcionar.
-        const enviouToken = Boolean(error.config?.headers?.Authorization);
-        if (error.response?.status === 401 && enviouToken) {
+        // do header estar pronto) e faria deslogar um login que acabou de funcionar. Mesma
+        // guarda do sucesso acima (28/08/2026): o token enviado por ESTA requisição precisa
+        // ainda ser o token ativo agora — senão é uma falha de uma sessão ANTERIOR que já foi
+        // trocada por outro login, e não pode deslogar a sessão nova por causa dela.
+        const tokenEnviado = (error.config?.headers?.Authorization as string | undefined)?.replace(/^Bearer /, "");
+        const tokenAtual = localStorage.getItem("token");
+        if (error.response?.status === 401 && tokenEnviado && tokenEnviado === tokenAtual) {
           localStorage.removeItem("token");
           setToken(null);
           setUser(null);
