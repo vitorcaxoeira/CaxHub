@@ -159,7 +159,13 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => !item.gestorOuAdmin || ehGestorOuAdmin),
-    }));
+    }))
+    // Grupo com `roles: "*"` mas cujo único item (ou todos) é `gestorOuAdmin: true` (ex.:
+    // Contábil) fica sem NENHUM item pra quem não é gestor nem admin — sem este filtro, o
+    // grupo continuava aparecendo vazio no menu (achado real: Edson via "Contábil" com
+    // "Em breve" dentro, 28/08/2026). A visibilidade do GRUPO precisa considerar o resultado
+    // do filtro por item, não só o `roles` estático dele.
+    .filter((group) => group.items.length > 0);
 
   function toggleGroup(label: string) {
     setOpenGroups((prev) => {
@@ -202,6 +208,9 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
                 <span>{group.label}</span>
                 <ChevronIcon open={isOpen} />
               </button>
+              {/* Sem fallback "Em breve" pra grupo vazio (28/08/2026): `visibleGroups` acima já
+                  filtra fora qualquer grupo cujos itens zeraram depois do recorte por
+                  gestorOuAdmin — chegar aqui com `group.items` vazio não acontece mais. */}
               {isOpen && (
                 <div className="mt-1 space-y-1 border-l border-border pl-3">
                   {group.items.map((item) => (
@@ -209,7 +218,6 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
                       {item.label}
                     </NavLink>
                   ))}
-                  {group.items.length === 0 && <p className="px-3 py-2 text-xs text-muted">Em breve</p>}
                 </div>
               )}
             </div>
