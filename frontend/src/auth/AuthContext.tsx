@@ -46,6 +46,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, [token]);
 
+  // Corrige corrida de tempo pré-existente (28/08/2026, incidente em produção): login() grava o
+  // token no localStorage de forma síncrona, mas quem seta axios.defaults.headers.common.Authorization
+  // é o efeito [token] acima — roda depois do commit. Se navigate("/") já trocar de rota no mesmo
+  // ciclo, os efeitos da Home (que buscam /dashboard/meu-perfil etc.) podem disparar ANTES desse
+  // header existir (efeitos de componente filho rodam antes dos do pai) — a requisição sai sem
+  // Authorization, vira 401 "Token ausente". Esse interceptor de REQUISIÇÃO lê o token direto do
+  // localStorage (sempre síncrono e atualizado) e injeta o header no momento do disparo — não
+  // depende de o efeito acima já ter rodado, fecha a corrida na raiz pra qualquer requisição.
+  useEffect(() => {
+    const id = axios.interceptors.request.use((config) => {
+      const tokenAtual = localStorage.getItem("token");
+      if (tokenAtual) config.headers.Authorization = `Bearer ${tokenAtual}`;
+      return config;
+    });
+    return () => axios.interceptors.request.eject(id);
+  }, []);
+
   // Renovação por deslizamento + auto-logout (27/08/2026) — primeiro interceptor global de
   // resposta do projeto, registrado uma vez. Backend (requireAuth) manda um token novo no header
   // X-Renewed-Token quando o atual já passou da metade da vida útil; aqui só troca ele
@@ -65,8 +82,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return response;
       },
       (error) => {
-        // Só desloga se já havia sessão — não reage a 401 de chamada anônima (ex.: login errado).
-        if (error.response?.status === 401 && localStorage.getItem("token")) {
+        // Só desloga se ESTA requisição realmente mandou um Authorization e ainda assim foi
+        // rejeitada (token de verdade inválido/expirado) — nunca baseado em "existe token no
+        // localStorage agora", que também é verdade na corrida acima (login() já gravou lá antes
+        // do header estar pronto) e faria deslogar um login que acabou de funcionar.
+        const enviouToken = Boolean(error.config?.headers?.Authorization);
+        if (error.response?.status === 401 && enviouToken) {
           localStorage.removeItem("token");
           setToken(null);
           setUser(null);
