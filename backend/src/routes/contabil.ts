@@ -14,11 +14,14 @@ import {
 import { runSincronizacaoContabil, sincronizacaoContabilEmAndamento } from "../sync/contabilSyncOrchestrator";
 
 export const contabilRouter = Router();
-// Temporariamente restrito a admin de novo (pedido do Vitor, 26/08/2026) — a lógica de
-// gruposPermitidos/gruposConsultados e a tabela DepartamentoGrupoContabil (ver
-// Administração > Departamento x Grupo Contábil) continuam mescladas e prontas; só falta trocar
-// esta linha de volta pra `requireAuth` quando o gestor for liberado de vez.
-contabilRouter.use(requireAuth, requireRole("admin"));
+// Só autenticado — quem vê O QUÊ é decidido rota a rota por gruposPermitidos/gruposConsultados
+// abaixo (mesmo padrão de departamentosPermitidos em routes/alocacao.ts): admin sem restrição,
+// gestor só os despar dos departamentos que gerencia (tabela DepartamentoGrupoContabil,
+// administrada em Administração > Departamento x Grupo Contábil). Reaberto em 28/08/2026 —
+// tinha sido restrito a admin temporariamente em 26/08/2026 (commit 3398f74) enquanto o
+// mapeamento era configurado; já está populado de verdade (29 mapeamentos). /centros-custo,
+// /sincronizacao e /departamentos-grupos continuam admin-only via requireRole na própria rota.
+contabilRouter.use(requireAuth);
 
 function parseStringListParam(value: unknown): string[] | null {
   if (typeof value !== "string" || value === "") return null;
