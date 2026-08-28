@@ -232,6 +232,12 @@ export function Alocacao() {
 
   useEffect(() => {
     if (!user) return;
+    // Guarda de "efeito superado" (28/08/2026) — mesma classe de corrida já corrigida em
+    // AuthContext.tsx e Sidebar.tsx: este efeito dispara de novo toda vez que `user` muda
+    // (login/logout/troca de conta), e sem isso a resposta de uma sessão ANTERIOR podia
+    // chegar depois de já estar logado como outra pessoa e preencher o filtro de
+    // departamentos com o recorte de quem não é mais o usuário atual.
+    let cancelado = false;
     const carregarDepartamentos =
       user.role === "admin"
         ? axios.get("/api/atividades/opcoes-filtro").then(({ data }) => data.departamentos as OpcaoFiltro[])
@@ -242,7 +248,14 @@ export function Alocacao() {
                 (data.departamentosGerenciados ?? []).map((d: any) => ({ value: d.depexe, label: d.depexeLabel })) as OpcaoFiltro[]
             );
 
-    carregarDepartamentos.then(setDepartamentos).catch(() => {});
+    carregarDepartamentos
+      .then((departamentos) => {
+        if (!cancelado) setDepartamentos(departamentos);
+      })
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
   }, [user]);
 
   // Mesmo endpoint independente do papel — /opcoes-filtro já resolve internamente quem cada
