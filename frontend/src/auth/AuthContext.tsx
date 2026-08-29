@@ -1,6 +1,28 @@
 import axios from "axios";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 
+interface PayloadJwt {
+  userId: number;
+  iat: number;
+  exp: number;
+}
+
+// Decodifica só o payload (2º segmento) de um JWT — sem verificar assinatura, que é papel
+// exclusivo do backend. Usado apenas pra validar um X-Renewed-Token ANTES de adotar (ver
+// interceptor de resposta abaixo, 29/08/2026): nunca pra decidir autorização de verdade.
+function decodificarPayloadJwt(token: string): PayloadJwt | null {
+  try {
+    const [, payloadBase64] = token.split(".");
+    const payload = JSON.parse(atob(payloadBase64.replace(/-/g, "+").replace(/_/g, "/")));
+    if (typeof payload.userId !== "number" || typeof payload.iat !== "number" || typeof payload.exp !== "number") {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 export interface AuthUser {
   id: number;
   email: string;
@@ -101,10 +123,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // resposta de uma sessão que já não é mais a atual, e descarta.
         const tokenEnviado = (response.config.headers?.Authorization as string | undefined)?.replace(/^Bearer /, "");
         const tokenAtual = localStorage.getItem("token");
+        // Segunda guarda, em cima da de identidade da requisição acima (29/08/2026, incidente em
+        // produção): a API saía sem Cache-Control, o Chrome cacheava a resposta com o
+        // X-Renewed-Token dentro, e uma revalidação (304) reentregava esse header já expirado —
+        // a guarda acima passava (a requisição realmente tinha mandado o token atual), mas o
+        // CONTEÚDO da resposta é que estava velho. Corrigido na raiz no backend (Cache-Control:
+        // no-store em toda resposta da API, server.ts), mas o navegador de quem já foi afetado
+        // ainda tem a entrada envenenada no cache até a próxima requisição limpar — por isso
+        // esta segunda camada: só adota o renovado se ele for comprovadamente MELHOR que o
+        // atual (mesmo usuário, mais novo, ainda no futuro), nunca só "porque veio no header".
         if (renovado && tokenEnviado === tokenAtual) {
-          localStorage.setItem("token", renovado);
-          axios.defaults.headers.common.Authorization = `Bearer ${renovado}`;
-          setToken(renovado);
+          const payloadAtual = decodificarPayloadJwt(tokenAtual ?? "");
+          const payloadRenovado = decodificarPayloadJwt(renovado);
+          const legitimo =
+            payloadAtual &&
+            payloadRenovado &&
+            payloadRenovado.userId === payloadAtual.userId &&
+            payloadRenovado.iat > payloadAtual.iat &&
+            payloadRenovado.exp * 1000 > Date.now();
+          if (legitimo) {
+            localStorage.setItem("token", renovado);
+            axios.defaults.headers.common.Authorization = `Bearer ${renovado}`;
+            setToken(renovado);
+          }
         }
         return response;
       },

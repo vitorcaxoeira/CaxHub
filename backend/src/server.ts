@@ -83,6 +83,12 @@ import { SYNC_JOBS } from "./sync/registry";
 garantirDiretorioUploads();
 
 const app = express();
+// Desliga o ETag automático do Express pra API — com ele, o navegador guarda cada resposta
+// autenticada e revalida via If-None-Match, e o servidor então responde 304 SEM recalcular
+// headers como X-Renewed-Token (29/08/2026, incidente em produção: ver o middleware no-store
+// logo abaixo pro porquê disso quebrava sessão de verdade). express.static (avatares) gera o
+// próprio ETag por fora, não é afetado.
+app.set("etag", false);
 app.use(express.json());
 app.use(attachCorrelationId);
 
@@ -90,6 +96,20 @@ app.use(attachCorrelationId);
 // precisa carregar via <img src> puro (sem header Authorization). Cache-busting vem da
 // query string `?v=timestamp` gravada em User.fotoUrl a cada troca, não de headers HTTP.
 app.use("/uploads/avatars", express.static(AVATARS_DIR));
+
+// INCIDENTE EM PRODUÇÃO (29/08/2026): toda resposta JSON da API saía com ETag e sem
+// Cache-Control — o Chrome cacheava, e ao revalidar (If-None-Match) o servidor respondia 304
+// sem reemitir X-Renewed-Token. O navegador então entregava ao JS a resposta ARMAZENADA,
+// headers antigos inclusos — o interceptor de renovação por deslizamento (AuthContext.tsx)
+// achava um X-Renewed-Token de HORAS atrás, já expirado (ou de outra sessão, no caso do menu
+// vazando pra conta errada), e sobrescrevia o token válido por ele. Próxima /auth/me: 401,
+// auto-logout. Reproduzível sempre que /api/atividades/minha-sessao-aberta (corpo estável,
+// consultado em toda tela por VigiaFimDeJornada.tsx) batia 304 logo depois do login. Nenhuma
+// resposta de API deve ir pro cache do navegador — cada uma é específica da sessão que a pediu.
+app.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 
 app.use("/auth", authRouter);
 app.use("/perfil", perfilRouter);
