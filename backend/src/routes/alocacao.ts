@@ -19,6 +19,7 @@ import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { SITRAT_CANCELADO } from "../domain/ratDominio";
 import { Prisma } from "@prisma/client";
 
 // Área de alocação: o Líder Técnico (Gestor) distribui as horas de um item de proposta
@@ -1168,7 +1169,8 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
 
     // "Horas realizadas" por alocação — mesmo cálculo de carregarAtividadesVisiveis em
     // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
-    // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão).
+    // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão), EXCETO o de uma
+    // RAT cancelada (sitrat=5) — RAT cancelada não é trabalho realizado.
     // `> 0n`, não só `!= null`: ver comentário equivalente na rota /consultores, mais acima
     // neste arquivo — seqati=0 não é um seqAti real, e sem essa guarda uma única alocação
     // zerada rouba pra si a soma de todo RatItem de seqati=0 do banco inteiro.
@@ -1176,7 +1178,12 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     const ratItemsComHoras =
       seqatisValidos.length > 0
         ? await prisma.ratItem.findMany({
-            where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
+            where: {
+              seqati: { in: seqatisValidos },
+              horini: { not: null },
+              horfim: { not: null },
+              rat: { sitrat: { not: SITRAT_CANCELADO } },
+            },
             select: { seqati: true, horini: true, horfim: true },
           })
         : [];
