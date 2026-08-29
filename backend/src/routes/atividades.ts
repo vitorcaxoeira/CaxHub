@@ -15,6 +15,7 @@ import {
   SITPRO_ATIVIDADES_VISIVEIS,
 } from "../domain/propostasDominio";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos, gerenciaDepartamento } from "../domain/contextoProjeto";
+import { SITRAT_CANCELADO } from "../domain/ratDominio";
 import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
 import { enfileirar } from "../sync/outboxSenior";
@@ -150,7 +151,12 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
       : Promise.resolve([]),
     seqatisValidos.length > 0
       ? prisma.ratItem.findMany({
-          where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
+          where: {
+            seqati: { in: seqatisValidos },
+            horini: { not: null },
+            horfim: { not: null },
+            rat: { sitrat: { not: SITRAT_CANCELADO } },
+          },
           select: { seqati: true, horini: true, horfim: true },
         })
       : Promise.resolve([]),
@@ -205,9 +211,10 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
 
   // "Horas realizadas" = duração das sessões de execução ainda não confirmadas (tempo já
   // rastreado, mas ainda não virou RatItem) + duração (horfim-horini) dos RatItem já
-  // confirmados/sincronizados pra essa atividade. Uma sessão confirmada tem `ratItemId`
-  // preenchido, então sai da conta de "sessões" e passa a contar via RatItem — nunca as
-  // duas ao mesmo tempo, pra não somar a mesma hora duas vezes.
+  // confirmados/sincronizados pra essa atividade, EXCETO o de uma RAT cancelada (sitrat=5)
+  // — já filtrado na query acima. Uma sessão confirmada tem `ratItemId` preenchido, então
+  // sai da conta de "sessões" e passa a contar via RatItem — nunca as duas ao mesmo tempo,
+  // pra não somar a mesma hora duas vezes.
   const minutosRealizadosPorSeqati = new Map<bigint, number>();
   for (const item of ratItemsComHoras) {
     if (item.seqati == null || item.horini == null || item.horfim == null) continue;
