@@ -17,6 +17,11 @@ export const SITRAT_LABELS: Record<number, string> = {
 // são enumeradas em ordem crescente, não na ordem de inserção do literal acima).
 export const SITRAT_ORDER = [9, 8, 6, 5, 4, 2, 1];
 
+// RAT cancelada no Senior — usado por quem SOMA horas (domain/resumoConsultor.ts) pra excluir
+// da conta; a listagem (routes/rats.ts) continua mostrando a linha normalmente, só com o tom
+// "destructive" (ver sitratTone abaixo). Uma RAT cancelada não vira trabalho realizado.
+export const SITRAT_CANCELADO = 5;
+
 export function sitratLabel(sitrat: number | null): string {
   if (sitrat === null) return "—";
   return SITRAT_LABELS[sitrat] ?? `Situação ${sitrat}`;

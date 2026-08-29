@@ -1,11 +1,14 @@
 import { prisma } from "../db/prisma";
+import { SITRAT_CANCELADO } from "./ratDominio";
 
 // Agregações do dashboard inicial do consultor (Home) — separadas da rota (routes/
 // dashboard.ts) porque a conta de "horas realizadas num período" é a mesma definição usada
 // em domain/tetoAtividade.ts (realizadoDaAtividade), só que aqui somada por DIA/PROJETO em
 // vez de por atividade: sessão de execução fechada e NÃO confirmada (confirmada=false,
-// fim preenchido, não excluída) + duração de RatItem já confirmado/sincronizado. Nunca as
-// duas ao mesmo tempo pra mesma hora (ver comentário de realizadoDaAtividade).
+// fim preenchido, não excluída) + duração de RatItem já confirmado/sincronizado, EXCETO o
+// de uma RAT cancelada (sitrat=5) — RAT cancelada não é trabalho realizado, mesmo com
+// horini/horfim preenchidos. Nunca sessão e RatItem ao mesmo tempo pra mesma hora (ver
+// comentário de realizadoDaAtividade).
 
 export interface MinutosPorDia {
   data: string; // YYYY-MM-DD
@@ -64,7 +67,7 @@ export async function horasRealizadasNoPeriodo(
         horini: { not: null },
         horfim: { not: null },
         datati: { gte: de, lte: fimDoDia },
-        rat: { codfor },
+        rat: { codfor, sitrat: { not: SITRAT_CANCELADO } },
       },
       select: { datati: true, horini: true, horfim: true, codpro: true },
     }),
