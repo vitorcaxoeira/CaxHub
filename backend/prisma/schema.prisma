@@ -798,6 +798,15 @@ model PropostaModoAlocacao {
   definidoEm  DateTime @default(now())
   definidoPor Int? // codusu
 
+  /// Desliga o bypass "Salvar mesmo excedendo" da edição de duração no Cronograma
+  /// (PATCH /alocacao/estrutura/:id, campo confirmarExcedente no body) — quando true,
+  /// validarSomaEstrutura nunca pode ser pulada por essa via, mesmo com a flag no body.
+  /// Ausência de linha nesta tabela (proposta sem config explícita) equivale a `false`,
+  /// mesmo espírito do default de `modo` (ver resolverModoAlocacao). NÃO afeta
+  /// AtividadeConsultor.horasExcedentes, canal deliberadamente separado de autorizar
+  /// estouro do teto de apontamento (ver comentário do campo).
+  bloqueiaExcedenteEstrutura Boolean @default(false)
+
   @@id([codemp, codpro])
   @@map("proposta_modo_alocacao")
 }

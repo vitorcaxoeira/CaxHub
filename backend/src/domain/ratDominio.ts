@@ -34,12 +34,14 @@ export function sitratTone(sitrat: number | null): "success" | "warning" | "dest
   return "success"; // impresso/aprovado/faturado/fechado
 }
 
-// Status agregado de integração da RAT com o Senior (28/08/2026) — construído em cima da fila
-// já existente (backend/src/sync/outboxSenior.ts, SincronizacaoPendente), sem inventar um novo
-// conceito de status. Mesma classificação visual já usada por item em AcaoIntegracao
-// (frontend/src/pages/projetos/MeusApontamentos.tsx): confirmado (numrat preenchido) vence
-// tudo; senão, pendência com erro = falha; pendência sem erro (em voo ou recém-enfileirada) =
-// enviando; sem pendência nenhuma (nunca enfileirado, ou desvinculado) = pendente.
+// Status agregado de integração com o Senior (28/08/2026) — construído em cima da fila já
+// existente (backend/src/sync/outboxSenior.ts, SincronizacaoPendente), sem inventar um novo
+// conceito de status. Nasceu pra RAT (confirmado = numrat preenchido) e hoje também serve
+// alocação/AtividadeConsultor (confirmado = seqati preenchido) — o chamador resolve "o que é
+// confirmado" pro próprio domínio, esta função só classifica a partir daí. Regra: confirmado
+// vence tudo; senão, pendência com erro OU "invalido" (dado ausente, nunca será tentada — ver
+// outboxSenior.ts) = falha; pendência sem erro (em voo ou recém-enfileirada) = enviando; sem
+// pendência nenhuma (nunca enfileirado, ou desvinculado) = pendente.
 export type IntegracaoErpStatus = "sincronizado" | "enviando" | "falha" | "pendente";
 
 export const INTEGRACAO_ERP_LABELS: Record<IntegracaoErpStatus, string> = {
@@ -61,25 +63,29 @@ export function integracaoErpTone(status: IntegracaoErpStatus): "success" | "war
 }
 
 function classificarItemIntegracao(
-  numrat: number | null,
+  confirmado: boolean,
   pendencia?: { status: string; ultimoErro: string | null }
 ): IntegracaoErpStatus {
-  if (numrat != null) return "sincronizado";
+  if (confirmado) return "sincronizado";
   if (!pendencia) return "pendente";
+  // Dado ausente na hora de enfileirar (ex.: alocação sem qtdhor) — nunca é tentada, nunca
+  // ganha ultimoErro (ver outboxSenior.ts). Sem esse caso à parte cairia em "enviando", o que
+  // é enganoso: precisa de correção manual, igual uma falha real.
+  if (pendencia.status === "invalido") return "falha";
   if (pendencia.ultimoErro) return "falha";
   return "enviando"; // "enviando" de verdade, ou "pendente" na fila mas sem erro ainda
 }
 
-// Agregado por RAT: pior caso vence (falha > enviando > pendente > sincronizado). RAT sem
-// nenhum item cai em "pendente" por default. IMPORTANTE: quem monta `itens` precisa já ter
-// filtrado a pendência por `tipo: "criar_apontamento"` — toda RAT aprovada também enfileira uma
-// pendência `aprovar_rat` sem canal publicado no Senior, que fica "pendente" pra sempre e
+// Agregado por RAT/atividade: pior caso vence (falha > enviando > pendente > sincronizado).
+// Sem nenhum item cai em "pendente" por default. IMPORTANTE: quem monta `itens` precisa já
+// ter filtrado a pendência pro(s) tipo(s) certo(s) — ex.: toda RAT aprovada também enfileira
+// uma pendência `aprovar_rat` sem canal publicado no Senior, que fica "pendente" pra sempre e
 // contaminaria esse agregado se não for excluída antes (ver GET /rats em routes/rats.ts).
 export function calcularIntegracaoErp(
-  itens: { numrat: number | null; pendencia?: { status: string; ultimoErro: string | null } }[]
+  itens: { confirmado: boolean; pendencia?: { status: string; ultimoErro: string | null } }[]
 ): IntegracaoErpStatus {
   if (itens.length === 0) return "pendente";
-  const classificados = itens.map((i) => classificarItemIntegracao(i.numrat, i.pendencia));
+  const classificados = itens.map((i) => classificarItemIntegracao(i.confirmado, i.pendencia));
   if (classificados.includes("falha")) return "falha";
   if (classificados.includes("enviando")) return "enviando";
   if (classificados.includes("pendente")) return "pendente";

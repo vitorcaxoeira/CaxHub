@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { agregarHoras, formatHorasCompacto, larguraHorasProposta, somarOrcamentos } from "../../lib/cronograma";
 import { tomConsumo } from "../../lib/consumoHoras";
@@ -20,7 +20,33 @@ const toneBadge: Record<string, string> = {
 export function CronogramaProposta() {
   const { codemp, codpro } = useParams<{ codemp: string; codpro: string }>();
   const navigate = useNavigate();
-  const { proposta, nos, loading, erro, recarregar, atualizarNo, criarNo, excluirNo, duplicarNo, moverItem } = useCronograma(codemp, codpro);
+  const {
+    proposta,
+    nos,
+    loading,
+    erro,
+    recarregar,
+    atualizarNo,
+    criarNo,
+    excluirNo,
+    duplicarNo,
+    moverItem,
+    atualizarBloqueiaExcedenteEstrutura,
+  } = useCronograma(codemp, codpro);
+  const [salvandoConfig, setSalvandoConfig] = useState(false);
+  const [erroConfig, setErroConfig] = useState<string | null>(null);
+
+  async function onMudarBloqueiaExcedente(bloqueia: boolean) {
+    setSalvandoConfig(true);
+    setErroConfig(null);
+    try {
+      await atualizarBloqueiaExcedenteEstrutura(bloqueia);
+    } catch (err) {
+      setErroConfig((err as Error).message);
+    } finally {
+      setSalvandoConfig(false);
+    }
+  }
 
   const orcamentoTotal = useMemo(() => somarOrcamentos(nos.filter((n) => n.tipo === "item"), agregarHoras(nos)), [nos]);
 
@@ -70,6 +96,24 @@ export function CronogramaProposta() {
             </div>
           </div>
           <IndicadorProgresso avanco={orcamentoTotal.consumoReal} cor={tomAvanco.barra} alturaPx={4} className="mt-3" />
+
+          {/* Só quem gerencia a proposta decide essa regra — desliga o bypass "Salvar mesmo
+              excedendo" da edição de duração (DrawerAtividade). horasExcedentes continua
+              funcionando normal, é um canal à parte (autoriza estourar, não some daqui). */}
+          {proposta.podeGerenciarProposta && (
+            <div className="mt-3 flex items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-muted">
+                <input
+                  type="checkbox"
+                  checked={proposta.bloqueiaExcedenteEstrutura}
+                  disabled={salvandoConfig}
+                  onChange={(e) => onMudarBloqueiaExcedente(e.target.checked)}
+                />
+                Travar horas acima do saldo do item na estrutura (sem "salvar mesmo excedendo")
+              </label>
+              {erroConfig && <p className="text-[12px] text-destructive">{erroConfig}</p>}
+            </div>
+          )}
         </div>
       )}
 
@@ -94,6 +138,7 @@ export function CronogramaProposta() {
         moverItem={moverItem}
         podeGerenciarProposta={proposta?.podeGerenciarProposta ?? false}
         larguraHoras={larguraHoras}
+        bloqueiaExcedenteEstrutura={proposta?.bloqueiaExcedenteEstrutura ?? false}
       />
     </div>
   );

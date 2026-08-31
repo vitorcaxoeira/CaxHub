@@ -3,6 +3,7 @@ import axios from "axios";
 import { HorasAgregadas, StatusNo, formatHorasCompacto, projetarSaldo } from "../../lib/cronograma";
 import { NoCronogramaCompleto, PatchNo } from "../../hooks/useCronograma";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
+import { TetoApontamento } from "../atividades/TetoApontamento";
 
 const OPCOES_STATUS: { value: Exclude<StatusNo, "bloqueada">; label: string }[] = [
   { value: "nao_iniciada", label: "Não iniciada" },
@@ -39,6 +40,13 @@ interface DrawerAtividadeProps {
   onSalvar: (id: number, patch: PatchNo) => Promise<void>;
   // Dígitos mínimos de hora usados na tela inteira (ver larguraHorasProposta).
   larguraHoras: number;
+  // Desliga o bypass "Salvar mesmo excedendo" (ver PropostaModoAlocacao.bloqueiaExcedenteEstrutura) —
+  // com isso ligado, estourar o saldo do item trava o salvamento em vez de só avisar.
+  bloqueiaExcedenteEstrutura: boolean;
+  // Recarrega a árvore inteira depois de autorizar/solicitar excedente (TetoApontamento) —
+  // sem isso o badge de excedente na árvore (LinhaNo) ficaria com o valor velho até um
+  // reload manual da página.
+  onRecarregar: () => void;
 }
 
 export function DrawerAtividade({
@@ -52,6 +60,8 @@ export function DrawerAtividade({
   onFechar,
   onSalvar,
   larguraHoras,
+  bloqueiaExcedenteEstrutura,
+  onRecarregar,
 }: DrawerAtividadeProps) {
   const [nome, setNome] = useState(no.nome);
   const [responsavelCodfor, setResponsavelCodfor] = useState<number | "">(no.responsavelCodfor ?? "");
@@ -72,6 +82,17 @@ export function DrawerAtividade({
   const saldoProjetado =
     item && horasPrevistasProjetadas != null ? projetarSaldo(item, no.id, horasPrevistasProjetadas, porId, agregados) : null;
   const estouraOrcamento = saldoProjetado != null && saldoProjetado < 0;
+  // Com o bloqueio ligado na proposta, não existe "confirmar mesmo assim" — o botão trava
+  // igual ao ModalAlocarConsultores (que nunca teve esse bypass).
+  const excedenteTravado = estouraOrcamento && bloqueiaExcedenteEstrutura;
+
+  // Uma vez confirmada pelo Senior (seqati preenchido), o responsável não pode mais trocar
+  // por aqui — trocar de verdade soft-deleta essa alocação e cria outra do zero (ver
+  // PATCH /alocacao/estrutura/:id), o que deixaria um seqAti órfão pra trás. O backend já
+  // recusa a mesma tentativa (mesma condição) — isto aqui só evita a viagem ao servidor pra
+  // descobrir.
+  const alocacaoConfirmada = no.alocacoesResumo.find((a) => a.seqati != null);
+  const responsavelTravado = alocacaoConfirmada != null;
 
   useEffect(() => {
     setNome(no.nome);
@@ -145,8 +166,9 @@ export function DrawerAtividade({
       patch.observacao = observacao.trim() === "" ? null : observacao.trim();
       // Distribuição pode ser provisória — não bloqueia o salvamento quando estoura o
       // orçamento do item, só avisa (ver saldoProjetado acima) e manda essa confirmação
-      // "leve" junto (o rótulo do botão já é o aviso; não pede um segundo clique).
-      if (estouraOrcamento) patch.confirmarExcedente = true;
+      // "leve" junto (o rótulo do botão já é o aviso; não pede um segundo clique). Exceto
+      // se a proposta travou esse bypass — aí nem tenta, o botão já está desabilitado.
+      if (estouraOrcamento && !bloqueiaExcedenteEstrutura) patch.confirmarExcedente = true;
     }
     try {
       await onSalvar(no.id, patch);
@@ -215,8 +237,9 @@ export function DrawerAtividade({
                 <select
                   id="drawer-responsavel"
                   value={responsavelCodfor}
+                  disabled={responsavelTravado}
                   onChange={(e) => setResponsavelCodfor(e.target.value === "" ? "" : Number(e.target.value))}
-                  className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-muted"
                 >
                   <option value="">Sem responsável</option>
                   {consultores.map((c) => (
@@ -225,6 +248,11 @@ export function DrawerAtividade({
                     </option>
                   ))}
                 </select>
+                {responsavelTravado && (
+                  <p className="mt-1 text-[11.5px] text-muted">
+                    Já confirmado pelo Senior — pra trocar, exclua a alocação atual e aloque um novo consultor.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -318,6 +346,22 @@ export function DrawerAtividade({
                 </p>
               </div>
 
+              {/* Uma por alocação — normalmente 1, pode ser mais de uma numa tarefa
+                  compartilhada entre consultores (ver alocacoesResumo). Mesmo componente do
+                  Kanban/Lista/Calendário/Timeline/MeusApontamentos (AtividadeDetalhe), só
+                  que embutido aqui em vez de aberto num drawer à parte. */}
+              {no.alocacoesResumo.map((a) => (
+                <TetoApontamento
+                  key={a.id}
+                  atividadeConsultorId={a.id}
+                  qtdhorPrevisto={a.qtdhor}
+                  horasExcedentesAtuais={a.horasExcedentes}
+                  podeAutorizarExcedente={a.podeAutorizarExcedente}
+                  souOExecutor={a.souOExecutor}
+                  onAlterado={onRecarregar}
+                />
+              ))}
+
               <div>
                 <label htmlFor="drawer-observacao" className="mb-1 block text-[12.5px] font-medium text-muted">
                   Observação
@@ -345,12 +389,13 @@ export function DrawerAtividade({
           </button>
           <button
             onClick={salvar}
-            disabled={salvando}
+            disabled={salvando || excedenteTravado}
+            title={excedenteTravado ? "Esta proposta não permite ultrapassar o saldo do item — reduza as horas antes de salvar." : undefined}
             className={`flex-1 rounded-md py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               estouraOrcamento ? "bg-destructive text-destructive-foreground" : "bg-primary text-primary-foreground"
             }`}
           >
-            {salvando ? "Salvando..." : estouraOrcamento ? "Salvar mesmo excedendo" : "Salvar"}
+            {salvando ? "Salvando..." : excedenteTravado ? "Saldo do item excedido" : estouraOrcamento ? "Salvar mesmo excedendo" : "Salvar"}
           </button>
         </div>
       </div>

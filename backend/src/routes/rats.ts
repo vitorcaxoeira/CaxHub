@@ -127,7 +127,7 @@ async function buscarItensEIntegracao(ratIds: number[]) {
     const itensDaRat = itensPorRat.get(ratId) ?? [];
     integracaoPorRat.set(
       ratId,
-      calcularIntegracaoErp(itensDaRat.map((item) => ({ numrat: item.numrat, pendencia: pendenciaPorRatItem.get(item.id) })))
+      calcularIntegracaoErp(itensDaRat.map((item) => ({ confirmado: item.numrat != null, pendencia: pendenciaPorRatItem.get(item.id) })))
     );
   }
 

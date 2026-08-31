@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useCallback, useEffect, useState } from "react";
 import { NoCronograma, StatusNo } from "../lib/cronograma";
+import { Tone } from "../components/ui/badges";
 
 export interface PropostaCronograma {
   codemp: number;
@@ -12,6 +13,9 @@ export interface PropostaCronograma {
   // Criar/renomear/excluir pasta raiz e agrupar itens dentro dela — ação de nível de
   // proposta inteira, não de um item/departamento específico.
   podeGerenciarProposta: boolean;
+  // Desliga o bypass "Salvar mesmo excedendo" da edição de duração (DrawerAtividade) —
+  // ver PATCH /propostas/:codemp/:codpro/configuracao-alocacao.
+  bloqueiaExcedenteEstrutura: boolean;
 }
 
 // Superset de NoCronograma com os campos que a tela precisa mas os seletores puros
@@ -29,6 +33,15 @@ export interface NoCronogramaCompleto extends NoCronograma {
   // backend/src/routes/alocacao.ts, mapNo) — sempre false pra pasta/item, só atividade-folha
   // com responsável carrega o sinal de verdade.
   horasDivergentes: boolean;
+  // Soma de AtividadeConsultor.horasExcedentes das alocações do nó — deliberadamente fora
+  // do cálculo de `saldo` acima (autoriza estourar o contratado do item, não conta contra
+  // ele). 0 pra pasta/item e pra atividade sem alocação.
+  horasExcedentes: number;
+  // Pior caso de integração com o Senior entre as alocações do nó (label/tom já resolvidos
+  // no servidor — ver integracaoErpLabel/integracaoErpTone em domain/ratDominio.ts). Null
+  // pra pasta/item e pra atividade ainda sem alocação (nada pra sincronizar ainda).
+  integracaoErpLabel: string | null;
+  integracaoErpTone: Tone | null;
   // Item ao qual esse nó pertence — útil pra ações (criar/alocar) que dependem do
   // departamento/permissão do item, mesmo pra nós que estão vários níveis abaixo dele.
   // Null só pra pasta raiz da proposta (não pertence a nenhum item específico).
@@ -38,10 +51,26 @@ export interface NoCronogramaCompleto extends NoCronograma {
   depexeLabel: string | null;
   // AtividadeConsultor vinculada(s) a este nó — normalmente 1, pode ser mais de uma numa
   // tarefa compartilhada entre consultores, e nenhuma numa atividade ainda sem responsável
-  // alocado. `id` é distinto de `no.id` (EstruturaAtividade, o nó da árvore em si). `seqati`
-  // null = a alocação ainda não foi confirmada pelo Senior (ver confirmarSessao,
-  // routes/apontamentos.ts) — string porque é BigInt na origem.
-  alocacoesResumo: { id: number; seqati: string | null }[];
+  // alocado. `id` é distinto de `no.id` (EstruturaAtividade, o nó da árvore em si) — é o
+  // `atividadeConsultorId` que PATCH /atividades/:id/horas-excedentes e
+  // /solicitacoes-excedente esperam. `seqati` null = a alocação ainda não foi confirmada
+  // pelo Senior — string porque é BigInt na origem.
+  alocacoesResumo: AlocacaoResumo[];
+}
+
+// Uma AtividadeConsultor, do jeito que o cronograma precisa dela — pedidos 2/3/4/5 (badge de
+// integração ERP, trava de troca de consultor, teto de apontamento editável, badge de
+// excedente) todos giram em cima desses mesmos campos, já mandados pelo backend em mapNo.
+export interface AlocacaoResumo {
+  id: number;
+  codfor: number;
+  consultorNome: string;
+  qtdhor: number | null;
+  horasExcedentes: number;
+  horasRealizadas: number;
+  seqati: string | null;
+  podeAutorizarExcedente: boolean;
+  souOExecutor: boolean;
 }
 
 interface NoApi {
@@ -62,11 +91,12 @@ interface NoApi {
   observacao: string | null;
   horasAlocadas: number;
   horasRealizadas: number;
+  horasExcedentes: number;
+  integracaoErpLabel: string | null;
+  integracaoErpTone: Tone | null;
   saldo: number | null;
   horasDivergentes: boolean;
-  // Só `id`/`seqati` interessam aqui — o resto do objeto (nome do consultor, horas etc.)
-  // já chega por outros campos deste mesmo nó.
-  alocacoes?: { id: number; seqati: string | null }[];
+  alocacoes?: AlocacaoResumo[];
 }
 
 interface ItemApi {
@@ -166,6 +196,9 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             horasAlocadas: 0,
             saldo: null,
             horasDivergentes: false,
+            horasExcedentes: 0,
+            integracaoErpLabel: null,
+            integracaoErpTone: null,
             seqite: null,
             podeEditarItem: p.podeEditar,
             depexe: null,
@@ -195,6 +228,9 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             horasAlocadas: 0,
             saldo: null,
             horasDivergentes: false,
+            horasExcedentes: 0,
+            integracaoErpLabel: null,
+            integracaoErpTone: null,
             seqite: item.seqite,
             podeEditarItem: item.podeEditar,
             depexe: item.depexe,
@@ -222,6 +258,9 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
               horasAlocadas: n.horasAlocadas,
               saldo: n.saldo,
               horasDivergentes: n.horasDivergentes,
+              horasExcedentes: n.horasExcedentes,
+              integracaoErpLabel: n.integracaoErpLabel,
+              integracaoErpTone: n.integracaoErpTone,
               seqite: item.seqite,
               podeEditarItem: item.podeEditar,
               depexe: item.depexe,
@@ -345,6 +384,9 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
           horasAlocadas: 0,
           saldo: null,
           horasDivergentes: false,
+          horasExcedentes: 0,
+          integracaoErpLabel: null,
+          integracaoErpTone: null,
           seqite: novo.seqite ?? null,
           podeEditarItem: itemDoNo ? itemDoNo.podeEditarItem : proposta?.podeGerenciarProposta ?? false,
           depexe: itemDoNo?.depexe ?? null,
@@ -414,5 +456,35 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     [carregar, codemp, codpro]
   );
 
-  return { proposta, nos, loading, erro, recarregar: carregar, atualizarNo, criarNo, excluirNo, duplicarNo, moverItem };
+  // Liga/desliga o bypass "Salvar mesmo excedendo" da edição de duração (ver
+  // DrawerAtividade/PATCH /propostas/:codemp/:codpro/configuracao-alocacao). Optimistic,
+  // mesmo padrão de atualizarNo — desfaz no erro.
+  const atualizarBloqueiaExcedenteEstrutura = useCallback(
+    async (bloqueiaExcedenteEstrutura: boolean) => {
+      const snapshot = proposta;
+      setProposta((atual) => (atual ? { ...atual, bloqueiaExcedenteEstrutura } : atual));
+      try {
+        await axios.patch(`/api/alocacao/propostas/${codemp}/${codpro}/configuracao-alocacao`, { bloqueiaExcedenteEstrutura });
+      } catch (err) {
+        setProposta(snapshot);
+        const axiosErr = err as { response?: { data?: { error?: string } } };
+        throw new Error(axiosErr.response?.data?.error ?? "Falha ao salvar a configuração");
+      }
+    },
+    [codemp, codpro, proposta]
+  );
+
+  return {
+    proposta,
+    nos,
+    loading,
+    erro,
+    recarregar: carregar,
+    atualizarNo,
+    criarNo,
+    excluirNo,
+    duplicarNo,
+    moverItem,
+    atualizarBloqueiaExcedenteEstrutura,
+  };
 }

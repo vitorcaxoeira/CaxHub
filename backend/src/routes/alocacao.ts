@@ -19,7 +19,7 @@ import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
-import { SITRAT_CANCELADO } from "../domain/ratDominio";
+import { SITRAT_CANCELADO, calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone, type IntegracaoErpStatus } from "../domain/ratDominio";
 import { Prisma } from "@prisma/client";
 
 // Área de alocação: o Líder Técnico (Gestor) distribui as horas de um item de proposta
@@ -989,6 +989,56 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/modo", async (req: Authenticated
   }
 });
 
+// Fecha (ou reabre) o bypass "confirmarExcedente" da edição de duração pelo Cronograma —
+// ver comentário do campo em schema.prisma (PropostaModoAlocacao.bloqueiaExcedenteEstrutura).
+// Ausência de linha na tabela (proposta sem nenhuma config ainda, o caso comum — a maioria
+// das propostas nunca chamou POST .../modo) equivale a `false`, mesmo default do schema.
+async function propostaBloqueiaExcedenteEstrutura(codemp: number, codpro: number): Promise<boolean> {
+  const config = await prisma.propostaModoAlocacao.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
+  return config?.bloqueiaExcedenteEstrutura ?? false;
+}
+
+alocacaoRouter.patch("/propostas/:codemp/:codpro/configuracao-alocacao", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    if (!Number.isFinite(codemp) || !Number.isFinite(codpro)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+    const bloqueiaExcedenteEstrutura = req.body?.bloqueiaExcedenteEstrutura;
+    if (typeof bloqueiaExcedenteEstrutura !== "boolean") {
+      res.status(400).json({ error: "bloqueiaExcedenteEstrutura deve ser true ou false" });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    if (!(await podeGerenciarProposta(role, contexto, codemp, codpro))) {
+      res.status(403).json({ error: "Sem permissão para gerenciar esta proposta" });
+      return;
+    }
+
+    // Upsert dedicado — não reaproveita o POST .../modo (imutável depois da 1ª alocação).
+    // Cria a linha com o modo já resolvido (esta tela só existe em modo "estrutura") se
+    // ainda não existir nenhuma, ou só atualiza a flag sem tocar no modo já gravado.
+    const modoAtual = (await resolverModoAlocacao(codemp, codpro)) ?? "estrutura";
+    await prisma.propostaModoAlocacao.upsert({
+      where: { codemp_codpro: { codemp, codpro } },
+      create: { codemp, codpro, modo: modoAtual, bloqueiaExcedenteEstrutura, definidoPor: contexto.consultor?.codusu ?? null },
+      update: { bloqueiaExcedenteEstrutura },
+    });
+
+    res.json({ bloqueiaExcedenteEstrutura });
+  } catch (error) {
+    handleError(res, error, "configuracao-alocacao");
+  }
+});
+
 function formatHorasSimples(minutos: number): string {
   const totalMinutos = Math.round(minutos);
   const horas = Math.trunc(totalMinutos / 60);
@@ -1161,6 +1211,30 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
       alocacoesPorNo.get(a.estruturaAtividadeId)!.push(a);
     }
     const nomePorId = new Map(todosOsNos.map((n) => [n.id, n.nome]));
+    // Departamento do item de cada alocação — a alocação carrega o próprio `seqite`
+    // (AtividadeConsultor.seqite), então não depende de descer pelo nó/pasta pra achar o
+    // item dono. Usado só pra decidir podeAutorizarExcedente por alocação, abaixo.
+    const depexePorSeqite = new Map(itens.map((i) => [i.seqite, i.depexe]));
+    // Pendência de sincronização mais recente por alocação — uma query só pra todas de uma
+    // vez (nunca por nó dentro do loop de mapNo, custo N+1). `SincronizacaoPendente.atividadeId`
+    // já é FK direta pra AtividadeConsultor.id (mais simples que o casamento via payload que
+    // RAT precisa fazer). Só os tipos com write-back real de alocação — `remover_atividade`
+    // fica de fora (não há write-back de exclusão a confirmar pro indicador "chegou no
+    // Senior"; a alocação já foi soft-deletada de qualquer forma).
+    const pendenciasAlocacao =
+      alocacoes.length > 0
+        ? await prisma.sincronizacaoPendente.findMany({
+            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, tipo: { in: ["criar_atividade", "editar_atividade"] } },
+            select: { atividadeId: true, status: true, ultimoErro: true },
+            orderBy: { id: "desc" },
+          })
+        : [];
+    const pendenciaPorAtividadeId = new Map<number, { status: string; ultimoErro: string | null }>();
+    for (const p of pendenciasAlocacao) {
+      if (!pendenciaPorAtividadeId.has(p.atividadeId)) {
+        pendenciaPorAtividadeId.set(p.atividadeId, { status: p.status, ultimoErro: p.ultimoErro });
+      }
+    }
     const nosPorSeqite = new Map<number, typeof nos>();
     for (const n of nos) {
       if (!nosPorSeqite.has(n.seqite)) nosPorSeqite.set(n.seqite, []);
@@ -1219,6 +1293,24 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
       const alocacoesDoNo = alocacoesPorNo.get(n.id) ?? [];
       const horasAlocadas = alocacoesDoNo.reduce((soma, a) => soma + (a.qtdhor ?? 0), 0);
       const horasRealizadas = alocacoesDoNo.reduce((soma, a) => soma + horasRealizadasDaAlocacao(a), 0);
+      // Soma das AtividadeConsultor.horasExcedentes do nó — deliberadamente fora do cálculo
+      // de `saldo` acima (excedente não conta contra o contratado do item, é o que autoriza
+      // estourar; ver comentário do campo no schema). Só exibição (pedido de mostrar o
+      // excedente já concedido na árvore), sem efeito em nenhuma validação.
+      const horasExcedentes = alocacoesDoNo.reduce((soma, a) => soma + a.horasExcedentes, 0);
+      // Pior caso entre as alocações do nó (mesmo "pior caso vence" de calcularIntegracaoErp
+      // agregando por RAT). Null (sem badge) pra pasta/item e pra atividade ainda sem
+      // consultor — `calcularIntegracaoErp([])` devolveria "pendente", o que seria enganoso
+      // aqui: não é "aguardando o Senior", é "nada pra sincronizar ainda".
+      const integracaoErp: IntegracaoErpStatus | null =
+        alocacoesDoNo.length > 0
+          ? calcularIntegracaoErp(
+              alocacoesDoNo.map((a) => ({
+                confirmado: a.seqati != null && a.seqati > 0n,
+                pendencia: pendenciaPorAtividadeId.get(a.id),
+              }))
+            )
+          : null;
       return {
         id: n.id,
         parentId: n.parentId,
@@ -1242,25 +1334,38 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
         observacao: n.observacao,
         horasAlocadas,
         horasRealizadas,
+        horasExcedentes,
+        // Label/tom já resolvidos no servidor (mesmo padrão de sitproLabel/sitproTone acima
+        // e de RatRow em routes/rats.ts) — o frontend só exibe, não recalcula domínio.
+        integracaoErpLabel: integracaoErp != null ? integracaoErpLabel(integracaoErp) : null,
+        integracaoErpTone: integracaoErp != null ? integracaoErpTone(integracaoErp) : null,
         saldo: n.duracaoHoras != null ? n.duracaoHoras - horasAlocadas : null,
         // Mesmo bug/checagem do KPI "Horas divergentes" em GET /propostas — aqui já dá pra
         // marcar o nó exato, não só a proposta. `duracaoHoras == null` fica de fora (nunca
         // definido, não é "divergente").
         horasDivergentes: n.tipo === "atividade" && n.responsavelCodfor != null && n.duracaoHoras != null && n.duracaoHoras !== horasAlocadas,
-        alocacoes: alocacoesDoNo.map((a) => ({
-          id: a.id,
-          codfor: a.codfor,
-          consultorNome: consultorPorCodfor.get(a.codfor)?.nomcom ?? consultorPorCodfor.get(a.codfor)?.nomfor ?? `Fornecedor ${a.codfor}`,
-          qtdhor: a.qtdhor,
-          horasExcedentes: a.horasExcedentes,
-          fasid: a.fasid,
-          faseDes: a.fase.fasdes,
-          dataPrevistaInicio: a.dataPrevistaInicio,
-          dataPrevistaFim: a.dataPrevistaFim,
-          // BigInt não serializa em JSON direto — string, igual ao resto da base (ver
-          // outboxSenior.ts). null = alocação ainda não confirmada pelo Senior.
-          seqati: a.seqati != null ? a.seqati.toString() : null,
-        })),
+        alocacoes: alocacoesDoNo.map((a) => {
+          const depexeDoItem = depexePorSeqite.get(a.seqite);
+          return {
+            id: a.id,
+            codfor: a.codfor,
+            consultorNome: consultorPorCodfor.get(a.codfor)?.nomcom ?? consultorPorCodfor.get(a.codfor)?.nomfor ?? `Fornecedor ${a.codfor}`,
+            qtdhor: a.qtdhor,
+            horasExcedentes: a.horasExcedentes,
+            horasRealizadas: horasRealizadasDaAlocacao(a),
+            fasid: a.fasid,
+            faseDes: a.fase.fasdes,
+            dataPrevistaInicio: a.dataPrevistaInicio,
+            dataPrevistaFim: a.dataPrevistaFim,
+            // BigInt não serializa em JSON direto — string, igual ao resto da base (ver
+            // outboxSenior.ts). null = alocação ainda não confirmada pelo Senior.
+            seqati: a.seqati != null ? a.seqati.toString() : null,
+            // Mesma regra/nome de carregarAtividadesVisiveis em atividades.ts: liberar horas
+            // acima do planejado é decisão de gestor; quem executa só pede.
+            podeAutorizarExcedente: depexeDoItem != null && gerenciaDepartamento(role, contexto, depexeDoItem),
+            souOExecutor: contexto.consultor?.codfor != null && contexto.consultor.codfor > 0 && contexto.consultor.codfor === a.codfor,
+          };
+        }),
       };
     }
 
@@ -1278,6 +1383,9 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
         // proposta inteira, não de um item/departamento específico (ver
         // podeGerenciarProposta).
         podeGerenciarProposta: podeGerenciarEstaProposta,
+        // Desliga o bypass "Salvar mesmo excedendo" da edição de duração (ver
+        // PATCH /propostas/:codemp/:codpro/configuracao-alocacao e o campo no schema).
+        bloqueiaExcedenteEstrutura: await propostaBloqueiaExcedenteEstrutura(codemp, codpro),
       },
       // Pastas raiz da proposta — organizacionais, fora do escopo de qualquer item;
       // servem só pra agrupar itens entre si (parentId de EstruturaAtividade normal,
@@ -1548,6 +1656,26 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
       }
       if (req.body?.responsavelCodfor !== undefined) {
         responsavelCodfor = req.body.responsavelCodfor != null ? Number(req.body.responsavelCodfor) : null;
+        // Trocar/limpar o responsável troca a AtividadeConsultor por baixo (soft-delete +
+        // criar outra, ver bloco mais abaixo) — depois que o Senior já confirmou a alocação
+        // atual (seqati preenchido), isso deixaria um seqAti órfão por lá e criaria um novo
+        // do zero pro mesmo trabalho. Barrado ANTES de qualquer escrita nesta requisição
+        // (nó e alocação são trocados juntos, atomicamente): quem precisar corrigir de
+        // verdade exclui a alocação (DELETE /alocacoes/:id) e aloca de novo, sem atalho por
+        // aqui. Enquanto seqati ainda for null (alocação recém-criada, sync não confirmou),
+        // a troca continua livre.
+        if (responsavelCodfor !== no.responsavelCodfor) {
+          const alocacaoAtual = await prisma.atividadeConsultor.findFirst({
+            where: { estruturaAtividadeId: id, sitreg: "A" },
+          });
+          if (alocacaoAtual?.seqati != null) {
+            res.status(400).json({
+              error:
+                "Esta atividade já foi confirmada pelo Senior — não é possível trocar o responsável. Exclua a alocação atual e aloque um novo consultor.",
+            });
+            return;
+          }
+        }
       }
       if (req.body?.observacao !== undefined) {
         observacao = typeof req.body.observacao === "string" && req.body.observacao.trim() !== "" ? req.body.observacao.trim() : null;
@@ -1556,14 +1684,20 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
         duracaoHoras = req.body.duracaoHoras != null ? Number(req.body.duracaoHoras) : null;
         // Distribuição pode ser provisória — `confirmarExcedente` deixa passar mesmo
         // estourando o saldo do item (o usuário já viu o aviso no drawer e confirmou).
-        // Sem essa flag, continua bloqueando — é só um "leve" a mais, não uma trava.
-        if (duracaoHoras != null && req.body?.confirmarExcedente !== true) {
-          // no.seqite nunca é null aqui — só pasta pode ser raiz (tipo="atividade" sempre
-          // pertence a um item, garantido na criação em POST /estrutura).
-          const saldo = await validarSomaEstrutura(no.codemp, no.codpro, no.seqite!, no.id, duracaoHoras);
-          if (!saldo.ok) {
-            res.status(400).json({ error: saldo.erro });
-            return;
+        // Sem essa flag, continua bloqueando — é só um "leve" a mais, não uma trava. Mas se
+        // a proposta ligou `bloqueiaExcedenteEstrutura`, esse bypass fica desligado — a
+        // flag do body é ignorada e a validação sempre roda (ver
+        // PropostaModoAlocacao.bloqueiaExcedenteEstrutura).
+        if (duracaoHoras != null) {
+          const bloqueiaExcedente = await propostaBloqueiaExcedenteEstrutura(no.codemp, no.codpro);
+          if (req.body?.confirmarExcedente !== true || bloqueiaExcedente) {
+            // no.seqite nunca é null aqui — só pasta pode ser raiz (tipo="atividade" sempre
+            // pertence a um item, garantido na criação em POST /estrutura).
+            const saldo = await validarSomaEstrutura(no.codemp, no.codpro, no.seqite!, no.id, duracaoHoras);
+            if (!saldo.ok) {
+              res.status(400).json({ error: saldo.erro });
+              return;
+            }
           }
         }
       }

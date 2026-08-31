@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import { HorasAgregadas, OrcamentoItem, StatusNo, estadoAlertaItem, formatHorasCompacto, larguraColunaHorasPx } from "../../lib/cronograma";
 import { NoCronogramaCompleto } from "../../hooks/useCronograma";
+import { toneBadge } from "../ui/badges";
 import { BadgeStatus } from "./BadgeStatus";
 import { MenuAcoesNo, DestinoMover } from "./MenuAcoesNo";
 
@@ -275,6 +276,33 @@ export function LinhaNo({
                 title={`Duração da tarefa: ${formatHorasCompacto(no.horasPrevistas ?? 0, larguraHoras)} · Enviado ao Senior: ${formatHorasCompacto(no.horasAlocadas, larguraHoras)} — fora de sincronia`}
               >
                 ⚠ horas div.
+              </span>
+            )}
+
+            {/* Excedente autorizado (AtividadeConsultor.horasExcedentes) — deliberadamente
+                separado do badge de horas divergentes acima: aqui não é bug de sincronismo,
+                é autorização de estourar o contratado do item, concedida pelo gestor. */}
+            {no.tipo === "atividade" && no.horasExcedentes > 0 && (
+              <span
+                className="hidden flex-none items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium text-warning sm:inline-flex"
+                title={`Excedente autorizado pelo gestor: +${formatHorasCompacto(no.horasExcedentes, larguraHoras)}`}
+              >
+                +{formatHorasCompacto(no.horasExcedentes, larguraHoras)} exced.
+              </span>
+            )}
+
+            {/* Status de integração com o Senior (seqati confirmado / enviando / falha no
+                envio / ainda pendente) — fato sobre o ENVIO em si, não sobre desalinho de
+                dado (isso é horasDivergentes, acima). Os dois podem estar presentes ao
+                mesmo tempo sem relação causal entre eles. */}
+            {no.tipo === "atividade" && no.integracaoErpLabel != null && (
+              <span
+                className={`hidden flex-none items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium sm:inline-flex ${
+                  toneBadge[no.integracaoErpTone ?? "neutral"]
+                }`}
+                title={`Integração com o Senior: ${no.integracaoErpLabel}`}
+              >
+                Senior: {no.integracaoErpLabel}
               </span>
             )}
 

@@ -72,6 +72,9 @@ interface ArvoreCronogramaProps {
   // Dígitos mínimos de hora usados por toda a árvore/drawer (ver larguraHorasProposta) —
   // calculado uma vez em CronogramaProposta a partir do total da proposta.
   larguraHoras: number;
+  // Repassado direto pro DrawerAtividade — desliga o bypass "Salvar mesmo excedendo" (ver
+  // PropostaModoAlocacao.bloqueiaExcedenteEstrutura).
+  bloqueiaExcedenteEstrutura: boolean;
 }
 
 export function ArvoreCronograma({
@@ -89,6 +92,7 @@ export function ArvoreCronograma({
   moverItem,
   podeGerenciarProposta,
   larguraHoras,
+  bloqueiaExcedenteEstrutura,
 }: ArvoreCronogramaProps) {
   const [expandidos, setExpandidos] = useState<Set<number>>(() => carregarExpansaoSalva(projetoId));
   const [busca, setBusca] = useState("");
@@ -714,6 +718,8 @@ export function ArvoreCronograma({
           onFechar={() => setDrawerNoId(null)}
           onSalvar={atualizarNo}
           larguraHoras={larguraHoras}
+          bloqueiaExcedenteEstrutura={bloqueiaExcedenteEstrutura}
+          onRecarregar={onTentarNovamente}
         />
       )}
 
