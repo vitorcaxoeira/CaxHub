@@ -339,6 +339,9 @@ export function MeusApontamentos() {
   const [erro, setErro] = useState<string | null>(null);
   const [confirmando, setConfirmando] = useState<number | null>(null);
   const [excluindoSessao, setExcluindoSessao] = useState<number | null>(null);
+  // Acordeon de "Sessões pendentes" por consultor (só aparece quando mostrarConsultor) —
+  // chave é o codfor, igual ao agrupamento de abrirResumoLote logo abaixo.
+  const [consultoresExpandidos, setConsultoresExpandidos] = useState<Set<number>>(new Set());
 
   // Pedido de correção de horário. Enquanto pendente, o envio do apontamento ao Senior fica
   // retido no servidor — é o que permite corrigir sem alterar nada do lado do ERP.
@@ -970,6 +973,249 @@ export function MeusApontamentos() {
     });
   }, [sessoes, codforsFiltroSessoes, buscaSessoesDebounced, dataInicioFiltro, dataFimFiltro]);
 
+  // Mesma chave de agrupamento de abrirResumoLote (codfor), só que aqui vira acordeon visual
+  // em vez de resumo de confirmação em lote — só faz sentido junto de mostrarConsultor, senão
+  // é sempre 1 grupo só (o próprio usuário).
+  const gruposPorConsultor = useMemo(() => {
+    const porConsultor = new Map<number, { codfor: number; consultorNome: string; sessoes: SessaoPendente[]; totalMinutos: number }>();
+    for (const s of sessoesFiltradas) {
+      let grupo = porConsultor.get(s.codfor);
+      if (!grupo) {
+        grupo = { codfor: s.codfor, consultorNome: s.consultorNome ?? "—", sessoes: [], totalMinutos: 0 };
+        porConsultor.set(s.codfor, grupo);
+      }
+      grupo.sessoes.push(s);
+      grupo.totalMinutos += s.duracaoMinutos;
+    }
+    return [...porConsultor.values()].sort((a, b) => a.consultorNome.localeCompare(b.consultorNome, "pt-BR"));
+  }, [sessoesFiltradas]);
+
+  // Abre sozinho quando só sobra 1 consultor na lista filtrada (ex.: gestor buscou/filtrou até
+  // um só) — dependência é o codfor em si, não o array inteiro, pra não reabrir a cada
+  // recarregamento se o usuário tiver fechado de propósito.
+  const unicoConsultorVisivel = gruposPorConsultor.length === 1 ? gruposPorConsultor[0].codfor : null;
+  useEffect(() => {
+    if (unicoConsultorVisivel == null) return;
+    setConsultoresExpandidos((atual) => (atual.has(unicoConsultorVisivel) ? atual : new Set(atual).add(unicoConsultorVisivel)));
+  }, [unicoConsultorVisivel]);
+
+  function toggleExpandirConsultor(codfor: number) {
+    setConsultoresExpandidos((atual) => {
+      const proximo = new Set(atual);
+      if (proximo.has(codfor)) proximo.delete(codfor);
+      else proximo.add(codfor);
+      return proximo;
+    });
+  }
+
+  // Linha de uma sessão pendente na lista plana (consultor comum, sem acordeon) — mesmas
+  // colunas responsivas do <thead> de fora.
+  function renderLinhaSessao(s: SessaoPendente) {
+    return (
+      // Faixa âmbar à esquerda quando há ajuste aguardando o gestor: a linha está congelada
+      // até a decisão, e sem marca isso não se vê.
+      <tr
+        key={s.id}
+        className={`border-t border-border/60 ${s.ajustePendente ? "border-l-2 border-l-warning bg-warning/5" : ""}`}
+      >
+        <td className="hidden px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">{s.id}</td>
+        <td className="px-2.5 py-3.5 text-sm font-semibold text-foreground">{s.codpro}</td>
+        {/* O próprio id abre a atividade — mesmo padrão da tabela de itens de RAT logo abaixo. */}
+        <td className="hidden px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">
+          <button
+            onClick={() => abrirDetalheAtividade(s.atividadeId)}
+            className="text-primary hover:underline"
+            title="Abrir a atividade (somente visualização)"
+          >
+            {s.atividadeId}
+          </button>
+        </td>
+        <td className="hidden max-w-[220px] truncate px-2.5 py-3.5 text-sm text-muted lg:table-cell" title={rotuloItem(s)}>
+          {rotuloItem(s)}
+        </td>
+        <td className="hidden max-w-[200px] truncate px-2.5 py-3.5 text-sm text-muted md:table-cell" title={s.cliente ?? undefined}>
+          {s.cliente ?? "—"}
+          {s.codcli != null && ` (${s.codcli})`}
+        </td>
+        <td className="whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted">{dataCurtaFormatter.format(new Date(s.inicio))}</td>
+        <td className="hidden whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">
+          {formatHorario(s.inicio, s.fim)}
+        </td>
+        <td className="whitespace-nowrap px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">
+          {formatMinutos(s.duracaoMinutos)}
+        </td>
+        <td className="hidden px-2.5 py-3.5 lg:table-cell">
+          {/* Editar é "só o dono" no servidor (PATCH /:id) — em sessão de outro consultor o
+              clique abre a MESMA janela em leitura, só pra ler o texto completo sem
+              depender do tooltip truncado (mesmo padrão da observação de item de RAT logo
+              abaixo, ModalEditarDescricao com somenteLeitura). */}
+          {s.souDono ? (
+            <button
+              onClick={() => setEditandoDescricaoId(s.id)}
+              className={`w-full max-w-[220px] truncate rounded-md border px-2.5 py-1.5 text-left text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                descricoes[s.id] ?? s.observacao
+                  ? "border-border text-foreground hover:bg-surface-2"
+                  : "border-dashed border-border text-muted hover:bg-surface-2"
+              }`}
+            >
+              {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
+            </button>
+          ) : (
+            <button
+              onClick={() => setEditandoDescricaoId(s.id)}
+              title={s.observacao ?? undefined}
+              className="block w-full max-w-[220px] truncate text-left text-sm text-muted hover:underline"
+            >
+              {s.observacao ?? "—"}
+            </button>
+          )}
+        </td>
+        {/* Mesmo agrupador "⋯" das linhas de RAT logo abaixo — duas ações soltas na coluna
+            empurravam a tabela e competiam por atenção. */}
+        <td className="whitespace-nowrap px-2.5 py-3.5 text-right">
+          <DropdownMenu placement="bottom-end">
+            <DropdownMenu.Trigger>
+              <button
+                className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Ações do apontamento"
+              >
+                ⋯
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content>
+              <DropdownMenu.Item onSelect={() => confirmar(s.id)} disabled={confirmando === s.id}>
+                {confirmando === s.id ? "Confirmando..." : "Confirmar"}
+              </DropdownMenu.Item>
+              {/* Pedir ajuste e Excluir são "só o dono" nos respectivos endpoints
+                  (solicitacoesAjuste.ts / DELETE /:id) — em sessão de outro consultor o
+                  servidor recusaria com 403/404, então a tela nem oferece. Confirmar acima
+                  não tem essa restrição (podeExecutarAcao já libera admin). */}
+              {s.souDono && (
+                <>
+                  {/* Confirmar não deixa mexer no horário — só manda a sessão como o
+                      rastreamento gravou. Quem precisa de outro intervalo pede aqui, antes de
+                      confirmar. */}
+                  <DropdownMenu.Item
+                    onSelect={() =>
+                      abrirPedidoAjuste(
+                        s.id,
+                        `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
+                        s.inicio,
+                        s.fim,
+                        s.ajustePendente
+                      )
+                    }
+                  >
+                    {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
+                  </DropdownMenu.Item>
+                  {/* Antes daqui não havia como apagar uma sessão rastreada errada — só
+                      restava confirmar e desfazer depois. */}
+                  <DropdownMenu.Item onSelect={() => excluirSessao(s.id)} disabled={excluindoSessao === s.id} destructive>
+                    {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
+                  </DropdownMenu.Item>
+                </>
+              )}
+            </DropdownMenu.Content>
+          </DropdownMenu>
+        </td>
+      </tr>
+    );
+  }
+
+  // Linha de sessão dentro do acordeon por consultor — sub-tabela numa única célula
+  // (colSpan cheio, borda fechando os 4 lados nela), mesmo padrão visual e de código da
+  // tabela de itens aninhada no detalhe de uma RAT logo abaixo (compacta, sem esconder
+  // coluna por breakpoint: já é uma sub-tabela dentro de uma célula só, não precisa
+  // acompanhar o <thead> responsivo da tabela de fora).
+  function renderLinhaSessaoAgrupada(s: SessaoPendente) {
+    return (
+      <tr key={s.id} className={`border-t border-border/40 ${s.ajustePendente ? "border-l-2 border-l-warning bg-warning/5" : ""}`}>
+        <td className="py-1.5 pr-3 font-mono text-[12.5px] text-muted">{s.id}</td>
+        <td className="py-1.5 pr-3 text-[12.5px] font-semibold text-foreground">{s.codpro}</td>
+        <td className="py-1.5 pr-3 font-mono text-[12.5px] text-muted">
+          <button
+            onClick={() => abrirDetalheAtividade(s.atividadeId)}
+            className="text-primary hover:underline"
+            title="Abrir a atividade (somente visualização)"
+          >
+            {s.atividadeId}
+          </button>
+        </td>
+        <td className="max-w-[220px] truncate py-1.5 pr-3 text-[12.5px] text-muted" title={rotuloItem(s)}>
+          {rotuloItem(s)}
+        </td>
+        <td className="max-w-[200px] truncate py-1.5 pr-3 text-[12.5px] text-muted" title={s.cliente ?? undefined}>
+          {s.cliente ?? "—"}
+          {s.codcli != null && ` (${s.codcli})`}
+        </td>
+        <td className="whitespace-nowrap py-1.5 pr-3 font-mono text-[12.5px] text-muted">
+          {dataCurtaFormatter.format(new Date(s.inicio))}
+        </td>
+        <td className="whitespace-nowrap py-1.5 pr-3 font-mono text-[12.5px] text-muted">{formatHorario(s.inicio, s.fim)}</td>
+        <td className="whitespace-nowrap py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">
+          {formatMinutos(s.duracaoMinutos)}
+        </td>
+        <td className="max-w-[320px] py-1.5 pr-3">
+          {s.souDono ? (
+            <button
+              onClick={() => setEditandoDescricaoId(s.id)}
+              className={`block w-full truncate text-left text-[12.5px] hover:underline ${
+                descricoes[s.id] ?? s.observacao ? "text-foreground" : "font-medium text-warning"
+              }`}
+            >
+              {descricoes[s.id] ?? s.observacao ?? "Sem descrição — clique para preencher"}
+            </button>
+          ) : (
+            <button
+              onClick={() => setEditandoDescricaoId(s.id)}
+              title={s.observacao ?? undefined}
+              className="block w-full truncate text-left text-[12.5px] text-muted hover:underline"
+            >
+              {s.observacao ?? "—"}
+            </button>
+          )}
+        </td>
+        <td className="py-1.5 text-right">
+          <DropdownMenu placement="bottom-end">
+            <DropdownMenu.Trigger>
+              <button
+                className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Ações do apontamento"
+              >
+                ⋯
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content>
+              <DropdownMenu.Item onSelect={() => confirmar(s.id)} disabled={confirmando === s.id}>
+                {confirmando === s.id ? "Confirmando..." : "Confirmar"}
+              </DropdownMenu.Item>
+              {s.souDono && (
+                <>
+                  <DropdownMenu.Item
+                    onSelect={() =>
+                      abrirPedidoAjuste(
+                        s.id,
+                        `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
+                        s.inicio,
+                        s.fim,
+                        s.ajustePendente
+                      )
+                    }
+                  >
+                    {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item onSelect={() => excluirSessao(s.id)} disabled={excluindoSessao === s.id} destructive>
+                    {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
+                  </DropdownMenu.Item>
+                </>
+              )}
+            </DropdownMenu.Content>
+          </DropdownMenu>
+        </td>
+      </tr>
+    );
+  }
+
   return (
     <div>
       <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
@@ -1099,11 +1345,6 @@ export function MeusApontamentos() {
                     <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
                       Cliente
                     </th>
-                    {mostrarConsultor && (
-                      <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
-                        Consultor
-                      </th>
-                    )}
                     <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                       Data
                     </th>
@@ -1138,11 +1379,6 @@ export function MeusApontamentos() {
                         <td className="hidden px-2.5 py-3.5 md:table-cell">
                           <Skeleton className="h-4 w-28" />
                         </td>
-                        {mostrarConsultor && (
-                          <td className="hidden px-2.5 py-3.5 md:table-cell">
-                            <Skeleton className="h-4 w-24" />
-                          </td>
-                        )}
                         <td className="px-2.5 py-3.5">
                           <Skeleton className="h-4 w-24" />
                         </td>
@@ -1160,138 +1396,83 @@ export function MeusApontamentos() {
                         </td>
                       </tr>
                     ))}
+                  {/* mostrarConsultor (admin/gestor vendo o time): agrupa em acordeon por
+                      consultor em vez de repetir o nome numa coluna à parte. */}
                   {!loading &&
-                    sessoesFiltradas.map((s) => (
-                      // Faixa âmbar à esquerda quando há ajuste aguardando o gestor: a
-                      // linha está congelada até a decisão, e sem marca isso não se vê.
-                      <tr
-                        key={s.id}
-                        className={`border-t border-border/60 ${
-                          s.ajustePendente ? "border-l-2 border-l-warning bg-warning/5" : ""
-                        }`}
-                      >
-                        <td className="hidden px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">{s.id}</td>
-                        <td className="px-2.5 py-3.5 text-sm font-semibold text-foreground">{s.codpro}</td>
-                        {/* O próprio id abre a atividade — mesmo padrão da tabela de itens
-                            de RAT logo abaixo. */}
-                        <td className="hidden px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                          <button
-                            onClick={() => abrirDetalheAtividade(s.atividadeId)}
-                            className="text-primary hover:underline"
-                            title="Abrir a atividade (somente visualização)"
+                    mostrarConsultor &&
+                    gruposPorConsultor.map((grupo) => {
+                      const expandido = consultoresExpandidos.has(grupo.codfor);
+                      return (
+                        <Fragment key={grupo.codfor}>
+                          <tr
+                            onClick={() => toggleExpandirConsultor(grupo.codfor)}
+                            className={`cursor-pointer transition ${
+                              expandido ? "border-t border-primary bg-primary/5" : "border-t border-border/60 hover:bg-surface-2"
+                            }`}
                           >
-                            {s.atividadeId}
-                          </button>
-                        </td>
-                        <td
-                          className="hidden max-w-[220px] truncate px-2.5 py-3.5 text-sm text-muted lg:table-cell"
-                          title={rotuloItem(s)}
-                        >
-                          {rotuloItem(s)}
-                        </td>
-                        <td
-                          className="hidden max-w-[200px] truncate px-2.5 py-3.5 text-sm text-muted md:table-cell"
-                          title={s.cliente ?? undefined}
-                        >
-                          {s.cliente ?? "—"}
-                          {s.codcli != null && ` (${s.codcli})`}
-                        </td>
-                        {mostrarConsultor && (
-                          <td
-                            className="hidden max-w-[180px] truncate px-2.5 py-3.5 text-sm text-muted md:table-cell"
-                            title={s.consultorNome ?? undefined}
-                          >
-                            {s.consultorNome ?? "—"}
-                          </td>
-                        )}
-                        <td className="whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted">
-                          {dataCurtaFormatter.format(new Date(s.inicio))}
-                        </td>
-                        <td className="hidden whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                          {formatHorario(s.inicio, s.fim)}
-                        </td>
-                        <td className="whitespace-nowrap px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">
-                          {formatMinutos(s.duracaoMinutos)}
-                        </td>
-                        <td className="hidden px-2.5 py-3.5 lg:table-cell">
-                          {/* Editar descrição é "só o dono" no servidor (PATCH /:id) — em
-                              sessão de outro consultor a tela nem oferece o botão, só
-                              mostra o texto (mesmo critério do menu "⋯" logo abaixo). */}
-                          {s.souDono ? (
-                            <button
-                              onClick={() => setEditandoDescricaoId(s.id)}
-                              className={`w-full max-w-[220px] truncate rounded-md border px-2.5 py-1.5 text-left text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                                descricoes[s.id] ?? s.observacao
-                                  ? "border-border text-foreground hover:bg-surface-2"
-                                  : "border-dashed border-border text-muted hover:bg-surface-2"
-                              }`}
-                            >
-                              {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
-                            </button>
-                          ) : (
-                            <span className="block max-w-[220px] truncate text-sm text-muted" title={s.observacao ?? undefined}>
-                              {s.observacao ?? "—"}
-                            </span>
+                            <td colSpan={10} className={`px-2.5 py-2.5 ${expandido ? "border-l border-r border-primary" : ""}`}>
+                              <p className="flex items-center justify-between gap-2 text-sm">
+                                <span className="flex items-center gap-2 font-semibold text-foreground">
+                                  <span className="text-muted">{expandido ? "▾" : "▸"}</span>
+                                  {grupo.consultorNome}
+                                </span>
+                                <span className="font-mono text-[12.5px] tabular-nums text-muted">
+                                  {grupo.sessoes.length} apont. · {formatMinutos(grupo.totalMinutos)}
+                                </span>
+                              </p>
+                            </td>
+                          </tr>
+                          {/* Mesmo padrão do detalhe de uma RAT logo abaixo: os apontamentos do
+                              consultor moram dentro de UMA célula de colSpan cheio — é essa célula
+                              que fecha as 4 bordas do acordeon, não cada linha. */}
+                          {expandido && (
+                            <tr className="border-t border-border/60 bg-surface-2/40">
+                              <td colSpan={10} className="border-b border-l border-r border-primary px-2.5 py-3">
+                                <table className="w-full border-collapse">
+                                  <thead>
+                                    <tr>
+                                      <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        ID
+                                      </th>
+                                      <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Proposta
+                                      </th>
+                                      <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Id Ativ.
+                                      </th>
+                                      <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Item
+                                      </th>
+                                      <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Cliente
+                                      </th>
+                                      <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Data
+                                      </th>
+                                      <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Horário
+                                      </th>
+                                      <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Duração
+                                      </th>
+                                      <th className="w-2/5 py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Descrição
+                                      </th>
+                                      <th className="py-1.5" />
+                                    </tr>
+                                  </thead>
+                                  <tbody>{grupo.sessoes.map((s) => renderLinhaSessaoAgrupada(s))}</tbody>
+                                </table>
+                              </td>
+                            </tr>
                           )}
-                        </td>
-                        {/* Mesmo agrupador "⋯" das linhas de RAT logo abaixo — duas ações
-                            soltas na coluna empurravam a tabela e competiam por atenção. */}
-                        <td className="whitespace-nowrap px-2.5 py-3.5 text-right">
-                          <DropdownMenu placement="bottom-end">
-                            <DropdownMenu.Trigger>
-                              <button
-                                className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                aria-label="Ações do apontamento"
-                              >
-                                ⋯
-                              </button>
-                            </DropdownMenu.Trigger>
-                            <DropdownMenu.Content>
-                              <DropdownMenu.Item onSelect={() => confirmar(s.id)} disabled={confirmando === s.id}>
-                                {confirmando === s.id ? "Confirmando..." : "Confirmar"}
-                              </DropdownMenu.Item>
-                              {/* Pedir ajuste e Excluir são "só o dono" nos respectivos
-                                  endpoints (solicitacoesAjuste.ts / DELETE /:id) — em sessão
-                                  de outro consultor o servidor recusaria com 403/404, então
-                                  a tela nem oferece. Confirmar acima não tem essa restrição
-                                  (podeExecutarAcao já libera admin). */}
-                              {s.souDono && (
-                                <>
-                                  {/* Confirmar não deixa mexer no horário — só manda a
-                                      sessão como o rastreamento gravou. Quem precisa de
-                                      outro intervalo pede aqui, antes de confirmar. */}
-                                  <DropdownMenu.Item
-                                    onSelect={() =>
-                                      abrirPedidoAjuste(
-                                        s.id,
-                                        `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
-                                        s.inicio,
-                                        s.fim,
-                                        s.ajustePendente
-                                      )
-                                    }
-                                  >
-                                    {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
-                                  </DropdownMenu.Item>
-                                  {/* Antes daqui não havia como apagar uma sessão rastreada
-                                      errada — só restava confirmar e desfazer depois. */}
-                                  <DropdownMenu.Item
-                                    onSelect={() => excluirSessao(s.id)}
-                                    disabled={excluindoSessao === s.id}
-                                    destructive
-                                  >
-                                    {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
-                                  </DropdownMenu.Item>
-                                </>
-                              )}
-                            </DropdownMenu.Content>
-                          </DropdownMenu>
-                        </td>
-                      </tr>
-                    ))}
+                        </Fragment>
+                      );
+                    })}
+                  {!loading && !mostrarConsultor && sessoesFiltradas.map((s) => renderLinhaSessao(s))}
                   {!loading && sessoesFiltradas.length === 0 && (
                     <tr>
-                      <td colSpan={mostrarConsultor ? 11 : 10} className="px-2.5 py-8 text-center text-sm text-muted">
+                      <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
                         {sessoes.length === 0
                           ? 'Nenhuma sessão pendente — mova um card pra "Em Andamento" pra começar a rastrear tempo.'
                           : "Nenhuma sessão encontrada com os filtros atuais."}
@@ -1632,6 +1813,7 @@ export function MeusApontamentos() {
           if (!sessao) return null;
           return (
             <ModalEditarDescricao
+              somenteLeitura={!sessao.souDono}
               titulo={`Proposta ${sessao.codpro}`}
               valorInicial={descricoes[sessao.id] ?? sessao.observacao ?? ""}
               onSalvar={(texto) => salvarDescricaoSessaoPendente(sessao.id, texto)}
