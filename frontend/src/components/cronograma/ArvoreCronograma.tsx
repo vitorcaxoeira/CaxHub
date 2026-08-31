@@ -766,6 +766,7 @@ export function ArvoreCronograma({
               codpro={codpro}
               onFechar={() => setAlocarConsultoresNoId(null)}
               recarregar={onTentarNovamente}
+              acompanharSincronizacaoAlocacao={acompanharSincronizacaoAlocacao}
             />
           );
         })()}

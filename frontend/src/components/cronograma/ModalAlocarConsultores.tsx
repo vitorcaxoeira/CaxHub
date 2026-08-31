@@ -33,6 +33,10 @@ interface ModalAlocarConsultoresProps {
   // — chamada tanto no sucesso (pra árvore refletir as atividades novas) quanto num 409
   // (saldo mudou no meio-tempo — recarrega em segundo plano sem fechar o modal).
   recarregar: () => void;
+  // Acompanha o envio ao Senior de cada alocação recém-criada até o ícone de integração
+  // assentar no resultado final (mesmo mecanismo do botão "Sincronizar com o Senior" e do
+  // drawer) — sem isso, um lote de N atividades ficava preso em "Enviando" até um F5.
+  acompanharSincronizacaoAlocacao: (atividadeConsultorId: number) => void;
 }
 
 const dinheiroPassoMinutos = 5;
@@ -60,6 +64,7 @@ export function ModalAlocarConsultores({
   codpro,
   onFechar,
   recarregar,
+  acompanharSincronizacaoAlocacao,
 }: ModalAlocarConsultoresProps) {
   const [consultores, setConsultores] = useState<ConsultorElegivel[] | null>(null);
   const [loadingConsultores, setLoadingConsultores] = useState(true);
@@ -194,11 +199,16 @@ export function ModalAlocarConsultores({
               ? { tipo: "nova_pasta" as const, nome: novaPastaNome.trim() }
               : { tipo: "item" as const };
 
-      await axios.post(`/api/alocacao/itens/${codemp}/${codpro}/${item.seqite}/alocar-lote`, {
+      const { data } = await axios.post(`/api/alocacao/itens/${codemp}/${codpro}/${item.seqite}/alocar-lote`, {
         destino,
         consultores: marcadosList.map((c) => ({ codfor: c.codfor, qtdhor: horasParaMinutos(horasInput[c.codfor] ?? "") ?? 0 })),
       });
       recarregar();
+      // Uma atividade por consultor do lote — cada uma com seu próprio envio em fila (ver
+      // POST .../alocar-lote no backend, que já devolve o id de cada AtividadeConsultor
+      // criada). Acompanha todas até o ícone de cada linha assentar no resultado final.
+      const criadas: { id: number }[] = Array.isArray(data?.atividades) ? data.atividades : [];
+      for (const a of criadas) acompanharSincronizacaoAlocacao(a.id);
       onFechar();
     } catch (err) {
       const axiosErr = err as { response?: { status?: number; data?: { error?: string } } };
