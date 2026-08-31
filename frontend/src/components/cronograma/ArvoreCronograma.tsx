@@ -584,7 +584,7 @@ export function ArvoreCronograma({
         temFilhos={(filhosDe.get(no.id)?.length ?? 0) > 0}
         expandido={expandidos.has(no.id)}
         statusEfetivo={statusPorId.get(no.id) ?? "nao_iniciada"}
-        agregado={agregados.get(no.id) ?? { horasPrevistas: 0, horasRealizadas: 0, avanco: 0 }}
+        agregado={agregados.get(no.id) ?? { horasPrevistas: 0, horasRealizadas: 0, horasExcedentes: 0, avanco: 0 }}
         orcado={orcadoPorId.get(no.id) ?? 0}
         orcamento={orcamentosPorId.get(no.id)}
         contagemDescendentes={contagemDescendentesPorId.get(no.id) ?? 0}
@@ -685,7 +685,7 @@ export function ArvoreCronograma({
               <span className="hidden w-[168px] flex-none font-mono text-[11px] font-medium uppercase tracking-wider text-muted sm:block">
                 Depto. / Resp.
               </span>
-              {["Orçado", "Realizado", "Alocado"].map((rotulo) => (
+              {["Orçado", "Realizado", "Alocado", "Excedente"].map((rotulo) => (
                 <span
                   key={rotulo}
                   className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"

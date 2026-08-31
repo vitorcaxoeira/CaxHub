@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import { HorasAgregadas, OrcamentoItem, StatusNo, estadoAlertaItem, formatHorasCompacto, larguraColunaHorasPx } from "../../lib/cronograma";
 import { NoCronogramaCompleto } from "../../hooks/useCronograma";
-import { toneBadge } from "../ui/badges";
+import { Tone, toneBadge } from "../ui/badges";
+import { Spinner } from "../ui/Spinner";
 import { BadgeStatus } from "./BadgeStatus";
 import { MenuAcoesNo, DestinoMover } from "./MenuAcoesNo";
 
@@ -42,6 +43,35 @@ export function IconeStatusAtividade({ status }: { status: StatusNo }) {
         </svg>
       )}
     </span>
+  );
+}
+
+// Ícone do status de integração com o Senior — o tom já identifica o estado sozinho
+// (integracaoErpTone em ratDominio.ts é uma bijeção: falha=destructive, enviando=warning,
+// pendente=neutral, sincronizado=success), então o ícone escolhe pelo tom, sem precisar do
+// status cru. Descritivo completo vai só no `title` de quem usa (hover), não aqui dentro.
+function IconeIntegracaoErp({ tone, className = "h-2.5 w-2.5" }: { tone: Tone; className?: string }) {
+  if (tone === "warning") return <Spinner className={className} />; // enviando — em voo
+  if (tone === "destructive") {
+    return (
+      <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" aria-hidden="true">
+        <line x1="6" y1="6" x2="18" y2="18" />
+        <line x1="18" y1="6" x2="6" y2="18" />
+      </svg>
+    );
+  }
+  if (tone === "neutral") {
+    return (
+      <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" aria-hidden="true">
+        <circle cx="12" cy="12" r="8" />
+      </svg>
+    );
+  }
+  // success — sincronizado
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
   );
 }
 
@@ -279,30 +309,18 @@ export function LinhaNo({
               </span>
             )}
 
-            {/* Excedente autorizado (AtividadeConsultor.horasExcedentes) — deliberadamente
-                separado do badge de horas divergentes acima: aqui não é bug de sincronismo,
-                é autorização de estourar o contratado do item, concedida pelo gestor. */}
-            {no.tipo === "atividade" && no.horasExcedentes > 0 && (
-              <span
-                className="hidden flex-none items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium text-warning sm:inline-flex"
-                title={`Excedente autorizado pelo gestor: +${formatHorasCompacto(no.horasExcedentes, larguraHoras)}`}
-              >
-                +{formatHorasCompacto(no.horasExcedentes, larguraHoras)} exced.
-              </span>
-            )}
-
             {/* Status de integração com o Senior (seqati confirmado / enviando / falha no
                 envio / ainda pendente) — fato sobre o ENVIO em si, não sobre desalinho de
                 dado (isso é horasDivergentes, acima). Os dois podem estar presentes ao
                 mesmo tempo sem relação causal entre eles. */}
             {no.tipo === "atividade" && no.integracaoErpLabel != null && (
               <span
-                className={`hidden flex-none items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium sm:inline-flex ${
+                className={`hidden h-4 w-4 flex-none items-center justify-center rounded-full sm:inline-flex ${
                   toneBadge[no.integracaoErpTone ?? "neutral"]
                 }`}
                 title={`Integração com o Senior: ${no.integracaoErpLabel}`}
               >
-                Senior: {no.integracaoErpLabel}
+                <IconeIntegracaoErp tone={no.integracaoErpTone ?? "neutral"} />
               </span>
             )}
 
@@ -379,6 +397,18 @@ export function LinhaNo({
           title="Alocado"
         >
           {formatHorasCompacto(agregado.horasPrevistas, larguraHoras)}
+        </div>
+
+        {/* Excedente autorizado (AtividadeConsultor.horasExcedentes), somado pra cima do
+            mesmo jeito que Realizado/Alocado (ver agregarHoras). Em branco quando zero — a
+            maioria das linhas nunca tem excedente, então "0:00" em toda linha só faria
+            ruído; aqui o vazio já é o sinal de "nada fora do combinado". */}
+        <div
+          className="hidden flex-none text-right font-mono text-[12px] tabular-nums text-warning md:block"
+          style={{ width: larguraColunaNumero }}
+          title="Excedente"
+        >
+          {agregado.horasExcedentes > 0 ? formatHorasCompacto(agregado.horasExcedentes, larguraHoras) : ""}
         </div>
 
         <div className="hidden w-[110px] flex-none text-right font-mono text-[11.5px] text-muted md:block">

@@ -20,6 +20,9 @@ export interface NoCronograma {
   // Minutos — sempre 0 por enquanto (sem apontamento real de horas sincronizado do
   // Senior ainda; ver agregarHoras).
   horasRealizadas: number;
+  // Minutos, AtividadeConsultor.horasExcedentes — só tem valor próprio em tipo="atividade",
+  // mesma convenção de horasPrevistas (pasta/item somam pra cima via agregarHoras).
+  horasExcedentes: number;
   responsavelCodfor: number | null;
   // Referência informativa a outra atividade da mesma árvore — sem motor de
   // recálculo de datas, só usada aqui pra derivar o status "bloqueada".
@@ -32,6 +35,7 @@ export interface NoCronograma {
 export interface HorasAgregadas {
   horasPrevistas: number;
   horasRealizadas: number;
+  horasExcedentes: number;
   // 0-1, com guarda contra divisão por zero (horasPrevistas=0 -> avanco=0).
   avanco: number;
 }
@@ -92,20 +96,24 @@ export function agregarHoras(nos: NoCronograma[]): Map<number, HorasAgregadas> {
 
     let horasPrevistas: number;
     let horasRealizadas: number;
+    let horasExcedentes: number;
     if (no.tipo === "atividade") {
       horasPrevistas = no.horasPrevistas ?? 0;
       horasRealizadas = no.horasRealizadas;
+      horasExcedentes = no.horasExcedentes;
     } else {
       horasPrevistas = 0;
       horasRealizadas = 0;
+      horasExcedentes = 0;
       for (const filho of filhosDe.get(no.id) ?? []) {
         const agregadoFilho = calcular(filho);
         horasPrevistas += agregadoFilho.horasPrevistas;
         horasRealizadas += agregadoFilho.horasRealizadas;
+        horasExcedentes += agregadoFilho.horasExcedentes;
       }
     }
     const avanco = horasPrevistas > 0 ? horasRealizadas / horasPrevistas : 0;
-    const agregado: HorasAgregadas = { horasPrevistas, horasRealizadas, avanco };
+    const agregado: HorasAgregadas = { horasPrevistas, horasRealizadas, horasExcedentes, avanco };
     resultado.set(no.id, agregado);
     return agregado;
   }

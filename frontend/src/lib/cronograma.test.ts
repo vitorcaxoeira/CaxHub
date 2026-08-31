@@ -23,6 +23,7 @@ function no(parcial: Partial<NoCronograma> & Pick<NoCronograma, "id" | "tipo" | 
     ordem: 0,
     horasPrevistas: null,
     horasRealizadas: 0,
+    horasExcedentes: 0,
     responsavelCodfor: null,
     predecessoraId: null,
     statusManual: null,
@@ -104,12 +105,12 @@ describe("agregarHoras", () => {
 
   it("atividade agrega o próprio valor (tratando null como 0)", () => {
     const nos = [no({ id: 1, tipo: "atividade", nome: "Sem duração", horasPrevistas: null })];
-    expect(agregarHoras(nos).get(1)).toEqual({ horasPrevistas: 0, horasRealizadas: 0, avanco: 0 });
+    expect(agregarHoras(nos).get(1)).toEqual({ horasPrevistas: 0, horasRealizadas: 0, horasExcedentes: 0, avanco: 0 });
   });
 
   it("guarda contra divisão por zero quando horasPrevistas agregadas é 0", () => {
     const nos = [no({ id: 1, tipo: "pasta", nome: "Pasta vazia" })];
-    expect(agregarHoras(nos).get(1)).toEqual({ horasPrevistas: 0, horasRealizadas: 0, avanco: 0 });
+    expect(agregarHoras(nos).get(1)).toEqual({ horasPrevistas: 0, horasRealizadas: 0, horasExcedentes: 0, avanco: 0 });
   });
 });
 
