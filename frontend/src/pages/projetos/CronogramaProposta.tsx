@@ -33,6 +33,7 @@ export function CronogramaProposta() {
     moverItem,
     atualizarBloqueiaExcedenteEstrutura,
     sincronizarAlocacao,
+    acompanharSincronizacaoAlocacao,
   } = useCronograma(codemp, codpro);
   const [salvandoConfig, setSalvandoConfig] = useState(false);
   const [erroConfig, setErroConfig] = useState<string | null>(null);
@@ -141,6 +142,7 @@ export function CronogramaProposta() {
         larguraHoras={larguraHoras}
         bloqueiaExcedenteEstrutura={proposta?.bloqueiaExcedenteEstrutura ?? false}
         sincronizarAlocacao={sincronizarAlocacao}
+        acompanharSincronizacaoAlocacao={acompanharSincronizacaoAlocacao}
       />
     </div>
   );

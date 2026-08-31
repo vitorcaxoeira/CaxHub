@@ -330,7 +330,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     });
 
     try {
-      await axios.patch(`/api/alocacao/estrutura/${id}`, {
+      const { data } = await axios.patch(`/api/alocacao/estrutura/${id}`, {
         ...(patch.nome !== undefined ? { nome: patch.nome } : {}),
         ...(patch.responsavelCodfor !== undefined ? { responsavelCodfor: patch.responsavelCodfor } : {}),
         ...(patch.horasPrevistas !== undefined ? { duracaoHoras: patch.horasPrevistas } : {}),
@@ -343,12 +343,21 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
         ...(patch.ordem !== undefined ? { ordem: patch.ordem } : {}),
         ...(patch.confirmarExcedente ? { confirmarExcedente: true } : {}),
       });
+      // PATCH /estrutura/:id devolve o id da AtividadeConsultor criada/editada nesta
+      // requisição (troca de responsável ou de horas) — quando existe, algo acabou de ser
+      // mandado pro Senior: recarrega na hora (o patch otimista acima não sabe nada sobre
+      // integracaoErpLabel/Tone, que são calculados só no servidor) e acompanha até o
+      // resultado definitivo chegar, mesmo mecanismo do botão "Sincronizar com o Senior".
+      if (data?.atividadeConsultorId != null) {
+        carregar();
+        acompanharSincronizacaoAlocacao(data.atividadeConsultorId);
+      }
     } catch (err) {
       setNos(snapshot);
       const axiosErr = err as { response?: { data?: { error?: string } } };
       throw new Error(axiosErr.response?.data?.error ?? "Falha ao salvar alteração");
     }
-  }, []);
+  }, [carregar]);
 
   // Agrupa (parentId = id de uma pasta raiz) ou solta (parentId = null) um item da
   // proposta — o item continua virtual, só a posição é persistida no backend
@@ -558,5 +567,6 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     moverItem,
     atualizarBloqueiaExcedenteEstrutura,
     sincronizarAlocacao,
+    acompanharSincronizacaoAlocacao,
   };
 }

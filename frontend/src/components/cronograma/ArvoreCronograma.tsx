@@ -79,6 +79,11 @@ interface ArvoreCronogramaProps {
   // ação "Sincronizar com o Senior" no menu "⋯" de LinhaNo, só quando integracaoErpTone é
   // "destructive".
   sincronizarAlocacao: (atividadeConsultorId: number) => Promise<void>;
+  // Repassado pro DrawerAtividade — acompanha o resultado de um envio que acabou de ser
+  // disparado (troca de responsável/horas, ou horas excedentes autorizadas) até o ícone
+  // de integração refletir o status final, sem esperar F5 (mesmo polling do botão
+  // "Sincronizar com o Senior").
+  acompanharSincronizacaoAlocacao: (atividadeConsultorId: number) => void;
 }
 
 export function ArvoreCronograma({
@@ -98,6 +103,7 @@ export function ArvoreCronograma({
   larguraHoras,
   bloqueiaExcedenteEstrutura,
   sincronizarAlocacao,
+  acompanharSincronizacaoAlocacao,
 }: ArvoreCronogramaProps) {
   const [expandidos, setExpandidos] = useState<Set<number>>(() => carregarExpansaoSalva(projetoId));
   const [busca, setBusca] = useState("");
@@ -740,6 +746,7 @@ export function ArvoreCronograma({
           larguraHoras={larguraHoras}
           bloqueiaExcedenteEstrutura={bloqueiaExcedenteEstrutura}
           onRecarregar={onTentarNovamente}
+          acompanharSincronizacaoAlocacao={acompanharSincronizacaoAlocacao}
         />
       )}
 

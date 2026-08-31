@@ -1800,6 +1800,13 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
     // Amarildo na proposta 8568, item 14, sem nenhuma AtividadeConsultor nascer). Mesmo
     // espírito do que PUT /alocacoes/:id já faz pro modo "item" (linha ~2126) e do que
     // POST .../alocar-lote já faz na criação em lote (mais abaixo neste arquivo).
+    // Id da AtividadeConsultor que acabou de ser criada/editada nesta requisição (se
+    // alguma) — devolvido na resposta pra o frontend acompanhar o envio ao Senior na hora
+    // (acompanharSincronizacaoAlocacao, useCronograma.ts), sem esperar um F5 pra saber o
+    // resultado. Fica null quando só o responsável foi LIMPO (sem alocação nova pra
+    // acompanhar) ou quando nada neste PATCH tocou a alocação.
+    let atividadeConsultorSincronizadaId: number | null = null;
+
     if (no.tipo === "atividade") {
       const houveMudancaResponsavel = responsavelCodfor !== undefined && responsavelCodfor !== no.responsavelCodfor;
 
@@ -1909,6 +1916,7 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
             dataPrevistaFim: fimEfetivo?.toISOString() ?? null,
             tipEve: TIP_EVE_INCLUIR,
           });
+          atividadeConsultorSincronizadaId = novaAlocacao.id;
         }
       } else if (duracaoHoras != null && duracaoHoras !== no.duracaoHoras) {
         const alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
@@ -1930,11 +1938,12 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
             dataPrevistaFim: alocacaoVinculada.dataPrevistaFim?.toISOString() ?? null,
             tipEve: TIP_EVE_ALTERAR,
           });
+          atividadeConsultorSincronizadaId = alocacaoVinculada.id;
         }
       }
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, atividadeConsultorId: atividadeConsultorSincronizadaId });
   } catch (error) {
     handleError(res, error, "estrutura-editar");
   }

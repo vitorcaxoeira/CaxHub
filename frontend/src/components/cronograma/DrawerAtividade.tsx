@@ -40,6 +40,10 @@ interface DrawerAtividadeProps {
   // sem isso o badge de excedente na árvore (LinhaNo) ficaria com o valor velho até um
   // reload manual da página.
   onRecarregar: () => void;
+  // Autorizar horas excedentes também manda editar_atividade pro Senior — acompanha até o
+  // ícone de integração assentar no resultado final, mesmo mecanismo do botão "Sincronizar
+  // com o Senior".
+  acompanharSincronizacaoAlocacao: (atividadeConsultorId: number) => void;
 }
 
 export function DrawerAtividade({
@@ -55,6 +59,7 @@ export function DrawerAtividade({
   larguraHoras,
   bloqueiaExcedenteEstrutura,
   onRecarregar,
+  acompanharSincronizacaoAlocacao,
 }: DrawerAtividadeProps) {
   const [nome, setNome] = useState(no.nome);
   const [responsavelCodfor, setResponsavelCodfor] = useState<number | "">(no.responsavelCodfor ?? "");
@@ -351,7 +356,10 @@ export function DrawerAtividade({
                   horasExcedentesAtuais={a.horasExcedentes}
                   podeAutorizarExcedente={a.podeAutorizarExcedente}
                   souOExecutor={a.souOExecutor}
-                  onAlterado={onRecarregar}
+                  onAlterado={() => {
+                    onRecarregar();
+                    acompanharSincronizacaoAlocacao(a.id);
+                  }}
                 />
               ))}
 
