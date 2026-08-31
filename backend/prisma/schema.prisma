@@ -801,11 +801,13 @@ model PropostaModoAlocacao {
   /// Desliga o bypass "Salvar mesmo excedendo" da edição de duração no Cronograma
   /// (PATCH /alocacao/estrutura/:id, campo confirmarExcedente no body) — quando true,
   /// validarSomaEstrutura nunca pode ser pulada por essa via, mesmo com a flag no body.
-  /// Ausência de linha nesta tabela (proposta sem config explícita) equivale a `false`,
-  /// mesmo espírito do default de `modo` (ver resolverModoAlocacao). NÃO afeta
+  /// Default `true` (31/08/2026, a pedido do Vitor): trava ligada é o padrão seguro pra
+  /// toda proposta, mesmo sem config explícita (ver propostaBloqueiaExcedenteEstrutura em
+  /// routes/alocacao.ts) — quem quiser o bypass antigo desliga pelo toggle do Cronograma,
+  /// decisão registrada em auditoria (PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO). NÃO afeta
   /// AtividadeConsultor.horasExcedentes, canal deliberadamente separado de autorizar
   /// estouro do teto de apontamento (ver comentário do campo).
-  bloqueiaExcedenteEstrutura Boolean @default(false)
+  bloqueiaExcedenteEstrutura Boolean @default(true)
 
   @@id([codemp, codpro])
   @@map("proposta_modo_alocacao")

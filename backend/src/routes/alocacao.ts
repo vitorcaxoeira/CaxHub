@@ -18,7 +18,7 @@ import { TIP_EVE_ALTERAR, TIP_EVE_EXCLUIR, TIP_EVE_INCLUIR } from "../soap/clien
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
-import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { entidadeIdAtividade, entidadeIdProposta } from "../audit/identidadeEntidade";
 import { SITRAT_CANCELADO, calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone, type IntegracaoErpStatus } from "../domain/ratDominio";
 import { Prisma } from "@prisma/client";
 
@@ -991,11 +991,12 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/modo", async (req: Authenticated
 
 // Fecha (ou reabre) o bypass "confirmarExcedente" da edição de duração pelo Cronograma —
 // ver comentário do campo em schema.prisma (PropostaModoAlocacao.bloqueiaExcedenteEstrutura).
-// Ausência de linha na tabela (proposta sem nenhuma config ainda, o caso comum — a maioria
-// das propostas nunca chamou POST .../modo) equivale a `false`, mesmo default do schema.
+// Ausência de linha na tabela (proposta sem nenhuma config ainda) equivale a `true` — mesmo
+// default do schema: trava ligada é o padrão seguro, quem quiser o bypass antigo desliga
+// explicitamente pelo toggle do Cronograma.
 async function propostaBloqueiaExcedenteEstrutura(codemp: number, codpro: number): Promise<boolean> {
   const config = await prisma.propostaModoAlocacao.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
-  return config?.bloqueiaExcedenteEstrutura ?? false;
+  return config?.bloqueiaExcedenteEstrutura ?? true;
 }
 
 alocacaoRouter.patch("/propostas/:codemp/:codpro/configuracao-alocacao", async (req: AuthenticatedRequest, res) => {
@@ -1017,21 +1018,58 @@ alocacaoRouter.patch("/propostas/:codemp/:codpro/configuracao-alocacao", async (
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
-    const { contexto, role } = ctx;
+    const { contexto, role, user } = ctx;
     if (!(await podeGerenciarProposta(role, contexto, codemp, codpro))) {
       res.status(403).json({ error: "Sem permissão para gerenciar esta proposta" });
       return;
     }
 
+    // Valor efetivo ANTES da troca (mesma resolução "sem linha = true" usada na validação)
+    // — é o "de" do evento de auditoria abaixo.
+    const valorAntes = await propostaBloqueiaExcedenteEstrutura(codemp, codpro);
+
     // Upsert dedicado — não reaproveita o POST .../modo (imutável depois da 1ª alocação).
     // Cria a linha com o modo já resolvido (esta tela só existe em modo "estrutura") se
     // ainda não existir nenhuma, ou só atualiza a flag sem tocar no modo já gravado.
     const modoAtual = (await resolverModoAlocacao(codemp, codpro)) ?? "estrutura";
-    await prisma.propostaModoAlocacao.upsert({
-      where: { codemp_codpro: { codemp, codpro } },
-      create: { codemp, codpro, modo: modoAtual, bloqueiaExcedenteEstrutura, definidoPor: contexto.consultor?.codusu ?? null },
-      update: { bloqueiaExcedenteEstrutura },
-    });
+    const operacoes: Prisma.PrismaPromise<unknown>[] = [
+      prisma.propostaModoAlocacao.upsert({
+        where: { codemp_codpro: { codemp, codpro } },
+        create: { codemp, codpro, modo: modoAtual, bloqueiaExcedenteEstrutura, definidoPor: contexto.consultor?.codusu ?? null },
+        update: { bloqueiaExcedenteEstrutura },
+      }),
+    ];
+    // Muda uma regra de negócio (quem pode estourar o saldo do item na estrutura inteira) —
+    // evento PRÓPRIO (não PROPOSTA_ALTERADA genérico) e com tone dedicado no frontend
+    // (auditoriaVisual.tsx), pra dar destaque na linha do tempo. Só grava se realmente
+    // mudou (idempotência: reenviar o mesmo valor não polui o histórico).
+    if (valorAntes !== bloqueiaExcedenteEstrutura) {
+      operacoes.push(
+        criarEventoAuditoria({
+          origem: "tela",
+          usuarioId: user.id,
+          codemp,
+          codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.PROPOSTA,
+          entidadeId: entidadeIdProposta(codemp, codpro),
+          entidadeRotulo: `Proposta ${codemp}/${codpro}`,
+          eventoTipo: EVENTOS_AUDITORIA.PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO,
+          alteracoes: {
+            bloqueiaExcedenteEstrutura: {
+              de: valorAntes,
+              para: bloqueiaExcedenteEstrutura,
+              rotulo: "Trava de excedente na estrutura",
+            },
+          },
+          metadata: {
+            bloqueio_de: valorAntes ? "Ligado" : "Desligado",
+            bloqueio_para: bloqueiaExcedenteEstrutura ? "Ligado" : "Desligado",
+          },
+          correlationId: req.correlationId!,
+        })
+      );
+    }
+    await prisma.$transaction(operacoes);
 
     res.json({ bloqueiaExcedenteEstrutura });
   } catch (error) {

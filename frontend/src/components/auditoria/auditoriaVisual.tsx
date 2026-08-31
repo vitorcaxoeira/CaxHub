@@ -89,6 +89,18 @@ function IconeExecucao() {
     </svg>
   );
 }
+// Ícone só dela — cadeado — pra dar "destaque especial" (pedido do Vitor) a
+// PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO: é uma mudança de regra de negócio (quem pode
+// estourar o saldo do item na estrutura inteira), não um campo qualquer de cadastro, e por
+// isso ganha um ícone e um tone (warning) próprios em vez de reaproveitar IconeEdicao/neutral.
+function IconeBloqueio() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
 function IconeSenior() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -144,6 +156,16 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     rotuloGrupo: "Item da Proposta",
     icone: IconeEdicao,
     resumo: (e) => `Alterou ${contarAlteracoes(e)} campo(s) do ${rotuloEntidade(e)}`,
+  },
+  // Mudança de regra de negócio (trava de "salvar mesmo excedendo" no Cronograma) — tone
+  // "warning" + ícone de cadeado próprio, de propósito: pra saltar aos olhos na linha do
+  // tempo, diferente de PROPOSTA_ALTERADA (tone neutro, ícone de lápis).
+  PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Configuração de Alocação",
+    icone: IconeBloqueio,
+    resumo: (e) =>
+      `${e.metadata?.bloqueio_para === "Ligado" ? "Ligou" : "Desligou"} a trava de horas acima do saldo do item na estrutura — ${rotuloEntidade(e)}`,
   },
   ALOCACAO_CRIADA: {
     tone: "success",
@@ -305,6 +327,7 @@ export function configEvento(eventoTipo: string): ConfigEvento {
 // Prioridade de "qual evento representa a ação inteira" quando um grupo (correlationId)
 // tem mais de um evento — o mais específico/relevante pro usuário vem primeiro.
 const PRIORIDADE_RESUMO_GRUPO = [
+  "PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO",
   "KANBAN_RAIA_ALTERADA",
   "PROPOSTA_STATUS_ALTERADO",
   "ATIVIDADE_ENVIADA_SENIOR",

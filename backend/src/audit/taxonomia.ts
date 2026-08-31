@@ -19,6 +19,13 @@ export const EVENTOS_AUDITORIA = {
   PROPOSTA_ITEM_CRIADO: "PROPOSTA_ITEM_CRIADO",
   PROPOSTA_ITEM_ALTERADO: "PROPOSTA_ITEM_ALTERADO",
 
+  // Liga/desliga PropostaModoAlocacao.bloqueiaExcedenteEstrutura (trava de "salvar mesmo
+  // excedendo" no Cronograma) — evento próprio, não PROPOSTA_ALTERADA genérico, de
+  // propósito: é uma mudança de regra de negócio (quem pode estourar o saldo do item),
+  // não um campo qualquer do cadastro. Ver tone "warning" dedicado em auditoriaVisual.tsx
+  // (frontend) pra dar destaque na linha do tempo.
+  PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO: "PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO",
+
   // Fase 2 — Alocação (AtividadeConsultor: consultor x atividade). ALOCACAO_ALTERADA
   // cobre hoje só o diff de qtdhor (a distribuição de horas em si) — é o único campo
   // editável por PATCH /alocacao/alocacoes/:id além das datas (ver DATA_*).
