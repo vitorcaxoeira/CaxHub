@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { HorasAgregadas, StatusNo, formatHorasCompacto, projetarSaldo } from "../../lib/cronograma";
+import { HorasAgregadas, StatusNo, formatHorasCompacto, formatarAlocacoes, projetarSaldo } from "../../lib/cronograma";
 import { NoCronogramaCompleto, PatchNo } from "../../hooks/useCronograma";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 import { TetoApontamento } from "../atividades/TetoApontamento";
@@ -13,13 +13,6 @@ const OPCOES_STATUS: { value: Exclude<StatusNo, "bloqueada">; label: string }[] 
 
 function dataParaInput(iso: string | null): string {
   return iso ? iso.slice(0, 10) : "";
-}
-
-// "69778 (seqati 11209)" — por alocação, já que uma tarefa compartilhada pode ter mais de
-// uma AtividadeConsultor, cada uma com seu próprio seqati (ou ainda sem, se não confirmado
-// pelo Senior). Usado tanto na linha visível quanto no tooltip do cabeçalho do drawer.
-function formatarAlocacoes(alocacoes: { id: number; seqati: string | null }[]): string {
-  return alocacoes.map((a) => `${a.id}${a.seqati != null ? ` (seqati ${a.seqati})` : ""}`).join(", ");
 }
 
 interface DrawerAtividadeProps {

@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { HorasAgregadas, OrcamentoItem, StatusNo, estadoAlertaItem, formatHorasCompacto, larguraColunaHorasPx } from "../../lib/cronograma";
+import {
+  HorasAgregadas,
+  OrcamentoItem,
+  StatusNo,
+  estadoAlertaItem,
+  formatHorasCompacto,
+  formatarAlocacoes,
+  larguraColunaHorasPx,
+} from "../../lib/cronograma";
 import { NoCronogramaCompleto } from "../../hooks/useCronograma";
 import { Tone, toneBadge } from "../ui/badges";
 import { Spinner } from "../ui/Spinner";
@@ -186,6 +194,17 @@ export function LinhaNo({
   // Mesma função usada pelo cabeçalho da árvore — é o que garante que os dois alinhem.
   const larguraColunaNumero = larguraColunaHorasPx(larguraHoras);
 
+  // Tooltip do badge de integração ERP: falha mostra o erro de verdade que o Senior devolveu
+  // (integracaoErpErro, ver mapNo no backend); sincronizado mostra os MESMOS ids técnicos já
+  // exibidos no cabeçalho do DrawerAtividade ("Est. X · Ativ. Y (seqati Z)") — é a identidade
+  // que confirma que aquela alocação específica é a que chegou no Senior; os demais status
+  // (enviando/pendente) usam o rótulo genérico, que já basta.
+  const tituloIntegracaoErp = no.integracaoErpErro
+    ? `Falha no envio ao Senior: ${no.integracaoErpErro}`
+    : no.integracaoErpTone === "success"
+    ? `Est. ${no.id} · Ativ. ${formatarAlocacoes(no.alocacoesResumo)}`
+    : `Integração com o Senior: ${no.integracaoErpLabel}`;
+
   return (
     <div className="group relative" ref={setTopoRef}>
       {isOverTopo && <div className="absolute inset-x-0 top-0 z-20 h-0.5 bg-primary" />}
@@ -322,10 +341,7 @@ export function LinhaNo({
                 className={`hidden h-4 w-4 flex-none items-center justify-center rounded-full sm:inline-flex ${
                   toneBadge[no.integracaoErpTone ?? "neutral"]
                 }`}
-                // Falha: mostra o erro de verdade que o Senior devolveu (integracaoErpErro,
-                // ver mapNo no backend) — o rótulo genérico "Falha no envio" sozinho não diz
-                // por quê. Nos demais status o rótulo já é suficiente.
-                title={no.integracaoErpErro ? `Falha no envio ao Senior: ${no.integracaoErpErro}` : `Integração com o Senior: ${no.integracaoErpLabel}`}
+                title={tituloIntegracaoErp}
               >
                 <IconeIntegracaoErp tone={no.integracaoErpTone ?? "neutral"} />
               </span>

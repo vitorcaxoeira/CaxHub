@@ -214,6 +214,14 @@ export function formatHorasCompacto(minutos: number, largura: number = 2): strin
   return `${sinal}${String(Math.abs(horas)).padStart(largura, "0")}:${String(min).padStart(2, "0")}`;
 }
 
+// "94652 (seqati 11310)" — por alocação, já que uma tarefa compartilhada pode ter mais de uma
+// AtividadeConsultor, cada uma com seu próprio seqati (ou ainda sem, se não confirmado pelo
+// Senior). Usado no cabeçalho do DrawerAtividade e no tooltip do badge de integração ERP em
+// LinhaNo — mesmo texto identificador nos dois lugares, extraído aqui pra não duplicar.
+export function formatarAlocacoes(alocacoes: { id: number; seqati: string | null }[]): string {
+  return alocacoes.map((a) => `${a.id}${a.seqati != null ? ` (seqati ${a.seqati})` : ""}`).join(", ");
+}
+
 // Orçamento de um item: três grandezas que convivem na árvore (ver tabela do prompt) —
 // contratado vem da proposta (join, nunca cópia — mora em item.horasPrevistas, ver
 // useCronograma), distribuído é a soma recursiva de horasPrevistas das atividades
