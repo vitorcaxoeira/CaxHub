@@ -28,6 +28,9 @@ interface MenuAcoesNoProps {
   // não tem teto de horas próprio — ver ArvoreCronograma).
   onAlocarConsultores?: () => void;
   onExcluir: () => void;
+  // Reenvia ao Senior — o item só aparece quando no.integracaoErpTone === "destructive"
+  // (falha no envio, ver GET .../cronograma e o badge de LinhaNo).
+  onSincronizarSenior?: () => void;
 }
 
 export function MenuAcoesNo({
@@ -43,6 +46,7 @@ export function MenuAcoesNo({
   permiteAdicionarAtividade = true,
   onAlocarConsultores,
   onExcluir,
+  onSincronizarSenior,
 }: MenuAcoesNoProps) {
   const [open, setOpen] = useState(false);
   const [mostrarMover, setMostrarMover] = useState(false);
@@ -80,6 +84,17 @@ export function MenuAcoesNo({
                     edição inline era um segundo caminho pro mesmo campo. */}
                 {onEditar && <DropdownMenu.Item onSelect={onEditar}>Editar</DropdownMenu.Item>}
                 <DropdownMenu.Item onSelect={onDuplicar}>Duplicar</DropdownMenu.Item>
+              </>
+            )}
+            {/* Só aparece com falha real de envio (badge vermelho de LinhaNo) — reenviar uma
+                alocação já sincronizada ou ainda pendente não faz sentido (o backend recusa
+                também, esta é só a primeira barreira). */}
+            {no.tipo === "atividade" && no.integracaoErpTone === "destructive" && onSincronizarSenior && (
+              <>
+                <DropdownMenu.Separator />
+                <DropdownMenu.Item onSelect={onSincronizarSenior} className="text-primary hover:bg-primary/10">
+                  Sincronizar com o Senior
+                </DropdownMenu.Item>
               </>
             )}
             {destinosPossiveis.length > 0 && (

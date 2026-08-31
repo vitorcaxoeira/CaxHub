@@ -75,6 +75,10 @@ interface ArvoreCronogramaProps {
   // Repassado direto pro DrawerAtividade — desliga o bypass "Salvar mesmo excedendo" (ver
   // PropostaModoAlocacao.bloqueiaExcedenteEstrutura).
   bloqueiaExcedenteEstrutura: boolean;
+  // Reenvia uma alocação com falha de envio ao Senior (ver POST /alocacoes/:id/reenviar) —
+  // ação "Sincronizar com o Senior" no menu "⋯" de LinhaNo, só quando integracaoErpTone é
+  // "destructive".
+  sincronizarAlocacao: (atividadeConsultorId: number) => Promise<void>;
 }
 
 export function ArvoreCronograma({
@@ -93,6 +97,7 @@ export function ArvoreCronograma({
   podeGerenciarProposta,
   larguraHoras,
   bloqueiaExcedenteEstrutura,
+  sincronizarAlocacao,
 }: ArvoreCronogramaProps) {
   const [expandidos, setExpandidos] = useState<Set<number>>(() => carregarExpansaoSalva(projetoId));
   const [busca, setBusca] = useState("");
@@ -384,6 +389,20 @@ export function ArvoreCronograma({
     }
   }
 
+  // Reenvia as alocações do nó que estiverem com falha — "estrutura" nasce com exatamente 1
+  // consultor por nó (regra de alocar-lote), então na prática é sempre 1 chamada; o loop só
+  // cobre o caso raro de tarefa compartilhada, sem precisar saber de antemão qual alocação
+  // específica é a que falhou. `allSettled` porque uma alocação sem nada a reenviar (ex.: já
+  // sincronizada) recusa com 400 sem que isso seja um erro de verdade pra quem clicou —
+  // só mostra erro se NENHUMA delas conseguiu.
+  async function sincronizarComSenior(no: NoCronogramaCompleto) {
+    const resultados = await Promise.allSettled(no.alocacoesResumo.map((a) => sincronizarAlocacao(a.id)));
+    const falhas = resultados.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (falhas.length === resultados.length && falhas.length > 0) {
+      setErroAcao((falhas[0].reason as Error).message);
+    }
+  }
+
   async function criarAtividadeEmPasta(pastaOuItem: NoCronogramaCompleto, nome: string) {
     // Chamado a partir da linha fantasma — hoje nasce tanto pra pasta ligada a um item
     // (seqite != null) quanto pro próprio item, ver condição de emissão do ghost row
@@ -601,6 +620,7 @@ export function ArvoreCronograma({
           no.tipo === "item" || (no.tipo === "pasta" && no.seqite != null) ? () => setAlocarConsultoresNoId(no.id) : undefined
         }
         onExcluir={() => excluir(no)}
+        onSincronizarSenior={() => sincronizarComSenior(no)}
         larguraHoras={larguraHoras}
       />
     );

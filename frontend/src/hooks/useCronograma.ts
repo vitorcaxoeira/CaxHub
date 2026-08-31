@@ -414,6 +414,23 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     }
   }, []);
 
+  // Reenvia uma alocação com falha de envio (ver POST /alocacoes/:id/reenviar) — dispara em
+  // segundo plano no servidor (202), então recarrega a árvore em seguida só pra refletir o
+  // status imediato (pendente/enviando); não faz polling do resultado final (mesmo limite
+  // que o botão tinha antes de existir aqui).
+  const sincronizarAlocacao = useCallback(
+    async (atividadeConsultorId: number) => {
+      try {
+        await axios.post(`/api/alocacao/alocacoes/${atividadeConsultorId}/reenviar`);
+        carregar();
+      } catch (err) {
+        const axiosErr = err as { response?: { data?: { error?: string } } };
+        throw new Error(axiosErr.response?.data?.error ?? "Falha ao reenviar ao Senior");
+      }
+    },
+    [carregar]
+  );
+
   // Duplica só o nó (não a subárvore) — cria uma cópia rasa com "(cópia)" no nome e
   // recarrega do servidor pra garantir consistência, já que envolve 2 chamadas
   // encadeadas (criar + preencher os campos que POST /estrutura não aceita).
@@ -486,5 +503,6 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     duplicarNo,
     moverItem,
     atualizarBloqueiaExcedenteEstrutura,
+    sincronizarAlocacao,
   };
 }

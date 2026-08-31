@@ -11,7 +11,7 @@ import {
   ContextoConsultor,
 } from "../domain/contextoProjeto";
 import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
-import { enfileirar, processarFilaSincronizacao } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao, reprocessar } from "../sync/outboxSenior";
 import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
 import { runPropostaItemSyncPorCodpro } from "../sync/propostaItemSync";
 import { TIP_EVE_ALTERAR, TIP_EVE_EXCLUIR, TIP_EVE_INCLUIR } from "../soap/client";
@@ -2726,5 +2726,76 @@ alocacaoRouter.delete("/alocacoes/:id", async (req: AuthenticatedRequest, res) =
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error, "remover-alocacao");
+  }
+});
+
+// POST /alocacoes/:id/reenviar — nova tentativa de sincronizar uma alocação com falha no
+// envio ao Senior (mesmo espírito de POST /apontamentos/envio/:ratItemId/reenviar). Como
+// enviarCriarAtividade/enviarEditarAtividade releem a AtividadeConsultor viva do banco na
+// hora do envio (nunca o payload congelado — ver montarPayloadAlocacao), reenviar aqui é só
+// resetar a pendência mais recente e reprocessar: sem branch de "preparar payload novo" que
+// o reenvio de apontamento precisa (prepararReenvioItem), porque não existe payload pra
+// remontar — a pendência já aponta pra alocação certa.
+alocacaoRouter.post("/alocacoes/:id/reenviar", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAlocacaoComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Alocação não encontrada" });
+      return;
+    }
+    const { atividade, depexe } = resolvido;
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    // Mesma regra de "editar" (reenviar não muda dado nenhum localmente, mas decide quando
+    // o Senior recebe a próxima tentativa — mesmo nível de permissão de PATCH /alocacoes/:id).
+    if (!podeMexerNoItem(role, contexto, "editar", depexe, resolvido.propostaDepexe, atividade.codfor)) {
+      res.status(403).json({ error: "Sem permissão para reenviar esta alocação" });
+      return;
+    }
+
+    // Só os tipos com write-back real de alocação têm o que reenviar (mesmo filtro de
+    // GET .../cronograma, que é quem decide se o botão aparece: badge "falha" == existe uma
+    // dessas pendências com erro).
+    const pendencia = await prisma.sincronizacaoPendente.findFirst({
+      where: { atividadeId: id, tipo: { in: ["criar_atividade", "editar_atividade"] } },
+      orderBy: { id: "desc" },
+    });
+    if (!pendencia) {
+      res.status(400).json({ error: "Nenhuma pendência de envio encontrada para esta alocação" });
+      return;
+    }
+    if (pendencia.status === "enviando") {
+      res.status(409).json({ error: "Envio já em andamento" });
+      return;
+    }
+    if (pendencia.status === "enviado") {
+      res.status(400).json({ error: "Esta alocação já foi sincronizada com o Senior — nada a reenviar" });
+      return;
+    }
+
+    // Reseta tentativas/erro (mesma função do endpoint admin de reprocessar) e dispara o
+    // envio em segundo plano — quem chamou não espera terminar, só sabe que entrou na fila;
+    // a árvore reflete o resultado no próximo recarregar() (o mesmo botão "Sincronizar" que
+    // já dispara isso, ver ArvoreCronograma).
+    await reprocessar(pendencia.id);
+    processarFilaSincronizacao({ apenasId: pendencia.id }).catch((erro) => {
+      console.error("[alocacao] reenvio ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+    });
+
+    res.status(202).json({ status: "reenviando" });
+  } catch (error) {
+    handleError(res, error, "reenviar-alocacao");
   }
 });

@@ -106,6 +106,9 @@ interface LinhaNoProps {
   onAdicionarDentro?: (tipo: "pasta" | "atividade") => void;
   onAlocarConsultores?: () => void;
   onExcluir: () => void;
+  // Reenvia a alocação ao Senior — só faz sentido (e o MenuAcoesNo só mostra a ação) quando
+  // no.integracaoErpTone === "destructive" (falha no envio, ver GET .../cronograma).
+  onSincronizarSenior?: () => void;
   // Dígitos mínimos de hora usados em toda a linha (ver larguraHorasProposta em
   // cronograma.ts) — mesmo valor pra árvore inteira, calculado uma vez no topo.
   larguraHoras: number;
@@ -136,6 +139,7 @@ export function LinhaNo({
   onAdicionarDentro,
   onAlocarConsultores,
   onExcluir,
+  onSincronizarSenior,
   larguraHoras,
   podeGerenciarProposta,
 }: LinhaNoProps) {
@@ -434,6 +438,7 @@ export function LinhaNo({
               permiteAdicionarAtividade={no.tipo === "item" || (no.tipo === "pasta" && no.seqite != null)}
               onAlocarConsultores={onAlocarConsultores}
               onExcluir={onExcluir}
+              onSincronizarSenior={onSincronizarSenior}
             />
           )}
         </div>
