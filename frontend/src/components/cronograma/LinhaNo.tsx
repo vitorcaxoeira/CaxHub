@@ -322,7 +322,10 @@ export function LinhaNo({
                 className={`hidden h-4 w-4 flex-none items-center justify-center rounded-full sm:inline-flex ${
                   toneBadge[no.integracaoErpTone ?? "neutral"]
                 }`}
-                title={`Integração com o Senior: ${no.integracaoErpLabel}`}
+                // Falha: mostra o erro de verdade que o Senior devolveu (integracaoErpErro,
+                // ver mapNo no backend) — o rótulo genérico "Falha no envio" sozinho não diz
+                // por quê. Nos demais status o rótulo já é suficiente.
+                title={no.integracaoErpErro ? `Falha no envio ao Senior: ${no.integracaoErpErro}` : `Integração com o Senior: ${no.integracaoErpLabel}`}
               >
                 <IconeIntegracaoErp tone={no.integracaoErpTone ?? "neutral"} />
               </span>

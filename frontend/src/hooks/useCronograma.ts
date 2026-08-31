@@ -48,6 +48,9 @@ export interface NoCronogramaCompleto extends NoCronograma {
   // pra pasta/item e pra atividade ainda sem alocação (nada pra sincronizar ainda).
   integracaoErpLabel: string | null;
   integracaoErpTone: Tone | null;
+  // Texto completo do erro do Senior — só preenchido quando integracaoErpTone é
+  // "destructive" (mostrado no tooltip do badge; o label genérico já cobre os outros casos).
+  integracaoErpErro: string | null;
   // Item ao qual esse nó pertence — útil pra ações (criar/alocar) que dependem do
   // departamento/permissão do item, mesmo pra nós que estão vários níveis abaixo dele.
   // Null só pra pasta raiz da proposta (não pertence a nenhum item específico).
@@ -100,6 +103,9 @@ interface NoApi {
   horasExcedentes: number;
   integracaoErpLabel: string | null;
   integracaoErpTone: Tone | null;
+  // Texto completo do erro do Senior — só preenchido quando integracaoErpTone é
+  // "destructive" (mostrado no tooltip do badge; o label genérico já cobre os outros casos).
+  integracaoErpErro: string | null;
   saldo: number | null;
   horasDivergentes: boolean;
   alocacoes?: AlocacaoResumo[];
@@ -214,6 +220,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             horasExcedentes: 0,
             integracaoErpLabel: null,
             integracaoErpTone: null,
+            integracaoErpErro: null,
             seqite: null,
             podeEditarItem: p.podeEditar,
             depexe: null,
@@ -246,6 +253,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             horasExcedentes: 0,
             integracaoErpLabel: null,
             integracaoErpTone: null,
+            integracaoErpErro: null,
             seqite: item.seqite,
             podeEditarItem: item.podeEditar,
             depexe: item.depexe,
@@ -276,6 +284,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
               horasExcedentes: n.horasExcedentes,
               integracaoErpLabel: n.integracaoErpLabel,
               integracaoErpTone: n.integracaoErpTone,
+              integracaoErpErro: n.integracaoErpErro,
               seqite: item.seqite,
               podeEditarItem: item.podeEditar,
               depexe: item.depexe,
@@ -402,6 +411,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
           horasExcedentes: 0,
           integracaoErpLabel: null,
           integracaoErpTone: null,
+          integracaoErpErro: null,
           seqite: novo.seqite ?? null,
           podeEditarItem: itemDoNo ? itemDoNo.podeEditarItem : proposta?.podeGerenciarProposta ?? false,
           depexe: itemDoNo?.depexe ?? null,

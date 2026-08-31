@@ -1311,6 +1311,25 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
               }))
             )
           : null;
+      // Mensagem de erro pro tooltip do badge — só quando o agregado é "falha" (nos outros
+      // status o rótulo genérico já basta). Pega a primeira alocação não confirmada com
+      // pendência de erro real; "invalido" nunca grava ultimoErro (ver outboxSenior.ts,
+      // payloadDeAlocacaoInvalido), então ganha uma frase própria aqui.
+      let integracaoErpErro: string | null = null;
+      if (integracaoErp === "falha") {
+        for (const a of alocacoesDoNo) {
+          if (a.seqati != null && a.seqati > 0n) continue;
+          const pendencia = pendenciaPorAtividadeId.get(a.id);
+          if (pendencia?.ultimoErro) {
+            integracaoErpErro = pendencia.ultimoErro;
+            break;
+          }
+          if (pendencia?.status === "invalido") {
+            integracaoErpErro = "Alocação sem horas definidas — nunca chegou a ser enviada ao Senior.";
+            break;
+          }
+        }
+      }
       return {
         id: n.id,
         parentId: n.parentId,
@@ -1339,6 +1358,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
         // e de RatRow em routes/rats.ts) — o frontend só exibe, não recalcula domínio.
         integracaoErpLabel: integracaoErp != null ? integracaoErpLabel(integracaoErp) : null,
         integracaoErpTone: integracaoErp != null ? integracaoErpTone(integracaoErp) : null,
+        integracaoErpErro,
         saldo: n.duracaoHoras != null ? n.duracaoHoras - horasAlocadas : null,
         // Mesmo bug/checagem do KPI "Horas divergentes" em GET /propostas — aqui já dá pra
         // marcar o nó exato, não só a proposta. `duracaoHoras == null` fica de fora (nunca
