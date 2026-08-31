@@ -1,7 +1,13 @@
 import axios from "axios";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NoCronograma, StatusNo } from "../lib/cronograma";
 import { Tone } from "../components/ui/badges";
+
+// Mesma tuning de acompanharEnvio em MeusApontamentos.tsx (apontamento/RAT): o envio ao
+// Senior costuma levar poucos segundos; passado isso, o cron de 15 min assume e a tela
+// simplesmente para de perguntar (fica no que já tinha, sem mentir um desfecho).
+const ENVIO_INTERVALO_MS = 1500;
+const ENVIO_MAX_TENTATIVAS = 13;
 
 export interface PropostaCronograma {
   codemp: number;
@@ -166,6 +172,15 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
   const [nos, setNos] = useState<NoCronogramaCompleto[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+
+  // Timers do acompanhamento de envio (ver acompanharSincronizacaoAlocacao) — cancelados ao
+  // sair da tela pra não bater em endpoint depois que o componente já saiu (mesmo padrão de
+  // MeusApontamentos.tsx).
+  const timersEnvioRef = useRef<number[]>([]);
+  useEffect(() => {
+    const timers = timersEnvioRef;
+    return () => timers.current.forEach((t) => window.clearTimeout(t));
+  }, []);
 
   const carregar = useCallback(() => {
     setLoading(true);
@@ -414,15 +429,44 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     }
   }, []);
 
+  // Acompanha um envio disparado em segundo plano (POST /alocacoes/:id/reenviar) até ele
+  // terminar de verdade — mesmo formato recursivo de acompanharEnvio em
+  // MeusApontamentos.tsx: setTimeout (não setInterval, pra nunca sobrepor uma consulta na
+  // outra), consultando GET /alocacoes/:id/envio a cada ENVIO_INTERVALO_MS. Só quando o
+  // resultado é definitivo (confirmado, bloqueado, ou qualquer erro) chama `carregar()` — a
+  // releitura completa da árvore, que já resolve o rótulo/tom certos (ver mapNo no backend);
+  // enquanto não concluir, não mexe em `nos`, então a tela mostra "Enviando" honestamente em
+  // vez de piscar com dado parcial. Falha de rede durante o polling é transitória, tenta de
+  // novo no próximo tick.
+  function acompanharSincronizacaoAlocacao(atividadeConsultorId: number, tentativa = 0) {
+    const timer = window.setTimeout(async () => {
+      let concluido = false;
+      try {
+        const { data } = await axios.get(`/api/alocacao/alocacoes/${atividadeConsultorId}/envio`);
+        concluido = data.status === "registrado" || data.status === "bloqueado" || Boolean(data.erro);
+        if (concluido) carregar();
+      } catch {
+        // Falha de rede no acompanhamento é transitória — tenta de novo no próximo tick.
+      }
+
+      if (concluido) return;
+      if (tentativa + 1 < ENVIO_MAX_TENTATIVAS) {
+        acompanharSincronizacaoAlocacao(atividadeConsultorId, tentativa + 1);
+      }
+      // Estourou o tempo sem desfecho: fica no que já tinha e o cron de 15 min assume.
+    }, ENVIO_INTERVALO_MS);
+    timersEnvioRef.current.push(timer);
+  }
+
   // Reenvia uma alocação com falha de envio (ver POST /alocacoes/:id/reenviar) — dispara em
-  // segundo plano no servidor (202), então recarrega a árvore em seguida só pra refletir o
-  // status imediato (pendente/enviando); não faz polling do resultado final (mesmo limite
-  // que o botão tinha antes de existir aqui).
+  // segundo plano no servidor (202); recarrega a árvore na hora só pra refletir o reset
+  // imediato (pendente/enviando) e em seguida acompanha até o resultado definitivo chegar.
   const sincronizarAlocacao = useCallback(
     async (atividadeConsultorId: number) => {
       try {
         await axios.post(`/api/alocacao/alocacoes/${atividadeConsultorId}/reenviar`);
         carregar();
+        acompanharSincronizacaoAlocacao(atividadeConsultorId);
       } catch (err) {
         const axiosErr = err as { response?: { data?: { error?: string } } };
         throw new Error(axiosErr.response?.data?.error ?? "Falha ao reenviar ao Senior");

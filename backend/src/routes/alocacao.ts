@@ -2786,9 +2786,10 @@ alocacaoRouter.post("/alocacoes/:id/reenviar", async (req: AuthenticatedRequest,
     }
 
     // Reseta tentativas/erro (mesma função do endpoint admin de reprocessar) e dispara o
-    // envio em segundo plano — quem chamou não espera terminar, só sabe que entrou na fila;
-    // a árvore reflete o resultado no próximo recarregar() (o mesmo botão "Sincronizar" que
-    // já dispara isso, ver ArvoreCronograma).
+    // envio em segundo plano — quem chamou não espera terminar, só sabe que entrou na fila.
+    // O resultado final chega pelo polling do frontend em GET /alocacoes/:id/envio logo
+    // abaixo (acompanharSincronizacaoAlocacao, useCronograma.ts), mesmo padrão de
+    // GET /apontamentos/envio/:ratItemId.
     await reprocessar(pendencia.id);
     processarFilaSincronizacao({ apenasId: pendencia.id }).catch((erro) => {
       console.error("[alocacao] reenvio ao Senior falhou:", erro instanceof Error ? erro.message : erro);
@@ -2797,5 +2798,60 @@ alocacaoRouter.post("/alocacoes/:id/reenviar", async (req: AuthenticatedRequest,
     res.status(202).json({ status: "reenviando" });
   } catch (error) {
     handleError(res, error, "reenviar-alocacao");
+  }
+});
+
+// GET /alocacoes/:id/envio — status leve pra acompanhar um envio disparado em segundo plano
+// (por POST /alocacoes/:id/reenviar, ou pela criação/edição original da alocação), sem
+// recarregar a árvore inteira a cada consulta. Mesmo espírito de
+// GET /apontamentos/envio/:ratItemId (backend/src/routes/apontamentos.ts) — a fonte de
+// verdade pra "terminou com sucesso" é o próprio seqati confirmado, não o status da fila (que
+// pode estar desatualizado se a confirmação chegou por outro caminho).
+alocacaoRouter.get("/alocacoes/:id/envio", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const resolvido = await carregarAlocacaoComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Alocação não encontrada" });
+      return;
+    }
+    const { atividade, depexe } = resolvido;
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    if (!podeMexerNoItem(role, contexto, "editar", depexe, resolvido.propostaDepexe, atividade.codfor)) {
+      res.status(403).json({ error: "Sem permissão para ver esta alocação" });
+      return;
+    }
+
+    // Mesma guarda do sentinela zero usada no resto do arquivo (ex.: GET .../cronograma) —
+    // seqati=0 não é um seqAti real.
+    if (atividade.seqati != null && atividade.seqati > 0n) {
+      res.json({ status: "registrado", seqati: atividade.seqati.toString(), erro: null });
+      return;
+    }
+
+    const pendencia = await prisma.sincronizacaoPendente.findFirst({
+      where: { atividadeId: id, tipo: { in: ["criar_atividade", "editar_atividade"] } },
+      orderBy: { id: "desc" },
+    });
+
+    res.json({
+      status: pendencia?.status ?? "desconhecido",
+      seqati: null,
+      erro: pendencia?.ultimoErro ?? null,
+    });
+  } catch (error) {
+    handleError(res, error, "envio-alocacao");
   }
 });
