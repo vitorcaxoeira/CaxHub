@@ -205,20 +205,23 @@ export function LinhaNo({
     ? `Est. ${no.id} · Ativ. ${formatarAlocacoes(no.alocacoesResumo)}`
     : `Integração com o Senior: ${no.integracaoErpLabel}`;
 
-  // Pasta expandida ganha o MESMO contorno fechado do acordeon de RATs/Sessões pendentes
-  // (MeusApontamentos.tsx): cabeçalho com topo+laterais+fundo tingido, conteúdo aninhado
-  // numa única caixa por fora (ver aninharPorFaixas em lib/cronograma.ts e o envolvimento em
+  // Pasta OU item expandido ganham o MESMO contorno fechado do acordeon de RATs/Sessões
+  // pendentes (MeusApontamentos.tsx): cabeçalho com topo+laterais, conteúdo aninhado numa
+  // única caixa por fora (ver aninharPorFaixas em lib/cronograma.ts e o envolvimento em
   // ArvoreCronograma.tsx — lá vira um <div> só, do jeito que na tabela do RAT vira um único
   // <td colSpan> com sub-tabela dentro; aqui não existe célula, mas o princípio é o mesmo:
-  // UMA caixa fechando os 4 lados sozinha, nunca borda repetida linha a linha). Esta linha
-  // só entra com os 3 lados que são dela — topo, esquerda e direita do CABEÇALHO; o lado de
+  // UMA caixa fechando os 4 lados sozinha, nunca borda repetida linha a linha). Item entrou
+  // depois da pasta — faltava fechar a caixa também no nível mais alto da árvore, não só nas
+  // pastas dentro dele (print do Vitor mostrando os dois contornos ausentes). Esta linha só
+  // entra com os 3 lados que são dela — topo, esquerda e direita do CABEÇALHO; o lado de
   // baixo, e a continuação de esquerda/direita pro conteúdo, vêm inteiramente do wrapper.
-  const caixaAbreAqui = no.tipo === "pasta" && expandido;
+  const caixaAbreAqui = (no.tipo === "pasta" || no.tipo === "item") && expandido;
 
   // Fundo + borda esquerda da linha, nesta ordem de prioridade: 1) alerta de estouro do
   // item (já existia, sempre vence) — pasta/atividade nunca caem aqui, `alerta` só é
-  // diferente de "ok" quando `orcamento` existe (só tipo="item"); 2) item expandido (já
-  // existia); 3) cabeçalho de pasta expandida (novo); 4) fallback de sempre.
+  // diferente de "ok" quando `orcamento` existe (só tipo="item"); 2) cabeçalho de pasta/item
+  // expandido (a mesma caixa dos dois — item não tem mais um destaque à parte, mais grosso,
+  // só na esquerda); 3) fallback de sempre.
   let classeFundoEBordaEsquerda: string;
   if (alerta === "estouro_realizado") {
     classeFundoEBordaEsquerda = "border-l-[3px] border-l-destructive bg-destructive/10";
@@ -226,18 +229,15 @@ export function LinhaNo({
     classeFundoEBordaEsquerda = "border-l-[3px] border-l-warning bg-warning/10";
   } else {
     const fundo = no.tipo === "pasta" ? (caixaAbreAqui ? "bg-primary/5" : "bg-surface-2") : "bg-surface hover:bg-surface-2";
-    const bordaEsquerda =
-      no.tipo === "item" && expandido
-        ? "border-l-[3px] border-l-primary"
-        : caixaAbreAqui
-          ? "border-l border-primary"
-          : no.tipo === "item"
-            ? "border-l border-l-border"
-            : "";
+    const bordaEsquerda = caixaAbreAqui
+      ? "border-l border-primary"
+      : no.tipo === "item"
+        ? "border-l border-l-border"
+        : "";
     classeFundoEBordaEsquerda = `${fundo} ${bordaEsquerda}`.trim();
   }
 
-  // Direita/topo só existem no cabeçalho da pasta que está abrindo a caixa — o resto do
+  // Direita/topo só existem no cabeçalho da pasta/item que está abrindo a caixa — o resto do
   // contorno (laterais continuando + fundo fechando) é o wrapper em ArvoreCronograma.tsx.
   const classeBordaDireita = caixaAbreAqui ? "border-r border-primary" : "";
   const classeBordaTopo = caixaAbreAqui ? "border-t border-primary" : "";

@@ -600,18 +600,23 @@ export function ArvoreCronograma({
     [drawerNo, nos]
   );
 
-  // Contorno de "acordeon" das pastas expandidas (mesmo padrão do acordeon de RATs/Sessões
-  // pendentes em MeusApontamentos.tsx): UMA caixa só por pasta, fechando os 4 lados por
-  // fora — nunca borda repetida linha a linha (ver acordeon-sempre-fechar-bordas-ao-expandir
-  // no segundo cérebro). Lá a tabela aninha o conteúdo dentro de um único `<td colSpan>`;
-  // aqui não existe célula (pasta e filhos são linhas irmãs, `achatarArvore` já achata tudo),
-  // então quem aninha é este laço: abre uma faixa de índices no `elementos` quando visita o
-  // cabeçalho de uma pasta expandida, fecha quando o mesmo laço abaixo detecta que aquele
-  // nível encerrou (a mesma condição que já emite a linha fantasma "+ Nova atividade").
-  // `aninharPorFaixas`, no fim, transforma essas faixas num único wrapper por pasta —
-  // aninhado de verdade quando há pasta dentro de pasta, ambas expandidas.
-  const pilhaCaixasPasta: { pastaId: number; inicio: number }[] = [];
-  const faixasCaixasPasta: FaixaAninhamento[] = [];
+  // Contorno de "acordeon" das pastas E itens expandidos (mesmo padrão do acordeon de
+  // RATs/Sessões pendentes em MeusApontamentos.tsx): UMA caixa só por nível, fechando os 4
+  // lados por fora — nunca borda repetida linha a linha (ver
+  // acordeon-sempre-fechar-bordas-ao-expandir no segundo cérebro). Lá a tabela aninha o
+  // conteúdo dentro de um único `<td colSpan>`; aqui não existe célula (pasta/item e filhos
+  // são linhas irmãs, `achatarArvore` já achata tudo), então quem aninha é este laço: abre
+  // uma faixa de índices no `elementos` quando visita o cabeçalho de uma pasta/item
+  // expandido, fecha quando o mesmo laço abaixo detecta que aquele nível encerrou (a mesma
+  // condição que já emite a linha fantasma "+ Nova atividade"). `aninharPorFaixas`, no fim,
+  // transforma essas faixas num único wrapper por nível — aninhado de verdade quando um
+  // item expandido contém uma pasta também expandida (a caixa da pasta fica DENTRO da caixa
+  // do item, não lado a lado).
+  function abreCaixaAcordeao(no: NoCronogramaCompleto): boolean {
+    return (no.tipo === "pasta" || no.tipo === "item") && expandidos.has(no.id);
+  }
+  const pilhaCaixasAcordeao: { id: number; inicio: number }[] = [];
+  const faixasCaixasAcordeao: FaixaAninhamento[] = [];
 
   const elementos: JSX.Element[] = [];
   linhas.forEach((no, i) => {
@@ -645,10 +650,10 @@ export function ArvoreCronograma({
         larguraHoras={larguraHoras}
       />
     );
-    // Cabeçalho de pasta expandida: abre a faixa a partir daqui — o conteúdo (linhas
+    // Cabeçalho de pasta/item expandido: abre a faixa a partir daqui — o conteúdo (linhas
     // seguintes, e a fantasma se houver) começa logo depois deste índice.
-    if (no.tipo === "pasta" && expandidos.has(no.id)) {
-      pilhaCaixasPasta.push({ pastaId: no.id, inicio: elementos.length });
+    if (abreCaixaAcordeao(no)) {
+      pilhaCaixasAcordeao.push({ id: no.id, inicio: elementos.length });
     }
 
     // Fecha (emite a linha fantasma de) toda pasta ancestral cujo último descendente
@@ -675,13 +680,13 @@ export function ArvoreCronograma({
           />
         );
       }
-      // Fecha a faixa da caixa desta pasta (mesma condição de abertura acima) — depois de
+      // Fecha a faixa da caixa deste nível (mesma condição de abertura acima) — depois de
       // eventualmente empurrar a linha fantasma, que fica DENTRO da caixa. Pré-ordem +
-      // pilha garantem que o topo da pilha aqui é sempre esta mesma pasta.
-      if (pastaFechando.tipo === "pasta" && expandidos.has(pastaFechando.id)) {
-        const aberta = pilhaCaixasPasta.pop();
-        if (aberta && aberta.pastaId === pastaFechando.id) {
-          faixasCaixasPasta.push({ chave: aberta.pastaId, inicio: aberta.inicio, fim: elementos.length - 1 });
+      // pilha garantem que o topo da pilha aqui é sempre este mesmo nó.
+      if (abreCaixaAcordeao(pastaFechando)) {
+        const aberta = pilhaCaixasAcordeao.pop();
+        if (aberta && aberta.id === pastaFechando.id) {
+          faixasCaixasAcordeao.push({ chave: aberta.id, inicio: aberta.inicio, fim: elementos.length - 1 });
         }
       }
       noAtual = pastaFechando.parentId != null ? porId.get(pastaFechando.parentId) : undefined;
@@ -689,8 +694,8 @@ export function ArvoreCronograma({
     }
   });
 
-  const elementosComCaixas = aninharPorFaixas(elementos, faixasCaixasPasta, (chave, conteudo) => (
-    <div key={`caixa-pasta-${chave}`} className="border-l border-r border-b border-primary">
+  const elementosComCaixas = aninharPorFaixas(elementos, faixasCaixasAcordeao, (chave, conteudo) => (
+    <div key={`caixa-acordeao-${chave}`} className="border-l border-r border-b border-primary">
       {conteudo}
     </div>
   ));
