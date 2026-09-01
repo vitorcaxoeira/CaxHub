@@ -14,6 +14,9 @@ interface LancamentoDetalhe {
   contaRotulo: string;
   datlct: string;
   codccu: string;
+  // "1111 - Nome do centro de custo" — cai pro código sozinho quando o centro de custo não
+  // está (mais) cadastrado localmente (join fora, ver routes/contabil.ts).
+  codccuRotulo: string;
   debcreLabel: string;
   valor: number;
   cpllct: string | null;
@@ -78,7 +81,7 @@ export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu
   const mostrarColunaConta = ctareds.length > 1;
 
   return (
-    <Modal open onClose={onClose} title={rotulo} subtitulo={formatarMes(mesReferencia)} className="max-w-3xl">
+    <Modal open onClose={onClose} title={rotulo} subtitulo={formatarMes(mesReferencia)} className="max-w-5xl">
       {loading && !dados ? (
         <div className="flex justify-center py-10">
           <Spinner className="h-6 w-6" />
@@ -115,11 +118,13 @@ export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu
                   <tr key={`${l.numlct}-${l.ctared}`} className="border-t border-border/60">
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{dataFormatter.format(new Date(l.datlct))}</td>
                     {mostrarColunaConta && <td className="px-3 py-2 text-xs text-muted">{l.contaRotulo}</td>}
-                    <td className="max-w-[220px] truncate px-3 py-2 text-xs text-foreground" title={l.cpllct ?? undefined}>
+                    <td className="max-w-[440px] truncate px-3 py-2 text-xs text-foreground" title={l.cpllct ?? undefined}>
                       {l.historico ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-xs text-muted">{l.orilctLabel}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-muted">{l.codccu}</td>
+                    <td className="max-w-[200px] truncate px-3 py-2 text-xs text-muted" title={l.codccuRotulo}>
+                      {l.codccuRotulo}
+                    </td>
                     <td className="px-3 py-2 text-xs text-muted">{l.debcreLabel}</td>
                     <td
                       className={`whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums ${

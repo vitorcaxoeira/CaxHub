@@ -371,11 +371,12 @@ contabilRouter.get("/resultado/lancamentos", async (req: AuthenticatedRequest, r
 
     const linhasQuery = `
       SELECT r.numlct::text AS numlct, r.ctared AS ctared, pc.descta AS descta, r.datlct AS datlct,
-             r.codccu AS codccu, r.debcre AS debcre, r.vlrrat::float8 AS vlrrat,
+             r.codccu AS codccu, cc.desccu AS desccu, r.debcre AS debcre, r.vlrrat::float8 AS vlrrat,
              (${FORMULA_VALOR_REALIZADO})::float8 AS valor,
              l.cpllct AS cpllct, l.orilct AS orilct, l.sitlct AS sitlct, l.codhpd AS codhpd
       FROM rateios_lancamento r
       JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
+      LEFT JOIN centros_custo cc ON cc.codemp = r.codemp AND cc.codccu = r.codccu
       LEFT JOIN lancamentos_contabeis l ON l.codemp = r.codemp AND l.numlct = r.numlct
       WHERE r.sitrat = $1
         AND r.removido_em_senior IS NULL
@@ -406,6 +407,7 @@ contabilRouter.get("/resultado/lancamentos", async (req: AuthenticatedRequest, r
           descta: string;
           datlct: Date;
           codccu: string;
+          desccu: string | null;
           debcre: string | null;
           vlrrat: number;
           valor: number;
@@ -432,6 +434,7 @@ contabilRouter.get("/resultado/lancamentos", async (req: AuthenticatedRequest, r
         contaRotulo: `${l.ctared} - ${l.descta}`,
         datlct: l.datlct,
         codccu: l.codccu,
+        codccuRotulo: l.desccu ? `${l.codccu} - ${l.desccu}` : l.codccu,
         debcre: l.debcre,
         debcreLabel: debcreLabel(l.debcre),
         vlrrat: l.vlrrat,
