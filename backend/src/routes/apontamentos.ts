@@ -5,6 +5,7 @@ import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis, cod
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
 import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
+import { calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone } from "../domain/ratDominio";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
@@ -513,12 +514,50 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     });
     const ajustePorSessao = new Map(ajustes.map((a) => [a.sessaoId, a]));
 
+    // Pendência de sincronização mais recente da ALOCAÇÃO por trás de cada sessão — mesma
+    // query (uma só, nunca por sessão no loop) e mesmo filtro de tipo já usados em
+    // routes/alocacao.ts (mapNo) pra calcular o indicador do Cronograma. `remover_atividade`
+    // fica de fora pelo mesmo motivo de lá: não há write-back de exclusão a confirmar.
+    const pendenciasAlocacao =
+      sessoes.length > 0
+        ? await prisma.sincronizacaoPendente.findMany({
+            where: { atividadeId: { in: sessoes.map((s) => s.atividadeId) }, tipo: { in: ["criar_atividade", "editar_atividade"] } },
+            select: { atividadeId: true, status: true, ultimoErro: true },
+            orderBy: { id: "desc" },
+          })
+        : [];
+    const pendenciaPorAtividadeId = new Map<number, { status: string; ultimoErro: string | null }>();
+    for (const p of pendenciasAlocacao) {
+      if (!pendenciaPorAtividadeId.has(p.atividadeId)) {
+        pendenciaPorAtividadeId.set(p.atividadeId, { status: p.status, ultimoErro: p.ultimoErro });
+      }
+    }
+
     res.json({
       mostrarConsultor,
       sessoes: sessoes.map((s) => {
         const proposta = propostaPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
         const item = itemPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}-${s.atividade.seqite}`);
         const consultor = consultorPorCodfor.get(s.atividade.codfor);
+
+        // Previsão de "vai dar erro ao confirmar" — as duas causas que hoje só se descobrem
+        // no clique em Confirmar (confirmarSessao, mais abaixo neste arquivo), replicadas
+        // aqui SÓ PRA LEITURA (nenhuma das duas altera nada):
+        // 1) status de sincronização da ALOCAÇÃO por trás da sessão (mesmo cálculo do
+        //    Cronograma — se ela nunca confirmou no Senior, a confirmação recusa com 409);
+        // 2) duração que trunca pra zero minuto no relógio do Senior — mesma função
+        //    (minutosDesdeMeiaNoite) usada pelo gate real, não um cálculo em ms aproximado
+        //    (ver duracaoMinutos abaixo, que É aproximado e não serve pra isto).
+        const confirmadoNoSenior = s.atividade.seqati != null && s.atividade.seqati > 0n;
+        const pendenciaAlocacao = pendenciaPorAtividadeId.get(s.atividadeId);
+        const statusErpAlocacao = calcularIntegracaoErp([{ confirmado: confirmadoNoSenior, pendencia: pendenciaAlocacao }]);
+        const integracaoErpErro =
+          statusErpAlocacao === "falha"
+            ? pendenciaAlocacao?.ultimoErro ??
+              (pendenciaAlocacao?.status === "invalido" ? "Alocação sem horas definidas — nunca chegou a ser enviada ao Senior." : null)
+            : null;
+        const duracaoInvalida = s.fim != null && minutosDesdeMeiaNoite(s.fim) <= minutosDesdeMeiaNoite(s.inicio);
+
         return {
           id: s.id,
           atividadeId: s.atividadeId,
@@ -540,6 +579,10 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           observacao: s.observacao,
           codfor: s.atividade.codfor,
           consultorNome: mostrarConsultor ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${s.atividade.codfor}`) : null,
+          integracaoErpLabel: integracaoErpLabel(statusErpAlocacao),
+          integracaoErpTone: integracaoErpTone(statusErpAlocacao),
+          integracaoErpErro,
+          duracaoInvalida,
           // Ações além de Confirmar (editar descrição, pedir ajuste, excluir) são "só o
           // dono" nos respectivos endpoints — a tela usa isto pra não oferecer botão que
           // o servidor vai recusar. Consultor comum: sempre true (a lista já é só dele).

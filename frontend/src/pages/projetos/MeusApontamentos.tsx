@@ -14,6 +14,7 @@ import { ModalDespesasRat } from "../../components/projetos/ModalDespesasRat";
 import { Modal } from "../../components/ui/Modal";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
+import { IconeIntegracaoErp } from "../../components/ui/IconeIntegracaoErp";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useAuth } from "../../auth/AuthContext";
 
@@ -55,6 +56,14 @@ interface SessaoPendente {
   // controla quais ações do menu "⋯" a tela oferece (Confirmar não depende disto).
   souDono: boolean;
   ajustePendente: AjustePendente | null;
+  // Previsão de "vai dar erro ao confirmar" (ver GET /sessoes-pendentes) — as duas causas
+  // que hoje só o clique em "Confirmar" descobre: status de sincronização da alocação por
+  // trás da sessão (mesmo indicador do Cronograma) e duração que trunca pra zero minuto no
+  // relógio do Senior. O backend sempre calcula os dois primeiros (nunca vêm null).
+  integracaoErpLabel: string;
+  integracaoErpTone: Tone;
+  integracaoErpErro: string | null;
+  duracaoInvalida: boolean;
 }
 
 interface AtividadeResumo {
@@ -1008,6 +1017,22 @@ export function MeusApontamentos() {
     });
   }
 
+  // Previsão de "vai dar erro ao confirmar" — mesmo ícone/tom do Cronograma
+  // (IconeIntegracaoErp), com duração inválida entrando ANTES do status de sincronização da
+  // alocação: é o aviso mais acionável (400 garantido, sem depender de nada do Senior), e o
+  // texto é o MESMO que confirmarSessao devolve hoje ao recusar (routes/apontamentos.ts).
+  function toneSincSessao(s: SessaoPendente): Tone {
+    return s.duracaoInvalida ? "destructive" : s.integracaoErpTone;
+  }
+  function tituloSincSessao(s: SessaoPendente): string {
+    if (s.duracaoInvalida) {
+      return "Vai falhar ao confirmar: sessão dura menos de 1 minuto — o Senior só registra por minuto cheio. Ajuste o horário antes de confirmar.";
+    }
+    if (s.integracaoErpErro) return `Falha no envio da alocação ao Senior: ${s.integracaoErpErro}`;
+    if (s.integracaoErpTone === "success") return "Alocação já confirmada pelo Senior.";
+    return `Integração da alocação com o Senior: ${s.integracaoErpLabel}`;
+  }
+
   // Linha de uma sessão pendente na lista plana (consultor comum, sem acordeon) — mesmas
   // colunas responsivas do <thead> de fora.
   function renderLinhaSessao(s: SessaoPendente) {
@@ -1069,6 +1094,17 @@ export function MeusApontamentos() {
               {s.observacao ?? "—"}
             </button>
           )}
+        </td>
+        {/* Previsão de "vai dar erro ao confirmar" — mesmo indicador visual do Cronograma
+            (IconeIntegracaoErp/toneBadge), aplicado à alocação por trás da sessão + duração
+            que vai truncar pra zero (ver toneSincSessao/tituloSincSessao acima). */}
+        <td className="hidden px-2.5 py-3.5 text-center sm:table-cell">
+          <span
+            className={`inline-flex h-4 w-4 items-center justify-center rounded-full ${toneBadge[toneSincSessao(s)]}`}
+            title={tituloSincSessao(s)}
+          >
+            <IconeIntegracaoErp tone={toneSincSessao(s)} />
+          </span>
         </td>
         {/* Mesmo agrupador "⋯" das linhas de RAT logo abaixo — duas ações soltas na coluna
             empurravam a tabela e competiam por atenção. */}
@@ -1174,6 +1210,14 @@ export function MeusApontamentos() {
               {s.observacao ?? "—"}
             </button>
           )}
+        </td>
+        <td className="py-1.5 pr-3 text-center">
+          <span
+            className={`inline-flex h-4 w-4 items-center justify-center rounded-full ${toneBadge[toneSincSessao(s)]}`}
+            title={tituloSincSessao(s)}
+          >
+            <IconeIntegracaoErp tone={toneSincSessao(s)} />
+          </span>
         </td>
         <td className="py-1.5 text-right">
           <DropdownMenu placement="bottom-end">
@@ -1357,6 +1401,9 @@ export function MeusApontamentos() {
                     <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
                       Descrição
                     </th>
+                    <th className="hidden bg-surface-2 px-2.5 py-3 text-center font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
+                      Sinc. ERP
+                    </th>
                     <th className="bg-surface-2 px-2.5 py-3" />
                   </tr>
                 </thead>
@@ -1391,6 +1438,9 @@ export function MeusApontamentos() {
                         <td className="hidden px-2.5 py-3.5 lg:table-cell">
                           <Skeleton className="h-7 w-full" />
                         </td>
+                        <td className="hidden px-2.5 py-3.5 text-center sm:table-cell">
+                          <Skeleton className="mx-auto h-4 w-4 rounded-full" />
+                        </td>
                         <td className="px-2.5 py-3.5 text-right">
                           <Skeleton className="ml-auto h-7 w-20 rounded" />
                         </td>
@@ -1410,7 +1460,7 @@ export function MeusApontamentos() {
                               expandido ? "border-t border-primary bg-primary/5" : "border-t border-border/60 hover:bg-surface-2"
                             }`}
                           >
-                            <td colSpan={10} className={`px-2.5 py-2.5 ${expandido ? "border-l border-r border-primary" : ""}`}>
+                            <td colSpan={11} className={`px-2.5 py-2.5 ${expandido ? "border-l border-r border-primary" : ""}`}>
                               <p className="flex items-center justify-between gap-2 text-sm">
                                 <span className="flex items-center gap-2 font-semibold text-foreground">
                                   <span className="text-muted">{expandido ? "▾" : "▸"}</span>
@@ -1427,7 +1477,7 @@ export function MeusApontamentos() {
                               que fecha as 4 bordas do acordeon, não cada linha. */}
                           {expandido && (
                             <tr className="border-t border-border/60 bg-surface-2/40">
-                              <td colSpan={10} className="border-b border-l border-r border-primary px-2.5 py-3">
+                              <td colSpan={11} className="border-b border-l border-r border-primary px-2.5 py-3">
                                 <table className="w-full border-collapse">
                                   <thead>
                                     <tr>
@@ -1458,6 +1508,9 @@ export function MeusApontamentos() {
                                       <th className="w-2/5 py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                                         Descrição
                                       </th>
+                                      <th className="py-1.5 pr-3 text-center font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                                        Sinc. ERP
+                                      </th>
                                       <th className="py-1.5" />
                                     </tr>
                                   </thead>
@@ -1472,7 +1525,7 @@ export function MeusApontamentos() {
                   {!loading && !mostrarConsultor && sessoesFiltradas.map((s) => renderLinhaSessao(s))}
                   {!loading && sessoesFiltradas.length === 0 && (
                     <tr>
-                      <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
+                      <td colSpan={11} className="px-2.5 py-8 text-center text-sm text-muted">
                         {sessoes.length === 0
                           ? 'Nenhuma sessão pendente — mova um card pra "Em Andamento" pra começar a rastrear tempo.'
                           : "Nenhuma sessão encontrada com os filtros atuais."}
