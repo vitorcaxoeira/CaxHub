@@ -5,20 +5,25 @@ import { OrcamentoItem, formatHorasCompacto } from "../../lib/cronograma";
 // item estourado — e o contrário também: o total positivo pode esconder um item
 // estourado. O alerta por item continua sendo a fonte de verdade; isto é só o placar.
 //
-// Os três primeiros cards são as MESMAS grandezas das três colunas da árvore, e usam de
+// Os quatro primeiros cards são as MESMAS grandezas das quatro colunas da árvore, e usam de
 // propósito as mesmas palavras: ler "Contratado" aqui e "Orçado" na coluna logo abaixo
-// faria parecer que são números diferentes.
+// faria parecer que são números diferentes. "Excedente" é o total de horas autorizadas
+// ACIMA do saldo do item (AtividadeConsultor.horasExcedentes, somado — ver somarExcedentes)
+// — mesma cor (text-warning) e mesma leitura "vazio = nada fora do combinado" da coluna
+// Excedente da árvore, só que aqui sempre exibe o valor (mesmo 00:00) pra manter os cards
+// com a mesma cara.
 export function KpisCronograma({ totais, larguraHoras }: { totais: OrcamentoItem; larguraHoras: number }) {
   const cards = [
     { label: "Orçado", valor: totais.horasContratadas, cor: "text-foreground" },
     { label: "Realizado", valor: totais.horasRealizadas, cor: "text-primary" },
     { label: "Alocado", valor: totais.horasDistribuidas, cor: "text-foreground" },
+    { label: "Excedente", valor: totais.horasExcedentes, cor: totais.horasExcedentes > 0 ? "text-warning" : "text-foreground" },
     { label: "A alocar", valor: totais.saldoDistribuicao, cor: totais.saldoDistribuicao < 0 ? "text-destructive" : "text-success" },
     { label: "Saldo real", valor: totais.saldoReal, cor: totais.saldoReal < 0 ? "text-destructive" : "text-foreground" },
   ];
 
   return (
-    <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {cards.map((card) => (
         <div key={card.label} className="rounded-lg border border-border bg-surface p-3">
           <p className="font-mono text-[11px] font-medium uppercase tracking-wide text-muted">{card.label}</p>

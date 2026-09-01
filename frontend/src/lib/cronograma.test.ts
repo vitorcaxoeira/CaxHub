@@ -15,6 +15,7 @@ import {
   orcamentoDeTotais,
   projetarSaldo,
   somarDistribuidas,
+  somarExcedentes,
   somarOrcamentos,
   somarRealizadas,
 } from "./cronograma";
@@ -263,6 +264,25 @@ describe("calcularOrcamentoItem", () => {
     expect(somarRealizadas(nos[0], agregados)).toBe(0);
   });
 
+  it("soma horas excedentes de atividades em níveis diferentes, subindo até o item", () => {
+    const nos = [
+      no({ id: 1, tipo: "item", nome: "Item", horasPrevistas: 600 }),
+      no({ id: 2, tipo: "pasta", nome: "Pasta A", parentId: 1 }),
+      no({ id: 3, tipo: "atividade", nome: "Ativ 1", parentId: 2, horasPrevistas: 120, horasExcedentes: 30 }),
+      no({ id: 4, tipo: "atividade", nome: "Ativ 2", parentId: 1, horasPrevistas: 60, horasExcedentes: 15 }),
+    ];
+    const agregados = agregarHoras(nos);
+    expect(somarExcedentes(nos[0], agregados)).toBe(45);
+    expect(calcularOrcamentoItem(nos[0], agregados).horasExcedentes).toBe(45);
+  });
+
+  it("sem nenhuma autorização de excedente, soma 0 (não fica undefined)", () => {
+    const nos = [no({ id: 1, tipo: "item", nome: "Item", horasPrevistas: 480 })];
+    const agregados = agregarHoras(nos);
+    expect(somarExcedentes(nos[0], agregados)).toBe(0);
+    expect(calcularOrcamentoItem(nos[0], agregados).horasExcedentes).toBe(0);
+  });
+
   it("item sem atividades preserva o contratado mas zera o resto", () => {
     const nos = [no({ id: 1, tipo: "item", nome: "Item", horasPrevistas: 480 })];
     const agregados = agregarHoras(nos);
@@ -283,6 +303,11 @@ describe("orcamentoDeTotais", () => {
     const esperado = calcularOrcamentoItem(nos[0], agregarHoras(nos));
     const orcamento = orcamentoDeTotais(600, 300, 150);
     expect(orcamento).toEqual(esperado);
+  });
+
+  it("horasExcedentes é opcional (default 0) quando o chamador não tem esse total", () => {
+    expect(orcamentoDeTotais(600, 300, 150).horasExcedentes).toBe(0);
+    expect(orcamentoDeTotais(600, 300, 150, 40).horasExcedentes).toBe(40);
   });
 });
 
@@ -344,7 +369,7 @@ describe("somarOrcamentos", () => {
   it("soma o orçamento de vários itens da proposta (rodapé de totais)", () => {
     const nos = [
       no({ id: 1, tipo: "item", nome: "Item A", horasPrevistas: 480 }),
-      no({ id: 2, tipo: "atividade", nome: "A1", parentId: 1, horasPrevistas: 300, horasRealizadas: 100 }),
+      no({ id: 2, tipo: "atividade", nome: "A1", parentId: 1, horasPrevistas: 300, horasRealizadas: 100, horasExcedentes: 20 }),
       no({ id: 10, tipo: "item", nome: "Item B", horasPrevistas: 240 }),
       no({ id: 11, tipo: "atividade", nome: "B1", parentId: 10, horasPrevistas: 300, horasRealizadas: 50 }),
     ];
@@ -356,6 +381,7 @@ describe("somarOrcamentos", () => {
     expect(total.horasContratadas).toBe(720);
     expect(total.horasDistribuidas).toBe(600);
     expect(total.horasRealizadas).toBe(150);
+    expect(total.horasExcedentes).toBe(20);
     expect(total.saldoDistribuicao).toBe(120);
     expect(total.saldoReal).toBe(570);
     // Item B sozinho já estoura (distribuiu 300 num contratado de 240), mas o TOTAL da

@@ -286,6 +286,10 @@ export interface OrcamentoItem {
   horasContratadas: number;
   horasDistribuidas: number;
   horasRealizadas: number;
+  // Soma de AtividadeConsultor.horasExcedentes (ver HorasAgregadas) — horas autorizadas
+  // ACIMA do que a atividade tinha de saldo, não faz parte de nenhum saldo/estouro abaixo
+  // (esses continuam batendo contratado x distribuído/realizado, sem descontar excedente).
+  horasExcedentes: number;
   // contratadas - distribuídas; negativo = estouro de planejamento.
   saldoDistribuicao: number;
   // contratadas - realizadas; negativo = estouro real.
@@ -312,10 +316,21 @@ export function somarRealizadas(no: NoCronograma, agregados: Map<number, HorasAg
   return agregados.get(no.id)?.horasRealizadas ?? 0;
 }
 
-// Deriva os campos calculados (saldos, consumos, estouros) a partir das três grandezas
-// brutas — compartilhado entre calcularOrcamentoItem (um item) e somarOrcamentos (vários
-// itens somados, ver rodapé de totais), pra não duplicar a mesma conta duas vezes.
-function derivarOrcamento(horasContratadas: number, horasDistribuidas: number, horasRealizadas: number): OrcamentoItem {
+export function somarExcedentes(no: NoCronograma, agregados: Map<number, HorasAgregadas>): number {
+  return agregados.get(no.id)?.horasExcedentes ?? 0;
+}
+
+// Deriva os campos calculados (saldos, consumos, estouros) a partir das grandezas brutas —
+// compartilhado entre calcularOrcamentoItem (um item) e somarOrcamentos (vários itens
+// somados, ver rodapé de totais), pra não duplicar a mesma conta duas vezes. `horasExcedentes`
+// só entra no total exibido (KpisCronograma) — não participa de saldo/estouro/consumo, que
+// continuam batendo contratado x distribuído/realizado como sempre bateram.
+function derivarOrcamento(
+  horasContratadas: number,
+  horasDistribuidas: number,
+  horasRealizadas: number,
+  horasExcedentes: number = 0
+): OrcamentoItem {
   const saldoDistribuicao = horasContratadas - horasDistribuidas;
   const saldoReal = horasContratadas - horasRealizadas;
   const consumoDistribuido = horasContratadas > 0 ? horasDistribuidas / horasContratadas : 0;
@@ -324,6 +339,7 @@ function derivarOrcamento(horasContratadas: number, horasDistribuidas: number, h
     horasContratadas,
     horasDistribuidas,
     horasRealizadas,
+    horasExcedentes,
     saldoDistribuicao,
     saldoReal,
     consumoDistribuido,
@@ -379,14 +395,25 @@ export function agregarOrcado(nos: NoCronograma[]): Map<number, number> {
 }
 
 export function calcularOrcamentoItem(item: NoCronograma, agregados: Map<number, HorasAgregadas>): OrcamentoItem {
-  return derivarOrcamento(item.horasPrevistas ?? 0, somarDistribuidas(item, agregados), somarRealizadas(item, agregados));
+  return derivarOrcamento(
+    item.horasPrevistas ?? 0,
+    somarDistribuidas(item, agregados),
+    somarRealizadas(item, agregados),
+    somarExcedentes(item, agregados)
+  );
 }
 
 // Mesmo cálculo de calcularOrcamentoItem, mas a partir de totais já conhecidos (sem
 // árvore/agregados) — usado pela tela de Atividades, onde contratado/distribuído vêm
-// prontos da API (GET /api/atividades) em vez de virem da EAP.
-export function orcamentoDeTotais(horasContratadas: number, horasDistribuidas: number, horasRealizadas: number): OrcamentoItem {
-  return derivarOrcamento(horasContratadas, horasDistribuidas, horasRealizadas);
+// prontos da API (GET /api/atividades) em vez de virem da EAP. `horasExcedentes` é
+// opcional (default 0) porque nem todo chamador tem esse total à mão.
+export function orcamentoDeTotais(
+  horasContratadas: number,
+  horasDistribuidas: number,
+  horasRealizadas: number,
+  horasExcedentes: number = 0
+): OrcamentoItem {
+  return derivarOrcamento(horasContratadas, horasDistribuidas, horasRealizadas, horasExcedentes);
 }
 
 // Soma o orçamento de vários itens num só (rodapé de totais da proposta) — mesma forma
@@ -396,12 +423,14 @@ export function somarOrcamentos(itens: NoCronograma[], agregados: Map<number, Ho
   let horasContratadas = 0;
   let horasDistribuidas = 0;
   let horasRealizadas = 0;
+  let horasExcedentes = 0;
   for (const item of itens) {
     horasContratadas += item.horasPrevistas ?? 0;
     horasDistribuidas += somarDistribuidas(item, agregados);
     horasRealizadas += somarRealizadas(item, agregados);
+    horasExcedentes += somarExcedentes(item, agregados);
   }
-  return derivarOrcamento(horasContratadas, horasDistribuidas, horasRealizadas);
+  return derivarOrcamento(horasContratadas, horasDistribuidas, horasRealizadas, horasExcedentes);
 }
 
 export type EstadoAlertaItem = "estouro_realizado" | "estouro_distribuicao" | "real_acima_previsto" | "ok";
@@ -441,7 +470,12 @@ export function descreverSaldoDistribuicao(orcamento: OrcamentoItem, largura: nu
 // achar o "maior número", o total já É o maior número. Mínimo de 2 dígitos (padrão
 // "00:35") mesmo quando a proposta inteira cabe em 1 dígito de hora.
 export function larguraHorasProposta(orcamentoTotal: OrcamentoItem): number {
-  const maiorMinutos = Math.max(orcamentoTotal.horasContratadas, orcamentoTotal.horasDistribuidas, orcamentoTotal.horasRealizadas);
+  const maiorMinutos = Math.max(
+    orcamentoTotal.horasContratadas,
+    orcamentoTotal.horasDistribuidas,
+    orcamentoTotal.horasRealizadas,
+    orcamentoTotal.horasExcedentes
+  );
   const horas = Math.trunc(Math.round(maiorMinutos) / 60);
   return Math.max(2, String(horas).length);
 }
