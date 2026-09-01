@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { SITRAT_CONTABILIZADO, defgruBucket, debcreLabel, orilctLabel, sitlotLabel } from "../domain/contabilDominio";
+import { formatarHistorico } from "../domain/historicoPadrao";
 import { resolverContextoConsultor, gestorNomePorDepartamento, type ContextoConsultor } from "../domain/contextoProjeto";
 import { depexeLabel } from "../domain/propostasDominio";
 import { parseIntListParam } from "../lib/queryParams";
@@ -372,7 +373,7 @@ contabilRouter.get("/resultado/lancamentos", async (req: AuthenticatedRequest, r
       SELECT r.numlct::text AS numlct, r.ctared AS ctared, pc.descta AS descta, r.datlct AS datlct,
              r.codccu AS codccu, r.debcre AS debcre, r.vlrrat::float8 AS vlrrat,
              (${FORMULA_VALOR_REALIZADO})::float8 AS valor,
-             l.cpllct AS cpllct, l.orilct AS orilct, l.sitlct AS sitlct
+             l.cpllct AS cpllct, l.orilct AS orilct, l.sitlct AS sitlct, l.codhpd AS codhpd
       FROM rateios_lancamento r
       JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
       LEFT JOIN lancamentos_contabeis l ON l.codemp = r.codemp AND l.numlct = r.numlct
@@ -411,10 +412,18 @@ contabilRouter.get("/resultado/lancamentos", async (req: AuthenticatedRequest, r
           cpllct: string | null;
           orilct: string | null;
           sitlct: number | null;
+          codhpd: number | null;
         }[]
       >(linhasQuery, SITRAT_CONTABILIZADO, ctareds, inicio, fim, codccu, grupos, pageSize, (page - 1) * pageSize),
       prisma.$queryRawUnsafe<{ total: number; valorTotal: number }[]>(totalQuery, SITRAT_CONTABILIZADO, ctareds, inicio, fim, codccu, grupos),
     ]);
+
+    // Templates de Histórico em lote (nunca por linha no loop, senão vira N+1). Join é só por
+    // `codhpd` — E046HPD/HistoricoPadrao é catálogo GLOBAL do Senior, sem `codemp` (confirmado
+    // ao vivo contra o dicionário de dados: PK de lá é só CodHpd).
+    const codhpds = [...new Set(linhas.map((l) => l.codhpd).filter((c): c is number => c != null))];
+    const templates = codhpds.length > 0 ? await prisma.historicoPadrao.findMany({ where: { codhpd: { in: codhpds } } }) : [];
+    const templatePorCodhpd = new Map(templates.map((t) => [t.codhpd, t.deshpd]));
 
     res.json({
       lancamentos: linhas.map((l) => ({
@@ -428,6 +437,7 @@ contabilRouter.get("/resultado/lancamentos", async (req: AuthenticatedRequest, r
         vlrrat: l.vlrrat,
         valor: l.valor,
         cpllct: l.cpllct,
+        historico: formatarHistorico(l.cpllct, l.codhpd != null ? templatePorCodhpd.get(l.codhpd) : null),
         orilctLabel: orilctLabel(l.orilct),
         sitlctLabel: sitlotLabel(l.sitlct),
       })),

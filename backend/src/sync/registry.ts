@@ -43,6 +43,7 @@ import { JOB_NAME as PROPOSTA_JOB, CRON_EXPR as PROPOSTA_CRON, CAMPO_DATA as PRO
 import { JOB_NAME as RAT_JOB, CRON_EXPR as RAT_CRON, CAMPO_DATA as RAT_DATA, BASE_QUERY as RAT_QUERY, runRatSync } from "./ratSync";
 import { JOB_NAME as RAT_ITEM_JOB, CRON_EXPR as RAT_ITEM_CRON, CAMPO_DATA as RAT_ITEM_DATA, BASE_QUERY as RAT_ITEM_QUERY, runRatItemSync } from "./ratItemSync";
 import { JOB_NAME as RATEIO_LANCAMENTO_JOB, CRON_EXPR as RATEIO_LANCAMENTO_CRON, CAMPO_DATA as RATEIO_LANCAMENTO_DATA, QUERY as RATEIO_LANCAMENTO_QUERY, runRateioLancamentoSync } from "./rateioLancamentoSync";
+import { JOB_NAME as HISTORICO_PADRAO_JOB, CRON_EXPR as HISTORICO_PADRAO_CRON, CAMPO_DATA as HISTORICO_PADRAO_DATA, QUERY as HISTORICO_PADRAO_QUERY, runHistoricoPadraoSync } from "./historicoPadraoSync";
 import { JOB_NAME as REPRESENTANTE_JOB, CRON_EXPR as REPRESENTANTE_CRON, CAMPO_DATA as REPRESENTANTE_DATA, BASE_QUERY as REPRESENTANTE_QUERY, runRepresentanteSync } from "./representanteSync";
 import { JOB_NAME as TIPO_TITULO_JOB, CRON_EXPR as TIPO_TITULO_CRON, CAMPO_DATA as TIPO_TITULO_DATA, QUERY as TIPO_TITULO_QUERY, runTipoTituloSync } from "./tipoTituloSync";
 import { JOB_NAME as TITULO_RECEBER_JOB, CRON_EXPR as TITULO_RECEBER_CRON, CAMPO_DATA as TITULO_RECEBER_DATA, BASE_QUERY as TITULO_RECEBER_QUERY, runTituloReceberSync } from "./tituloReceberSync";
@@ -77,6 +78,7 @@ const JOBS_COM_FILTRO = new Set([
   FASE_PROPOSTA_JOB,
   FILIAL_JOB,
   FORMA_PAGAMENTO_JOB,
+  HISTORICO_PADRAO_JOB,
   LANCAMENTO_CONTABIL_JOB,
   MOEDA_JOB,
   MOVIMENTO_CONTA_JOB,
@@ -340,6 +342,11 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
     },
   },
   { jobName: ORCAMENTO_CONTABIL_JOB, displayName: "Orçamentos Contábeis", cronExpr: ORCAMENTO_CONTABIL_CRON, suportaAlterados: ORCAMENTO_CONTABIL_DATA != null, campoData: ORCAMENTO_CONTABIL_DATA, ...catalogo(ORCAMENTO_CONTABIL_JOB, ORCAMENTO_CONTABIL_QUERY, "orcamentos_contabeis"), run: runOrcamentoContabilSync, contarRegistros: () => prisma.orcamentoContabil.count() },
+  // Catálogo de templates de "Complemento Hist." (E046HPD), pedido do Vitor em 01/09/2026 pra
+  // montar o texto legível do Histórico no drilldown de lançamentos (domain/historicoPadrao.ts)
+  // — sem dependência das tabelas acima. Configuração, não transacional: sem varredura de
+  // exclusão (mesmo espírito de FORMA_PAGAMENTO_JOB), decisão confirmada com o Vitor.
+  { jobName: HISTORICO_PADRAO_JOB, displayName: "Históricos Padrão", cronExpr: HISTORICO_PADRAO_CRON, suportaAlterados: HISTORICO_PADRAO_DATA != null, campoData: HISTORICO_PADRAO_DATA, ...catalogo(HISTORICO_PADRAO_JOB, HISTORICO_PADRAO_QUERY, "historicos_padrao"), run: runHistoricoPadraoSync, contarRegistros: () => prisma.historicoPadrao.count() },
   // Despesas de viagem lançadas em RAT (USU_TE777RDV) + catálogo de rotas/percursos,
   // identificadas a pedido do Vitor em 13/08/2026. Sem dependência das tabelas acima — RDV
   // referencia Rat só por valor (codemp+numrat), sem FK formal. Rota/Percurso rodam antes da

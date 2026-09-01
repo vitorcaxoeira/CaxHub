@@ -17,6 +17,11 @@ interface LancamentoDetalhe {
   debcreLabel: string;
   valor: number;
   cpllct: string | null;
+  // Texto legível do Histórico, já montado no backend a partir do template de HistoricoPadrao
+  // (E046HPD) + os parâmetros de `cpllct` — ver domain/historicoPadrao.ts. Cai pro `cpllct`
+  // cru sozinho quando não há template (lançamento sem `codhpd`, ou contagem de parâmetros não
+  // bate com o template — nunca mostra texto errado).
+  historico: string | null;
   orilctLabel: string;
   sitlctLabel: string;
 }
@@ -111,7 +116,7 @@ export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{dataFormatter.format(new Date(l.datlct))}</td>
                     {mostrarColunaConta && <td className="px-3 py-2 text-xs text-muted">{l.contaRotulo}</td>}
                     <td className="max-w-[220px] truncate px-3 py-2 text-xs text-foreground" title={l.cpllct ?? undefined}>
-                      {l.cpllct ?? "—"}
+                      {l.historico ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-xs text-muted">{l.orilctLabel}</td>
                     <td className="px-3 py-2 font-mono text-xs text-muted">{l.codccu}</td>

@@ -13,7 +13,7 @@ export const JOB_NAME = "lancamentos_contabeis-sync";
 // sincronizar "alterados" do que filtrar por um campo que pode deixar linha de fora.
 export const CRON_EXPR = "0 5 * * *";
 export const CAMPO_DATA: string | null = null;
-export const QUERY =`SELECT codemp AS codemp, numlct AS numlct, sitlct AS sitlct, orilct AS orilct, cpllct AS cpllct, numlot AS numlot FROM e640lct`;
+export const QUERY =`SELECT codemp AS codemp, numlct AS numlct, sitlct AS sitlct, orilct AS orilct, cpllct AS cpllct, numlot AS numlot, codhpd AS codhpd FROM e640lct`;
 
 interface LancamentoContabilRow {
   codemp: number;
@@ -22,6 +22,10 @@ interface LancamentoContabilRow {
   orilct: string;
   cpllct?: string;
   numlot?: number;
+  // Código do histórico padrão (E640LCT.CodHpd) — chave de junção com HistoricoPadrao pra
+  // montar o texto legível de `cpllct` (ver domain/historicoPadrao.ts). Adicionado em
+  // 01/09/2026; linha pré-existente fica com codhpd null até o próximo sync rodar.
+  codhpd?: number;
 }
 
 // Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
@@ -33,6 +37,7 @@ const COLUNAS: ColunaUpsert[] = [
   { nome: "orilct", cast: "text" },
   { nome: "cpllct", cast: "text" },
   { nome: "numlot", cast: "int" },
+  { nome: "codhpd", cast: "int" },
 ];
 
 // `!= null` (não `!== undefined`) pra tratar ausência de chave e null da mesma forma — os
@@ -47,6 +52,7 @@ function linhaDe(row: LancamentoContabilRow): LinhaUpsert {
       row.orilct,
       row.cpllct != null ? row.cpllct : null,
       row.numlot != null ? String(row.numlot) : null,
+      row.codhpd != null ? String(row.codhpd) : null,
     ],
   };
 }

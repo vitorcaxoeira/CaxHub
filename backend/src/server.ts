@@ -61,6 +61,7 @@ import { scheduleCondicaoPagamentoSync } from "./sync/condicaoPagamentoSync";
 import { schedulePlanoContabilSync } from "./sync/planoContabilSync";
 import { scheduleLancamentoContabilSync } from "./sync/lancamentoContabilSync";
 import { scheduleRateioLancamentoSync } from "./sync/rateioLancamentoSync";
+import { scheduleHistoricoPadraoSync } from "./sync/historicoPadraoSync";
 import { scheduleOrcamentoContabilSync } from "./sync/orcamentoContabilSync";
 import { scheduleRegistroDespesaViagemSync } from "./sync/registroDespesaViagemSync";
 import { scheduleRotaViagemSync } from "./sync/rotaViagemSync";
@@ -190,6 +191,7 @@ async function iniciar() {
     schedulePlanoContabilSync();
     scheduleLancamentoContabilSync();
     scheduleRateioLancamentoSync();
+    scheduleHistoricoPadraoSync();
     scheduleOrcamentoContabilSync();
     scheduleRotaViagemSync();
     schedulePercursoViagemSync();

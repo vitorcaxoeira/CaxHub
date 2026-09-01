@@ -1463,6 +1463,31 @@ model PlanoContabil {
   @@map("plano_contabil")
 }
 
+// Espelho local da tabela E046HPD do Senior ERP (Tabelas - Históricos Padrões) — catálogo de
+// templates de texto usado pra montar o "Complemento Hist." de um lançamento contábil (ver
+// LancamentoContabil.codhpd/cpllct e domain/historicoPadrao.ts). Sem `removidoEmSenior`: é
+// catálogo de configuração (raramente muda), não dado transacional — decisão confirmada com o
+// Vitor em 01/09/2026, mesmo espírito de formaPagamentoSync.ts (upsert simples, sem varredura).
+model HistoricoPadrao {
+  // SEM codemp — confirmado ao vivo contra o dicionário de dados do Senior (r996tbl.pkflds =
+  // "CodHpd" sozinho): E046HPD é catálogo GLOBAL, não por empresa, diferente da maioria das
+  // tabelas espelhadas aqui. `SELECT CodEmp FROM E046HPD` dá erro de coluna inexistente no
+  // Senior — não repetir esse campo por hábito de copiar o padrão de outras tabelas.
+  codhpd Int @id
+  tithpd String? @db.VarChar(80)
+  // TEMPLATE do histórico — placeholders são `*NUM` (numérico) e `*ALF` (alfanumérico),
+  // substituídos POSICIONALMENTE pelos parâmetros de LancamentoContabil.cpllct, na ordem em
+  // que aparecem no texto (a distinção NUM/ALF é só validação de entrada no Senior, não muda
+  // a substituição). Ex.: "Vlr. Ref. Compra conf. NF *NUM de *ALF".
+  deshpd String @db.VarChar(80)
+  /// Domínio "LTipHpd"
+  tiphpd String @db.VarChar(1)
+  /// Domínio "LSimNao"
+  intagr String? @db.VarChar(1)
+
+  @@map("historicos_padrao")
+}
+
 // Espelho local da tabela E640LCT do Senior ERP (Contábil - Lançamento - Lançamentos Contábeis).
 model LancamentoContabil {
   codemp Int
@@ -1473,6 +1498,14 @@ model LancamentoContabil {
   orilct String @db.VarChar(3)
   cpllct String? @db.VarChar(250)
   numlot Int?
+  // Código do histórico padrão (E640LCT.CodHpd) — chave de junção com HistoricoPadrao. É o
+  // que de fato monta o texto legível do "Complemento Hist." mostrado no Senior: `cpllct` é
+  // só a lista de parâmetros ("607543","Senior Sistemas S.A."), o texto final vem de
+  // substituir os placeholders (*NUM/*ALF) do template (HistoricoPadrao.deshpd) por esses
+  // parâmetros, na ordem em que aparecem — ver domain/historicoPadrao.ts. NÃO é 1:1 com
+  // `orilct`: o mesmo orilct (ex. CPR) usa códigos de histórico diferentes conforme a rotina
+  // exata que gerou o lançamento, cada um com seu próprio número de parâmetros.
+  codhpd Int?
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
