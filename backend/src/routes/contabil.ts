@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { SITRAT_CONTABILIZADO, defgruBucket } from "../domain/contabilDominio";
+import { SITRAT_CONTABILIZADO, defgruBucket, debcreLabel, orilctLabel, sitlotLabel } from "../domain/contabilDominio";
 import { resolverContextoConsultor, gestorNomePorDepartamento, type ContextoConsultor } from "../domain/contextoProjeto";
 import { depexeLabel } from "../domain/propostasDominio";
 import { parseIntListParam } from "../lib/queryParams";
@@ -323,6 +323,121 @@ contabilRouter.get("/resultado", async (req: AuthenticatedRequest, res) => {
     });
   } catch (error) {
     handleError(res, error, "resultado");
+  }
+});
+
+// ---------- Drilldown: lançamentos que compõem uma célula da Matriz ----------
+// `ctareds` (plural — ver LinhaMatrizResultado.ctareds em domain/matrizContabil.ts): a célula
+// clicada quase sempre representa 1 conta-folha só, mas quando o filtro de níveis oculta o
+// nível onde a folha de verdade mora, um nó "aparenta" ser folha e na real soma mais de uma
+// conta — por isso o filtro aqui é sempre `ctared = ANY(...)`, nunca um valor singular, pra
+// bater exatamente com o que a matriz mostrou em QUALQUER configuração de filtro.
+contabilRouter.get("/resultado/lancamentos", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await gruposPermitidos(role, contexto);
+    if (permitidos != null && permitidos.length === 0) {
+      res.status(403).json({ error: MENSAGEM_SEM_GRUPOS });
+      return;
+    }
+
+    const ctareds = parseIntListParam(req.query.ctareds);
+    if (!ctareds) {
+      res.status(400).json({ error: "Parâmetro ctareds é obrigatório" });
+      return;
+    }
+    const mesReferencia = typeof req.query.mesReferencia === "string" ? req.query.mesReferencia : "";
+    if (!/^\d{4}-\d{2}$/.test(mesReferencia)) {
+      res.status(400).json({ error: "Parâmetro mesReferencia é obrigatório no formato AAAA-MM" });
+      return;
+    }
+    const [ano, mes] = mesReferencia.split("-").map(Number);
+    const inicio = `${mesReferencia}-01`;
+    const fim = mes === 12 ? `${ano + 1}-01-01` : `${ano}-${String(mes + 1).padStart(2, "0")}-01`;
+
+    const codccu = parseStringListParam(req.query.codccu);
+    // Nunca confia no ctared cru do cliente: o mesmo recorte de grupo que decide o que ele vê
+    // na matriz decide o que ele pode detalhar aqui — sem `?grupo=` próprio nesta rota, o
+    // recorte É o total que ele pode ver (gestor) ou nenhum (admin, sem filtro).
+    const grupos = gruposConsultados(permitidos, null);
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+
+    const linhasQuery = `
+      SELECT r.numlct::text AS numlct, r.ctared AS ctared, pc.descta AS descta, r.datlct AS datlct,
+             r.codccu AS codccu, r.debcre AS debcre, r.vlrrat::float8 AS vlrrat,
+             (${FORMULA_VALOR_REALIZADO})::float8 AS valor,
+             l.cpllct AS cpllct, l.orilct AS orilct, l.sitlct AS sitlct
+      FROM rateios_lancamento r
+      JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
+      LEFT JOIN lancamentos_contabeis l ON l.codemp = r.codemp AND l.numlct = r.numlct
+      WHERE r.sitrat = $1
+        AND r.removido_em_senior IS NULL
+        AND r.ctared = ANY($2::int[])
+        AND r.datlct >= $3::date AND r.datlct < $4::date
+        AND ($5::text[] IS NULL OR r.codccu = ANY($5::text[]))
+        AND ($6::text[] IS NULL OR btrim(pc.despar) = ANY($6::text[]))
+      ORDER BY r.datlct ASC, r.numlct ASC
+      LIMIT $7 OFFSET $8
+    `;
+    const totalQuery = `
+      SELECT COUNT(*)::int AS total, COALESCE(SUM(${FORMULA_VALOR_REALIZADO}), 0)::float8 AS "valorTotal"
+      FROM rateios_lancamento r
+      JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
+      WHERE r.sitrat = $1
+        AND r.removido_em_senior IS NULL
+        AND r.ctared = ANY($2::int[])
+        AND r.datlct >= $3::date AND r.datlct < $4::date
+        AND ($5::text[] IS NULL OR r.codccu = ANY($5::text[]))
+        AND ($6::text[] IS NULL OR btrim(pc.despar) = ANY($6::text[]))
+    `;
+
+    const [linhas, totais] = await Promise.all([
+      prisma.$queryRawUnsafe<
+        {
+          numlct: string;
+          ctared: number;
+          descta: string;
+          datlct: Date;
+          codccu: string;
+          debcre: string | null;
+          vlrrat: number;
+          valor: number;
+          cpllct: string | null;
+          orilct: string | null;
+          sitlct: number | null;
+        }[]
+      >(linhasQuery, SITRAT_CONTABILIZADO, ctareds, inicio, fim, codccu, grupos, pageSize, (page - 1) * pageSize),
+      prisma.$queryRawUnsafe<{ total: number; valorTotal: number }[]>(totalQuery, SITRAT_CONTABILIZADO, ctareds, inicio, fim, codccu, grupos),
+    ]);
+
+    res.json({
+      lancamentos: linhas.map((l) => ({
+        numlct: l.numlct,
+        ctared: l.ctared,
+        contaRotulo: `${l.ctared} - ${l.descta}`,
+        datlct: l.datlct,
+        codccu: l.codccu,
+        debcre: l.debcre,
+        debcreLabel: debcreLabel(l.debcre),
+        vlrrat: l.vlrrat,
+        valor: l.valor,
+        cpllct: l.cpllct,
+        orilctLabel: orilctLabel(l.orilct),
+        sitlctLabel: sitlotLabel(l.sitlct),
+      })),
+      total: totais[0]?.total ?? 0,
+      valorTotal: totais[0]?.valorTotal ?? 0,
+      page,
+      pageSize,
+    });
+  } catch (error) {
+    handleError(res, error, "resultado/lancamentos");
   }
 });
 

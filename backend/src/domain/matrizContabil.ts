@@ -39,6 +39,17 @@ export interface LinhaMatrizResultado {
   anasin: string | null;
   valores: number[];
   total: number;
+  /**
+   * `ctared`s das contas-folha que contribuíram pra este nó (só em `tipo: "conta"`; vazio em
+   * "grupo" e em árvores que não passam `ctaredOrigem` pra `somarNoCaminho`, ver
+   * `montarMatrizCentroCusto`). No caso comum (filtro de níveis padrão) tem 1 item — o próprio
+   * `ctared` do nó; quando um nível intermediário é ocultado pelo filtro, um nó "folha visível"
+   * pode herdar mais de um `ctared` real (descendentes que "subiram" pra ele, ver
+   * `cadeiaVisivel` em `montarMatrizResultado`). É essa lista, não o `ctared` singular, que o
+   * drilldown de lançamentos (routes/contabil.ts) precisa pra bater exatamente com o valor
+   * exibido em qualquer configuração de filtro.
+   */
+  ctareds: number[];
 }
 
 interface NoEmConstrucao {
@@ -53,6 +64,7 @@ interface NoEmConstrucao {
   ordenacao: string;
   valores: number[];
   filhos: string[];
+  ctareds: Set<number>;
 }
 
 /**
@@ -67,21 +79,34 @@ function criarConstrutorArvore(numColunas: number) {
   function garantirNo(
     chave: string,
     chavePai: string | null,
-    dados: Omit<NoEmConstrucao, "chave" | "chavePai" | "valores" | "filhos">
+    dados: Omit<NoEmConstrucao, "chave" | "chavePai" | "valores" | "filhos" | "ctareds">
   ): NoEmConstrucao {
     const existente = nos.get(chave);
     if (existente) return existente;
-    const novo: NoEmConstrucao = { chave, chavePai, ...dados, valores: new Array(numColunas).fill(0), filhos: [] };
+    const novo: NoEmConstrucao = {
+      chave,
+      chavePai,
+      ...dados,
+      valores: new Array(numColunas).fill(0),
+      filhos: [],
+      ctareds: new Set<number>(),
+    };
     nos.set(chave, novo);
     if (chavePai === null) raizes.push(chave);
     else nos.get(chavePai)!.filhos.push(chave);
     return novo;
   }
 
-  function somarNoCaminho(caminho: string[], valores: number[]) {
+  // `ctaredOrigem`: a conta-folha de onde `valores` está vindo, registrada em CADA nó do
+  // caminho (não só na folha) — é o que permite ao drilldown de lançamentos saber exatamente
+  // quais `ctared`s somar pra reconstruir o valor de qualquer nó exibido, mesmo quando o filtro
+  // de níveis faz um nó "parecer" folha sem ser a conta real (ver LinhaMatrizResultado.ctareds).
+  // Omitido = árvore que não precisa disso (montarMatrizCentroCusto).
+  function somarNoCaminho(caminho: string[], valores: number[], ctaredOrigem?: number) {
     for (const chave of caminho) {
       const no = nos.get(chave)!;
       for (let i = 0; i < numColunas; i++) no.valores[i] += valores[i];
+      if (ctaredOrigem !== undefined) no.ctareds.add(ctaredOrigem);
     }
   }
 
@@ -102,6 +127,7 @@ function criarConstrutorArvore(numColunas: number) {
         anasin: no.anasin,
         valores: no.valores,
         total: no.valores.reduce((a, b) => a + b, 0),
+        ctareds: [...no.ctareds].sort((a, b) => a - b),
       });
       for (const filho of ordenarPorChave(no.filhos)) emitir(filho);
     }
@@ -221,7 +247,7 @@ export function montarMatrizResultado(
       caminho.push(chave);
     });
 
-    arvore.somarNoCaminho(caminho, valores);
+    arvore.somarNoCaminho(caminho, valores, conta.ctared);
     for (let i = 0; i < numColunas; i++) totalGeral[i] += valores[i];
   }
 

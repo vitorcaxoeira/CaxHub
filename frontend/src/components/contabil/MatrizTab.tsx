@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
-import { MatrizContabil, LinhaMatrizContabil } from "./MatrizContabil";
+import { MatrizContabil, LinhaMatrizContabil, ValorClicado } from "./MatrizContabil";
+import { ModalDetalheLancamentos } from "./ModalDetalheLancamentos";
 
 interface MatrizTabProps {
   anos: number[];
@@ -24,6 +25,8 @@ export function MatrizTab({ anos, meses, niveis, grupos, centrosCusto, incluirSe
   const [resultado, setResultado] = useState<RespostaResultado>(RESULTADO_VAZIO);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  // Drilldown de lançamentos — só a Matriz tem por ora (ver plano/decisão com o Vitor).
+  const [detalhe, setDetalhe] = useState<ValorClicado | null>(null);
 
   useEffect(() => {
     if (anos.length === 0) return;
@@ -58,8 +61,16 @@ export function MatrizTab({ anos, meses, niveis, grupos, centrosCusto, incluirSe
           Selecione ao menos um ano pra ver o resultado.
         </p>
       ) : (
-        <MatrizContabil meses={resultado.meses} linhas={resultado.linhas} totalGeral={resultado.totalGeral} loading={loading} />
+        <MatrizContabil
+          meses={resultado.meses}
+          linhas={resultado.linhas}
+          totalGeral={resultado.totalGeral}
+          loading={loading}
+          onClickValor={setDetalhe}
+        />
       )}
+
+      {detalhe && <ModalDetalheLancamentos {...detalhe} codccu={centrosCusto} onClose={() => setDetalhe(null)} />}
 
       <p className="mt-4 text-[11px] text-muted">
         Realizado = rateios contabilizados (situação "Contabilizado" no lançamento), crédito soma e débito subtrai.

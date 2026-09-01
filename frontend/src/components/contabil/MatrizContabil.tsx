@@ -16,6 +16,22 @@ export interface LinhaMatrizContabil {
   anasin: string | null;
   valores: number[];
   total: number;
+  /**
+   * `ctared`s das contas-folha que compõem este nó (só em `tipo: "conta"` — ver
+   * LinhaMatrizResultado.ctareds no backend). Normalmente 1 item; pode ter mais quando o
+   * filtro de níveis oculta o nível da folha real. É o que o drilldown de lançamentos usa pra
+   * bater exatamente com o valor exibido, em vez de assumir 1 folha = 1 conta.
+   */
+  ctareds: number[];
+}
+
+// Parâmetros do valor clicado, repassados pra quem abre o modal de detalhe — a MESMA
+// identidade (contas + mês) que o backend precisa pra devolver os lançamentos certos (ver
+// GET /contabil/resultado/lancamentos).
+export interface ValorClicado {
+  ctareds: number[];
+  mesReferencia: string;
+  rotulo: string;
 }
 
 interface MatrizContabilProps {
@@ -25,25 +41,29 @@ interface MatrizContabilProps {
   loading: boolean;
   /** Header da 1ª coluna — "Conta" (padrão) ou "Centro de Custo" na aba de CC. */
   rotuloColuna?: string;
+  // Drilldown de lançamentos — só a aba Matriz passa isto hoje. Sem ela, os valores continuam
+  // texto puro (Orçado x Realizado e Centro de Custo ainda não têm o detalhe implementado).
+  onClickValor?: (params: ValorClicado) => void;
 }
 
 const MESES_ABREV = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const numero = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 });
 
-function formatarMes(mes: string): string {
+// Exportada pro modal de detalhe de lançamentos (mesmo formato "Jun/26" no subtítulo).
+export function formatarMes(mes: string): string {
   const [ano, mesNum] = mes.split("-");
   return `${MESES_ABREV[Number(mesNum) - 1]}/${ano.slice(2)}`;
 }
 
-function Valor({ v }: { v: number }) {
+function Valor({ v, className = "" }: { v: number; className?: string }) {
   return (
-    <span className={`font-mono text-[12.5px] tabular-nums ${v < 0 ? "text-destructive" : "text-foreground"}`}>
+    <span className={`font-mono text-[12.5px] tabular-nums ${v < 0 ? "text-destructive" : "text-foreground"} ${className}`}>
       {numero.format(v)}
     </span>
   );
 }
 
-export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColuna = "Conta" }: MatrizContabilProps) {
+export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColuna = "Conta", onClickValor }: MatrizContabilProps) {
   const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
 
   // "Chave -> tem filhos" — decide se a linha ganha seta de expandir/recolher.
@@ -172,11 +192,30 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColun
                       </span>
                     </div>
                   </td>
-                  {linha.valores.map((v, i) => (
-                    <td key={i} className="px-3 py-1.5 text-right">
-                      <Valor v={v} />
-                    </td>
-                  ))}
+                  {linha.valores.map((v, i) => {
+                    // Link só no último nível REALMENTE exibido (folha visível, não pasta/grupo
+                    // recolhida por cima dela) e só quando há algo pra detalhar (conta real,
+                    // ctareds preenchido, valor diferente de zero) — regra 2 do pedido.
+                    const podeDetalhar = Boolean(
+                      onClickValor && linha.tipo === "conta" && !podeExpandir && linha.ctareds.length > 0 && v !== 0
+                    );
+                    return (
+                      <td key={i} className="px-3 py-1.5 text-right">
+                        {podeDetalhar ? (
+                          <button
+                            type="button"
+                            onClick={() => onClickValor!({ ctareds: linha.ctareds, mesReferencia: meses[i], rotulo: linha.rotulo })}
+                            className="rounded px-1 -mx-1 hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            title="Ver os lançamentos que compõem este valor"
+                          >
+                            <Valor v={v} className="underline decoration-dotted underline-offset-2" />
+                          </button>
+                        ) : (
+                          <Valor v={v} />
+                        )}
+                      </td>
+                    );
+                  })}
                   <td className="px-3 py-1.5 text-right">
                     <Valor v={linha.total} />
                   </td>
