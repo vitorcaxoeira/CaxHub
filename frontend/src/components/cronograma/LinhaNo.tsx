@@ -124,6 +124,15 @@ interface LinhaNoProps {
   // `no.podeEditarItem` porque organizar a estrutura não é alocar: quem enxerga a
   // proposta pode reorganizá-la, mesmo em item de outro departamento.
   podeGerenciarProposta: boolean;
+  // Contorno de "acordeon" de pasta expandida (ver calcularCaixasAcordeaoPasta em
+  // lib/cronograma.ts) — mesmo padrão visual do acordeon de RATs/Sessões pendentes, só que
+  // marcado linha a linha porque aqui pasta e filhos são irmãs, não aninhadas numa célula
+  // só. `caixaAbreAqui` = esta linha é o cabeçalho de uma pasta que acabou de expandir;
+  // `caixaDentro` = esta linha está dentro do conteúdo de alguma pasta expandida;
+  // `caixaFechaAqui` = esta linha é a última visível do conteúdo de alguma pasta expandida.
+  caixaAbreAqui: boolean;
+  caixaDentro: boolean;
+  caixaFechaAqui: boolean;
 }
 
 export function LinhaNo({
@@ -150,6 +159,9 @@ export function LinhaNo({
   onSincronizarSenior,
   larguraHoras,
   podeGerenciarProposta,
+  caixaAbreAqui,
+  caixaDentro,
+  caixaFechaAqui,
 }: LinhaNoProps) {
   const paddingEsquerda = 14 + profundidade * 24;
 
@@ -205,6 +217,37 @@ export function LinhaNo({
     ? `Est. ${no.id} · Ativ. ${formatarAlocacoes(no.alocacoesResumo)}`
     : `Integração com o Senior: ${no.integracaoErpLabel}`;
 
+  // Fundo + borda esquerda da linha, nesta ordem de prioridade: 1) alerta de estouro do
+  // item (já existia, sempre vence) — pasta/atividade nunca caem aqui, `alerta` só é
+  // diferente de "ok" quando `orcamento` existe (só tipo="item"); 2) item expandido (já
+  // existia); 3) caixa de "acordeon" de pasta expandida (novo — ver
+  // calcularCaixasAcordeaoPasta); 4) fallback de sempre.
+  let classeFundoEBordaEsquerda: string;
+  if (alerta === "estouro_realizado") {
+    classeFundoEBordaEsquerda = "border-l-[3px] border-l-destructive bg-destructive/10";
+  } else if (alerta === "real_acima_previsto") {
+    classeFundoEBordaEsquerda = "border-l-[3px] border-l-warning bg-warning/10";
+  } else {
+    const fundo = no.tipo === "pasta" ? (caixaAbreAqui ? "bg-primary/5" : "bg-surface-2") : "bg-surface hover:bg-surface-2";
+    const bordaEsquerda =
+      no.tipo === "item" && expandido
+        ? "border-l-[3px] border-l-primary"
+        : caixaDentro || caixaAbreAqui
+          ? "border-l border-primary"
+          : no.tipo === "item"
+            ? "border-l border-l-border"
+            : "";
+    classeFundoEBordaEsquerda = `${fundo} ${bordaEsquerda}`.trim();
+  }
+
+  // Direita/topo só existem pra fechar a caixa da pasta expandida — nada mais na linha usa
+  // esses dois lados hoje. Embaixo é o separador padrão de sempre, TROCADO (não somado) pela
+  // cor de fechamento quando esta é a última linha visível do conteúdo de alguma pasta —
+  // as duas classes de border-b não podem conviver na mesma linha.
+  const classeBordaDireita = caixaDentro || caixaAbreAqui ? "border-r border-primary" : "";
+  const classeBordaTopo = caixaAbreAqui ? "border-t border-primary" : "";
+  const classeBordaBaixo = caixaFechaAqui ? "border-b border-primary" : "border-b border-border/50";
+
   return (
     <div className="group relative" ref={setTopoRef}>
       {isOverTopo && <div className="absolute inset-x-0 top-0 z-20 h-0.5 bg-primary" />}
@@ -222,25 +265,9 @@ export function LinhaNo({
         // morto como os 46px de antes.
         className={`flex ${
           no.tipo === "item" ? "min-h-[32px]" : "min-h-7"
-        } cursor-pointer items-center gap-1.5 border-b border-border/50 py-1 pr-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
-          alerta === "estouro_realizado"
-            ? "border-l-[3px] border-l-destructive bg-destructive/10"
-            : alerta === "real_acima_previsto"
-              ? "border-l-[3px] border-l-warning bg-warning/10"
-              : no.tipo === "pasta"
-                ? "bg-surface-2"
-                : "bg-surface hover:bg-surface-2"
-        } ${
-          alerta === "ok" || alerta === "estouro_distribuicao"
-            ? no.tipo === "item" && expandido
-              ? "border-l-[3px] border-l-primary"
-              : no.tipo === "item"
-                ? "border-l border-l-border"
-                : ""
-            : ""
-        } ${selecionado ? "ring-1 ring-inset ring-primary/50" : ""} ${isDragging ? "opacity-40" : ""} ${
-          isOverCorpo && no.tipo !== "atividade" ? "ring-2 ring-inset ring-primary/40" : ""
-        }`}
+        } cursor-pointer items-center gap-1.5 py-1 pr-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${classeFundoEBordaEsquerda} ${classeBordaDireita} ${classeBordaTopo} ${classeBordaBaixo} ${
+          selecionado ? "ring-1 ring-inset ring-primary/50" : ""
+        } ${isDragging ? "opacity-40" : ""} ${isOverCorpo && no.tipo !== "atividade" ? "ring-2 ring-inset ring-primary/40" : ""}`}
         style={style}
       >
         {/* Coluna 1 — Estrutura. É a ÚNICA flexível da linha, e é dentro dela que mora a

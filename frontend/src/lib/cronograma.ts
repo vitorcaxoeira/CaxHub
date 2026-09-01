@@ -199,6 +199,67 @@ export function derivarStatus(nos: NoCronograma[]): Map<number, StatusNo> {
   return resultado;
 }
 
+export interface CaixasAcordeaoPasta {
+  // Linha está dentro do conteúdo de alguma pasta expandida (borda dos dois lados
+  // continuando pra baixo).
+  dentroDeCaixa: Set<number>;
+  // Linha É o cabeçalho de uma pasta expandida — borda no topo nasce aqui.
+  abreCaixaAqui: Set<number>;
+  // Linha é a ÚLTIMA visível do conteúdo de alguma pasta expandida — borda embaixo fecha
+  // aqui.
+  fechaCaixaAqui: Set<number>;
+}
+
+// Contorno de "acordeon" (mesmo padrão do acordeon de RATs/Sessões pendentes em
+// MeusApontamentos.tsx) pras pastas expandidas do Cronograma — mas SEM célula única pra
+// fechar sozinha: aqui pasta e filhos são linhas IRMÃS (achatarArvore), não aninhadas numa
+// tabela, então a borda lateral precisa ser marcada em cada linha do conteúdo, não só no
+// cabeçalho e no fechamento.
+//
+// Pastas aninhadas (pasta dentro de pasta), ambas expandidas, NÃO desenham caixas
+// concêntricas deslocadas por indentação — compartilham a mesma borda lateral "de fora"
+// (mesma posição/cor, igual ao destaque de "item" expandido já faz com seu próprio
+// border-l). Cada uma fecha (`fechaCaixaAqui`) de forma independente na sua última linha
+// visível; se a pasta-mãe ainda tiver mais conteúdo depois, o lado continua até ela fechar
+// a dela.
+//
+// `linhas` é a lista JÁ ACHATADA E FILTRADA por visibilidade (mesma que a árvore renderiza
+// de fato — ver `linhas` em ArvoreCronograma.tsx), não a árvore inteira: uma pasta fechada
+// não tem filhos nessa lista, então nunca abre caixa nem aparece dentro de uma.
+export function calcularCaixasAcordeaoPasta(
+  linhas: (NoCronograma & { profundidade: number })[],
+  expandidos: Set<number>
+): CaixasAcordeaoPasta {
+  const dentroDeCaixa = new Set<number>();
+  const abreCaixaAqui = new Set<number>();
+  const fechaCaixaAqui = new Set<number>();
+  const pilha: { id: number; profundidade: number }[] = [];
+
+  for (let i = 0; i < linhas.length; i++) {
+    const no = linhas[i];
+    // Saiu do escopo de toda pasta aberta cuja profundidade seja >= a desta linha (irmã ou
+    // ancestral mais rasa) — fecha cada uma na última linha ANTES desta, que foi a última
+    // realmente dentro dela.
+    while (pilha.length > 0 && no.profundidade <= pilha[pilha.length - 1].profundidade) {
+      pilha.pop();
+      fechaCaixaAqui.add(linhas[i - 1].id);
+    }
+    if (pilha.length > 0) dentroDeCaixa.add(no.id);
+    if (no.tipo === "pasta" && expandidos.has(no.id)) {
+      abreCaixaAqui.add(no.id);
+      pilha.push({ id: no.id, profundidade: no.profundidade });
+    }
+  }
+  // Sobrou pasta aberta até o fim da lista (nada mais raso apareceu depois) — fecha na
+  // última linha do array inteiro.
+  while (pilha.length > 0) {
+    pilha.pop();
+    fechaCaixaAqui.add(linhas[linhas.length - 1].id);
+  }
+
+  return { dentroDeCaixa, abreCaixaAqui, fechaCaixaAqui };
+}
+
 // Horas em minutos -> "HH:MM", sempre com no mínimo `largura` dígitos de hora (zero à
 // esquerda), mesmo quando o valor é só minutos — ex.: 00:35, 01:00 (nunca embrulha tipo
 // relógio de 24h, `largura` só estabelece um MÍNIMO, um valor de 125h vira "125:00" ainda

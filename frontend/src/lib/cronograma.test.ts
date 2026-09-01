@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   achatarArvore,
   agregarHoras,
+  calcularCaixasAcordeaoPasta,
   calcularOrcamentoItem,
   derivarStatus,
   descreverSaldoDistribuicao,
@@ -152,6 +153,73 @@ describe("derivarStatus", () => {
       no({ id: 2, tipo: "atividade", nome: "B", predecessoraId: 1 }),
     ];
     expect(() => derivarStatus(nos)).not.toThrow();
+  });
+});
+
+describe("calcularCaixasAcordeaoPasta", () => {
+  it("pasta expandida com filhos: abre no cabeçalho, continua nos filhos, fecha na última linha visível", () => {
+    // arvoreExemplo(): Item 1 > Pasta 2 "Levantamento" > Atividade 3; Item 1 > Pasta 4
+    // "Cadastros" > Atividade 5, Atividade 6. Pasta 2 fechada (id 3 não aparece em `linhas`
+    // — mesma filtragem que ArvoreCronograma já faz antes de chamar esta função), só
+    // Pasta 4 expandida.
+    const linhas = achatarArvore(arvoreExemplo()).filter((n) => n.id !== 3);
+    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set([4]));
+    expect(caixas.abreCaixaAqui).toEqual(new Set([4]));
+    expect(caixas.dentroDeCaixa).toEqual(new Set([5, 6]));
+    expect(caixas.fechaCaixaAqui).toEqual(new Set([6]));
+  });
+
+  it("pasta fechada não gera nenhuma marca", () => {
+    const linhas = achatarArvore(arvoreExemplo()).filter((n) => n.id !== 3 && n.id !== 5 && n.id !== 6);
+    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set());
+    expect(caixas.abreCaixaAqui.size).toBe(0);
+    expect(caixas.dentroDeCaixa.size).toBe(0);
+    expect(caixas.fechaCaixaAqui.size).toBe(0);
+  });
+
+  it("pastas aninhadas (pasta dentro de pasta), ambas expandidas: cada uma fecha independente, o lado de fora continua", () => {
+    // Item 1 > Pasta 2 > [Pasta 3 > Atividade 4, Atividade 5] — Pasta 3 é filha de Pasta 2;
+    // Atividade 5 é irmã de Pasta 3, depois dela, ainda dentro de Pasta 2.
+    const arvore = [
+      no({ id: 1, tipo: "item", nome: "Item" }),
+      no({ id: 2, tipo: "pasta", nome: "Pasta externa", parentId: 1 }),
+      no({ id: 3, tipo: "pasta", nome: "Pasta interna", parentId: 2 }),
+      no({ id: 4, tipo: "atividade", nome: "Só filha da interna", parentId: 3, horasPrevistas: 60 }),
+      no({ id: 5, tipo: "atividade", nome: "Filha da externa, depois da interna", parentId: 2, ordem: 1, horasPrevistas: 60 }),
+    ];
+    const linhas = achatarArvore(arvore);
+    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set([2, 3]));
+    expect(caixas.abreCaixaAqui).toEqual(new Set([2, 3]));
+    // Pasta 3 (interna) está dentro da caixa da Pasta 2 (externa) — as duas coisas são
+    // verdade ao mesmo tempo: ela abre a própria caixa E está dentro da caixa de fora.
+    expect(caixas.dentroDeCaixa).toEqual(new Set([3, 4, 5]));
+    // Pasta interna fecha sozinha em 4 (única filha dela); a externa só fecha depois, em 5
+    // — nenhuma das duas fecha na linha da outra.
+    expect(caixas.fechaCaixaAqui).toEqual(new Set([4, 5]));
+  });
+
+  it("pasta expandida sem nenhum filho: abre e fecha na própria linha, sem nada dentro", () => {
+    const linhas = [
+      { ...no({ id: 1, tipo: "item", nome: "Item" }), profundidade: 0 },
+      { ...no({ id: 2, tipo: "pasta", nome: "Vazia", parentId: 1 }), profundidade: 1 },
+    ];
+    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set([2]));
+    expect(caixas.abreCaixaAqui).toEqual(new Set([2]));
+    expect(caixas.dentroDeCaixa.size).toBe(0);
+    expect(caixas.fechaCaixaAqui).toEqual(new Set([2]));
+  });
+
+  it("pasta expandida cujo conteúdo vai até a última linha da árvore fecha pelo braço final do algoritmo", () => {
+    const arvore = [
+      no({ id: 1, tipo: "item", nome: "Item" }),
+      no({ id: 2, tipo: "pasta", nome: "Última pasta", parentId: 1 }),
+      no({ id: 3, tipo: "atividade", nome: "Última atividade", parentId: 2, horasPrevistas: 60 }),
+    ];
+    const linhas = achatarArvore(arvore);
+    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set([2]));
+    expect(caixas.abreCaixaAqui).toEqual(new Set([2]));
+    expect(caixas.dentroDeCaixa).toEqual(new Set([3]));
+    expect(caixas.fechaCaixaAqui).toEqual(new Set([3]));
   });
 });
 

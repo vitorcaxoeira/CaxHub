@@ -4,6 +4,7 @@ import {
   achatarArvore,
   agregarHoras,
   agregarOrcado,
+  calcularCaixasAcordeaoPasta,
   calcularOrcamentoItem,
   derivarStatus,
   estadoAlertaItem,
@@ -310,6 +311,11 @@ export function ArvoreCronograma({
     if (filtroAtivo) return true;
     return ancestraisTodosExpandidos(no);
   });
+
+  // Contorno de "acordeon" das pastas expandidas (mesmo padrão do acordeon de RATs/Sessões
+  // pendentes) — calculado sobre `linhas` (só o que está de fato visível), não a árvore
+  // inteira, senão uma pasta fechada contaria filhos que a tela nem mostra.
+  const caixasPasta = calcularCaixasAcordeaoPasta(linhas, expandidos);
 
   function alternarExpandir(id: number) {
     setExpandidos((atual) => {
@@ -628,6 +634,9 @@ export function ArvoreCronograma({
         onExcluir={() => excluir(no)}
         onSincronizarSenior={() => sincronizarComSenior(no)}
         larguraHoras={larguraHoras}
+        caixaAbreAqui={caixasPasta.abreCaixaAqui.has(no.id)}
+        caixaDentro={caixasPasta.dentroDeCaixa.has(no.id)}
+        caixaFechaAqui={caixasPasta.fechaCaixaAqui.has(no.id)}
       />
     );
     // Fecha (emite a linha fantasma de) toda pasta ancestral cujo último descendente
