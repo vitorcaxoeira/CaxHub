@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   achatarArvore,
   agregarHoras,
-  calcularCaixasAcordeaoPasta,
+  aninharPorFaixas,
   calcularOrcamentoItem,
   derivarStatus,
   descreverSaldoDistribuicao,
   estadoAlertaItem,
   filtrarPreservandoAncestrais,
+  FaixaAninhamento,
   formatHorasCompacto,
   larguraHorasProposta,
   NoCronograma,
@@ -156,70 +157,49 @@ describe("derivarStatus", () => {
   });
 });
 
-describe("calcularCaixasAcordeaoPasta", () => {
-  it("pasta expandida com filhos: abre no cabeçalho, continua nos filhos, fecha na última linha visível", () => {
-    // arvoreExemplo(): Item 1 > Pasta 2 "Levantamento" > Atividade 3; Item 1 > Pasta 4
-    // "Cadastros" > Atividade 5, Atividade 6. Pasta 2 fechada (id 3 não aparece em `linhas`
-    // — mesma filtragem que ArvoreCronograma já faz antes de chamar esta função), só
-    // Pasta 4 expandida.
-    const linhas = achatarArvore(arvoreExemplo()).filter((n) => n.id !== 3);
-    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set([4]));
-    expect(caixas.abreCaixaAqui).toEqual(new Set([4]));
-    expect(caixas.dentroDeCaixa).toEqual(new Set([5, 6]));
-    expect(caixas.fechaCaixaAqui).toEqual(new Set([6]));
+describe("aninharPorFaixas", () => {
+  // `envolver` de teste não usa JSX (a função é genérica e vive num arquivo .ts puro) —
+  // representa a caixa como uma string "[chave:conteúdo,junto,por,vírgula]", só pra dar pra
+  // conferir o aninhamento com toEqual num array plano.
+  function envolverTeste(chave: string | number, conteudo: string[]): string {
+    return `[${chave}:${conteudo.join(",")}]`;
+  }
+
+  it("sem faixa nenhuma, devolve os itens inalterados", () => {
+    expect(aninharPorFaixas(["a", "b", "c"], [], envolverTeste)).toEqual(["a", "b", "c"]);
   });
 
-  it("pasta fechada não gera nenhuma marca", () => {
-    const linhas = achatarArvore(arvoreExemplo()).filter((n) => n.id !== 3 && n.id !== 5 && n.id !== 6);
-    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set());
-    expect(caixas.abreCaixaAqui.size).toBe(0);
-    expect(caixas.dentroDeCaixa.size).toBe(0);
-    expect(caixas.fechaCaixaAqui.size).toBe(0);
+  it("uma faixa no meio vira uma única caixa envolvendo só aquele trecho", () => {
+    const faixas: FaixaAninhamento[] = [{ chave: "pasta", inicio: 1, fim: 2 }];
+    expect(aninharPorFaixas(["a", "b", "c", "d"], faixas, envolverTeste)).toEqual(["a", "[pasta:b,c]", "d"]);
   });
 
-  it("pastas aninhadas (pasta dentro de pasta), ambas expandidas: cada uma fecha independente, o lado de fora continua", () => {
-    // Item 1 > Pasta 2 > [Pasta 3 > Atividade 4, Atividade 5] — Pasta 3 é filha de Pasta 2;
-    // Atividade 5 é irmã de Pasta 3, depois dela, ainda dentro de Pasta 2.
-    const arvore = [
-      no({ id: 1, tipo: "item", nome: "Item" }),
-      no({ id: 2, tipo: "pasta", nome: "Pasta externa", parentId: 1 }),
-      no({ id: 3, tipo: "pasta", nome: "Pasta interna", parentId: 2 }),
-      no({ id: 4, tipo: "atividade", nome: "Só filha da interna", parentId: 3, horasPrevistas: 60 }),
-      no({ id: 5, tipo: "atividade", nome: "Filha da externa, depois da interna", parentId: 2, ordem: 1, horasPrevistas: 60 }),
+  it("faixa vazia (fim < início) ainda vira uma caixa, só que sem nada dentro — pasta expandida sem conteúdo visível", () => {
+    const faixas: FaixaAninhamento[] = [{ chave: "vazia", inicio: 1, fim: 0 }];
+    expect(aninharPorFaixas(["a", "b"], faixas, envolverTeste)).toEqual(["a", "[vazia:]", "b"]);
+  });
+
+  it("faixas aninhadas (pasta dentro de pasta) produzem caixas aninhadas de verdade, não concatenadas", () => {
+    // itens: a, b, c, d, e — faixa externa cobre b..d, faixa interna cobre c..d (a "cauda"
+    // da externa, sem nada da externa sobrando depois da interna).
+    const faixas: FaixaAninhamento[] = [
+      { chave: "externa", inicio: 1, fim: 3 },
+      { chave: "interna", inicio: 2, fim: 3 },
     ];
-    const linhas = achatarArvore(arvore);
-    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set([2, 3]));
-    expect(caixas.abreCaixaAqui).toEqual(new Set([2, 3]));
-    // Pasta 3 (interna) está dentro da caixa da Pasta 2 (externa) — as duas coisas são
-    // verdade ao mesmo tempo: ela abre a própria caixa E está dentro da caixa de fora.
-    expect(caixas.dentroDeCaixa).toEqual(new Set([3, 4, 5]));
-    // Pasta interna fecha sozinha em 4 (única filha dela); a externa só fecha depois, em 5
-    // — nenhuma das duas fecha na linha da outra.
-    expect(caixas.fechaCaixaAqui).toEqual(new Set([4, 5]));
+    expect(aninharPorFaixas(["a", "b", "c", "d", "e"], faixas, envolverTeste)).toEqual(["a", "[externa:b,[interna:c,d]]", "e"]);
   });
 
-  it("pasta expandida sem nenhum filho: abre e fecha na própria linha, sem nada dentro", () => {
-    const linhas = [
-      { ...no({ id: 1, tipo: "item", nome: "Item" }), profundidade: 0 },
-      { ...no({ id: 2, tipo: "pasta", nome: "Vazia", parentId: 1 }), profundidade: 1 },
+  it("duas faixas irmãs (disjuntas, não aninhadas) viram duas caixas separadas", () => {
+    const faixas: FaixaAninhamento[] = [
+      { chave: "p1", inicio: 0, fim: 1 },
+      { chave: "p2", inicio: 2, fim: 3 },
     ];
-    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set([2]));
-    expect(caixas.abreCaixaAqui).toEqual(new Set([2]));
-    expect(caixas.dentroDeCaixa.size).toBe(0);
-    expect(caixas.fechaCaixaAqui).toEqual(new Set([2]));
+    expect(aninharPorFaixas(["a", "b", "c", "d"], faixas, envolverTeste)).toEqual(["[p1:a,b]", "[p2:c,d]"]);
   });
 
-  it("pasta expandida cujo conteúdo vai até a última linha da árvore fecha pelo braço final do algoritmo", () => {
-    const arvore = [
-      no({ id: 1, tipo: "item", nome: "Item" }),
-      no({ id: 2, tipo: "pasta", nome: "Última pasta", parentId: 1 }),
-      no({ id: 3, tipo: "atividade", nome: "Última atividade", parentId: 2, horasPrevistas: 60 }),
-    ];
-    const linhas = achatarArvore(arvore);
-    const caixas = calcularCaixasAcordeaoPasta(linhas, new Set([2]));
-    expect(caixas.abreCaixaAqui).toEqual(new Set([2]));
-    expect(caixas.dentroDeCaixa).toEqual(new Set([3]));
-    expect(caixas.fechaCaixaAqui).toEqual(new Set([3]));
+  it("faixa que vai até o último item do array fecha corretamente (sem sobra depois dela)", () => {
+    const faixas: FaixaAninhamento[] = [{ chave: "ultima", inicio: 1, fim: 2 }];
+    expect(aninharPorFaixas(["a", "b", "c"], faixas, envolverTeste)).toEqual(["a", "[ultima:b,c]"]);
   });
 });
 

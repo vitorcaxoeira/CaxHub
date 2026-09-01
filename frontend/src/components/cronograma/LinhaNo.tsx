@@ -124,15 +124,6 @@ interface LinhaNoProps {
   // `no.podeEditarItem` porque organizar a estrutura não é alocar: quem enxerga a
   // proposta pode reorganizá-la, mesmo em item de outro departamento.
   podeGerenciarProposta: boolean;
-  // Contorno de "acordeon" de pasta expandida (ver calcularCaixasAcordeaoPasta em
-  // lib/cronograma.ts) — mesmo padrão visual do acordeon de RATs/Sessões pendentes, só que
-  // marcado linha a linha porque aqui pasta e filhos são irmãs, não aninhadas numa célula
-  // só. `caixaAbreAqui` = esta linha é o cabeçalho de uma pasta que acabou de expandir;
-  // `caixaDentro` = esta linha está dentro do conteúdo de alguma pasta expandida;
-  // `caixaFechaAqui` = esta linha é a última visível do conteúdo de alguma pasta expandida.
-  caixaAbreAqui: boolean;
-  caixaDentro: boolean;
-  caixaFechaAqui: boolean;
 }
 
 export function LinhaNo({
@@ -159,9 +150,6 @@ export function LinhaNo({
   onSincronizarSenior,
   larguraHoras,
   podeGerenciarProposta,
-  caixaAbreAqui,
-  caixaDentro,
-  caixaFechaAqui,
 }: LinhaNoProps) {
   const paddingEsquerda = 14 + profundidade * 24;
 
@@ -217,11 +205,20 @@ export function LinhaNo({
     ? `Est. ${no.id} · Ativ. ${formatarAlocacoes(no.alocacoesResumo)}`
     : `Integração com o Senior: ${no.integracaoErpLabel}`;
 
+  // Pasta expandida ganha o MESMO contorno fechado do acordeon de RATs/Sessões pendentes
+  // (MeusApontamentos.tsx): cabeçalho com topo+laterais+fundo tingido, conteúdo aninhado
+  // numa única caixa por fora (ver aninharPorFaixas em lib/cronograma.ts e o envolvimento em
+  // ArvoreCronograma.tsx — lá vira um <div> só, do jeito que na tabela do RAT vira um único
+  // <td colSpan> com sub-tabela dentro; aqui não existe célula, mas o princípio é o mesmo:
+  // UMA caixa fechando os 4 lados sozinha, nunca borda repetida linha a linha). Esta linha
+  // só entra com os 3 lados que são dela — topo, esquerda e direita do CABEÇALHO; o lado de
+  // baixo, e a continuação de esquerda/direita pro conteúdo, vêm inteiramente do wrapper.
+  const caixaAbreAqui = no.tipo === "pasta" && expandido;
+
   // Fundo + borda esquerda da linha, nesta ordem de prioridade: 1) alerta de estouro do
   // item (já existia, sempre vence) — pasta/atividade nunca caem aqui, `alerta` só é
   // diferente de "ok" quando `orcamento` existe (só tipo="item"); 2) item expandido (já
-  // existia); 3) caixa de "acordeon" de pasta expandida (novo — ver
-  // calcularCaixasAcordeaoPasta); 4) fallback de sempre.
+  // existia); 3) cabeçalho de pasta expandida (novo); 4) fallback de sempre.
   let classeFundoEBordaEsquerda: string;
   if (alerta === "estouro_realizado") {
     classeFundoEBordaEsquerda = "border-l-[3px] border-l-destructive bg-destructive/10";
@@ -232,7 +229,7 @@ export function LinhaNo({
     const bordaEsquerda =
       no.tipo === "item" && expandido
         ? "border-l-[3px] border-l-primary"
-        : caixaDentro || caixaAbreAqui
+        : caixaAbreAqui
           ? "border-l border-primary"
           : no.tipo === "item"
             ? "border-l border-l-border"
@@ -240,13 +237,11 @@ export function LinhaNo({
     classeFundoEBordaEsquerda = `${fundo} ${bordaEsquerda}`.trim();
   }
 
-  // Direita/topo só existem pra fechar a caixa da pasta expandida — nada mais na linha usa
-  // esses dois lados hoje. Embaixo é o separador padrão de sempre, TROCADO (não somado) pela
-  // cor de fechamento quando esta é a última linha visível do conteúdo de alguma pasta —
-  // as duas classes de border-b não podem conviver na mesma linha.
-  const classeBordaDireita = caixaDentro || caixaAbreAqui ? "border-r border-primary" : "";
+  // Direita/topo só existem no cabeçalho da pasta que está abrindo a caixa — o resto do
+  // contorno (laterais continuando + fundo fechando) é o wrapper em ArvoreCronograma.tsx.
+  const classeBordaDireita = caixaAbreAqui ? "border-r border-primary" : "";
   const classeBordaTopo = caixaAbreAqui ? "border-t border-primary" : "";
-  const classeBordaBaixo = caixaFechaAqui ? "border-b border-primary" : "border-b border-border/50";
+  const classeBordaBaixo = "border-b border-border/50";
 
   return (
     <div className="group relative" ref={setTopoRef}>

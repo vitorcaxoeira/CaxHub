@@ -199,65 +199,58 @@ export function derivarStatus(nos: NoCronograma[]): Map<number, StatusNo> {
   return resultado;
 }
 
-export interface CaixasAcordeaoPasta {
-  // Linha está dentro do conteúdo de alguma pasta expandida (borda dos dois lados
-  // continuando pra baixo).
-  dentroDeCaixa: Set<number>;
-  // Linha É o cabeçalho de uma pasta expandida — borda no topo nasce aqui.
-  abreCaixaAqui: Set<number>;
-  // Linha é a ÚLTIMA visível do conteúdo de alguma pasta expandida — borda embaixo fecha
-  // aqui.
-  fechaCaixaAqui: Set<number>;
+export interface FaixaAninhamento {
+  chave: string | number;
+  // Índices INCLUSIVOS dentro do array plano de itens. `fim < inicio` é uma faixa vazia
+  // (pasta expandida sem nenhum conteúdo visível) — ainda assim vira uma caixa, só que sem
+  // nada dentro (ver ArvoreCronograma.tsx).
+  inicio: number;
+  fim: number;
 }
 
-// Contorno de "acordeon" (mesmo padrão do acordeon de RATs/Sessões pendentes em
-// MeusApontamentos.tsx) pras pastas expandidas do Cronograma — mas SEM célula única pra
-// fechar sozinha: aqui pasta e filhos são linhas IRMÃS (achatarArvore), não aninhadas numa
-// tabela, então a borda lateral precisa ser marcada em cada linha do conteúdo, não só no
-// cabeçalho e no fechamento.
+// Aninha um array PLANO de itens dentro de "caixas" segundo faixas de índice já calculadas
+// por quem monta o array (ver ArvoreCronograma.tsx: cada pasta expandida abre uma faixa ao
+// visitar o próprio cabeçalho e fecha quando o mesmo laço que emite a linha fantasma detecta
+// que aquele nível encerrou). É o equivalente, pra uma lista já achatada e indentada
+// (pasta/filhos são irmãos, não aninhados como num `<td colSpan>` com sub-tabela), de
+// aninhar de verdade — uma ÚNICA caixa por pasta fechando os 4 lados sozinha, em vez de
+// repetir borda linha a linha (ver acordeon-sempre-fechar-bordas-ao-expandir no segundo
+// cérebro).
 //
-// Pastas aninhadas (pasta dentro de pasta), ambas expandidas, NÃO desenham caixas
-// concêntricas deslocadas por indentação — compartilham a mesma borda lateral "de fora"
-// (mesma posição/cor, igual ao destaque de "item" expandido já faz com seu próprio
-// border-l). Cada uma fecha (`fechaCaixaAqui`) de forma independente na sua última linha
-// visível; se a pasta-mãe ainda tiver mais conteúdo depois, o lado continua até ela fechar
-// a dela.
-//
-// `linhas` é a lista JÁ ACHATADA E FILTRADA por visibilidade (mesma que a árvore renderiza
-// de fato — ver `linhas` em ArvoreCronograma.tsx), não a árvore inteira: uma pasta fechada
-// não tem filhos nessa lista, então nunca abre caixa nem aparece dentro de uma.
-export function calcularCaixasAcordeaoPasta(
-  linhas: (NoCronograma & { profundidade: number })[],
-  expandidos: Set<number>
-): CaixasAcordeaoPasta {
-  const dentroDeCaixa = new Set<number>();
-  const abreCaixaAqui = new Set<number>();
-  const fechaCaixaAqui = new Set<number>();
-  const pilha: { id: number; profundidade: number }[] = [];
+// As faixas precisam estar propriamente aninhadas (uma contém a outra inteira, ou são
+// disjuntas — nunca se cruzam pela metade); isso é garantido por construção, porque abrir e
+// fechar seguem a mesma ordem de visitação em pré-ordem da árvore (igual parênteses
+// balanceados). `envolver` recebe o conteúdo já aninhado de uma faixa e devolve o item único
+// que a substitui (ex.: um `<div>` com a borda fechando os 4 lados por fora do cabeçalho).
+export function aninharPorFaixas<T>(
+  itens: T[],
+  faixas: FaixaAninhamento[],
+  envolver: (chave: string | number, conteudo: T[]) => T
+): T[] {
+  const porInicio = new Map(faixas.map((f) => [f.inicio, f]));
 
-  for (let i = 0; i < linhas.length; i++) {
-    const no = linhas[i];
-    // Saiu do escopo de toda pasta aberta cuja profundidade seja >= a desta linha (irmã ou
-    // ancestral mais rasa) — fecha cada uma na última linha ANTES desta, que foi a última
-    // realmente dentro dela.
-    while (pilha.length > 0 && no.profundidade <= pilha[pilha.length - 1].profundidade) {
-      pilha.pop();
-      fechaCaixaAqui.add(linhas[i - 1].id);
+  function construir(inicio: number, fimExclusivo: number): T[] {
+    const resultado: T[] = [];
+    let i = inicio;
+    while (i < fimExclusivo) {
+      const faixa = porInicio.get(i);
+      if (faixa) {
+        // Consome a entrada antes de recursar: a chamada abaixo volta a passar pelo mesmo
+        // índice `i` (agora como início do próprio conteúdo) — sem apagar, encontraria esta
+        // mesma faixa de novo e nunca avançaria (recursão infinita).
+        porInicio.delete(i);
+        const conteudo = construir(faixa.inicio, faixa.fim + 1);
+        resultado.push(envolver(faixa.chave, conteudo));
+        i = faixa.fim + 1;
+      } else {
+        resultado.push(itens[i]);
+        i++;
+      }
     }
-    if (pilha.length > 0) dentroDeCaixa.add(no.id);
-    if (no.tipo === "pasta" && expandidos.has(no.id)) {
-      abreCaixaAqui.add(no.id);
-      pilha.push({ id: no.id, profundidade: no.profundidade });
-    }
-  }
-  // Sobrou pasta aberta até o fim da lista (nada mais raso apareceu depois) — fecha na
-  // última linha do array inteiro.
-  while (pilha.length > 0) {
-    pilha.pop();
-    fechaCaixaAqui.add(linhas[linhas.length - 1].id);
+    return resultado;
   }
 
-  return { dentroDeCaixa, abreCaixaAqui, fechaCaixaAqui };
+  return construir(0, itens.length);
 }
 
 // Horas em minutos -> "HH:MM", sempre com no mínimo `largura` dígitos de hora (zero à

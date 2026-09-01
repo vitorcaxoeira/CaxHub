@@ -4,10 +4,11 @@ import {
   achatarArvore,
   agregarHoras,
   agregarOrcado,
-  calcularCaixasAcordeaoPasta,
+  aninharPorFaixas,
   calcularOrcamentoItem,
   derivarStatus,
   estadoAlertaItem,
+  FaixaAninhamento,
   filtrarPreservandoAncestrais,
   larguraColunaHorasPx,
   OrcamentoItem,
@@ -312,11 +313,6 @@ export function ArvoreCronograma({
     return ancestraisTodosExpandidos(no);
   });
 
-  // Contorno de "acordeon" das pastas expandidas (mesmo padrão do acordeon de RATs/Sessões
-  // pendentes) — calculado sobre `linhas` (só o que está de fato visível), não a árvore
-  // inteira, senão uma pasta fechada contaria filhos que a tela nem mostra.
-  const caixasPasta = calcularCaixasAcordeaoPasta(linhas, expandidos);
-
   function alternarExpandir(id: number) {
     setExpandidos((atual) => {
       const proximo = new Set(atual);
@@ -604,6 +600,19 @@ export function ArvoreCronograma({
     [drawerNo, nos]
   );
 
+  // Contorno de "acordeon" das pastas expandidas (mesmo padrão do acordeon de RATs/Sessões
+  // pendentes em MeusApontamentos.tsx): UMA caixa só por pasta, fechando os 4 lados por
+  // fora — nunca borda repetida linha a linha (ver acordeon-sempre-fechar-bordas-ao-expandir
+  // no segundo cérebro). Lá a tabela aninha o conteúdo dentro de um único `<td colSpan>`;
+  // aqui não existe célula (pasta e filhos são linhas irmãs, `achatarArvore` já achata tudo),
+  // então quem aninha é este laço: abre uma faixa de índices no `elementos` quando visita o
+  // cabeçalho de uma pasta expandida, fecha quando o mesmo laço abaixo detecta que aquele
+  // nível encerrou (a mesma condição que já emite a linha fantasma "+ Nova atividade").
+  // `aninharPorFaixas`, no fim, transforma essas faixas num único wrapper por pasta —
+  // aninhado de verdade quando há pasta dentro de pasta, ambas expandidas.
+  const pilhaCaixasPasta: { pastaId: number; inicio: number }[] = [];
+  const faixasCaixasPasta: FaixaAninhamento[] = [];
+
   const elementos: JSX.Element[] = [];
   linhas.forEach((no, i) => {
     elementos.push(
@@ -634,11 +643,14 @@ export function ArvoreCronograma({
         onExcluir={() => excluir(no)}
         onSincronizarSenior={() => sincronizarComSenior(no)}
         larguraHoras={larguraHoras}
-        caixaAbreAqui={caixasPasta.abreCaixaAqui.has(no.id)}
-        caixaDentro={caixasPasta.dentroDeCaixa.has(no.id)}
-        caixaFechaAqui={caixasPasta.fechaCaixaAqui.has(no.id)}
       />
     );
+    // Cabeçalho de pasta expandida: abre a faixa a partir daqui — o conteúdo (linhas
+    // seguintes, e a fantasma se houver) começa logo depois deste índice.
+    if (no.tipo === "pasta" && expandidos.has(no.id)) {
+      pilhaCaixasPasta.push({ pastaId: no.id, inicio: elementos.length });
+    }
+
     // Fecha (emite a linha fantasma de) toda pasta ancestral cujo último descendente
     // visível é justamente este `no` — não só quando `no` em si é a pasta (senão nunca
     // apareceria depois dos filhos, só em pastas vazias). Anda da mais funda pra mais
@@ -663,10 +675,25 @@ export function ArvoreCronograma({
           />
         );
       }
+      // Fecha a faixa da caixa desta pasta (mesma condição de abertura acima) — depois de
+      // eventualmente empurrar a linha fantasma, que fica DENTRO da caixa. Pré-ordem +
+      // pilha garantem que o topo da pilha aqui é sempre esta mesma pasta.
+      if (pastaFechando.tipo === "pasta" && expandidos.has(pastaFechando.id)) {
+        const aberta = pilhaCaixasPasta.pop();
+        if (aberta && aberta.pastaId === pastaFechando.id) {
+          faixasCaixasPasta.push({ chave: aberta.pastaId, inicio: aberta.inicio, fim: elementos.length - 1 });
+        }
+      }
       noAtual = pastaFechando.parentId != null ? porId.get(pastaFechando.parentId) : undefined;
       profundidadeAtual -= 1;
     }
   });
+
+  const elementosComCaixas = aninharPorFaixas(elementos, faixasCaixasPasta, (chave, conteudo) => (
+    <div key={`caixa-pasta-${chave}`} className="border-l border-r border-b border-primary">
+      {conteudo}
+    </div>
+  ));
 
   return (
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
@@ -736,7 +763,11 @@ export function ArvoreCronograma({
               <span className="w-6 flex-none" />
             </div>
 
-            {linhas.length === 0 ? <p className="p-8 text-center text-sm text-muted">Nenhum resultado com os filtros atuais.</p> : elementos}
+            {linhas.length === 0 ? (
+              <p className="p-8 text-center text-sm text-muted">Nenhum resultado com os filtros atuais.</p>
+            ) : (
+              elementosComCaixas
+            )}
           </div>
         )}
       </div>
