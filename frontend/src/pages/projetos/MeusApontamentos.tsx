@@ -1564,8 +1564,8 @@ export function MeusApontamentos() {
         </section>
 
         <section>
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <p className="font-mono text-[10px] uppercase tracking-widest text-muted">RATs</p>
               <input
                 type="text"
@@ -1582,7 +1582,7 @@ export function MeusApontamentos() {
                 className={`${selectClass} w-64`}
               />
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               {situacoesRat.length > 1 && (
                 <MultiSelectDropdown
                   opcoes={situacoesRat.map((s) => ({ value: s.sitrat, label: s.label }))}
