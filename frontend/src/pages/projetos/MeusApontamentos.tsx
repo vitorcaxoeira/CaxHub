@@ -64,6 +64,9 @@ interface SessaoPendente {
   integracaoErpTone: Tone;
   integracaoErpErro: string | null;
   duracaoInvalida: boolean;
+  // Mesma previsão acima, agora pro bloqueio de apontamento (ver
+  // domain/bloqueioApontamento.ts, backend) — confirmar essa sessão vai recusar 409.
+  bloqueadoApontamentoEfetivo: boolean;
 }
 
 interface AtividadeResumo {
@@ -1033,6 +1036,13 @@ export function MeusApontamentos() {
     return `Integração da alocação com o Senior: ${s.integracaoErpLabel}`;
   }
 
+  // Motivo de "Pedir ajuste" estar desabilitado por bloqueio de apontamento (ver
+  // domain/bloqueioApontamento.ts, backend) — texto único pra não divergir entre a linha
+  // plana e a agrupada. "Confirmar" NÃO usa mais isto (03/09/2026): confirmar uma sessão
+  // preexistente segue liberado mesmo com o bloqueio ligado, só "pedir ajuste" (que abre uma
+  // solicitação NOVA) continua recusado.
+  const MOTIVO_BLOQUEIO_APONTAMENTO = "Apontamento bloqueado nesta atividade/proposta pelo gestor.";
+
   // Linha de uma sessão pendente na lista plana (consultor comum, sem acordeon) — mesmas
   // colunas responsivas do <thead> de fora.
   function renderLinhaSessao(s: SessaoPendente) {
@@ -1119,6 +1129,11 @@ export function MeusApontamentos() {
               </button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Content>
+              {/* Bloqueio de apontamento não trava Confirmar: a sessão já foi trabalhada
+                  ANTES do bloqueio ligar (mover card, Start/Stop, ou solicitação avulsa já
+                  aprovada) — o backend só recusa por bloqueio quando a sessão nasce agora
+                  (lançamento manual do gestor), não ao confirmar uma que já existe (03/09/2026,
+                  ver confirmarSessao/origemSessao em routes/apontamentos.ts). */}
               <DropdownMenu.Item onSelect={() => confirmar(s.id)} disabled={confirmando === s.id}>
                 {confirmando === s.id ? "Confirmando..." : "Confirmar"}
               </DropdownMenu.Item>
@@ -1130,7 +1145,8 @@ export function MeusApontamentos() {
                 <>
                   {/* Confirmar não deixa mexer no horário — só manda a sessão como o
                       rastreamento gravou. Quem precisa de outro intervalo pede aqui, antes de
-                      confirmar. */}
+                      confirmar. Bloqueio só impede pedir um NOVO ajuste — ver um já pendente
+                      continua aberto (é o mesmo raciocínio de "reprovar sempre livre"). */}
                   <DropdownMenu.Item
                     onSelect={() =>
                       abrirPedidoAjuste(
@@ -1141,6 +1157,8 @@ export function MeusApontamentos() {
                         s.ajustePendente
                       )
                     }
+                    disabled={s.bloqueadoApontamentoEfetivo && !s.ajustePendente}
+                    title={s.bloqueadoApontamentoEfetivo && !s.ajustePendente ? MOTIVO_BLOQUEIO_APONTAMENTO : undefined}
                   >
                     {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
                   </DropdownMenu.Item>
@@ -1230,6 +1248,11 @@ export function MeusApontamentos() {
               </button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Content>
+              {/* Bloqueio de apontamento não trava Confirmar: a sessão já foi trabalhada
+                  ANTES do bloqueio ligar (mover card, Start/Stop, ou solicitação avulsa já
+                  aprovada) — o backend só recusa por bloqueio quando a sessão nasce agora
+                  (lançamento manual do gestor), não ao confirmar uma que já existe (03/09/2026,
+                  ver confirmarSessao/origemSessao em routes/apontamentos.ts). */}
               <DropdownMenu.Item onSelect={() => confirmar(s.id)} disabled={confirmando === s.id}>
                 {confirmando === s.id ? "Confirmando..." : "Confirmar"}
               </DropdownMenu.Item>
@@ -1245,6 +1268,8 @@ export function MeusApontamentos() {
                         s.ajustePendente
                       )
                     }
+                    disabled={s.bloqueadoApontamentoEfetivo && !s.ajustePendente}
+                    title={s.bloqueadoApontamentoEfetivo && !s.ajustePendente ? MOTIVO_BLOQUEIO_APONTAMENTO : undefined}
                   >
                     {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
                   </DropdownMenu.Item>
@@ -2095,6 +2120,10 @@ export function MeusApontamentos() {
           // ele nunca autoriza as próprias horas excedentes.
           podeAutorizarExcedente={false}
           souOExecutor={false}
+          // Painel só-leitura: nenhuma ação de excedente/apontamento aparece aqui de
+          // qualquer forma (gates acima), então o valor não afeta a tela.
+          bloqueadoApontamento={false}
+          bloqueadoExcedente={false}
           onClose={() => setDetalheAtividade(null)}
         />
       )}

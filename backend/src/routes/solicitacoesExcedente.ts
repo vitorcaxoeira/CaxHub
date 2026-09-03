@@ -11,6 +11,7 @@ import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { depexeLabel, modproLabel } from "../domain/propostasDominio";
+import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
 
 // Pedido de horas excedentes: quem executa pede, o gestor do departamento decide.
 //
@@ -143,6 +144,18 @@ solicitacoesExcedenteRouter.post("/", async (req: AuthenticatedRequest, res) => 
       return;
     }
 
+    // Bloqueio de horas excedentes (proposta ou atividade) — ver domain/bloqueioApontamento.ts.
+    const bloqueio = await resolverBloqueioApontamento(atividade);
+    if (bloqueio.bloqueadoExcedente) {
+      res.status(403).json({
+        error:
+          bloqueio.origemBloqueioExcedente === "proposta"
+            ? "Esta proposta não permite horas excedentes."
+            : "Esta atividade não permite horas excedentes.",
+      });
+      return;
+    }
+
     const fato = `solicitou ${formatarMinutos(horasSolicitadas)} de horas excedentes`;
 
     let criada;
@@ -209,7 +222,16 @@ interface SolicitacaoParaLista {
   decididoEm: Date | null;
   solicitante: { nome: string } | null;
   decididoPor: { nome: string } | null;
-  atividade: { codemp: number; codpro: number; seqite: number; qtdhor: number | null; horasExcedentes: number; codfor: number };
+  atividade: {
+    codemp: number;
+    codpro: number;
+    seqite: number;
+    qtdhor: number | null;
+    horasExcedentes: number;
+    codfor: number;
+    bloqueiaApontamento: boolean;
+    bloqueiaExcedente: boolean;
+  };
 }
 
 function serializar(
@@ -217,6 +239,7 @@ function serializar(
   depexe: number | null,
   gestorNome: string | null,
   podeDecidir: boolean,
+  bloqueadoExcedenteEfetivo: boolean,
   propostaInfo?: PropostaInfo
 ) {
   return {
@@ -245,13 +268,28 @@ function serializar(
     qtdhor: s.atividade.qtdhor,
     horasExcedentesAtuais: s.atividade.horasExcedentes,
     podeDecidir,
+    // Aprovar essa solicitação vai recusar 409 se a proposta/atividade não permitir
+    // excedente (ver domain/bloqueioApontamento.ts) — a tela desabilita só "Aprovar",
+    // "Reprovar" continua sempre disponível.
+    bloqueadoExcedenteEfetivo,
   };
 }
 
 const INCLUDE_LISTA = {
   solicitante: { select: { nome: true } },
   decididoPor: { select: { nome: true } },
-  atividade: { select: { codemp: true, codpro: true, seqite: true, qtdhor: true, horasExcedentes: true, codfor: true } },
+  atividade: {
+    select: {
+      codemp: true,
+      codpro: true,
+      seqite: true,
+      qtdhor: true,
+      horasExcedentes: true,
+      codfor: true,
+      bloqueiaApontamento: true,
+      bloqueiaExcedente: true,
+    },
+  },
 } as const;
 
 // GET /solicitacoes-excedente?status=pendente — o painel.
@@ -287,6 +325,12 @@ solicitacoesExcedenteRouter.get("/", async (req: AuthenticatedRequest, res) => {
         .filter((p): p is { codemp: number; depexe: number } => p.depexe != null)
     );
 
+    // 1 query em lote pra todas as propostas envolvidas (nunca 1 por solicitação no map
+    // abaixo) — ver domain/bloqueioApontamento.ts.
+    const cfgBloqueioPorProposta = await configBloqueioPropostasEmLote(
+      todas.map((s) => ({ codemp: s.atividade.codemp, codpro: s.atividade.codpro }))
+    );
+
     const visiveis = todas
       .map((s) => {
         const depexe = mapaDepexe.get(s.atividadeId) ?? null;
@@ -295,7 +339,12 @@ solicitacoesExcedenteRouter.get("/", async (req: AuthenticatedRequest, res) => {
         if (!gerencia && !minha) return null;
         const propostaInfo = mapaProposta.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
         const gestorNome = depexe != null ? mapaGestor.get(`${s.atividade.codemp}-${depexe}`) ?? null : null;
-        return serializar(s, depexe, gestorNome, gerencia, propostaInfo);
+        const cfg = cfgBloqueioPorProposta.get(`${s.atividade.codemp}-${s.atividade.codpro}`) ?? {
+          bloqueiaApontamento: false,
+          bloqueiaExcedente: true,
+        };
+        const bloqueadoExcedenteEfetivo = resolverBloqueioComConfig(cfg, s.atividade).bloqueadoExcedente;
+        return serializar(s, depexe, gestorNome, gerencia, bloqueadoExcedenteEfetivo, propostaInfo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -346,7 +395,11 @@ solicitacoesExcedenteRouter.get("/atividade/:atividadeId", async (req: Authentic
         `${resolvido.atividade.codemp}-${resolvido.depexe}`
       ) ?? null;
 
-    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gestorNome, gerencia, propostaInfo)) });
+    const bloqueadoExcedenteEfetivo = (await resolverBloqueioApontamento(resolvido.atividade)).bloqueadoExcedente;
+
+    res.json({
+      solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gestorNome, gerencia, bloqueadoExcedenteEfetivo, propostaInfo)),
+    });
   } catch (error) {
     handleError(res, error, "por-atividade");
   }
@@ -393,6 +446,24 @@ async function decidirUma(
   const { user, contexto, role } = ctx;
   if (!gerenciaDepartamento(role, contexto, depexe)) {
     return { status: 403, body: { error: "Só o gestor do departamento pode decidir esta solicitação" } };
+  }
+
+  // Bloqueio de horas excedentes (proposta ou atividade) — só barra APROVAR (aprovar = de
+  // fato somar horas excedentes); reprovar continua sempre livre, pra limpar a fila mesmo
+  // com o bloqueio ativo. Ver domain/bloqueioApontamento.ts.
+  if (aprovar) {
+    const bloqueio = await resolverBloqueioApontamento(atividade);
+    if (bloqueio.bloqueadoExcedente) {
+      return {
+        status: 409,
+        body: {
+          error:
+            bloqueio.origemBloqueioExcedente === "proposta"
+              ? "Esta proposta não permite horas excedentes."
+              : "Esta atividade não permite horas excedentes.",
+        },
+      };
+    }
   }
 
   // UMA frase pro histórico, pra auditoria e pra notificação. Em minúscula porque os

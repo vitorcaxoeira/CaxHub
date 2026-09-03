@@ -42,6 +42,8 @@ model User {
   sessoesExcluidas        AtividadeSessaoExecucao[]   @relation("sessaoExcluidaPor")
   ajustesSolicitados      SolicitacaoAjusteApontamento[] @relation("ajusteSolicitante")
   ajustesDecididos        SolicitacaoAjusteApontamento[] @relation("ajusteDecisor")
+  configPropostaSolicitadas SolicitacaoConfiguracaoProposta[] @relation("configPropostaSolicitante")
+  configPropostaDecididas   SolicitacaoConfiguracaoProposta[] @relation("configPropostaDecisor")
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -669,6 +671,17 @@ model AtividadeConsultor {
   /// passa a ser `qtdhor + horasExcedentes`; a distribuição do item continua conferida só
   /// contra `qtdhor`, então o excedente aparece como estouro real no cronograma.
   horasExcedentes Int @default(0)
+
+  /// Bloqueio por alocação — gestor trava UM consultor numa atividade sem mexer na proposta
+  /// inteira. Combinado por OR com PropostaModoAlocacao.bloqueiaApontamento (qualquer um
+  /// bloqueando já bloqueia). Default `false`. Ver domain/bloqueioApontamento.ts.
+  bloqueiaApontamento Boolean @default(false)
+
+  /// Autoriza ESTA alocação a ter horas excedentes — combinado por OR com
+  /// PropostaModoAlocacao.bloqueiaExcedente. Default `true` (mesmo padrão seguro do campo
+  /// irmão da proposta).
+  bloqueiaExcedente Boolean @default(true)
+
   /// Domínio "LSitReg": A=Ativo, I=Inativo
   sitreg String?      @db.VarChar(1)
   datger DateTime?    @db.Date
@@ -808,6 +821,19 @@ model PropostaModoAlocacao {
   /// AtividadeConsultor.horasExcedentes, canal deliberadamente separado de autorizar
   /// estouro do teto de apontamento (ver comentário do campo).
   bloqueiaExcedenteEstrutura Boolean @default(true)
+
+  /// Desliga apontar/iniciar execução/confirmar sessão/solicitar ajuste em TODA a proposta —
+  /// "mais restritivo vence" com o campo irmão em AtividadeConsultor. Default `false`
+  /// (02/09/2026, a pedido do Vitor): não muda nada pra quem já está rodando — só quem ligar
+  /// o toggle no Cronograma passa a bloquear. Ver domain/bloqueioApontamento.ts.
+  bloqueiaApontamento Boolean @default(false)
+
+  /// Desliga autorizar/solicitar horas excedentes (AtividadeConsultor.horasExcedentes) em TODA
+  /// a proposta — canal separado de bloqueiaExcedenteEstrutura (que só trava a EDIÇÃO DE
+  /// DURAÇÃO da EAP, não horas já trabalhadas). "Mais restritivo vence" com o campo irmão em
+  /// AtividadeConsultor. Default `true` (mesmo padrão seguro de bloqueiaExcedenteEstrutura):
+  /// excedente só libera quando alguém liga o toggle explicitamente.
+  bloqueiaExcedente Boolean @default(true)
 
   @@id([codemp, codpro])
   @@map("proposta_modo_alocacao")
@@ -1203,6 +1229,49 @@ model SolicitacaoApontamento {
   // vários pedidos na mesma atividade, em dias diferentes, são legítimos. Quem impede
   // duplicata é a checagem de sobreposição, que também olha os pendentes.
   @@map("solicitacoes_apontamento")
+}
+
+// Pedido de mudança numa das 3 flags de configuração da proposta (PropostaModoAlocacao) e a
+// decisão de quem tem alçada — dado 100% do CaxHub.
+//
+// Por que existe: mudar essas flags é uma decisão de nível de proposta (destravar apontamento
+// ou liberar excedente da proposta inteira), mas quem podia mexer era qualquer gestor com UM
+// item nela (podeGerenciarProposta, routes/alocacao.ts). Agora quem não tem alçada PEDE, e só
+// admin / gestor do Comercial / gestor da Diretoria decide (podeAprovarConfiguracaoProposta,
+// domain/contextoProjeto.ts) — quem já tem alçada continua mudando direto, sem passar por aqui.
+//
+// Sem FK pra Proposta: a chave lá é composta (codemp,codpro) e PropostaModoAlocacao já convive
+// assim. Pedido e decisão em colunas separadas, mesmo padrão das outras 3 solicitações.
+model SolicitacaoConfiguracaoProposta {
+  id     Int @id @default(autoincrement())
+  codemp Int
+  codpro Int
+  /// "bloqueiaExcedenteEstrutura" | "bloqueiaApontamento" | "bloqueiaExcedente"
+  campo String @db.VarChar(40)
+  /// Valor no instante do pedido. O que vale de verdade sai sempre de PropostaModoAlocacao na
+  /// hora de decidir — isto é papelada, pra frase "de X para Y" continuar legível depois.
+  valorAtual      Boolean
+  valorSolicitado Boolean
+  /// Imutável, e obrigatório: é o que o aprovador lê pra decidir.
+  motivo        String   @db.VarChar(1000)
+  solicitanteId Int?
+  criadoEm      DateTime @default(now())
+
+  /// pendente | aprovada | reprovada
+  status            String    @default("pendente") @db.VarChar(20)
+  decididoPorId     Int?
+  decididoEm        DateTime?
+  observacaoDecisao String?   @db.VarChar(1000)
+
+  // SetNull como nas outras: a papelada sobrevive à exclusão de quem pediu ou decidiu.
+  solicitante User? @relation("configPropostaSolicitante", fields: [solicitanteId], references: [id], onDelete: SetNull)
+  decididoPor User? @relation("configPropostaDecisor", fields: [decididoPorId], references: [id], onDelete: SetNull)
+
+  @@index([codemp, codpro])
+  @@index([status])
+  // O índice único parcial "uma pendente por proposta+campo" não cabe aqui — Prisma não
+  // expressa `WHERE`. Vai em SQL cru na migration.
+  @@map("solicitacoes_configuracao_proposta")
 }
 
 // Itens de checklist de uma atividade — dado 100% do CaxHub.

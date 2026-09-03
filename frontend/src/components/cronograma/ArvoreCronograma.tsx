@@ -86,6 +86,16 @@ interface ArvoreCronogramaProps {
   // de integração refletir o status final, sem esperar F5 (mesmo polling do botão
   // "Sincronizar com o Senior").
   acompanharSincronizacaoAlocacao: (atividadeConsultorId: number) => void;
+  // Repassado pro DrawerAtividade (fallback de alocação múltipla) e, envolvido em
+  // mudarConfigApontamentoAlocacao abaixo, pra LinhaNo (caso comum, 1 alocação) — bloqueio
+  // de apontamento/excedente por alocação (ver useCronograma/atualizarConfigApontamentoAlocacao).
+  atualizarConfigApontamentoAlocacao: (
+    alocacaoId: number,
+    patch: Partial<{ bloqueiaApontamento: boolean; bloqueiaExcedente: boolean }>
+  ) => Promise<void>;
+  // Idem, pro input inline de horas excedentes na árvore (ver
+  // useCronograma/atualizarHorasExcedentesAlocacao).
+  atualizarHorasExcedentesAlocacao: (alocacaoId: number, horasExcedentes: number) => Promise<void>;
 }
 
 export function ArvoreCronograma({
@@ -106,6 +116,8 @@ export function ArvoreCronograma({
   bloqueiaExcedenteEstrutura,
   sincronizarAlocacao,
   acompanharSincronizacaoAlocacao,
+  atualizarConfigApontamentoAlocacao,
+  atualizarHorasExcedentesAlocacao,
 }: ArvoreCronogramaProps) {
   const [expandidos, setExpandidos] = useState<Set<number>>(() => carregarExpansaoSalva(projetoId));
   const [busca, setBusca] = useState("");
@@ -397,6 +409,28 @@ export function ArvoreCronograma({
     }
   }
 
+  // Os dois controles novos de bloqueio/excedente inline da LinhaNo (caso comum, 1 alocação)
+  // — mesmo padrão "captura erro e joga no banner" das ações acima, pra não precisar de
+  // estado de erro próprio dentro de cada linha.
+  async function mudarConfigApontamentoAlocacao(
+    alocacaoId: number,
+    patch: Partial<{ bloqueiaApontamento: boolean; bloqueiaExcedente: boolean }>
+  ) {
+    try {
+      await atualizarConfigApontamentoAlocacao(alocacaoId, patch);
+    } catch (err) {
+      setErroAcao((err as Error).message);
+    }
+  }
+
+  async function salvarExcedenteAlocacao(alocacaoId: number, minutos: number) {
+    try {
+      await atualizarHorasExcedentesAlocacao(alocacaoId, minutos);
+    } catch (err) {
+      setErroAcao((err as Error).message);
+    }
+  }
+
   // Reenvia as alocações do nó que estiverem com falha — "estrutura" nasce com exatamente 1
   // consultor por nó (regra de alocar-lote), então na prática é sempre 1 chamada; o loop só
   // cobre o caso raro de tarefa compartilhada, sem precisar saber de antemão qual alocação
@@ -648,6 +682,8 @@ export function ArvoreCronograma({
         onExcluir={() => excluir(no)}
         onSincronizarSenior={() => sincronizarComSenior(no)}
         larguraHoras={larguraHoras}
+        onMudarConfigApontamentoAlocacao={mudarConfigApontamentoAlocacao}
+        onSalvarExcedenteAlocacao={salvarExcedenteAlocacao}
       />
     );
     // Cabeçalho de pasta/item expandido: abre a faixa a partir daqui — o conteúdo (linhas
@@ -752,7 +788,7 @@ export function ArvoreCronograma({
               <span className="hidden w-[168px] flex-none font-mono text-[11px] font-medium uppercase tracking-wider text-muted sm:block">
                 Depto. / Resp.
               </span>
-              {["Orçado", "Realizado", "Alocado", "Excedente"].map((rotulo) => (
+              {["Orçado", "Realizado", "Alocado"].map((rotulo) => (
                 <span
                   key={rotulo}
                   className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
@@ -761,10 +797,21 @@ export function ArvoreCronograma({
                   {rotulo}
                 </span>
               ))}
-              <span className="hidden w-[110px] flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block">
-                Período
+              {/* Bloq. Exce. / Hrs. Exce. / Bloq. Apto. — trio fixo, nesta ordem exata (ver
+                  LinhaNo: checkbox, valor/input, checkbox, todos operando na mesma alocação
+                  quando o nó tem exatamente 1). */}
+              <span className="hidden w-[104px] flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block">
+                Bloq. Exce.
               </span>
-              <span className="w-[90px] flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted">Status</span>
+              <span
+                className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
+                style={{ width: larguraColunaHorasPx(larguraHoras) }}
+              >
+                Hrs. Exce.
+              </span>
+              <span className="hidden w-[84px] flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block">
+                Bloq. Apto.
+              </span>
               <span className="w-6 flex-none" />
             </div>
 
@@ -790,8 +837,7 @@ export function ArvoreCronograma({
           onSalvar={atualizarNo}
           larguraHoras={larguraHoras}
           bloqueiaExcedenteEstrutura={bloqueiaExcedenteEstrutura}
-          onRecarregar={onTentarNovamente}
-          acompanharSincronizacaoAlocacao={acompanharSincronizacaoAlocacao}
+          atualizarConfigApontamentoAlocacao={atualizarConfigApontamentoAlocacao}
         />
       )}
 

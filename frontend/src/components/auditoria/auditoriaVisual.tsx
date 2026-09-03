@@ -167,6 +167,24 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     resumo: (e) =>
       `${e.metadata?.bloqueio_para === "Ligado" ? "Ligou" : "Desligou"} a trava de horas acima do saldo do item na estrutura — ${rotuloEntidade(e)}`,
   },
+  // Bloqueio de apontamento/excedente por PROPOSTA e por ALOCAÇÃO (gestor pode travar só uma
+  // atividade de um consultor) — mesmo tone/ícone de destaque de PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO
+  // acima, mas conceito diferente: aquele é sobre EDITAR a duração da EAP; estes são sobre
+  // apontar hora de verdade e sobre autorizar/solicitar horas excedentes já trabalhadas.
+  PROPOSTA_BLOQUEIO_APONTAMENTO_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Configuração de Apontamento",
+    icone: IconeBloqueio,
+    resumo: (e) =>
+      `${e.metadata?.bloqueio_para === "Ligado" ? "Ligou" : "Desligou"} o bloqueio de apontamento da proposta — ${rotuloEntidade(e)}`,
+  },
+  PROPOSTA_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Configuração de Apontamento",
+    icone: IconeBloqueio,
+    resumo: (e) =>
+      `${e.metadata?.bloqueio_para === "Ligado" ? "Ligou" : "Desligou"} o bloqueio de horas excedentes da proposta — ${rotuloEntidade(e)}`,
+  },
   ALOCACAO_CRIADA: {
     tone: "success",
     rotuloGrupo: "Alocação",
@@ -192,6 +210,22 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
               : "as horas alocadas e as excedentes";
       return `Alterou ${oQue} — ${rotuloEntidade(e)}`;
     },
+  },
+  // Equivalente por alocação dos dois eventos de proposta acima — gestor bloqueia só esta
+  // atividade de UM consultor, sem mexer na proposta inteira.
+  ALOCACAO_BLOQUEIO_APONTAMENTO_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Configuração de Apontamento — Alocação",
+    icone: IconeBloqueio,
+    resumo: (e) =>
+      `${e.metadata?.bloqueio_para === "Ligado" ? "Ligou" : "Desligou"} o bloqueio de apontamento desta atividade — ${rotuloEntidade(e)}`,
+  },
+  ALOCACAO_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Configuração de Apontamento — Alocação",
+    icone: IconeBloqueio,
+    resumo: (e) =>
+      `${e.metadata?.bloqueio_para === "Ligado" ? "Ligou" : "Desligou"} o bloqueio de horas excedentes desta atividade — ${rotuloEntidade(e)}`,
   },
   EXCEDENTE_SOLICITADO: {
     tone: "warning",
@@ -252,6 +286,28 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     rotuloGrupo: "Ajuste de horário",
     icone: IconeRemocao,
     resumo: (e) => `Reprovou o ajuste de horário — ${rotuloEntidade(e)}`,
+  },
+  // Pedido de mudança nas 3 flags de configuração da proposta (Cronograma) e a decisão de
+  // quem tem alçada — mesmo tom das outras 3 famílias de solicitação (warning/success/
+  // destructive). A mudança da flag em si (aprovada) ainda gera o evento PRÓPRIO dela
+  // (PROPOSTA_BLOQUEIO_*_ALTERADO, ver acima) na mesma decisão — os dois aparecem juntos.
+  PROPOSTA_CONFIG_SOLICITADA: {
+    tone: "warning",
+    rotuloGrupo: "Configuração da Proposta",
+    icone: IconeCriacao,
+    resumo: (e) => `Solicitou mudança de configuração — ${rotuloEntidade(e)}`,
+  },
+  PROPOSTA_CONFIG_APROVADA: {
+    tone: "success",
+    rotuloGrupo: "Configuração da Proposta",
+    icone: IconeCriacao,
+    resumo: (e) => `Aprovou mudança de configuração — ${rotuloEntidade(e)}`,
+  },
+  PROPOSTA_CONFIG_REPROVADA: {
+    tone: "destructive",
+    rotuloGrupo: "Configuração da Proposta",
+    icone: IconeRemocao,
+    resumo: (e) => `Reprovou mudança de configuração — ${rotuloEntidade(e)}`,
   },
   ALOCACAO_REMOVIDA: {
     tone: "destructive",
@@ -328,6 +384,10 @@ export function configEvento(eventoTipo: string): ConfigEvento {
 // tem mais de um evento — o mais específico/relevante pro usuário vem primeiro.
 const PRIORIDADE_RESUMO_GRUPO = [
   "PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO",
+  "PROPOSTA_BLOQUEIO_APONTAMENTO_ALTERADO",
+  "PROPOSTA_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO",
+  "ALOCACAO_BLOQUEIO_APONTAMENTO_ALTERADO",
+  "ALOCACAO_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO",
   "KANBAN_RAIA_ALTERADA",
   "PROPOSTA_STATUS_ALTERADO",
   "ATIVIDADE_ENVIADA_SENIOR",

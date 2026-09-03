@@ -115,6 +115,8 @@ export function TimelineAtividades({ atividades, onAbrirDetalhe }: TimelineAtivi
                                                 horasExcedentes: atividade.horasExcedentes,
                                                 podeAutorizarExcedente: atividade.podeAutorizarExcedente,
                                                 souOExecutor: atividade.souOExecutor,
+                                                bloqueadoApontamento: atividade.bloqueadoApontamento,
+                                                bloqueadoExcedente: atividade.bloqueadoExcedente,
                         })
                       }
                       title={`${atividade.cliente} · ${atividade.depexeLabel}`}

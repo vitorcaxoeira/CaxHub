@@ -75,6 +75,10 @@ export interface SolicitacaoApontamento {
   clienteNome: string | null;
   despro: string | null;
   podeDecidir: boolean;
+  // Aprovar essa solicitação vai recusar 409 se a proposta/atividade estiver com
+  // apontamento bloqueado (ver domain/bloqueioApontamento.ts, backend) — só desabilita
+  // "Aprovar"; "Reprovar" continua sempre disponível.
+  bloqueadoApontamentoEfetivo: boolean;
 }
 
 export interface SolicitacaoExcedente {
@@ -101,6 +105,10 @@ export interface SolicitacaoExcedente {
   qtdhor: number | null;
   horasExcedentesAtuais: number;
   podeDecidir: boolean;
+  // Aprovar essa solicitação vai recusar 409 se a proposta/atividade não permitir
+  // horas excedentes (ver domain/bloqueioApontamento.ts, backend) — só desabilita
+  // "Aprovar"; "Reprovar" continua sempre disponível.
+  bloqueadoExcedenteEfetivo: boolean;
 }
 
 interface AtividadeDetalheProps {
@@ -132,6 +140,12 @@ interface AtividadeDetalheProps {
   // O usuário logado é o consultor desta atividade. Governa as duas coisas que só quem
   // executa faz: pedir horas excedentes e pedir apontamento avulso.
   souOExecutor: boolean;
+  // "Mais restritivo vence" entre proposta e atividade, já resolvido no servidor (ver
+  // domain/bloqueioApontamento.ts, backend). bloqueadoExcedente só barra AUMENTAR o
+  // excedente (reduzir/zerar continua sempre permitido); bloqueadoApontamento barra
+  // solicitar apontamento avulso.
+  bloqueadoExcedente: boolean;
+  bloqueadoApontamento: boolean;
   // Avisa a tela pra recarregar os cards depois de mudar o excedente, que altera o teto.
   onExcedenteAlterado?: () => void;
   onClose: () => void;
@@ -171,6 +185,8 @@ export function AtividadeDetalhe({
   horasRealizadas,
   podeAutorizarExcedente,
   souOExecutor,
+  bloqueadoExcedente,
+  bloqueadoApontamento,
   onExcedenteAlterado,
   onClose,
 }: AtividadeDetalheProps) {
@@ -211,6 +227,11 @@ export function AtividadeDetalhe({
   const [erroSolicitacao, setErroSolicitacao] = useState<string | null>(null);
   const pendente = solicitacoes.find((s) => s.status === "pendente") ?? null;
   const ultimaDecidida = solicitacoes.find((s) => s.status !== "pendente") ?? null;
+
+  // Só barra AUMENTAR (reduzir/zerar o já concedido continua liberado, mesma regra do
+  // backend) — mesmo cálculo de TetoApontamento.tsx (Cronograma).
+  const aumentandoExcedente = (horasParaMinutos(excedenteInput) ?? 0) > detalheAtual.horasExcedentes;
+  const salvarExcedenteTravado = bloqueadoExcedente && aumentandoExcedente;
 
   // Apontamento avulso — o tempo que ficou de fora por esquecer de mover o card. Diferente
   // do excedente: pode haver vários pendentes na mesma atividade, um por dia esquecido.
@@ -518,12 +539,16 @@ export function AtividadeDetalhe({
                       />
                       <button
                         onClick={salvarExcedente}
-                        disabled={salvandoExcedente}
+                        disabled={salvandoExcedente || salvarExcedenteTravado}
+                        title={salvarExcedenteTravado ? "Esta proposta/atividade não permite aumentar horas excedentes." : undefined}
                         className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {salvandoExcedente ? "Salvando..." : "Salvar"}
                       </button>
                       {erroExcedente && <span className="text-[12px] text-destructive">{erroExcedente}</span>}
+                      {!erroExcedente && salvarExcedenteTravado && (
+                        <span className="text-[12px] text-muted">Esta proposta/atividade não permite aumentar horas excedentes.</span>
+                      )}
                     </div>
                   ) : souOExecutor ? (
                     <div className="mt-2">
@@ -534,6 +559,11 @@ export function AtividadeDetalhe({
                         </p>
                       ) : abrindoSolicitacao ? (
                         <div className="space-y-2 rounded-md border border-border bg-surface px-2.5 py-2">
+                          {bloqueadoExcedente && (
+                            <p className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[12px] font-medium text-destructive">
+                              Esta proposta e/ou o item não aceita horas excedentes.
+                            </p>
+                          )}
                           <div className="flex items-center gap-2">
                             <label htmlFor="horas-solicitadas" className="text-[12px] text-muted">
                               Horas necessárias
@@ -565,8 +595,9 @@ export function AtividadeDetalhe({
                             </button>
                             <button
                               onClick={enviarSolicitacao}
-                              disabled={enviandoSolicitacao}
-                              className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                              disabled={enviandoSolicitacao || bloqueadoExcedente}
+                              title={bloqueadoExcedente ? "Esta proposta e/ou o item não aceita horas excedentes." : undefined}
+                              className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {enviandoSolicitacao ? "Enviando..." : "Enviar solicitação"}
                             </button>
@@ -676,6 +707,10 @@ export function AtividadeDetalhe({
                           </button>
                         </div>
                       </div>
+                    ) : bloqueadoApontamento ? (
+                      <p className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[12px] font-medium text-destructive">
+                        Apontamento bloqueado nesta atividade/proposta pelo gestor.
+                      </p>
                     ) : (
                       <>
                         <p className="mb-2 text-[11.5px] text-muted">

@@ -26,12 +26,26 @@ export const EVENTOS_AUDITORIA = {
   // (frontend) pra dar destaque na linha do tempo.
   PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO: "PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO",
 
+  // Liga/desliga PropostaModoAlocacao.bloqueiaApontamento/bloqueiaExcedente — mesmo espírito
+  // de PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO acima (evento próprio, tone "warning" dedicado em
+  // auditoriaVisual.tsx), mas conceito DIFERENTE: aquele trava só a EDIÇÃO de duração da EAP
+  // (planejamento); estes travam apontar hora de verdade e autorizar/solicitar
+  // AtividadeConsultor.horasExcedentes (ver domain/bloqueioApontamento.ts).
+  PROPOSTA_BLOQUEIO_APONTAMENTO_ALTERADO: "PROPOSTA_BLOQUEIO_APONTAMENTO_ALTERADO",
+  PROPOSTA_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO: "PROPOSTA_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO",
+
   // Fase 2 — Alocação (AtividadeConsultor: consultor x atividade). ALOCACAO_ALTERADA
   // cobre hoje só o diff de qtdhor (a distribuição de horas em si) — é o único campo
   // editável por PATCH /alocacao/alocacoes/:id além das datas (ver DATA_*).
   ALOCACAO_CRIADA: "ALOCACAO_CRIADA",
   ALOCACAO_ALTERADA: "ALOCACAO_ALTERADA",
   ALOCACAO_REMOVIDA: "ALOCACAO_REMOVIDA",
+
+  // Equivalente por alocação dos dois eventos de proposta acima (AtividadeConsultor.
+  // bloqueiaApontamento/bloqueiaExcedente) — gestor bloqueia SÓ esta atividade de UM
+  // consultor, sem mexer na proposta inteira.
+  ALOCACAO_BLOQUEIO_APONTAMENTO_ALTERADO: "ALOCACAO_BLOQUEIO_APONTAMENTO_ALTERADO",
+  ALOCACAO_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO: "ALOCACAO_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO",
 
   // Datas previstas (dataPrevistaInicio/dataPrevistaFim) de uma atividade — campo null
   // vira valor = DATA_INCLUIDA; valor muda pra outro valor = DATA_ALTERADA. Emitido em
@@ -47,6 +61,15 @@ export const EVENTOS_AUDITORIA = {
   EXCEDENTE_SOLICITADO: "EXCEDENTE_SOLICITADO",
   EXCEDENTE_APROVADO: "EXCEDENTE_APROVADO",
   EXCEDENTE_REPROVADO: "EXCEDENTE_REPROVADO",
+
+  // Pedido de mudança nas 3 flags de configuração da proposta (PropostaModoAlocacao) e a
+  // decisão de quem tem alçada — ver SolicitacaoConfiguracaoProposta no schema e
+  // podeAprovarConfiguracaoProposta em domain/contextoProjeto.ts. Entidade PROPOSTA, a mesma
+  // já usada pelos eventos de mudança das flags em si (PROPOSTA_BLOQUEIO_*_ALTERADO): ao
+  // aprovar, os dois eventos são gravados juntos — a decisão E a mudança da flag.
+  PROPOSTA_CONFIG_SOLICITADA: "PROPOSTA_CONFIG_SOLICITADA",
+  PROPOSTA_CONFIG_APROVADA: "PROPOSTA_CONFIG_APROVADA",
+  PROPOSTA_CONFIG_REPROVADA: "PROPOSTA_CONFIG_REPROVADA",
 
   // Apontamento avulso: tempo trabalhado sem mover o card, pedido pelo consultor e
   // decidido pelo gestor. Mesma escolha de entidade dos eventos de excedente, aqui sob

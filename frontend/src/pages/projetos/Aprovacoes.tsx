@@ -34,9 +34,14 @@ interface AtividadeDetalheDados {
   horasRealizadas: number;
   podeAutorizarExcedente: boolean;
   souOExecutor: boolean;
+  // "Mais restritivo vence" entre proposta e atividade, já resolvido no servidor (ver
+  // domain/bloqueioApontamento.ts, backend) — mesmo nome de campo que GET /:id/detalhe
+  // devolve (reaproveita carregarAtividadesVisiveis).
+  bloqueadoApontamentoEfetivo: boolean;
+  bloqueadoExcedenteEfetivo: boolean;
 }
 
-type Aba = "excedentes" | "apontamentos" | "ajustes";
+type Aba = "excedentes" | "apontamentos" | "ajustes" | "config-proposta";
 
 // Correção de horário de um apontamento já confirmado. Enquanto o pedido está pendente, o
 // envio ao Senior fica retido (ver RetidoPorAjusteError no backend) — é o que permite
@@ -69,6 +74,36 @@ export interface SolicitacaoAjuste {
   modproLabel: string;
   clienteNome: string | null;
   despro: string | null;
+  podeDecidir: boolean;
+  // Aprovar essa solicitação vai recusar 409 se a proposta/atividade estiver com
+  // apontamento bloqueado (ver domain/bloqueioApontamento.ts, backend) — só desabilita
+  // "Aprovar"; "Reprovar" continua sempre disponível.
+  bloqueadoApontamentoEfetivo: boolean;
+}
+
+// Pedido de mudança numa das 3 flags de configuração da proposta (PropostaModoAlocacao) e a
+// decisão de quem tem alçada — admin, gestor do Comercial ou da Diretoria (ver
+// podeAprovarConfiguracaoProposta no backend). Diferente dos outros 3 tipos: não gira em
+// torno de uma atividade — é da PROPOSTA inteira, por isso não tem atividadeId/seqite.
+export interface SolicitacaoConfigProposta {
+  id: number;
+  codemp: number;
+  codpro: number;
+  numprj: number | null;
+  campo: string;
+  campoLabel: string;
+  valorAtual: boolean;
+  valorSolicitado: boolean;
+  motivo: string;
+  status: "pendente" | "aprovada" | "reprovada";
+  criadoEm: string;
+  decididoEm: string | null;
+  observacaoDecisao: string | null;
+  solicitanteNome: string;
+  decisorNome: string | null;
+  clienteNome: string | null;
+  despro: string | null;
+  modproLabel: string;
   podeDecidir: boolean;
 }
 
@@ -289,24 +324,31 @@ function ListaExcedentes({
   );
 
   // Só os pendentes que ESTE gestor pode decidir, dentro do filtro atual — é exatamente o
-  // conjunto que "Aprovar todos"/"Reprovar todos" atinge.
+  // conjunto que "Reprovar todos" atinge (reprovar nunca é bloqueado).
   const pendentesDecidiveis = useMemo(
     () => solicitacoesFiltradas.filter((s) => s.status === "pendente" && s.podeDecidir),
     [solicitacoesFiltradas]
   );
+  // "Aprovar todos" é mais restrito: fica de fora quem está com horas excedentes bloqueadas
+  // (proposta ou atividade) — ver domain/bloqueioApontamento.ts, backend.
+  const pendentesAprovaveisEmLote = useMemo(
+    () => pendentesDecidiveis.filter((s) => !s.bloqueadoExcedenteEfetivo),
+    [pendentesDecidiveis]
+  );
 
   async function decidirEmLote(aprovar: boolean) {
+    const alvo = aprovar ? pendentesAprovaveisEmLote : pendentesDecidiveis;
     const confirmado = window.confirm(
       aprovar
-        ? `Aprovar ${pendentesDecidiveis.length} pedido(s) de horas excedentes, liberando exatamente o que foi solicitado? Essa ação não pode ser desfeita.`
-        : `Reprovar ${pendentesDecidiveis.length} pedido(s) de horas excedentes? Essa ação não pode ser desfeita.`
+        ? `Aprovar ${alvo.length} pedido(s) de horas excedentes, liberando exatamente o que foi solicitado? Essa ação não pode ser desfeita.`
+        : `Reprovar ${alvo.length} pedido(s) de horas excedentes? Essa ação não pode ser desfeita.`
     );
     if (!confirmado) return;
 
     setProcessandoLote(true);
     try {
       const { data } = await axios.post("/api/solicitacoes-excedente/decidir-lote", {
-        ids: pendentesDecidiveis.map((s) => s.id),
+        ids: alvo.map((s) => s.id),
         aprovar,
       });
       const totalSucesso = data.sucesso.length as number;
@@ -382,9 +424,11 @@ function ListaExcedentes({
               <button onClick={() => decidirEmLote(false)} disabled={processandoLote} className={classeBotao.destrutivo}>
                 Reprovar todos ({pendentesDecidiveis.length})
               </button>
+              {pendentesAprovaveisEmLote.length > 0 && (
               <button onClick={() => decidirEmLote(true)} disabled={processandoLote} className={classeBotao.primario}>
-                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesDecidiveis.length})`}
+                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesAprovaveisEmLote.length})`}
               </button>
+              )}
             </div>
           )}
         </div>
@@ -459,7 +503,12 @@ function ListaExcedentes({
                   <button onClick={() => decidir(s, false)} disabled={enviando} className={classeBotao.destrutivo}>
                     Reprovar
                   </button>
-                  <button onClick={() => decidir(s, true)} disabled={enviando} className={classeBotao.primario}>
+                  <button
+                    onClick={() => decidir(s, true)}
+                    disabled={enviando || s.bloqueadoExcedenteEfetivo}
+                    title={s.bloqueadoExcedenteEfetivo ? "Esta proposta/atividade não permite horas excedentes." : undefined}
+                    className={classeBotao.primario}
+                  >
                     {enviando ? "Salvando..." : "Aprovar"}
                   </button>
                 </div>
@@ -541,25 +590,32 @@ function ListaApontamentos({
   );
 
   // Só os pendentes que ESTE gestor pode decidir, dentro do filtro atual — é exatamente o
-  // conjunto que "Aprovar todos"/"Reprovar todos" atinge.
+  // conjunto que "Reprovar todos" atinge (reprovar nunca é bloqueado).
   const pendentesDecidiveis = useMemo(
     () => solicitacoesFiltradas.filter((s) => s.status === "pendente" && s.podeDecidir),
     [solicitacoesFiltradas]
   );
+  // "Aprovar todos" é mais restrito: fica de fora quem está com apontamento bloqueado
+  // (proposta ou atividade) — ver domain/bloqueioApontamento.ts, backend.
+  const pendentesAprovaveisEmLote = useMemo(
+    () => pendentesDecidiveis.filter((s) => !s.bloqueadoApontamentoEfetivo),
+    [pendentesDecidiveis]
+  );
 
   async function decidirEmLote(aprovar: boolean) {
     const acao = aprovar ? "aprovar" : "reprovar";
+    const alvo = aprovar ? pendentesAprovaveisEmLote : pendentesDecidiveis;
     const confirmado = window.confirm(
       aprovar
-        ? `Aprovar ${pendentesDecidiveis.length} pedido(s) de apontamento, exatamente como solicitados? Essa ação não pode ser desfeita.`
-        : `Reprovar ${pendentesDecidiveis.length} pedido(s) de apontamento? Essa ação não pode ser desfeita.`
+        ? `Aprovar ${alvo.length} pedido(s) de apontamento, exatamente como solicitados? Essa ação não pode ser desfeita.`
+        : `Reprovar ${alvo.length} pedido(s) de apontamento? Essa ação não pode ser desfeita.`
     );
     if (!confirmado) return;
 
     setProcessandoLote(true);
     try {
       const { data } = await axios.post("/api/solicitacoes-apontamento/decidir-lote", {
-        ids: pendentesDecidiveis.map((s) => s.id),
+        ids: alvo.map((s) => s.id),
         aprovar,
       });
       const totalSucesso = data.sucesso.length as number;
@@ -646,9 +702,11 @@ function ListaApontamentos({
               <button onClick={() => decidirEmLote(false)} disabled={processandoLote} className={classeBotao.destrutivo}>
                 Reprovar todos ({pendentesDecidiveis.length})
               </button>
+              {pendentesAprovaveisEmLote.length > 0 && (
               <button onClick={() => decidirEmLote(true)} disabled={processandoLote} className={classeBotao.primario}>
-                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesDecidiveis.length})`}
+                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesAprovaveisEmLote.length})`}
               </button>
+              )}
             </div>
           )}
         </div>
@@ -743,7 +801,12 @@ function ListaApontamentos({
                   <button onClick={() => decidir(s, false)} disabled={enviando} className={classeBotao.destrutivo}>
                     Reprovar
                   </button>
-                  <button onClick={() => decidir(s, true)} disabled={enviando} className={classeBotao.primario}>
+                  <button
+                    onClick={() => decidir(s, true)}
+                    disabled={enviando || s.bloqueadoApontamentoEfetivo}
+                    title={s.bloqueadoApontamentoEfetivo ? "Apontamento bloqueado nesta atividade/proposta pelo gestor." : undefined}
+                    className={classeBotao.primario}
+                  >
                     {enviando ? "Salvando..." : "Aprovar"}
                   </button>
                 </div>
@@ -824,24 +887,31 @@ function ListaAjustes({
   );
 
   // Só os pendentes que ESTE gestor pode decidir, dentro do filtro atual — é exatamente o
-  // conjunto que "Aprovar todos"/"Reprovar todos" atinge.
+  // conjunto que "Reprovar todos" atinge (reprovar nunca é bloqueado).
   const pendentesDecidiveis = useMemo(
     () => solicitacoesFiltradas.filter((s) => s.status === "pendente" && s.podeDecidir),
     [solicitacoesFiltradas]
   );
+  // "Aprovar todos" é mais restrito: fica de fora quem está com apontamento bloqueado
+  // (proposta ou atividade) — ver domain/bloqueioApontamento.ts, backend.
+  const pendentesAprovaveisEmLote = useMemo(
+    () => pendentesDecidiveis.filter((s) => !s.bloqueadoApontamentoEfetivo),
+    [pendentesDecidiveis]
+  );
 
   async function decidirEmLote(aprovar: boolean) {
+    const alvo = aprovar ? pendentesAprovaveisEmLote : pendentesDecidiveis;
     const confirmado = window.confirm(
       aprovar
-        ? `Aprovar ${pendentesDecidiveis.length} pedido(s) de ajuste de horário, exatamente como solicitados? Essa ação não pode ser desfeita.`
-        : `Reprovar ${pendentesDecidiveis.length} pedido(s) de ajuste de horário? Essa ação não pode ser desfeita.`
+        ? `Aprovar ${alvo.length} pedido(s) de ajuste de horário, exatamente como solicitados? Essa ação não pode ser desfeita.`
+        : `Reprovar ${alvo.length} pedido(s) de ajuste de horário? Essa ação não pode ser desfeita.`
     );
     if (!confirmado) return;
 
     setProcessandoLote(true);
     try {
       const { data } = await axios.post("/api/solicitacoes-ajuste/decidir-lote", {
-        ids: pendentesDecidiveis.map((s) => s.id),
+        ids: alvo.map((s) => s.id),
         aprovar,
       });
       const totalSucesso = data.sucesso.length as number;
@@ -920,9 +990,11 @@ function ListaAjustes({
               <button onClick={() => decidirEmLote(false)} disabled={processandoLote} className={classeBotao.destrutivo}>
                 Reprovar todos ({pendentesDecidiveis.length})
               </button>
+              {pendentesAprovaveisEmLote.length > 0 && (
               <button onClick={() => decidirEmLote(true)} disabled={processandoLote} className={classeBotao.primario}>
-                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesDecidiveis.length})`}
+                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesAprovaveisEmLote.length})`}
               </button>
+              )}
             </div>
           )}
         </div>
@@ -1000,7 +1072,12 @@ function ListaAjustes({
                   <button onClick={() => decidir(s, false)} disabled={enviando} className={classeBotao.destrutivo}>
                     Reprovar
                   </button>
-                  <button onClick={() => decidir(s, true)} disabled={enviando} className={classeBotao.primario}>
+                  <button
+                    onClick={() => decidir(s, true)}
+                    disabled={enviando || s.bloqueadoApontamentoEfetivo}
+                    title={s.bloqueadoApontamentoEfetivo ? "Apontamento bloqueado nesta atividade/proposta pelo gestor." : undefined}
+                    className={classeBotao.primario}
+                  >
                     {enviando ? "Salvando..." : "Aprovar"}
                   </button>
                 </div>
@@ -1027,9 +1104,242 @@ function ListaAjustes({
   );
 }
 
-// Uma tela, três tipos de pedido, dois recortes. O gestor decide os do time dele; o
-// consultor acompanha os próprios. Quem separa é o servidor — a tela só desenha o que veio,
-// e `podeDecidir` por linha diz de qual lado a pessoa está naquele pedido.
+
+// Pedidos de mudança nas 3 flags de configuração da proposta (bloqueiaExcedenteEstrutura,
+// bloqueiaApontamento, bloqueiaExcedente) — decididos por admin, gestor do Comercial ou da
+// Diretoria. Não usa CabecalhoLinha (é atividade-cêntrico: exige seqite/atividadeId/
+// onVerAtividade) — a proposta é o próprio assunto aqui, não um contexto da atividade.
+function ListaConfigProposta({ status, onMudou }: { status: string; onMudou: () => void }) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [solicitacoes, setSolicitacoes] = useState<SolicitacaoConfigProposta[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
+  const [decidindoId, setDecidindoId] = useState<number | null>(null);
+  const [observacao, setObservacao] = useState("");
+  const [enviando, setEnviando] = useState(false);
+
+  // Filtro de solicitante: mesma ideia das outras 3 listas, recortando só o que já está na
+  // tela (não é uma lista de todo mundo que poderia pedir).
+  const [solicitanteFiltro, setSolicitanteFiltro] = useState<string[]>([]);
+  const [processandoLote, setProcessandoLote] = useState(false);
+
+  const carregar = useCallback(() => {
+    setLoading(true);
+    axios
+      .get("/api/solicitacoes-config-proposta", { params: status ? { status } : {} })
+      .then(({ data }) => {
+        setSolicitacoes(data.solicitacoes);
+        setErro(null);
+      })
+      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar as solicitações"))
+      .finally(() => setLoading(false));
+  }, [status]);
+
+  useEffect(carregar, [carregar]);
+
+  const solicitantesDisponiveis = useMemo<MultiSelectOption<string>[]>(
+    () =>
+      [...new Set(solicitacoes.map((s) => s.solicitanteNome))]
+        .sort((a, b) => a.localeCompare(b, "pt-BR"))
+        .map((nome) => ({ value: nome, label: nome })),
+    [solicitacoes]
+  );
+
+  const solicitacoesFiltradas = useMemo(
+    () => (solicitanteFiltro.length === 0 ? solicitacoes : solicitacoes.filter((s) => solicitanteFiltro.includes(s.solicitanteNome))),
+    [solicitacoes, solicitanteFiltro]
+  );
+
+  // Só os pendentes que ESTE aprovador pode decidir, dentro do filtro atual — é exatamente o
+  // conjunto que "Aprovar todos"/"Reprovar todos" atinge. Sem gate extra de bloqueio (esse
+  // conceito não existe pra config de proposta): aprovar aqui não tem meio-termo.
+  const pendentesDecidiveis = useMemo(
+    () => solicitacoesFiltradas.filter((s) => s.status === "pendente" && s.podeDecidir),
+    [solicitacoesFiltradas]
+  );
+
+  async function decidirEmLote(aprovar: boolean) {
+    const confirmado = window.confirm(
+      aprovar
+        ? `Aprovar ${pendentesDecidiveis.length} pedido(s) de configuração de proposta, exatamente como solicitados? Essa ação não pode ser desfeita.`
+        : `Reprovar ${pendentesDecidiveis.length} pedido(s) de configuração de proposta? Essa ação não pode ser desfeita.`
+    );
+    if (!confirmado) return;
+
+    setProcessandoLote(true);
+    try {
+      const { data } = await axios.post("/api/solicitacoes-config-proposta/decidir-lote", {
+        ids: pendentesDecidiveis.map((s) => s.id),
+        aprovar,
+      });
+      const totalSucesso = data.sucesso.length as number;
+      const falhas = data.falhas as { id: number; erro: string }[];
+      toast.mostrar(
+        falhas.length === 0
+          ? `${totalSucesso} pedido(s) ${aprovar ? "aprovado(s)" : "reprovado(s)"}.`
+          : `${totalSucesso} pedido(s) ${aprovar ? "aprovado(s)" : "reprovado(s)"}, ${falhas.length} falha(s): ${falhas
+              .map((f) => `#${f.id} — ${f.erro}`)
+              .join("; ")}`,
+        falhas.length === 0 ? (aprovar ? "success" : "neutral") : "destructive"
+      );
+      carregar();
+      onMudou();
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      toast.mostrar(mensagem ?? `Falha ao ${aprovar ? "aprovar" : "reprovar"} em lote`, "destructive");
+    } finally {
+      setProcessandoLote(false);
+    }
+  }
+
+  async function decidir(s: SolicitacaoConfigProposta, aprovar: boolean) {
+    setEnviando(true);
+    try {
+      await axios.post(`/api/solicitacoes-config-proposta/${s.id}/decidir`, { aprovar, observacao });
+      toast.mostrar(
+        aprovar ? `Aprovado. "${s.campoLabel}" foi ${s.valorSolicitado ? "ligado" : "desligado"}.` : "Solicitação reprovada.",
+        aprovar ? "success" : "neutral"
+      );
+      setDecidindoId(null);
+      setObservacao("");
+      carregar();
+      onMudou();
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      toast.mostrar(mensagem ?? "Falha ao registrar a decisão", "destructive");
+      // Recarrega mesmo no erro: um 409 quer dizer que outra pessoa já decidiu (ou que o
+      // valor mudou por fora), e a tela precisa parar de oferecer os botões.
+      carregar();
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  if (loading) return <p className="mt-6 text-sm text-muted">Carregando...</p>;
+  if (erro)
+    return <p className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{erro}</p>;
+
+  return (
+    <div className="mt-4">
+      {solicitacoes.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <MultiSelectDropdown
+            opcoes={solicitantesDisponiveis}
+            selecionados={solicitanteFiltro}
+            onChange={setSolicitanteFiltro}
+            labelTodos="Todos os solicitantes"
+            labelSufixo="solicitantes"
+          />
+          {status === "pendente" && pendentesDecidiveis.length > 0 && (
+            <div className="ml-auto flex items-center gap-2">
+              <button onClick={() => decidirEmLote(false)} disabled={processandoLote} className={classeBotao.destrutivo}>
+                Reprovar todos ({pendentesDecidiveis.length})
+              </button>
+              <button onClick={() => decidirEmLote(true)} disabled={processandoLote} className={classeBotao.primario}>
+                {processandoLote ? "Processando..." : `Aprovar todos (${pendentesDecidiveis.length})`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {solicitacoesFiltradas.length === 0 ? (
+        <p className="mt-2 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-sm text-muted">
+          {solicitacoes.length === 0
+            ? "Nenhuma solicitação de configuração de proposta por aqui."
+            : "Nenhuma solicitação com esse filtro de solicitante."}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {solicitacoesFiltradas.map((s) => (
+            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-[11.5px] text-muted">#{s.id}</span>
+                <span className={`rounded px-1.5 py-0.5 font-mono text-[10.5px] uppercase ${TOM_STATUS[s.status] ?? ""}`}>
+                  {s.status}
+                </span>
+                <span className="text-sm font-medium text-foreground">{s.solicitanteNome}</span>
+                <button
+                  onClick={() => navigate(`/projetos/alocacao/${s.codemp}/${s.codpro}/cronograma`)}
+                  className="font-mono text-[12.5px] font-medium text-primary hover:underline"
+                >
+                  Proposta {s.codpro}
+                </button>
+                {s.clienteNome && <span className="text-[12.5px] text-muted">{s.clienteNome}</span>}
+                <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+                  {s.modproLabel}
+                </span>
+                <span className="ml-auto font-mono text-[11px] text-muted">{dateTimeFormatter.format(new Date(s.criadoEm))}</span>
+              </div>
+
+              <p className="mt-1.5 text-[13px] text-foreground">
+                <span className="text-muted">{s.campoLabel}: </span>
+                <span className={s.valorAtual ? "text-warning" : "text-muted"}>{s.valorAtual ? "Ligado" : "Desligado"}</span>
+                <span className="text-muted"> → </span>
+                <span className={s.valorSolicitado ? "text-warning" : "text-success"}>
+                  {s.valorSolicitado ? "Ligado" : "Desligado"}
+                </span>
+              </p>
+
+              <p className="mt-1.5 text-[13px] text-foreground">
+                <span className="text-muted">Motivo: </span>
+                {s.motivo}
+              </p>
+
+              {s.status !== "pendente" && (
+                <p className="mt-1 text-[12px] text-muted">
+                  {s.decisorNome} decidiu em {s.decididoEm ? dateTimeFormatter.format(new Date(s.decididoEm)) : "—"}
+                  {s.observacaoDecisao && ` — "${s.observacaoDecisao}"`}
+                </p>
+              )}
+
+              {s.status === "pendente" &&
+                s.podeDecidir &&
+                (decidindoId === s.id ? (
+                  <div className="mt-2 space-y-2 rounded-md border border-border bg-surface-2/40 px-2.5 py-2">
+                    <input
+                      value={observacao}
+                      onChange={(e) => setObservacao(e.target.value)}
+                      placeholder="Observação (opcional) — vai junto no aviso ao solicitante"
+                      className={`w-full ${classeCampo}`}
+                    />
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        onClick={() => {
+                          setDecidindoId(null);
+                          setObservacao("");
+                        }}
+                        disabled={enviando}
+                        className={classeBotao.neutro}
+                      >
+                        Cancelar
+                      </button>
+                      <button onClick={() => decidir(s, false)} disabled={enviando} className={classeBotao.destrutivo}>
+                        Reprovar
+                      </button>
+                      <button onClick={() => decidir(s, true)} disabled={enviando} className={classeBotao.primario}>
+                        {enviando ? "Salvando..." : "Aprovar"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => setDecidindoId(s.id)} className={`mt-2 ${classeBotao.neutro}`}>
+                    Decidir
+                  </button>
+                ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// Uma tela, quatro tipos de pedido. O aprovador decide os que tem alçada; o solicitante
+// acompanha os próprios. Quem separa é o servidor — a tela só desenha o que veio, e
+// `podeDecidir` por linha diz de qual lado a pessoa está naquele pedido.
 export function Aprovacoes() {
   const toast = useToast();
   const [aba, setAba] = useState<Aba>("excedentes");
@@ -1052,6 +1362,7 @@ export function Aprovacoes() {
     { valor: "excedentes", rotulo: "Horas Excedentes" },
     { valor: "apontamentos", rotulo: "Apontamentos" },
     { valor: "ajustes", rotulo: "Ajustes de horário" },
+    { valor: "config-proposta", rotulo: "Configuração de Proposta" },
   ];
 
   const descricaoDaAba: Record<Aba, string> = {
@@ -1061,6 +1372,8 @@ export function Aprovacoes() {
       "Tempo trabalhado sem mover o card de raia. Aprovar libera o apontamento para o consultor confirmar em Meus Apontamentos — quem fecha e envia ao Senior continua sendo quem executou.",
     ajustes:
       "Correção de horário de apontamento já confirmado. Enquanto o pedido está aqui, o envio ao Senior fica retido — o ERP só recebe o valor final, e nunca precisa ser alterado lá.",
+    "config-proposta":
+      "Mudança nas 3 travas de configuração da proposta (Cronograma) — quem gerencia a proposta pede, e admin, gestor do Comercial ou da Diretoria decide.",
   };
 
   return (
@@ -1110,6 +1423,9 @@ export function Aprovacoes() {
       {aba === "ajustes" && (
         <ListaAjustes key={`aju-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
       )}
+      {aba === "config-proposta" && (
+        <ListaConfigProposta key={`cfg-${versao}`} status={status} onMudou={() => setVersao((v) => v + 1)} />
+      )}
 
       {/* O mesmo painel que abre ao clicar no card do quadro. `podeEditar` false: aqui o
           gestor veio conferir o que aconteceu na atividade antes de decidir, não editar
@@ -1137,6 +1453,8 @@ export function Aprovacoes() {
           // horas, e mexer nele muda o teto que esta tela mostra, então as listas recarregam.
           podeAutorizarExcedente={atividadeAberta.podeAutorizarExcedente}
           souOExecutor={atividadeAberta.souOExecutor}
+          bloqueadoApontamento={atividadeAberta.bloqueadoApontamentoEfetivo}
+          bloqueadoExcedente={atividadeAberta.bloqueadoExcedenteEfetivo}
           onExcedenteAlterado={() => setVersao((v) => v + 1)}
           onClose={() => setAtividadeAberta(null)}
         />

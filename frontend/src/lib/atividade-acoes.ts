@@ -19,19 +19,28 @@ export const EXIBIR_AMBOS_BOTOES = true;
 
 export interface AtividadeComColuna {
   coluna: { nome: string } | null;
+  // "Mais restritivo vence" entre proposta e atividade, já resolvido no servidor (ver
+  // domain/bloqueioApontamento.ts, backend) — opcional pra não quebrar quem ainda constrói
+  // esse objeto sem o campo (equivale a "não bloqueado").
+  bloqueadoApontamento?: boolean;
 }
 
 export function podeIniciar(atividade: AtividadeComColuna): boolean {
-  return atividade.coluna?.nome === RAIA_A_FAZER;
+  return atividade.coluna?.nome === RAIA_A_FAZER && !atividade.bloqueadoApontamento;
 }
 
 export function podeParar(atividade: AtividadeComColuna): boolean {
+  // Parar nunca é bloqueado — só a ENTRADA em execução é barrada, senão uma sessão que já
+  // estava rodando quando o bloqueio foi ligado ficaria presa pra sempre.
   return atividade.coluna?.nome === RAIA_EM_ANDAMENTO;
 }
 
 // Motivo legível pra tooltip do botão desabilitado.
 export function motivoIniciarDesabilitado(atividade: AtividadeComColuna): string {
   if (podeIniciar(atividade)) return "";
+  if (atividade.coluna?.nome === RAIA_A_FAZER && atividade.bloqueadoApontamento) {
+    return "Apontamentos bloqueados nesta atividade/proposta.";
+  }
   return `Atividade não está em "${RAIA_A_FAZER}".`;
 }
 

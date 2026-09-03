@@ -12,7 +12,8 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { processarFilaSincronizacao } from "../sync/outboxSenior";
 import { depexeLabel, modproLabel } from "../domain/propostasDominio";
-import { diaBrasilComoData } from "./apontamentos";
+import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
+import { diaBrasilComoData, recusarSeEstourarTeto } from "./apontamentos";
 
 // Correção de horário de um apontamento JÁ confirmado. O consultor pede, o gestor decide.
 //
@@ -142,6 +143,19 @@ solicitacoesAjusteRouter.post("/", async (req: AuthenticatedRequest, res) => {
       res.status(403).json({ error: "Só quem executou o apontamento pode pedir ajuste nele" });
       return;
     }
+
+    // Bloqueio de apontamento (proposta ou atividade) — ver domain/bloqueioApontamento.ts.
+    const bloqueio = await resolverBloqueioApontamento(atividade);
+    if (bloqueio.bloqueadoApontamento) {
+      res.status(409).json({
+        error:
+          bloqueio.origemBloqueioApontamento === "proposta"
+            ? "Apontamento bloqueado nesta proposta pelo gestor."
+            : "Apontamento bloqueado nesta atividade pelo gestor.",
+      });
+      return;
+    }
+
     if (sessao.excluidaEm != null) {
       res.status(400).json({ error: "Apontamento excluído — não há o que ajustar" });
       return;
@@ -163,6 +177,17 @@ solicitacoesAjusteRouter.post("/", async (req: AuthenticatedRequest, res) => {
     });
     if (conflitos.length > 0) {
       res.status(409).json({ error: mensagemDeConflito(conflitos), conflitos });
+      return;
+    }
+
+    // Não deixa nem registrar o pedido se o novo horário estoura o teto (alocado +
+    // excedentes) — antes disso só era recusado na hora do gestor aprovar (decidirUma).
+    // A sessão atual já entra no `realizado`, então tira a duração dela antes de somar a
+    // nova — senão a mesma hora contaria duas vezes.
+    const duracaoAtualDaSessao = sessao.fim ? Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000) : 0;
+    const recusaTeto = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao);
+    if (recusaTeto) {
+      res.status(recusaTeto.status).json(recusaTeto.body);
       return;
     }
 
@@ -238,6 +263,7 @@ function serializar(
   depexe: number | null,
   gestorNome: string | null,
   podeDecidir: boolean,
+  bloqueadoApontamentoEfetivo: boolean,
   propostaInfo?: PropostaInfo
 ) {
   return {
@@ -269,6 +295,10 @@ function serializar(
     clienteNome: propostaInfo?.clienteNome ?? null,
     despro: propostaInfo?.despro ?? null,
     podeDecidir,
+    // Aprovar essa solicitação vai recusar 409 se a proposta/atividade estiver com
+    // apontamento bloqueado (ver domain/bloqueioApontamento.ts) — a tela desabilita só
+    // "Aprovar", "Reprovar" continua sempre disponível.
+    bloqueadoApontamentoEfetivo,
   };
 }
 
@@ -311,6 +341,12 @@ solicitacoesAjusteRouter.get("/", async (req: AuthenticatedRequest, res) => {
         .filter((p): p is { codemp: number; depexe: number } => p.depexe != null)
     );
 
+    // 1 query em lote pra todas as propostas envolvidas (nunca 1 por solicitação no map
+    // abaixo) — ver domain/bloqueioApontamento.ts.
+    const cfgBloqueioPorProposta = await configBloqueioPropostasEmLote(
+      todas.map((s) => ({ codemp: s.sessao.atividade.codemp, codpro: s.sessao.atividade.codpro }))
+    );
+
     const visiveis = todas
       .map((s) => {
         const a = s.sessao.atividade;
@@ -320,7 +356,9 @@ solicitacoesAjusteRouter.get("/", async (req: AuthenticatedRequest, res) => {
         if (!gerencia && !minha) return null;
         const propostaInfo = mapaProposta.get(`${a.codemp}-${a.codpro}`);
         const gestorNome = depexe != null ? mapaGestor.get(`${a.codemp}-${depexe}`) ?? null : null;
-        return serializar(s, depexe, gestorNome, gerencia, propostaInfo);
+        const cfg = cfgBloqueioPorProposta.get(`${a.codemp}-${a.codpro}`) ?? { bloqueiaApontamento: false, bloqueiaExcedente: true };
+        const bloqueadoApontamentoEfetivo = resolverBloqueioComConfig(cfg, a).bloqueadoApontamento;
+        return serializar(s, depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -343,7 +381,7 @@ solicitacoesAjusteRouter.get("/sessao/:sessaoId", async (req: AuthenticatedReque
       include: INCLUDE_LISTA,
       orderBy: { criadoEm: "desc" },
     });
-    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, null, null, false)) });
+    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, null, null, false, false)) });
   } catch (error) {
     handleError(res, error, "por-sessao");
   }
@@ -376,6 +414,24 @@ async function decidirUma(
   const { user, contexto, role } = ctx;
   if (!gerenciaDepartamento(role, contexto, depexe)) {
     return { status: 403, body: { error: "Só o gestor do departamento pode decidir esta solicitação" } };
+  }
+
+  // Bloqueio de apontamento (proposta ou atividade) — só barra APROVAR (aprovar = de fato
+  // confirmar o novo horário); reprovar continua sempre livre, pra limpar a fila mesmo com
+  // o bloqueio ativo. Ver domain/bloqueioApontamento.ts.
+  if (aprovar) {
+    const bloqueio = await resolverBloqueioApontamento(atividade);
+    if (bloqueio.bloqueadoApontamento) {
+      return {
+        status: 409,
+        body: {
+          error:
+            bloqueio.origemBloqueioApontamento === "proposta"
+              ? "Apontamento bloqueado nesta proposta pelo gestor."
+              : "Apontamento bloqueado nesta atividade pelo gestor.",
+        },
+      };
+    }
   }
 
   // O gestor pode gravar horário diferente do pedido. Ausentes, valem os solicitados.

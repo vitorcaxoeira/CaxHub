@@ -9,6 +9,7 @@ import { calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone } from "..
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
 // rastreou (ver AtividadeSessaoExecucao / PATCH /atividades/:id/mover) e confirma —
@@ -130,7 +131,7 @@ async function buscarOuCriarRatRascunho(
 //
 // `descontarMinutos` é a duração de uma sessão que JÁ está no realizado e vai ser
 // substituída por este intervalo. Zero quando a sessão ainda nem existe.
-async function recusarSeEstourarTeto(
+export async function recusarSeEstourarTeto(
   atividade: Parameters<typeof saldoDaAtividade>[0],
   inicio: Date,
   fim: Date,
@@ -170,10 +171,16 @@ interface AjustesConfirmacao {
 // Núcleo compartilhado por POST /confirmar (sessão já existe, veio de movimentação de
 // coluna) e POST /manual (sessão criada na hora) — confirmar é sempre: validar RBAC,
 // resolver/criar o Rat do dia, criar o RatItem, marcar a sessão e enfileirar pro Senior.
+//
+// `origemSessao` distingue os dois casos pro bloqueio de apontamento (ver comentário na
+// checagem abaixo): "preexistente" (default) é o horário já trabalhado antes desta
+// chamada — mover card, Start/Stop, ou uma solicitação avulsa já aprovada pelo gestor;
+// "recem-criada" é só o /manual, que fabrica a sessão e confirma no mesmo passo.
 async function confirmarSessao(
   sessaoId: number,
   ajustes: AjustesConfirmacao,
-  ctx: NonNullable<Awaited<ReturnType<typeof contextoDoUsuario>>>
+  ctx: NonNullable<Awaited<ReturnType<typeof contextoDoUsuario>>>,
+  origemSessao: "preexistente" | "recem-criada" = "preexistente"
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const { contexto, role } = ctx;
 
@@ -211,6 +218,23 @@ async function confirmarSessao(
   }
   if (!podeExecutarAcao(role, contexto, "lancarApontamento", { depexe: item.depexe, codfor: atividade.codfor })) {
     return { status: 403, body: { error: "Sem permissão para lançar apontamento nesta atividade" } };
+  }
+  // Bloqueio de apontamento (proposta ou atividade) — ver domain/bloqueioApontamento.ts.
+  // Só barra sessão RECÉM-CRIADA (/manual, gestor lançando tempo novo na hora): o horário já
+  // trabalhado antes do bloqueio ligar (sessão preexistente — mover card, Start/Stop, ou
+  // solicitação avulsa já aprovada) tem que continuar confirmável, senão fica represado pra
+  // sempre sem nenhum caminho de sair do limbo (a pedido do Vitor, 03/09/2026).
+  const bloqueio = await resolverBloqueioApontamento(atividade);
+  if (origemSessao === "recem-criada" && bloqueio.bloqueadoApontamento) {
+    return {
+      status: 409,
+      body: {
+        error:
+          bloqueio.origemBloqueioApontamento === "proposta"
+            ? "Apontamento bloqueado nesta proposta pelo gestor."
+            : "Apontamento bloqueado nesta atividade pelo gestor.",
+      },
+    };
   }
   // A alocação ainda não foi confirmada pelo Senior (seqati chega assíncrono, via o outbox
   // processando o "criar_atividade" enfileirado na hora de alocar) — bloqueado desde
@@ -533,6 +557,13 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
       }
     }
 
+    // Previsão de bloqueio de apontamento (proposta ou atividade) — mesma lógica de
+    // confirmarSessao, só pra leitura (ver domain/bloqueioApontamento.ts). 1 query em lote
+    // pra todas as propostas envolvidas, nunca 1 por sessão no map abaixo.
+    const cfgBloqueioPorProposta = await configBloqueioPropostasEmLote(
+      sessoes.map((s) => ({ codemp: s.atividade.codemp, codpro: s.atividade.codpro }))
+    );
+
     res.json({
       mostrarConsultor,
       sessoes: sessoes.map((s) => {
@@ -588,6 +619,12 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           // o servidor vai recusar. Consultor comum: sempre true (a lista já é só dele).
           // Gestor/admin: true só na própria sessão, false nas do time.
           souDono: !mostrarConsultor || s.atividade.codfor === meuCodfor,
+          // Mesma previsão de erro acima, agora pro bloqueio de apontamento — confirmar essa
+          // sessão vai recusar 409 (ver confirmarSessao).
+          bloqueadoApontamentoEfetivo: resolverBloqueioComConfig(
+            cfgBloqueioPorProposta.get(`${s.atividade.codemp}-${s.atividade.codpro}`) ?? { bloqueiaApontamento: false, bloqueiaExcedente: true },
+            s.atividade
+          ).bloqueadoApontamento,
           ajustePendente: (() => {
             const a = ajustePorSessao.get(s.id);
             return a
@@ -724,6 +761,22 @@ export async function criarSessaoManualPendente(
   const coluna = await colunaDaAtividade(atividade);
   if (!coluna) return { status: 400, body: { error: "Quadro Kanban sem colunas configuradas" } };
 
+  // Bloqueio de apontamento (proposta ou atividade) — barra AQUI, não só na confirmação: uma
+  // sessão não confirmada já entra em `realizado` (mesmo raciocínio do teto acima). Ver
+  // domain/bloqueioApontamento.ts.
+  const bloqueio = await resolverBloqueioApontamento(atividade);
+  if (bloqueio.bloqueadoApontamento) {
+    return {
+      status: 409,
+      body: {
+        error:
+          bloqueio.origemBloqueioApontamento === "proposta"
+            ? "Apontamento bloqueado nesta proposta pelo gestor."
+            : "Apontamento bloqueado nesta atividade pelo gestor.",
+      },
+    };
+  }
+
   const recusa = await recusarSeEstourarTeto(atividade, inicio, fim);
   if (recusa) return recusa;
 
@@ -753,7 +806,7 @@ export async function registrarApontamentoAvulso(
     data: { atividadeId, colunaId: colunaAtual.id, inicio, fim, origem: "manual" },
   });
 
-  const resultado = await confirmarSessao(sessao.id, { descricao }, ctx);
+  const resultado = await confirmarSessao(sessao.id, { descricao }, ctx, "recem-criada");
   // confirmarSessao recusa por teto, permissão ou item inexistente DEPOIS da sessão criada.
   // Deixá-la aí somaria ao realizado da atividade um apontamento que não foi aceito.
   if (resultado.status >= 400) {

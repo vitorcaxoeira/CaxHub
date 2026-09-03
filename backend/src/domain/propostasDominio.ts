@@ -124,6 +124,13 @@ export function depexeLabel(depexe: number | null): string {
   return DEPEXE_LABELS[depexe] ?? `Depto. ${depexe}`;
 }
 
+// Os dois departamentos com alçada pra aprovar configuração de proposta — ver
+// podeAprovarConfiguracaoProposta em domain/contextoProjeto.ts. "Diretoria" e "Gestor
+// Comercial" não são papéis (Role) no CaxHub: são gestores destes departamentos
+// (DepartamentoGestor), o mesmo mecanismo de Líder Técnico.
+export const DEPEXE_DIRETORIA = 0;
+export const DEPEXE_COMERCIAL = 2;
+
 // Domínio "USU_TRatForFat" do Senior (forma de faturamento).
 export const FORFAT_LABELS: Record<number, string> = {
   0: "Mediante RAT",

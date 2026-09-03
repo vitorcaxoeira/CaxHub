@@ -10,8 +10,9 @@ import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
-import { criarSessaoManualPendente } from "./apontamentos";
+import { criarSessaoManualPendente, recusarSeEstourarTeto } from "./apontamentos";
 import { depexeLabel, modproLabel } from "../domain/propostasDominio";
+import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
 
 // Apontamento avulso: o consultor trabalhou e esqueceu de mover o card, então pede o tempo
 // aqui, dizendo o motivo e o que foi feito. O gestor aprova (podendo corrigir horário e
@@ -157,9 +158,30 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
       return;
     }
 
+    // Bloqueio de apontamento (proposta ou atividade) — ver domain/bloqueioApontamento.ts.
+    const bloqueio = await resolverBloqueioApontamento(atividade);
+    if (bloqueio.bloqueadoApontamento) {
+      res.status(409).json({
+        error:
+          bloqueio.origemBloqueioApontamento === "proposta"
+            ? "Apontamento bloqueado nesta proposta pelo gestor."
+            : "Apontamento bloqueado nesta atividade pelo gestor.",
+      });
+      return;
+    }
+
     const conflitos = await conflitosDoIntervalo(atividade.codemp, atividade.codfor, inicio, fim);
     if (conflitos.length > 0) {
       res.status(409).json({ error: mensagemDeConflito(conflitos), conflitos });
+      return;
+    }
+
+    // Não deixa nem registrar o pedido se ele já estoura o teto (alocado + excedentes) —
+    // antes disso só era recusado na hora do gestor aprovar (criarSessaoManualPendente),
+    // deixando o consultor pedir algo que nunca poderia ser concedido como pediu.
+    const recusaTeto = await recusarSeEstourarTeto(atividade, inicio, fim);
+    if (recusaTeto) {
+      res.status(recusaTeto.status).json(recusaTeto.body);
       return;
     }
 
@@ -216,7 +238,18 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
 const INCLUDE_LISTA = {
   solicitante: { select: { nome: true } },
   decididoPor: { select: { nome: true } },
-  atividade: { select: { codemp: true, codpro: true, seqite: true, qtdhor: true, horasExcedentes: true, codfor: true } },
+  atividade: {
+    select: {
+      codemp: true,
+      codpro: true,
+      seqite: true,
+      qtdhor: true,
+      horasExcedentes: true,
+      codfor: true,
+      bloqueiaApontamento: true,
+      bloqueiaExcedente: true,
+    },
+  },
 } as const;
 
 type SolicitacaoComRelacoes = Prisma.SolicitacaoApontamentoGetPayload<{ include: typeof INCLUDE_LISTA }>;
@@ -226,6 +259,7 @@ function serializar(
   depexe: number | null,
   gestorNome: string | null,
   podeDecidir: boolean,
+  bloqueadoApontamentoEfetivo: boolean,
   propostaInfo?: PropostaInfo
 ) {
   return {
@@ -254,6 +288,10 @@ function serializar(
     clienteNome: propostaInfo?.clienteNome ?? null,
     despro: propostaInfo?.despro ?? null,
     podeDecidir,
+    // Aprovar essa solicitação vai recusar 409 se a proposta/atividade estiver com
+    // apontamento bloqueado (ver domain/bloqueioApontamento.ts) — a tela desabilita só
+    // "Aprovar", "Reprovar" continua sempre disponível.
+    bloqueadoApontamentoEfetivo,
   };
 }
 
@@ -286,6 +324,12 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
         .filter((p): p is { codemp: number; depexe: number } => p.depexe != null)
     );
 
+    // 1 query em lote pra todas as propostas envolvidas (nunca 1 por solicitação no map
+    // abaixo) — ver domain/bloqueioApontamento.ts.
+    const cfgBloqueioPorProposta = await configBloqueioPropostasEmLote(
+      todas.map((s) => ({ codemp: s.atividade.codemp, codpro: s.atividade.codpro }))
+    );
+
     const visiveis = todas
       .map((s) => {
         const depexe = mapaDepexe.get(s.atividadeId) ?? null;
@@ -294,7 +338,12 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
         if (!gerencia && !minha) return null;
         const propostaInfo = mapaProposta.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
         const gestorNome = depexe != null ? mapaGestor.get(`${s.atividade.codemp}-${depexe}`) ?? null : null;
-        return serializar(s, depexe, gestorNome, gerencia, propostaInfo);
+        const cfg = cfgBloqueioPorProposta.get(`${s.atividade.codemp}-${s.atividade.codpro}`) ?? {
+          bloqueiaApontamento: false,
+          bloqueiaExcedente: true,
+        };
+        const bloqueadoApontamentoEfetivo = resolverBloqueioComConfig(cfg, s.atividade).bloqueadoApontamento;
+        return serializar(s, depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -345,7 +394,13 @@ solicitacoesApontamentoRouter.get("/atividade/:atividadeId", async (req: Authent
         `${resolvido.atividade.codemp}-${resolvido.depexe}`
       ) ?? null;
 
-    res.json({ solicitacoes: solicitacoes.map((s) => serializar(s, resolvido.depexe, gestorNome, gerencia, propostaInfo)) });
+    const bloqueadoApontamentoEfetivo = (await resolverBloqueioApontamento(resolvido.atividade)).bloqueadoApontamento;
+
+    res.json({
+      solicitacoes: solicitacoes.map((s) =>
+        serializar(s, resolvido.depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo)
+      ),
+    });
   } catch (error) {
     handleError(res, error, "por-atividade");
   }

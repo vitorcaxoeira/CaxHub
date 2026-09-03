@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   HorasAgregadas,
@@ -10,18 +10,19 @@ import {
   larguraColunaHorasPx,
 } from "../../lib/cronograma";
 import { NoCronogramaCompleto } from "../../hooks/useCronograma";
+import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 import { Tone, toneBadge } from "../ui/badges";
 import { IconeIntegracaoErp } from "../ui/IconeIntegracaoErp";
-import { BadgeStatus } from "./BadgeStatus";
 import { MenuAcoesNo, DestinoMover } from "./MenuAcoesNo";
 
-const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
-
-function formatPeriodoCompacto(inicio: string | null, fim: string | null): string {
-  if (!inicio && !fim) return "—";
-  const i = inicio ? dateFormatter.format(new Date(inicio)) : "?";
-  const f = fim ? dateFormatter.format(new Date(fim)) : "?";
-  return `${i} – ${f}`;
+// "Alocado X + excedente Y = teto Z" — mesmo texto que a seção "Teto de apontamento" (agora
+// removida do Drawer, ver DrawerAtividade.tsx) mostrava, só que como hover na própria coluna
+// Alocado da árvore. Sem "+ excedente" quando não há excedente, e sem nada especial (só
+// "Alocado") quando o nó não tem horas alocadas pra começo de conversa.
+function tituloAlocado(horasPrevistas: number, horasExcedentes: number, larguraHoras: number): string {
+  if (horasPrevistas <= 0) return "Alocado";
+  const excedenteTexto = horasExcedentes > 0 ? ` + excedente ${formatHorasCompacto(horasExcedentes, larguraHoras)}` : "";
+  return `Alocado ${formatHorasCompacto(horasPrevistas, larguraHoras)}${excedenteTexto} = teto ${formatHorasCompacto(horasPrevistas + horasExcedentes, larguraHoras)}`;
 }
 
 // Exportada (junto com IconeStatusAtividade abaixo) pra ser reusada fora da árvore de
@@ -95,6 +96,15 @@ interface LinhaNoProps {
   // `no.podeEditarItem` porque organizar a estrutura não é alocar: quem enxerga a
   // proposta pode reorganizá-la, mesmo em item de outro departamento.
   podeGerenciarProposta: boolean;
+  // Colunas "Blq. Excedente"/"Bloq. Apto." e o input inline de horas excedentes — só
+  // operam quando o nó tem exatamente 1 alocação (ver alocacaoUnica abaixo); nó com 0 ou
+  // >1 alocações não usa nenhum dos dois. Erros já viram banner no pai (erroAcao), por
+  // isso as duas promises aqui não precisam de tratamento de erro local.
+  onMudarConfigApontamentoAlocacao: (
+    alocacaoId: number,
+    patch: Partial<{ bloqueiaApontamento: boolean; bloqueiaExcedente: boolean }>
+  ) => Promise<void>;
+  onSalvarExcedenteAlocacao: (alocacaoId: number, minutos: number) => Promise<void>;
 }
 
 export function LinhaNo({
@@ -121,8 +131,54 @@ export function LinhaNo({
   onSincronizarSenior,
   larguraHoras,
   podeGerenciarProposta,
+  onMudarConfigApontamentoAlocacao,
+  onSalvarExcedenteAlocacao,
 }: LinhaNoProps) {
   const paddingEsquerda = 14 + profundidade * 24;
+
+  // Caso comum do lote novo: 1 consultor por atividade-folha (nó com 0 ou >1 alocações não
+  // ganha os controles inline — 0 não tem o que configurar, >1 seria ambíguo qual alocação
+  // editar; esses casos raros continuam configuráveis pelo Drawer, ver DrawerAtividade.tsx).
+  const alocacaoUnica = no.tipo === "atividade" && no.alocacoesResumo.length === 1 ? no.alocacoesResumo[0] : null;
+  const podeConfigurarInline = alocacaoUnica != null && alocacaoUnica.podeAutorizarExcedente;
+
+  const [excedenteInput, setExcedenteInput] = useState(minutosParaInputHoras(alocacaoUnica?.horasExcedentes ?? 0));
+  const [salvandoExcedente, setSalvandoExcedente] = useState(false);
+  useEffect(() => {
+    setExcedenteInput(minutosParaInputHoras(alocacaoUnica?.horasExcedentes ?? 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alocacaoUnica?.horasExcedentes]);
+
+  async function salvarExcedenteInline() {
+    if (!alocacaoUnica) return;
+    const minutos = horasParaMinutos(excedenteInput);
+    if (minutos == null || minutos < 0 || minutos === alocacaoUnica.horasExcedentes) {
+      // Input inválido ou sem mudança de verdade: reverte pro valor real, sem chamar o
+      // servidor à toa.
+      setExcedenteInput(minutosParaInputHoras(alocacaoUnica.horasExcedentes));
+      return;
+    }
+    setSalvandoExcedente(true);
+    try {
+      await onSalvarExcedenteAlocacao(alocacaoUnica.id, minutos);
+    } finally {
+      setSalvandoExcedente(false);
+    }
+  }
+
+  // Atalho do botão "×" — mesmo caminho de digitar "0:00" no input e sair do campo (mesmo
+  // PATCH, mesma regra de negócio no servidor: só zera se o realizado ainda não estiver
+  // consumindo a faixa de excedente). Sem window.confirm de propósito, pra ficar consistente
+  // com o input, que também zera sem confirmação.
+  async function limparExcedenteInline() {
+    if (!alocacaoUnica) return;
+    setSalvandoExcedente(true);
+    try {
+      await onSalvarExcedenteAlocacao(alocacaoUnica.id, 0);
+    } finally {
+      setSalvandoExcedente(false);
+    }
+  }
 
   // Arrastar um ITEM só o agrupa/desagrupa de uma pasta raiz — organização da estrutura,
   // não distribuição de horas. Por isso vale a permissão da proposta e não a do item:
@@ -410,29 +466,93 @@ export function LinhaNo({
         <div
           className="hidden flex-none text-right font-mono text-[12px] tabular-nums text-muted md:block"
           style={{ width: larguraColunaNumero }}
-          title="Alocado"
+          title={tituloAlocado(agregado.horasPrevistas, agregado.horasExcedentes, larguraHoras)}
         >
           {formatHorasCompacto(agregado.horasPrevistas, larguraHoras)}
+        </div>
+
+        {/* Blq. Excedente — checkbox por alocação, só quando há exatamente 1 (ver
+            alocacaoUnica acima); nó com 0 ou >1 alocações fica em branco, mesma convenção
+            de "vazio = não aplicável" das colunas numéricas. */}
+        <div className="hidden w-[104px] flex-none text-center md:block" onClick={(e) => e.stopPropagation()}>
+          {podeConfigurarInline && (
+            <input
+              type="checkbox"
+              checked={alocacaoUnica!.bloqueiaExcedente}
+              onChange={(e) => onMudarConfigApontamentoAlocacao(alocacaoUnica!.id, { bloqueiaExcedente: e.target.checked })}
+              title="Bloquear horas excedentes desta atividade"
+            />
+          )}
         </div>
 
         {/* Excedente autorizado (AtividadeConsultor.horasExcedentes), somado pra cima do
             mesmo jeito que Realizado/Alocado (ver agregarHoras). Em branco quando zero — a
             maioria das linhas nunca tem excedente, então "0:00" em toda linha só faria
-            ruído; aqui o vazio já é o sinal de "nada fora do combinado". */}
+            ruído; aqui o vazio já é o sinal de "nada fora do combinado". Vira input (mais
+            estreito, 60% da coluna — sobra espaço pro botão "×" ao lado) quando o gestor
+            pode mexer NESTA alocação e ela não está com o excedente bloqueado
+            (bloqueadoExcedenteEfetivo já resolvido no servidor, proposta+atividade). */}
         <div
           className="hidden flex-none text-right font-mono text-[12px] tabular-nums text-warning md:block"
           style={{ width: larguraColunaNumero }}
-          title="Excedente"
+          title="Horas excedentes"
         >
-          {agregado.horasExcedentes > 0 ? formatHorasCompacto(agregado.horasExcedentes, larguraHoras) : ""}
+          {podeConfigurarInline && !alocacaoUnica!.bloqueadoExcedenteEfetivo ? (
+            <div className="flex items-center justify-end gap-1">
+              <input
+                type="text"
+                value={excedenteInput}
+                onChange={(e) => setExcedenteInput(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onBlur={salvarExcedenteInline}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                  if (e.key === "Escape") {
+                    setExcedenteInput(minutosParaInputHoras(alocacaoUnica!.horasExcedentes));
+                    e.currentTarget.blur();
+                  }
+                }}
+                disabled={salvandoExcedente}
+                placeholder="0:00"
+                title="Horas excedentes (H:MM)"
+                className="w-[60%] rounded border border-transparent bg-transparent px-1 text-right font-mono text-[12px] tabular-nums text-warning hover:border-border focus:border-border focus:outline-none disabled:opacity-50"
+              />
+              {/* Zera num clique — mesmo caminho de digitar "0:00" no input (mesma regra de
+                  negócio no servidor: só some se o realizado ainda não estiver consumindo
+                  a faixa de excedente). Só aparece quando há algo pra remover. */}
+              {alocacaoUnica!.horasExcedentes > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    limparExcedenteInline();
+                  }}
+                  disabled={salvandoExcedente}
+                  title="Remover horas excedentes"
+                  className="flex h-4 w-4 flex-none items-center justify-center rounded-full bg-destructive/15 text-destructive hover:bg-destructive/25 disabled:opacity-50"
+                >
+                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          ) : (
+            agregado.horasExcedentes > 0 ? formatHorasCompacto(agregado.horasExcedentes, larguraHoras) : ""
+          )}
         </div>
 
-        <div className="hidden w-[110px] flex-none text-right font-mono text-[11.5px] text-muted md:block">
-          {no.tipo === "atividade" ? formatPeriodoCompacto(no.dataPrevistaInicio, no.dataPrevistaFim) : ""}
-        </div>
-
-        <div className="w-[90px] flex-none text-right">
-          <BadgeStatus status={statusEfetivo} />
+        {/* Bloq. Apto. — mesmo padrão do Blq. Excedente acima, logo depois do Excedente. */}
+        <div className="hidden w-[84px] flex-none text-center md:block" onClick={(e) => e.stopPropagation()}>
+          {podeConfigurarInline && (
+            <input
+              type="checkbox"
+              checked={alocacaoUnica!.bloqueiaApontamento}
+              onChange={(e) => onMudarConfigApontamentoAlocacao(alocacaoUnica!.id, { bloqueiaApontamento: e.target.checked })}
+              title="Bloquear apontamentos desta atividade"
+            />
+          )}
         </div>
 
         <div className="w-6 flex-none" onClick={(e) => e.stopPropagation()}>

@@ -1,5 +1,6 @@
 import { Consultor } from "@prisma/client";
 import { prisma } from "../db/prisma";
+import { DEPEXE_COMERCIAL, DEPEXE_DIRETORIA } from "./propostasDominio";
 
 // Contexto de autorização do módulo de Gestão de Projetos. "Líder Técnico" e
 // "Consultor" não são papéis (Role) — são derivados dinamicamente de
@@ -132,6 +133,19 @@ export async function consultoresFiltraveis(role: string, contexto: ContextoCons
 // horas excedentes, abrir o cronograma da proposta).
 export function gerenciaDepartamento(role: string, contexto: ContextoConsultor, depexe: number): boolean {
   return role === "admin" || contexto.departamentosGerenciados.includes(depexe);
+}
+
+// "Admin, Gestor Comercial ou Diretoria" — alçada pra DECIDIR a configuração de uma proposta
+// (as 3 flags de PropostaModoAlocacao: bloqueiaExcedenteEstrutura, bloqueiaApontamento,
+// bloqueiaExcedente). Conjunto propositalmente mais estreito que podeGerenciarProposta
+// (routes/alocacao.ts), onde entra qualquer gestor com UM item na proposta — largo demais
+// pro peso dessas três decisões.
+//
+// Escrito sobre gerenciaDepartamento: admin já entra de graça lá dentro, e trocar o gestor de
+// um desses dois departamentos no Senior muda o aprovador sozinho, sem deploy. Não há papel
+// "diretoria" no CaxHub — Diretoria é o departamento 0 (ver DEPEXE_DIRETORIA).
+export function podeAprovarConfiguracaoProposta(role: string, contexto: ContextoConsultor): boolean {
+  return gerenciaDepartamento(role, contexto, DEPEXE_COMERCIAL) || gerenciaDepartamento(role, contexto, DEPEXE_DIRETORIA);
 }
 
 // Nome de quem gerencia um departamento — o mesmo JOIN que notificarGestoresDoDepartamento

@@ -82,6 +82,11 @@ export interface AtividadeKanban {
   horasExcedentes: number;
   podeAutorizarExcedente: boolean;
   souOExecutor: boolean;
+  // "Mais restritivo vence" entre proposta e atividade, já resolvido no servidor (ver
+  // domain/bloqueioApontamento.ts, backend). Governa Iniciar (podeIniciar em
+  // atividade-acoes.ts) e as ações de excedente/apontamento no drawer de detalhe.
+  bloqueadoApontamento: boolean;
+  bloqueadoExcedente: boolean;
 }
 
 export interface DetalheInfo {
@@ -104,6 +109,8 @@ export interface DetalheInfo {
   horasExcedentes: number;
   podeAutorizarExcedente: boolean;
   souOExecutor: boolean;
+  bloqueadoApontamento: boolean;
+  bloqueadoExcedente: boolean;
 }
 
 interface KanbanBoardProps {
@@ -199,6 +206,8 @@ function DraggableCard({
       horasExcedentes: atividade.horasExcedentes,
       podeAutorizarExcedente: atividade.podeAutorizarExcedente,
       souOExecutor: atividade.souOExecutor,
+      bloqueadoApontamento: atividade.bloqueadoApontamento,
+      bloqueadoExcedente: atividade.bloqueadoExcedente,
     });
   }
 

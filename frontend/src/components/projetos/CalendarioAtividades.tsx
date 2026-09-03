@@ -109,6 +109,8 @@ export function CalendarioAtividades({ atividades, onAbrirDetalhe }: CalendarioA
                                                 horasExcedentes: a.horasExcedentes,
                                                 podeAutorizarExcedente: a.podeAutorizarExcedente,
                                                 souOExecutor: a.souOExecutor,
+                                                bloqueadoApontamento: a.bloqueadoApontamento,
+                                                bloqueadoExcedente: a.bloqueadoExcedente,
                       })
                     }
                     title={`${a.cliente} · ${a.depexeLabel}`}

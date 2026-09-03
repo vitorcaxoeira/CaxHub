@@ -550,6 +550,8 @@ export function AtividadesTable({
                                                 horasExcedentes: row.horasExcedentes,
                                                 podeAutorizarExcedente: row.podeAutorizarExcedente,
                                                 souOExecutor: row.souOExecutor,
+                                                bloqueadoApontamento: row.bloqueadoApontamento,
+                                                bloqueadoExcedente: row.bloqueadoExcedente,
                                               })
                                             }
                                             className="text-sm text-primary hover:underline"

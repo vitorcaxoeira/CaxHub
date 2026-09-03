@@ -26,6 +26,10 @@ interface TetoApontamentoProps {
   // Só o gestor do departamento autoriza excedente direto; quem executa só solicita.
   podeAutorizarExcedente: boolean;
   souOExecutor: boolean;
+  // "Mais restritivo vence" entre proposta e atividade (ver domain/bloqueioApontamento.ts,
+  // backend) — já resolvido no servidor. Só barra AUMENTAR o excedente; reduzir/zerar o que
+  // já foi concedido continua sempre permitido (mesma regra do backend).
+  bloqueadoExcedente: boolean;
   // Avisa o pai pra recarregar (o teto/o realizado mudaram) — no Cronograma, dispara
   // recarregar() do useCronograma pra atualizar o badge de excedente na árvore.
   onAlterado?: () => void;
@@ -45,6 +49,7 @@ export function TetoApontamento({
   horasExcedentesAtuais,
   podeAutorizarExcedente,
   souOExecutor,
+  bloqueadoExcedente,
   onAlterado,
 }: TetoApontamentoProps) {
   const [solicitacoes, setSolicitacoes] = useState<SolicitacaoExcedenteResumo[]>([]);
@@ -60,6 +65,12 @@ export function TetoApontamento({
 
   const pendente = solicitacoes.find((s) => s.status === "pendente") ?? null;
   const ultimaDecidida = solicitacoes.find((s) => s.status !== "pendente") ?? null;
+
+  // Só barra AUMENTAR (reduzir/zerar o já concedido continua liberado, mesma regra do
+  // backend em PATCH /atividades/:id/horas-excedentes) — projeta o valor do campo a cada
+  // tecla, mesmo espírito de saldoProjetado em DrawerAtividade.
+  const aumentandoExcedente = (horasParaMinutos(excedenteInput) ?? 0) > horasExcedentesAtuais;
+  const salvarExcedenteTravado = bloqueadoExcedente && aumentandoExcedente;
 
   function carregarSolicitacoes() {
     // Quem não é nem executor nem gestor da atividade leva 403 aqui — fica vazio, sem
@@ -159,12 +170,16 @@ export function TetoApontamento({
             />
             <button
               onClick={salvarExcedente}
-              disabled={salvandoExcedente}
+              disabled={salvandoExcedente || salvarExcedenteTravado}
+              title={salvarExcedenteTravado ? "Esta proposta/atividade não permite aumentar horas excedentes." : undefined}
               className="rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {salvandoExcedente ? "Salvando..." : "Salvar"}
             </button>
             {erroExcedente && <span className="text-[12px] text-destructive">{erroExcedente}</span>}
+            {!erroExcedente && salvarExcedenteTravado && (
+              <span className="text-[12px] text-muted">Esta proposta/atividade não permite aumentar horas excedentes.</span>
+            )}
           </div>
         ) : souOExecutor ? (
           <div className="mt-2">
@@ -172,6 +187,10 @@ export function TetoApontamento({
               <p className="rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[12px] text-warning">
                 Solicitação de {formatHorasCompacto(pendente.horasSolicitadas, 2)} aguardando o gestor desde{" "}
                 {dateTimeFormatter.format(new Date(pendente.criadoEm))}.
+              </p>
+            ) : bloqueadoExcedente ? (
+              <p className="rounded-md border border-border bg-surface-2/60 px-2.5 py-1.5 text-[12px] text-muted">
+                Esta proposta/atividade não permite horas excedentes no momento.
               </p>
             ) : abrindoSolicitacao ? (
               <div className="space-y-2 rounded-md border border-border bg-surface px-2.5 py-2">

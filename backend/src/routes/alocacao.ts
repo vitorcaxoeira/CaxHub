@@ -9,6 +9,7 @@ import {
   gerenciaDepartamento,
   AcaoProjeto,
   ContextoConsultor,
+  podeAprovarConfiguracaoProposta,
 } from "../domain/contextoProjeto";
 import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
 import { enfileirar, processarFilaSincronizacao, reprocessar } from "../sync/outboxSenior";
@@ -20,6 +21,11 @@ import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade, entidadeIdProposta } from "../audit/identidadeEntidade";
 import { SITRAT_CANCELADO, calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone, type IntegracaoErpStatus } from "../domain/ratDominio";
+import {
+  configBloqueioProposta,
+  configBloqueioPropostasEmLote,
+  resolverBloqueioComConfig,
+} from "../domain/bloqueioApontamento";
 import { Prisma } from "@prisma/client";
 
 // Área de alocação: o Líder Técnico (Gestor) distribui as horas de um item de proposta
@@ -129,7 +135,11 @@ async function podeVerProposta(permitidos: number[], codemp: number, codpro: num
 //
 // Organizar a estrutura não é alocar: distribuir horas para um consultor continua sendo
 // decidido item a item por podeExecutarAcao, com o depexe DO ITEM.
-async function podeGerenciarProposta(
+// Exportada (02/09/2026) pra o router de solicitação de configuração da proposta
+// (routes/solicitacoesConfigProposta.ts) usar a MESMA regra de "quem pode PEDIR" que esta
+// tela usa pra tudo mais — mesmo precedente de solicitacoesApontamento.ts importando
+// criarSessaoManualPendente de ./apontamentos.
+export async function podeGerenciarProposta(
   role: string,
   contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>,
   codemp: number,
@@ -1007,9 +1017,17 @@ alocacaoRouter.patch("/propostas/:codemp/:codpro/configuracao-alocacao", async (
       res.status(400).json({ error: "Parâmetros inválidos" });
       return;
     }
-    const bloqueiaExcedenteEstrutura = req.body?.bloqueiaExcedenteEstrutura;
-    if (typeof bloqueiaExcedenteEstrutura !== "boolean") {
-      res.status(400).json({ error: "bloqueiaExcedenteEstrutura deve ser true ou false" });
+    // Os 3 campos são opcionais e independentes — o corpo pode mandar só o que mudou (ex.: só
+    // bloqueiaApontamento) sem precisar reenviar os outros dois.
+    const { bloqueiaExcedenteEstrutura, bloqueiaApontamento, bloqueiaExcedente } = req.body ?? {};
+    for (const [nome, valor] of Object.entries({ bloqueiaExcedenteEstrutura, bloqueiaApontamento, bloqueiaExcedente })) {
+      if (valor !== undefined && typeof valor !== "boolean") {
+        res.status(400).json({ error: `${nome} deve ser true ou false` });
+        return;
+      }
+    }
+    if (bloqueiaExcedenteEstrutura === undefined && bloqueiaApontamento === undefined && bloqueiaExcedente === undefined) {
+      res.status(400).json({ error: "Nenhum campo de configuração informado" });
       return;
     }
 
@@ -1019,59 +1037,131 @@ alocacaoRouter.patch("/propostas/:codemp/:codpro/configuracao-alocacao", async (
       return;
     }
     const { contexto, role, user } = ctx;
-    if (!(await podeGerenciarProposta(role, contexto, codemp, codpro))) {
+    // Mudar bloqueiaExcedenteEstrutura/bloqueiaExcedente virou decisão de alçada (02/09/2026):
+    // quem só gerencia a proposta PEDE, por POST /solicitacoes-config-proposta, e admin/gestor
+    // do Comercial/gestor da Diretoria decide. bloqueiaApontamento FICOU DE FORA dessa regra
+    // (03/09/2026, a pedido do Vitor): não impacta orçamento, e o gestor da área que já
+    // gerencia a proposta pode ligar/desligar direto, como sempre foi.
+    if (bloqueiaApontamento !== undefined && !(await podeGerenciarProposta(role, contexto, codemp, codpro))) {
       res.status(403).json({ error: "Sem permissão para gerenciar esta proposta" });
       return;
     }
+    if (
+      (bloqueiaExcedenteEstrutura !== undefined || bloqueiaExcedente !== undefined) &&
+      !podeAprovarConfiguracaoProposta(role, contexto)
+    ) {
+      res.status(403).json({
+        error: "Mudar esta configuração exige aprovação — solicite a mudança para admin, gestor do Comercial ou da Diretoria",
+      });
+      return;
+    }
 
-    // Valor efetivo ANTES da troca (mesma resolução "sem linha = true" usada na validação)
-    // — é o "de" do evento de auditoria abaixo.
-    const valorAntes = await propostaBloqueiaExcedenteEstrutura(codemp, codpro);
+    // Com pedido pendente pro mesmo campo, o caminho é decidir o pedido (em Aprovações), não
+    // mudar por fora: senão a decisão depois aplicaria de novo, com o "de" já errado.
+    const camposEnviados = Object.entries({ bloqueiaExcedenteEstrutura, bloqueiaApontamento, bloqueiaExcedente })
+      .filter(([, valor]) => valor !== undefined)
+      .map(([nome]) => nome);
+    const pendente = await prisma.solicitacaoConfiguracaoProposta.findFirst({
+      where: { codemp, codpro, status: "pendente", campo: { in: camposEnviados } },
+      select: { campo: true },
+    });
+    if (pendente) {
+      res.status(409).json({
+        error: `Existe uma solicitação pendente para "${pendente.campo}" nesta proposta — decida o pedido em Aprovações antes de mudar por aqui`,
+      });
+      return;
+    }
+
+    // Valores efetivos ANTES da troca (mesma resolução "sem linha = default" usada na
+    // validação/leitura) — é o "de" dos eventos de auditoria abaixo.
+    const configAntes = {
+      bloqueiaExcedenteEstrutura: await propostaBloqueiaExcedenteEstrutura(codemp, codpro),
+      ...(await configBloqueioProposta(codemp, codpro)),
+    };
 
     // Upsert dedicado — não reaproveita o POST .../modo (imutável depois da 1ª alocação).
     // Cria a linha com o modo já resolvido (esta tela só existe em modo "estrutura") se
-    // ainda não existir nenhuma, ou só atualiza a flag sem tocar no modo já gravado.
+    // ainda não existir nenhuma, ou só atualiza os campos enviados sem tocar no modo já gravado.
     const modoAtual = (await resolverModoAlocacao(codemp, codpro)) ?? "estrutura";
+    const dadosFinais = {
+      bloqueiaExcedenteEstrutura: bloqueiaExcedenteEstrutura ?? configAntes.bloqueiaExcedenteEstrutura,
+      bloqueiaApontamento: bloqueiaApontamento ?? configAntes.bloqueiaApontamento,
+      bloqueiaExcedente: bloqueiaExcedente ?? configAntes.bloqueiaExcedente,
+    };
     const operacoes: Prisma.PrismaPromise<unknown>[] = [
       prisma.propostaModoAlocacao.upsert({
         where: { codemp_codpro: { codemp, codpro } },
-        create: { codemp, codpro, modo: modoAtual, bloqueiaExcedenteEstrutura, definidoPor: contexto.consultor?.codusu ?? null },
-        update: { bloqueiaExcedenteEstrutura },
+        create: { codemp, codpro, modo: modoAtual, ...dadosFinais, definidoPor: contexto.consultor?.codusu ?? null },
+        update: dadosFinais,
       }),
     ];
-    // Muda uma regra de negócio (quem pode estourar o saldo do item na estrutura inteira) —
-    // evento PRÓPRIO (não PROPOSTA_ALTERADA genérico) e com tone dedicado no frontend
-    // (auditoriaVisual.tsx), pra dar destaque na linha do tempo. Só grava se realmente
-    // mudou (idempotência: reenviar o mesmo valor não polui o histórico).
-    if (valorAntes !== bloqueiaExcedenteEstrutura) {
+
+    // Cada campo muda uma regra de negócio distinta — evento PRÓPRIO por campo (não
+    // PROPOSTA_ALTERADA genérico) e com tone dedicado no frontend (auditoriaVisual.tsx), pra
+    // dar destaque na linha do tempo. Só grava se realmente mudou (idempotência: reenviar o
+    // mesmo valor não polui o histórico).
+    const entidadeComum = {
+      origem: "tela" as const,
+      usuarioId: user.id,
+      codemp,
+      codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.PROPOSTA,
+      entidadeId: entidadeIdProposta(codemp, codpro),
+      entidadeRotulo: `Proposta ${codemp}/${codpro}`,
+      correlationId: req.correlationId!,
+    };
+    if (bloqueiaExcedenteEstrutura !== undefined && configAntes.bloqueiaExcedenteEstrutura !== bloqueiaExcedenteEstrutura) {
       operacoes.push(
         criarEventoAuditoria({
-          origem: "tela",
-          usuarioId: user.id,
-          codemp,
-          codpro,
-          entidadeTipo: ENTIDADES_AUDITORIA.PROPOSTA,
-          entidadeId: entidadeIdProposta(codemp, codpro),
-          entidadeRotulo: `Proposta ${codemp}/${codpro}`,
+          ...entidadeComum,
           eventoTipo: EVENTOS_AUDITORIA.PROPOSTA_BLOQUEIO_EXCEDENTE_ALTERADO,
           alteracoes: {
             bloqueiaExcedenteEstrutura: {
-              de: valorAntes,
+              de: configAntes.bloqueiaExcedenteEstrutura,
               para: bloqueiaExcedenteEstrutura,
               rotulo: "Trava de excedente na estrutura",
             },
           },
           metadata: {
-            bloqueio_de: valorAntes ? "Ligado" : "Desligado",
+            bloqueio_de: configAntes.bloqueiaExcedenteEstrutura ? "Ligado" : "Desligado",
             bloqueio_para: bloqueiaExcedenteEstrutura ? "Ligado" : "Desligado",
           },
-          correlationId: req.correlationId!,
+        })
+      );
+    }
+    if (bloqueiaApontamento !== undefined && configAntes.bloqueiaApontamento !== bloqueiaApontamento) {
+      operacoes.push(
+        criarEventoAuditoria({
+          ...entidadeComum,
+          eventoTipo: EVENTOS_AUDITORIA.PROPOSTA_BLOQUEIO_APONTAMENTO_ALTERADO,
+          alteracoes: {
+            bloqueiaApontamento: { de: configAntes.bloqueiaApontamento, para: bloqueiaApontamento, rotulo: "Bloquear apontamentos" },
+          },
+          metadata: {
+            bloqueio_de: configAntes.bloqueiaApontamento ? "Ligado" : "Desligado",
+            bloqueio_para: bloqueiaApontamento ? "Ligado" : "Desligado",
+          },
+        })
+      );
+    }
+    if (bloqueiaExcedente !== undefined && configAntes.bloqueiaExcedente !== bloqueiaExcedente) {
+      operacoes.push(
+        criarEventoAuditoria({
+          ...entidadeComum,
+          eventoTipo: EVENTOS_AUDITORIA.PROPOSTA_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO,
+          alteracoes: {
+            bloqueiaExcedente: { de: configAntes.bloqueiaExcedente, para: bloqueiaExcedente, rotulo: "Bloquear horas excedentes" },
+          },
+          metadata: {
+            bloqueio_de: configAntes.bloqueiaExcedente ? "Ligado" : "Desligado",
+            bloqueio_para: bloqueiaExcedente ? "Ligado" : "Desligado",
+          },
         })
       );
     }
     await prisma.$transaction(operacoes);
 
-    res.json({ bloqueiaExcedenteEstrutura });
+    res.json(dadosFinais);
   } catch (error) {
     handleError(res, error, "configuracao-alocacao");
   }
@@ -1327,6 +1417,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
       );
     }
 
+    // 1 query só pra proposta inteira (nunca por nó/alocação dentro do loop de mapNo) — ver
+    // domain/bloqueioApontamento.ts.
+    const cfgBloqueioProposta = await configBloqueioProposta(codemp, codpro);
+
     function mapNo(n: (typeof todosOsNos)[number]) {
       const alocacoesDoNo = alocacoesPorNo.get(n.id) ?? [];
       const horasAlocadas = alocacoesDoNo.reduce((soma, a) => soma + (a.qtdhor ?? 0), 0);
@@ -1404,6 +1498,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
         horasDivergentes: n.tipo === "atividade" && n.responsavelCodfor != null && n.duracaoHoras != null && n.duracaoHoras !== horasAlocadas,
         alocacoes: alocacoesDoNo.map((a) => {
           const depexeDoItem = depexePorSeqite.get(a.seqite);
+          const bloqueio = resolverBloqueioComConfig(cfgBloqueioProposta, a);
           return {
             id: a.id,
             codfor: a.codfor,
@@ -1422,12 +1517,39 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
             // acima do planejado é decisão de gestor; quem executa só pede.
             podeAutorizarExcedente: depexeDoItem != null && gerenciaDepartamento(role, contexto, depexeDoItem),
             souOExecutor: contexto.consultor?.codfor != null && contexto.consultor.codfor > 0 && contexto.consultor.codfor === a.codfor,
+            // Valores brutos desta alocação (pra editar no Drawer) e já combinados com a
+            // proposta (pra desabilitar botão sem o frontend saber a regra) — ver
+            // domain/bloqueioApontamento.ts.
+            bloqueiaApontamento: a.bloqueiaApontamento,
+            bloqueiaExcedente: a.bloqueiaExcedente,
+            bloqueadoApontamentoEfetivo: bloqueio.bloqueadoApontamento,
+            bloqueadoExcedenteEfetivo: bloqueio.bloqueadoExcedente,
           };
         }),
       };
     }
 
     const podeGerenciarEstaProposta = await podeGerenciarProposta(role, contexto, codemp, codpro);
+    // Última solicitação de CADA campo, qualquer status — não só as pendentes. Alimenta o
+    // indicador visual (aguardando/aprovado/reprovado, ver IconeStatusSolicitacao no
+    // frontend) ao lado de cada checkbox: pendente ainda trava a edição (mesma regra de
+    // sempre), aprovada/reprovada só fica à vista como contexto de "o que aconteceu da
+    // última vez que alguém pediu isso" — não trava nada.
+    const ultimasSolicitacoesConfig = await prisma.solicitacaoConfiguracaoProposta.findMany({
+      where: { codemp, codpro },
+      orderBy: { criadoEm: "desc" },
+      distinct: ["campo"],
+      select: {
+        campo: true,
+        status: true,
+        valorSolicitado: true,
+        criadoEm: true,
+        decididoEm: true,
+        observacaoDecisao: true,
+        solicitante: { select: { nome: true } },
+        decididoPor: { select: { nome: true } },
+      },
+    });
 
     res.json({
       proposta: {
@@ -1444,6 +1566,26 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
         // Desliga o bypass "Salvar mesmo excedendo" da edição de duração (ver
         // PATCH /propostas/:codemp/:codpro/configuracao-alocacao e o campo no schema).
         bloqueiaExcedenteEstrutura: await propostaBloqueiaExcedenteEstrutura(codemp, codpro),
+        // Bloqueio de apontamento/excedente em nível de proposta inteira — ver
+        // domain/bloqueioApontamento.ts e o checkbox equivalente no Cronograma.
+        bloqueiaApontamento: cfgBloqueioProposta.bloqueiaApontamento,
+        bloqueiaExcedente: cfgBloqueioProposta.bloqueiaExcedente,
+        // Alçada pra DECIDIR essas 3 flags (admin/gestor do Comercial/gestor da Diretoria) —
+        // quem não tem, o Cronograma faz PEDIR em vez de mudar direto.
+        podeAprovarConfiguracao: podeAprovarConfiguracaoProposta(role, contexto),
+        // Última solicitação de cada campo (qualquer status) — pendente trava o checkbox
+        // (o caminho de mudar passa a ser decidir o pedido em Aprovações); aprovada/
+        // reprovada só ilustra o desfecho da última vez que alguém pediu.
+        solicitacoesConfigPorCampo: ultimasSolicitacoesConfig.map((s) => ({
+          campo: s.campo,
+          status: s.status,
+          valorSolicitado: s.valorSolicitado,
+          solicitanteNome: s.solicitante?.nome ?? "Usuário removido",
+          criadoEm: s.criadoEm,
+          decididoEm: s.decididoEm,
+          decisorNome: s.decididoPor?.nome ?? null,
+          observacaoDecisao: s.observacaoDecisao,
+        })),
       },
       // Pastas raiz da proposta — organizacionais, fora do escopo de qualquer item;
       // servem só pra agrupar itens entre si (parentId de EstruturaAtividade normal,
@@ -2006,6 +2148,29 @@ alocacaoRouter.delete("/estrutura/:id", async (req: AuthenticatedRequest, res) =
         error: `Não é possível excluir: existem ${alocacoesVinculadas.length} consultores alocados nesta atividade — remova as alocações primeiro`,
       });
       return;
+    }
+
+    // Trava contra apagar o rastro de uma atividade já executada: uma sessão ou item de RAT
+    // pode existir contra uma alocação já inativa (consultor removido antes), então busca
+    // TODAS as AtividadeConsultor do nó, não só as com sitreg "A" (alocacoesVinculadas acima
+    // é escopo diferente: conta só quantos consultores ATIVOS restam pra decidir a cascata).
+    const todasAlocacoesDoNo = await prisma.atividadeConsultor.findMany({
+      where: { estruturaAtividadeId: id },
+      select: { id: true, seqati: true },
+    });
+    if (todasAlocacoesDoNo.length > 0) {
+      const [temSessao, temRatItem] = await Promise.all([
+        prisma.atividadeSessaoExecucao.count({
+          where: { atividadeId: { in: todasAlocacoesDoNo.map((a) => a.id) }, excluidaEm: null },
+        }),
+        prisma.ratItem.count({
+          where: { seqati: { in: todasAlocacoesDoNo.map((a) => a.seqati).filter((s): s is bigint => s != null) } },
+        }),
+      ]);
+      if (temSessao > 0 || temRatItem > 0) {
+        res.status(400).json({ error: "Não é possível excluir: existem apontamentos (sessão ou RAT) registrados nesta atividade" });
+        return;
+      }
     }
 
     if (alocacoesVinculadas.length === 1) {
@@ -2756,6 +2921,17 @@ alocacaoRouter.delete("/alocacoes/:id", async (req: AuthenticatedRequest, res) =
 
     if (!podeMexerNoItem(role, contexto, "excluir", depexe, resolvido.propostaDepexe, atividade.codfor)) {
       res.status(403).json({ error: "Sem permissão para remover esta alocação" });
+      return;
+    }
+
+    // Mesma trava de DELETE /estrutura/:id — não apaga o rastro de uma atividade já
+    // executada. Ver comentário lá pra por que busca sessão/RAT em vez de só olhar sitreg.
+    const [temSessao, temRatItem] = await Promise.all([
+      prisma.atividadeSessaoExecucao.count({ where: { atividadeId: id, excluidaEm: null } }),
+      atividade.seqati != null ? prisma.ratItem.count({ where: { seqati: atividade.seqati } }) : Promise.resolve(0),
+    ]);
+    if (temSessao > 0 || temRatItem > 0) {
+      res.status(400).json({ error: "Não é possível excluir: existem apontamentos (sessão ou RAT) registrados nesta atividade" });
       return;
     }
 

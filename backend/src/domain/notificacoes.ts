@@ -1,4 +1,5 @@
 import { prisma } from "../db/prisma";
+import { DEPEXE_COMERCIAL, DEPEXE_DIRETORIA } from "./propostasDominio";
 
 export async function criarNotificacao(
   userId: number,
@@ -62,5 +63,42 @@ export async function notificarGestoresDoDepartamento(
   for (const usuario of usuarios) {
     if (usuario.id === excluirUserId) continue;
     await criarNotificacao(usuario.id, tipo, mensagem, atividadeId);
+  }
+}
+
+// Notifica quem tem alçada pra decidir configuração de proposta: gestor do Comercial +
+// gestor da Diretoria + todo admin — o mesmo conjunto de podeAprovarConfiguracaoProposta
+// (domain/contextoProjeto.ts).
+//
+// Função própria porque as três acima não servem: notificarGestoresDoDepartamento é de UM
+// departamento e exige `atividadeId`, e aqui a solicitação é da PROPOSTA (não existe
+// atividade envolvida) e o conjunto inclui admins, que não são gestores de departamento
+// nenhum. `atividadeId` fica de fora — criarNotificacao já aceita sem ele.
+//
+// Mesmo silêncio das outras em cada etapa (gestor sem Consultor casando, ou Consultor sem
+// User): quem não tem login aqui simplesmente não recebe, e isso não derruba a ação.
+export async function notificarAprovadoresConfiguracaoProposta(
+  codemp: number,
+  mensagem: string,
+  excluirUserId?: number
+): Promise<void> {
+  const gestores = await prisma.departamentoGestor.findMany({
+    where: { codemp, depexe: { in: [DEPEXE_COMERCIAL, DEPEXE_DIRETORIA] } },
+  });
+  const codusuList = gestores.map((g) => Number(g.usuges));
+  const consultores =
+    codusuList.length > 0 ? await prisma.consultor.findMany({ where: { codemp, codusu: { in: codusuList } } }) : [];
+  const emails = consultores.map((c) => c.email).filter((e): e is string => !!e);
+
+  const [gestoresUsuarios, admins] = await Promise.all([
+    emails.length > 0 ? prisma.user.findMany({ where: { email: { in: emails, mode: "insensitive" } } }) : Promise.resolve([]),
+    prisma.user.findMany({ where: { role: { name: "admin" } } }),
+  ]);
+
+  // Um admin que também seja gestor de um desses departamentos apareceria duas vezes.
+  const idsUnicos = new Set([...gestoresUsuarios, ...admins].map((u) => u.id));
+  for (const userId of idsUnicos) {
+    if (userId === excluirUserId) continue;
+    await criarNotificacao(userId, "config_proposta_solicitada", mensagem);
   }
 }

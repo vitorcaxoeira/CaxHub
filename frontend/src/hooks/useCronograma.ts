@@ -22,6 +22,30 @@ export interface PropostaCronograma {
   // Desliga o bypass "Salvar mesmo excedendo" da edição de duração (DrawerAtividade) —
   // ver PATCH /propostas/:codemp/:codpro/configuracao-alocacao.
   bloqueiaExcedenteEstrutura: boolean;
+  // Bloqueio de apontamento/excedente em nível de proposta inteira — "mais restritivo
+  // vence" com o campo irmão em AlocacaoResumo (a atividade pode ser mais restritiva que
+  // a proposta, nunca menos). Ver domain/bloqueioApontamento.ts (backend).
+  bloqueiaApontamento: boolean;
+  bloqueiaExcedente: boolean;
+  // Alçada pra DECIDIR as 3 flags acima (admin/gestor do Comercial/gestor da Diretoria).
+  // Quem não tem, em vez de alternar o checkbox, abre um pedido de aprovação.
+  podeAprovarConfiguracao: boolean;
+  // Última solicitação de CADA campo, qualquer status — pendente trava o checkbox (o
+  // caminho de mudar passa a ser decidir o pedido em /projetos/aprovacoes); aprovada/
+  // reprovada só ilustra o desfecho da última vez que alguém pediu (indicador visual, ver
+  // IconeStatusSolicitacao).
+  solicitacoesConfigPorCampo: SolicitacaoConfigPorCampo[];
+}
+
+export interface SolicitacaoConfigPorCampo {
+  campo: string;
+  status: "pendente" | "aprovada" | "reprovada";
+  valorSolicitado: boolean;
+  solicitanteNome: string;
+  criadoEm: string;
+  decididoEm: string | null;
+  decisorNome: string | null;
+  observacaoDecisao: string | null;
 }
 
 // Superset de NoCronograma com os campos que a tela precisa mas os seletores puros
@@ -80,6 +104,13 @@ export interface AlocacaoResumo {
   seqati: string | null;
   podeAutorizarExcedente: boolean;
   souOExecutor: boolean;
+  // Valores brutos desta alocação (pra editar no Drawer) e já combinados com a proposta
+  // (pra desabilitar botão sem o frontend precisar saber a regra) — ver
+  // domain/bloqueioApontamento.ts (backend).
+  bloqueiaApontamento: boolean;
+  bloqueiaExcedente: boolean;
+  bloqueadoApontamentoEfetivo: boolean;
+  bloqueadoExcedenteEfetivo: boolean;
 }
 
 interface NoApi {
@@ -554,6 +585,130 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     [codemp, codpro, proposta]
   );
 
+  // Liga/desliga o bloqueio de apontamento/excedente EM NÍVEL DE PROPOSTA (ver
+  // PATCH /propostas/:codemp/:codpro/configuracao-alocacao). Optimistic, mesmo padrão de
+  // atualizarBloqueiaExcedenteEstrutura acima — desfaz no erro. Também recalcula o
+  // "efetivo" de toda alocação da árvore (mesma lógica OR de
+  // domain/bloqueioApontamento.ts no backend, replicada aqui só pro toggle parecer
+  // instantâneo; o servidor confirma/recusa de verdade em cada ação).
+  // Pedido de mudança pra quem NÃO tem alçada (ver podeAprovarConfiguracao). Sem update
+  // otimista de propósito: o valor só muda quando alguém aprovar — o que muda agora é só a
+  // pendência, e é `carregar()` que a traz de volta pra travar o checkbox.
+  const solicitarConfigProposta = useCallback(
+    async (campo: string, valorSolicitado: boolean, motivo: string) => {
+      try {
+        await axios.post("/api/solicitacoes-config-proposta", {
+          codemp: Number(codemp),
+          codpro: Number(codpro),
+          campo,
+          valorSolicitado,
+          motivo,
+        });
+        await carregar();
+      } catch (err) {
+        const axiosErr = err as { response?: { data?: { error?: string } } };
+        throw new Error(axiosErr.response?.data?.error ?? "Falha ao enviar a solicitação");
+      }
+    },
+    [carregar, codemp, codpro]
+  );
+
+  const atualizarConfigApontamentoProposta = useCallback(
+    async (patch: Partial<{ bloqueiaApontamento: boolean; bloqueiaExcedente: boolean }>) => {
+      const snapshotProposta = proposta;
+      const snapshotNos = nos;
+      const novaProposta = proposta ? { ...proposta, ...patch } : proposta;
+      setProposta(novaProposta);
+      if (novaProposta) {
+        setNos((atual) =>
+          atual.map((n) => ({
+            ...n,
+            alocacoesResumo: n.alocacoesResumo.map((a) => ({
+              ...a,
+              bloqueadoApontamentoEfetivo: novaProposta.bloqueiaApontamento || a.bloqueiaApontamento,
+              bloqueadoExcedenteEfetivo: novaProposta.bloqueiaExcedente || a.bloqueiaExcedente,
+            })),
+          }))
+        );
+      }
+      try {
+        await axios.patch(`/api/alocacao/propostas/${codemp}/${codpro}/configuracao-alocacao`, patch);
+      } catch (err) {
+        setProposta(snapshotProposta);
+        setNos(snapshotNos);
+        const axiosErr = err as { response?: { data?: { error?: string } } };
+        throw new Error(axiosErr.response?.data?.error ?? "Falha ao salvar a configuração");
+      }
+    },
+    [codemp, codpro, proposta, nos]
+  );
+
+  // Equivalente por ALOCAÇÃO (gestor bloqueia só uma atividade de um consultor, sem mexer
+  // na proposta inteira) — ver PATCH /atividades/:id/config-apontamento. Mesmo padrão
+  // optimistic acima, combinando com o bloqueio da proposta (já em `proposta`) pra
+  // recalcular o efetivo desta alocação só.
+  const atualizarConfigApontamentoAlocacao = useCallback(
+    async (alocacaoId: number, patch: Partial<{ bloqueiaApontamento: boolean; bloqueiaExcedente: boolean }>) => {
+      const snapshot = nos;
+      setNos((atual) =>
+        atual.map((n) => ({
+          ...n,
+          alocacoesResumo: n.alocacoesResumo.map((a) => {
+            if (a.id !== alocacaoId) return a;
+            const bloqueiaApontamento = patch.bloqueiaApontamento ?? a.bloqueiaApontamento;
+            const bloqueiaExcedente = patch.bloqueiaExcedente ?? a.bloqueiaExcedente;
+            return {
+              ...a,
+              bloqueiaApontamento,
+              bloqueiaExcedente,
+              bloqueadoApontamentoEfetivo: (proposta?.bloqueiaApontamento ?? false) || bloqueiaApontamento,
+              bloqueadoExcedenteEfetivo: (proposta?.bloqueiaExcedente ?? true) || bloqueiaExcedente,
+            };
+          }),
+        }))
+      );
+      try {
+        await axios.patch(`/api/atividades/${alocacaoId}/config-apontamento`, patch);
+      } catch (err) {
+        setNos(snapshot);
+        const axiosErr = err as { response?: { data?: { error?: string } } };
+        throw new Error(axiosErr.response?.data?.error ?? "Falha ao salvar a configuração");
+      }
+    },
+    [nos, proposta]
+  );
+
+  // Equivalente por ALOCAÇÃO do "Salvar" de TetoApontamento.tsx, mas chamável direto da
+  // árvore (coluna Excedente vira input quando não bloqueada) — ver PATCH
+  // /atividades/:id/horas-excedentes.
+  const atualizarHorasExcedentesAlocacao = useCallback(
+    async (alocacaoId: number, horasExcedentes: number) => {
+      const snapshot = nos;
+      setNos((atual) =>
+        atual.map((n) => {
+          if (!n.alocacoesResumo.some((a) => a.id === alocacaoId)) return n;
+          const novasAlocacoes = n.alocacoesResumo.map((a) => (a.id === alocacaoId ? { ...a, horasExcedentes } : a));
+          return {
+            ...n,
+            alocacoesResumo: novasAlocacoes,
+            // horasExcedentes do NÓ é soma das alocações (mesmo cálculo do backend, mapNo) —
+            // recalculado aqui pra coluna Excedente (agregarHoras lê no.horasExcedentes direto
+            // pra tipo="atividade") atualizar na hora.
+            horasExcedentes: novasAlocacoes.reduce((soma, a) => soma + a.horasExcedentes, 0),
+          };
+        })
+      );
+      try {
+        await axios.patch(`/api/atividades/${alocacaoId}/horas-excedentes`, { horasExcedentes });
+      } catch (err) {
+        setNos(snapshot);
+        const axiosErr = err as { response?: { data?: { error?: string } } };
+        throw new Error(axiosErr.response?.data?.error ?? "Falha ao salvar as horas excedentes");
+      }
+    },
+    [nos]
+  );
+
   return {
     proposta,
     nos,
@@ -566,6 +721,10 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     duplicarNo,
     moverItem,
     atualizarBloqueiaExcedenteEstrutura,
+    atualizarConfigApontamentoProposta,
+    solicitarConfigProposta,
+    atualizarConfigApontamentoAlocacao,
+    atualizarHorasExcedentesAlocacao,
     sincronizarAlocacao,
     acompanharSincronizacaoAlocacao,
   };

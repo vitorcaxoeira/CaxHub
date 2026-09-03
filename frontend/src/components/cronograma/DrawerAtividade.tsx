@@ -3,7 +3,6 @@ import axios from "axios";
 import { HorasAgregadas, StatusNo, formatHorasCompacto, formatarAlocacoes, projetarSaldo } from "../../lib/cronograma";
 import { NoCronogramaCompleto, PatchNo } from "../../hooks/useCronograma";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
-import { TetoApontamento } from "../atividades/TetoApontamento";
 
 const OPCOES_STATUS: { value: Exclude<StatusNo, "bloqueada">; label: string }[] = [
   { value: "nao_iniciada", label: "Não iniciada" },
@@ -36,14 +35,13 @@ interface DrawerAtividadeProps {
   // Desliga o bypass "Salvar mesmo excedendo" (ver PropostaModoAlocacao.bloqueiaExcedenteEstrutura) —
   // com isso ligado, estourar o saldo do item trava o salvamento em vez de só avisar.
   bloqueiaExcedenteEstrutura: boolean;
-  // Recarrega a árvore inteira depois de autorizar/solicitar excedente (TetoApontamento) —
-  // sem isso o badge de excedente na árvore (LinhaNo) ficaria com o valor velho até um
-  // reload manual da página.
-  onRecarregar: () => void;
-  // Autorizar horas excedentes também manda editar_atividade pro Senior — acompanha até o
-  // ícone de integração assentar no resultado final, mesmo mecanismo do botão "Sincronizar
-  // com o Senior".
-  acompanharSincronizacaoAlocacao: (atividadeConsultorId: number) => void;
+  // Liga/desliga bloqueio de apontamento/excedente de UMA alocação (gestor trava só este
+  // consultor nesta atividade, sem mexer na proposta inteira) — ver
+  // useCronograma/atualizarConfigApontamentoAlocacao.
+  atualizarConfigApontamentoAlocacao: (
+    alocacaoId: number,
+    patch: Partial<{ bloqueiaApontamento: boolean; bloqueiaExcedente: boolean }>
+  ) => Promise<void>;
 }
 
 export function DrawerAtividade({
@@ -58,8 +56,7 @@ export function DrawerAtividade({
   onSalvar,
   larguraHoras,
   bloqueiaExcedenteEstrutura,
-  onRecarregar,
-  acompanharSincronizacaoAlocacao,
+  atualizarConfigApontamentoAlocacao,
 }: DrawerAtividadeProps) {
   const [nome, setNome] = useState(no.nome);
   const [responsavelCodfor, setResponsavelCodfor] = useState<number | "">(no.responsavelCodfor ?? "");
@@ -175,6 +172,20 @@ export function DrawerAtividade({
       setErro((err as Error).message);
     } finally {
       setSalvando(false);
+    }
+  }
+
+  // Liga/desliga bloqueio de apontamento/excedente de UMA alocação — mesmo padrão de erro
+  // das demais ações do drawer (setErro), sem estado de "salvando" próprio: o checkbox já
+  // reflete o valor otimista na hora (ver atualizarConfigApontamentoAlocacao).
+  async function onMudarConfigApontamentoAlocacao(
+    alocacaoId: number,
+    patch: Partial<{ bloqueiaApontamento: boolean; bloqueiaExcedente: boolean }>
+  ) {
+    try {
+      await atualizarConfigApontamentoAlocacao(alocacaoId, patch);
+    } catch (err) {
+      setErro((err as Error).message);
     }
   }
 
@@ -344,24 +355,36 @@ export function DrawerAtividade({
                 </p>
               </div>
 
-              {/* Uma por alocação — normalmente 1, pode ser mais de uma numa tarefa
-                  compartilhada entre consultores (ver alocacoesResumo). Mesmo componente do
-                  Kanban/Lista/Calendário/Timeline/MeusApontamentos (AtividadeDetalhe), só
-                  que embutido aqui em vez de aberto num drawer à parte. */}
-              {no.alocacoesResumo.map((a) => (
-                <TetoApontamento
-                  key={a.id}
-                  atividadeConsultorId={a.id}
-                  qtdhorPrevisto={a.qtdhor}
-                  horasExcedentesAtuais={a.horasExcedentes}
-                  podeAutorizarExcedente={a.podeAutorizarExcedente}
-                  souOExecutor={a.souOExecutor}
-                  onAlterado={() => {
-                    onRecarregar();
-                    acompanharSincronizacaoAlocacao(a.id);
-                  }}
-                />
-              ))}
+              {/* Checkboxes de bloqueio por alocação — só quando há MAIS DE UMA (o caso
+                  comum, 1 alocação/regra estrutural do lote novo, tem os mesmos 2 controles
+                  direto na árvore do Cronograma, ver LinhaNo.tsx colunas "Bloq. Exce."/"Bloq.
+                  Apto."); este bloco é fallback só pro caso raro de tarefa compartilhada
+                  entre consultores, onde a árvore não sabe qual das N alocações o clique se
+                  refere. "Teto de apontamento" (resumo Alocado+excedente=teto e autorização
+                  de excedente) saiu totalmente do Drawer — vive na árvore agora (coluna Hrs.
+                  Exce. e hover na coluna Alocado, ver LinhaNo.tsx). */}
+              {no.alocacoesResumo
+                .filter((a) => a.podeAutorizarExcedente && no.alocacoesResumo.length > 1)
+                .map((a) => (
+                  <div key={a.id} className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <label className="flex items-center gap-2 text-[12.5px] text-muted">
+                      <input
+                        type="checkbox"
+                        checked={a.bloqueiaApontamento}
+                        onChange={(e) => onMudarConfigApontamentoAlocacao(a.id, { bloqueiaApontamento: e.target.checked })}
+                      />
+                      Bloquear apontamentos desta atividade
+                    </label>
+                    <label className="flex items-center gap-2 text-[12.5px] text-muted">
+                      <input
+                        type="checkbox"
+                        checked={a.bloqueiaExcedente}
+                        onChange={(e) => onMudarConfigApontamentoAlocacao(a.id, { bloqueiaExcedente: e.target.checked })}
+                      />
+                      Bloquear horas excedentes desta atividade
+                    </label>
+                  </div>
+                ))}
 
               <div>
                 <label htmlFor="drawer-observacao" className="mb-1 block text-[12.5px] font-medium text-muted">

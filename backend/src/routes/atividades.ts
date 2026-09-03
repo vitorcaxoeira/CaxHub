@@ -24,9 +24,14 @@ import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "
 import { CAMPOS_AUDITADOS_ATIVIDADE_DATAS, CAMPOS_AUDITADOS_EXCEDENTE } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
-import { avaliarEntradaEmExecucao, formatarMinutos } from "../domain/tetoAtividade";
+import { avaliarEntradaEmExecucao, formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { diaSemanaDaSessao, limitePorExpediente } from "../domain/jornadaConsultor";
 import { limiteDaSessaoAberta, prazoDeEncerramento, MENSAGEM_MOTIVO, MotivoLimite } from "../domain/limiteSessao";
+import {
+  configBloqueioPropostasEmLote,
+  resolverBloqueioApontamento,
+  resolverBloqueioComConfig,
+} from "../domain/bloqueioApontamento";
 import {
   RAIA_A_FAZER,
   RAIA_EM_ANDAMENTO,
@@ -288,6 +293,11 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   const nosEstruturaPorId = new Map(nosEstrutura.map((n) => [n.id, n]));
   const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
   const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
+  // 1 query só pra todas as propostas envolvidas (nunca 1 por atividade dentro do map abaixo)
+  // — ver domain/bloqueioApontamento.ts.
+  const cfgBloqueioPorProposta = await configBloqueioPropostasEmLote(
+    atividades.map((a) => ({ codemp: a.codemp, codpro: a.codpro }))
+  );
 
   return atividades
     .map((a) => {
@@ -391,6 +401,24 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
         // como sentinela de "não se aplica a um consultor" (ver alocacao.ts).
         souOExecutor:
           contexto.consultor?.codfor != null && contexto.consultor.codfor > 0 && contexto.consultor.codfor === a.codfor,
+        // Valores brutos desta alocação e já combinados com a proposta (proposta OU
+        // atividade bloqueando já bloqueia) — ver domain/bloqueioApontamento.ts.
+        ...(() => {
+          const cfg = cfgBloqueioPorProposta.get(`${a.codemp}-${a.codpro}`) ?? { bloqueiaApontamento: false, bloqueiaExcedente: true };
+          const bloqueio = resolverBloqueioComConfig(cfg, a);
+          return {
+            bloqueiaApontamento: a.bloqueiaApontamento,
+            bloqueiaExcedente: a.bloqueiaExcedente,
+            bloqueadoApontamentoEfetivo: bloqueio.bloqueadoApontamento,
+            bloqueadoExcedenteEfetivo: bloqueio.bloqueadoExcedente,
+            // Mesmo valor de bloqueadoApontamentoEfetivo/bloqueadoExcedenteEfetivo, com o
+            // nome curto que AtividadeDetalhe.tsx e as telas de /projetos/atividades (Kanban,
+            // Lista, Calendário, Timeline, atividade-acoes.ts) já esperavam — sem isto, esses
+            // consumidores liam `undefined` (chave inexistente) e nunca bloqueavam nada.
+            bloqueadoApontamento: bloqueio.bloqueadoApontamento,
+            bloqueadoExcedente: bloqueio.bloqueadoExcedente,
+          };
+        })(),
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -803,6 +831,23 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    // Mesma regra de bloqueio do botão Iniciar, e pelo mesmo motivo: arrastar o card pra uma
+    // raia que conta como execução abre sessão igual — sem isto o bloqueio teria uma porta
+    // dos fundos a um arrasto de distância. Só quando ENTRA em execução (parar sempre livre,
+    // ver domain/bloqueioApontamento.ts).
+    if (colunaNova.contaComoExecucao) {
+      const bloqueio = await resolverBloqueioApontamento(atividade);
+      if (bloqueio.bloqueadoApontamento) {
+        res.status(409).json({
+          error:
+            bloqueio.origemBloqueioApontamento === "proposta"
+              ? "Apontamento bloqueado nesta proposta pelo gestor."
+              : "Apontamento bloqueado nesta atividade pelo gestor.",
+        });
+        return;
+      }
+    }
+
     // Mesma regra de teto do botão Iniciar, e pelo mesmo motivo: arrastar o card pra uma
     // raia que conta como execução abre sessão igual. Sem isto o bloqueio do Iniciar teria
     // uma porta dos fundos a um arrasto de distância.
@@ -919,6 +964,19 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
     // frontend só desabilita o botão; quem garante de verdade é o servidor.
     if (!podeIniciar(colunaAtual?.nome)) {
       res.status(409).json({ error: `Atividade não está em "${RAIA_A_FAZER}" — não pode ser iniciada agora.` });
+      return;
+    }
+
+    // Bloqueio de apontamento (proposta ou atividade) — só a ENTRADA em execução é barrada,
+    // ver comentário equivalente em PATCH /:id/mover e domain/bloqueioApontamento.ts.
+    const bloqueio = await resolverBloqueioApontamento(atividade);
+    if (bloqueio.bloqueadoApontamento) {
+      res.status(409).json({
+        error:
+          bloqueio.origemBloqueioApontamento === "proposta"
+            ? "Apontamento bloqueado nesta proposta pelo gestor."
+            : "Apontamento bloqueado nesta atividade pelo gestor.",
+      });
       return;
     }
 
@@ -1424,6 +1482,36 @@ atividadesRouter.patch("/:id/horas-excedentes", async (req: AuthenticatedRequest
       return;
     }
 
+    // Bloqueio de horas excedentes (proposta ou atividade) — só barra AUMENTAR; reduzir ou
+    // zerar um excedente já concedido continua sempre permitido (ver
+    // domain/bloqueioApontamento.ts).
+    if (horasExcedentes > atividade.horasExcedentes) {
+      const bloqueio = await resolverBloqueioApontamento(atividade);
+      if (bloqueio.bloqueadoExcedente) {
+        res.status(403).json({
+          error:
+            bloqueio.origemBloqueioExcedente === "proposta"
+              ? "Esta proposta não permite horas excedentes."
+              : "Esta atividade não permite horas excedentes.",
+        });
+        return;
+      }
+    }
+
+    // Reduzir/zerar nunca pode derrubar o teto abaixo do que já foi realizado — senão o
+    // consultor fica com apontamento já registrado "sobrando" acima do novo teto. Não
+    // depende de bloqueiaExcedente (é integridade de dado, não autorização).
+    if (horasExcedentes < atividade.horasExcedentes) {
+      const { realizado } = await saldoDaAtividade(atividade);
+      const minimoPermitido = Math.max(0, realizado - (atividade.qtdhor ?? 0));
+      if (horasExcedentes < minimoPermitido) {
+        res.status(409).json({
+          error: `Não é possível reduzir as horas excedentes abaixo de ${formatarMinutos(minimoPermitido)} — os apontamentos já registrados estão consumindo essa parte (realizado ${formatarMinutos(realizado)} de ${formatarMinutos(atividade.qtdhor ?? 0)} alocados).`,
+        });
+        return;
+      }
+    }
+
     const diff = diffCampos(CAMPOS_AUDITADOS_EXCEDENTE, atividade, paraDiff({ horasExcedentes }));
     const anterior = atividade.horasExcedentes;
     // UMA frase pro histórico e pra notificação. Se fossem duas, um dia divergiriam — e a
@@ -1496,6 +1584,115 @@ atividadesRouter.patch("/:id/horas-excedentes", async (req: AuthenticatedRequest
     res.json({ id, horasExcedentes, teto: (atividade.qtdhor ?? 0) + horasExcedentes });
   } catch (error) {
     handleError(res, error, "horas-excedentes");
+  }
+});
+
+// Bloqueio por alocação — gestor trava apontamento/excedente de UM consultor numa atividade,
+// sem mexer na proposta inteira (equivalente por alocação de PATCH
+// /alocacao/propostas/:codemp/:codpro/configuracao-alocacao). Endpoint próprio, não
+// PATCH /alocacao/alocacoes/:id, porque aquele exige qtdhor obrigatório e usa RBAC que
+// inclui o dono da atividade — isto é ação exclusiva de gestor, mesmo espírito de
+// /horas-excedentes acima. Ver domain/bloqueioApontamento.ts.
+atividadesRouter.patch("/:id/config-apontamento", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const { bloqueiaApontamento, bloqueiaExcedente } = req.body ?? {};
+    for (const [nome, valor] of Object.entries({ bloqueiaApontamento, bloqueiaExcedente })) {
+      if (valor !== undefined && typeof valor !== "boolean") {
+        res.status(400).json({ error: `${nome} deve ser true ou false` });
+        return;
+      }
+    }
+    if (bloqueiaApontamento === undefined && bloqueiaExcedente === undefined) {
+      res.status(400).json({ error: "Nenhum campo de configuração informado" });
+      return;
+    }
+
+    const resolvido = await carregarAtividadeComDepexe(id);
+    if (!resolvido) {
+      res.status(404).json({ error: "Atividade não encontrada" });
+      return;
+    }
+    const { atividade, depexe } = resolvido;
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role, user } = ctx;
+    if (!gerenciaDepartamento(role, contexto, depexe)) {
+      res.status(403).json({ error: "Só o gestor do departamento pode bloquear apontamento/excedente desta atividade" });
+      return;
+    }
+
+    // Mesma regra do endpoint de horas-excedentes: só deixa LIGAR o bloqueio de excedente se
+    // o realizado ainda não estiver usando a faixa de excedente já concedida.
+    if (bloqueiaExcedente === true && atividade.bloqueiaExcedente !== true && atividade.horasExcedentes > 0) {
+      const { realizado } = await saldoDaAtividade(atividade);
+      if (realizado > (atividade.qtdhor ?? 0)) {
+        res.status(409).json({
+          error: `Não é possível bloquear horas excedentes: os apontamentos já registrados estão consumindo parte delas (realizado ${formatarMinutos(realizado)} de ${formatarMinutos(atividade.qtdhor ?? 0)} alocados).`,
+        });
+        return;
+      }
+    }
+
+    const dadosFinais = {
+      bloqueiaApontamento: bloqueiaApontamento ?? atividade.bloqueiaApontamento,
+      bloqueiaExcedente: bloqueiaExcedente ?? atividade.bloqueiaExcedente,
+    };
+    const operacoes: Prisma.PrismaPromise<unknown>[] = [prisma.atividadeConsultor.update({ where: { id }, data: dadosFinais })];
+
+    const entidadeComum = {
+      origem: "tela" as const,
+      usuarioId: user.id,
+      codemp: atividade.codemp,
+      codpro: atividade.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.ALOCACAO,
+      entidadeId: entidadeIdAtividade(id),
+      entidadeRotulo: `Alocação — Item ${atividade.seqite} da Proposta ${atividade.codemp}/${atividade.codpro}`,
+      correlationId: req.correlationId!,
+    };
+    if (bloqueiaApontamento !== undefined && atividade.bloqueiaApontamento !== bloqueiaApontamento) {
+      operacoes.push(
+        criarEventoAuditoria({
+          ...entidadeComum,
+          eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_BLOQUEIO_APONTAMENTO_ALTERADO,
+          alteracoes: {
+            bloqueiaApontamento: { de: atividade.bloqueiaApontamento, para: bloqueiaApontamento, rotulo: "Bloquear apontamentos" },
+          },
+          metadata: {
+            bloqueio_de: atividade.bloqueiaApontamento ? "Ligado" : "Desligado",
+            bloqueio_para: bloqueiaApontamento ? "Ligado" : "Desligado",
+          },
+        })
+      );
+    }
+    if (bloqueiaExcedente !== undefined && atividade.bloqueiaExcedente !== bloqueiaExcedente) {
+      operacoes.push(
+        criarEventoAuditoria({
+          ...entidadeComum,
+          eventoTipo: EVENTOS_AUDITORIA.ALOCACAO_BLOQUEIO_HORAS_EXCEDENTES_ALTERADO,
+          alteracoes: {
+            bloqueiaExcedente: { de: atividade.bloqueiaExcedente, para: bloqueiaExcedente, rotulo: "Bloquear horas excedentes" },
+          },
+          metadata: {
+            bloqueio_de: atividade.bloqueiaExcedente ? "Ligado" : "Desligado",
+            bloqueio_para: bloqueiaExcedente ? "Ligado" : "Desligado",
+          },
+        })
+      );
+    }
+    await prisma.$transaction(operacoes);
+
+    res.json(dadosFinais);
+  } catch (error) {
+    handleError(res, error, "config-apontamento");
   }
 });
 
