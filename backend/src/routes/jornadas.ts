@@ -8,9 +8,10 @@ import {
   gerenciaDepartamento,
 } from "../domain/contextoProjeto";
 
-// Jornada de trabalho por consultor e dia da semana. Quem mantém é o gestor do
-// departamento do consultor — o próprio consultor não edita a própria jornada, pelo mesmo
-// motivo de não autorizar as próprias horas excedentes.
+// Jornada de trabalho por consultor e dia da semana ("Meta diária" na tela). Mantida pelo
+// gestor do departamento pra qualquer consultor do time, e por qualquer consultor pra si
+// mesmo — 04/09/2026, a pedido do Vitor: acesso liberado ao próprio usuário, mas só ao
+// próprio registro (nunca ao de outro consultor sem ser gestor do departamento dele).
 export const jornadasRouter = Router();
 jornadasRouter.use(requireAuth);
 
@@ -31,9 +32,10 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
 }
 
 // Consultores cuja jornada este usuário pode ver/editar: os dos departamentos que ele
-// gerencia. Admin alcança todos. Mesma fonte de "quem é do meu time" usada pelo filtro de
-// consultor das RATs e pelo apontamento manual — se cada tela derivasse por conta própria,
-// elas divergiriam.
+// gerencia, mais ele próprio (mesmo fora de qualquer time que gerencie — é o que dá acesso
+// "só ao usuário dele" pro consultor comum). Admin alcança todos. Mesma fonte de "quem é do
+// meu time" usada pelo filtro de consultor das RATs e pelo apontamento manual — se cada tela
+// derivasse por conta própria, elas divergiriam.
 async function consultoresGerenciados(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
   if (role === "admin") {
     // Admin alcança todo departamento QUE TEM TIME — não a tabela de consultores inteira.
@@ -42,7 +44,11 @@ async function consultoresGerenciados(role: string, contexto: Awaited<ReturnType
     // quem saiu dos times. Jornada de trabalho é conceito de quem executa atividade.
     return consultoresDosDepartamentos(await departamentosComTime());
   }
-  return consultoresDosDepartamentos(contexto.departamentosGerenciados);
+  const doTime = await consultoresDosDepartamentos(contexto.departamentosGerenciados);
+  if (contexto.consultor?.codfor != null && !doTime.some((c) => c.codfor === contexto.consultor!.codfor)) {
+    return [...doTime, contexto.consultor];
+  }
+  return doTime;
 }
 
 // Minutos desde a meia-noite, ou null. Aceita null/"" pra "não trabalha neste período".
@@ -147,7 +153,11 @@ jornadasRouter.put("/:codemp/:codfor", async (req: AuthenticatedRequest, res) =>
       res.status(403).json({ error: "Este consultor não está num departamento que você gerencia" });
       return;
     }
-    if (alvo.depexe != null && !gerenciaDepartamento(ctx.role, ctx.contexto, alvo.depexe)) {
+    // "É o meu próprio registro" autoriza junto com "eu gerencio o departamento dele" —
+    // sem isso, o consultor comum passava pelo `permitidos.find` acima (ele mesmo entra em
+    // `consultoresGerenciados`) e caía 403 aqui, porque não gerencia departamento nenhum.
+    const ehOProprio = ctx.contexto.consultor?.codemp === codemp && ctx.contexto.consultor?.codfor === codfor;
+    if (!ehOProprio && alvo.depexe != null && !gerenciaDepartamento(ctx.role, ctx.contexto, alvo.depexe)) {
       res.status(403).json({ error: "Sem permissão sobre o departamento deste consultor" });
       return;
     }

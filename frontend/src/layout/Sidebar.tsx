@@ -9,6 +9,11 @@ interface NavLeaf {
   // Só aparece pra quem é admin ou gestor de algum departamento (dinâmico, via
   // DepartamentoGestor — não dá pra expressar isso com `roles`, que é estático).
   gestorOuAdmin?: boolean;
+  // Combina com `gestorOuAdmin` como OU, não AND: também aparece pra quem tem Consultor
+  // próprio (dinâmico, via Consultor.email — mesmo caso de `gestorOuAdmin` não dar pra
+  // expressar com `roles`). Hoje só a Meta diária usa isto — acesso liberado ao consultor
+  // comum, mas restrito ao próprio registro dele no backend (ver routes/jornadas.ts).
+  souConsultor?: boolean;
 }
 
 interface NavGroup {
@@ -38,7 +43,7 @@ const groups: NavGroup[] = [
       // pra decidir os do time. O recorte de quem vê o quê é do servidor.
       { to: "/projetos/aprovacoes", label: "Aprovações" },
       { to: "/projetos/alocacao", label: "Alocação", gestorOuAdmin: true },
-      { to: "/projetos/jornadas", label: "Jornada", gestorOuAdmin: true },
+      { to: "/projetos/jornadas", label: "Meta diária", gestorOuAdmin: true, souConsultor: true },
       { to: "/projetos/auditoria", label: "Auditoria", gestorOuAdmin: true },
     ],
     roles: "*",
@@ -126,11 +131,15 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   const { user } = useAuth();
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro a Receber"]));
   const [ehGestorOuAdmin, setEhGestorOuAdmin] = useState(false);
+  // Tem Consultor próprio (Consultor.email == o dele) — dinâmico, igual ehGestorOuAdmin,
+  // mas admin não precisa disto pra ver nada (já entra por ehGestorOuAdmin).
+  const [souConsultor, setSouConsultor] = useState(false);
 
   useEffect(() => {
     if (!user) return;
     if (user.role === "admin") {
       setEhGestorOuAdmin(true);
+      setSouConsultor(false);
       return;
     }
     // Guarda de "efeito superado" (28/08/2026) — mesma classe de corrida já corrigida em
@@ -144,10 +153,15 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     axios
       .get("/api/dashboard/meu-perfil")
       .then(({ data }) => {
-        if (!cancelado) setEhGestorOuAdmin((data.departamentosGerenciados ?? []).length > 0);
+        if (cancelado) return;
+        setEhGestorOuAdmin((data.departamentosGerenciados ?? []).length > 0);
+        setSouConsultor(data.consultor != null);
       })
       .catch(() => {
-        if (!cancelado) setEhGestorOuAdmin(false);
+        if (!cancelado) {
+          setEhGestorOuAdmin(false);
+          setSouConsultor(false);
+        }
       });
     return () => {
       cancelado = true;
@@ -158,7 +172,11 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     .filter((group) => user && (group.roles === "*" || group.roles.includes(user.role)))
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => !item.gestorOuAdmin || ehGestorOuAdmin),
+      // `gestorOuAdmin` e `souConsultor` combinam como OU quando um item declara os dois
+      // (ex.: Meta diária): item sem nenhuma das duas flags é sempre visível.
+      items: group.items.filter(
+        (item) => (!item.gestorOuAdmin && !item.souConsultor) || (item.gestorOuAdmin && ehGestorOuAdmin) || (item.souConsultor && souConsultor)
+      ),
     }))
     // Grupo com `roles: "*"` mas cujo único item (ou todos) é `gestorOuAdmin: true` (ex.:
     // Contábil) fica sem NENHUM item pra quem não é gestor nem admin — sem este filtro, o

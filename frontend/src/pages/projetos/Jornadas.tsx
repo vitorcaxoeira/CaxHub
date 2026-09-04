@@ -46,9 +46,10 @@ const CAMPOS: { chave: keyof Omit<DiaJornada, "diaSemana" | "cadastrado">; rotul
   { chave: "tardeFim", rotulo: "até" },
 ];
 
-// Jornada de trabalho por consultor. Existe pra alimentar a parada automática de execução:
-// sem ela, um card esquecido "Em Andamento" na sexta à noite conta o fim de semana inteiro.
-// Quem mantém é o gestor do departamento — a rota já recusa consultor de fora do time dele.
+// Jornada de trabalho por consultor ("Meta diária" na tela). Existe pra alimentar a parada
+// automática de execução: sem ela, um card esquecido "Em Andamento" na sexta à noite conta o
+// fim de semana inteiro. Mantida pelo gestor do departamento pra qualquer um do time, e por
+// qualquer consultor pra si mesmo — a rota recusa quem não é nem uma coisa nem outra.
 export function Jornadas() {
   const toast = useToast();
   const [consultores, setConsultores] = useState<ConsultorOpcao[]>([]);
@@ -62,7 +63,13 @@ export function Jornadas() {
   useEffect(() => {
     axios
       .get("/api/jornadas/consultores")
-      .then(({ data }) => setConsultores(data.consultores))
+      .then(({ data }) => {
+        const lista: ConsultorOpcao[] = data.consultores;
+        setConsultores(lista);
+        // Consultor comum só vê a si mesmo nesta lista (acesso liberado só ao próprio
+        // usuário) — sem escolha real a fazer, então já entra selecionado.
+        if (lista.length === 1) setCodforSelecionado(lista[0].codfor);
+      })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os consultores"))
       .finally(() => setLoading(false));
   }, []);
@@ -118,8 +125,8 @@ export function Jornadas() {
 
   return (
     <div>
-      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Gestão de Projetos · Jornada</p>
-      <h1 className="mt-1 font-display text-2xl font-bold text-foreground">Jornada de trabalho</h1>
+      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Gestão de Projetos · Meta diária</p>
+      <h1 className="mt-1 font-display text-2xl font-bold text-foreground">Meta diária</h1>
       <p className="mt-1 text-sm text-muted">
         Define até que horas uma atividade em andamento pode contar. Card esquecido em execução é parado automaticamente no
         fim do expediente do dia — quem não tem jornada aqui só é parado pelo teto de horas.
