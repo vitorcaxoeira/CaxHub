@@ -26,7 +26,8 @@ import {
   configBloqueioPropostasEmLote,
   resolverBloqueioComConfig,
 } from "../domain/bloqueioApontamento";
-import { Prisma } from "@prisma/client";
+import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
+import { Prisma, AtividadeConsultor } from "@prisma/client";
 
 // Área de alocação: o Líder Técnico (Gestor) distribui as horas de um item de proposta
 // entre um ou mais consultores do próprio time (AtividadeConsultor = "Distribuição
@@ -1845,6 +1846,12 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
     let status: string | null | undefined;
     let responsavelCodfor: number | null | undefined;
     let observacao: string | null | undefined;
+    // Alocação (AtividadeConsultor) vinculada a este nó — buscada cedo, no bloco de
+    // duracaoHoras abaixo, só quando o responsável NÃO está mudando nesta requisição (é o
+    // caso em que este PATCH escreve o qtdhor dela por cascade, mais abaixo). Guardada aqui
+    // e reaproveitada lá embaixo pra não consultar duas vezes o mesmo registro.
+    let alocacaoVinculada: AtividadeConsultor | null = null;
+    let houveMudancaResponsavel = false;
     if (no.tipo === "atividade") {
       if (req.body?.status !== undefined) {
         const statusValidos = ["nao_iniciada", "em_curso", "concluida"];
@@ -1877,6 +1884,7 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
           }
         }
       }
+      houveMudancaResponsavel = responsavelCodfor !== undefined && responsavelCodfor !== no.responsavelCodfor;
       if (req.body?.observacao !== undefined) {
         observacao = typeof req.body.observacao === "string" && req.body.observacao.trim() !== "" ? req.body.observacao.trim() : null;
       }
@@ -1897,6 +1905,34 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
             if (!saldo.ok) {
               res.status(400).json({ error: saldo.erro });
               return;
+            }
+          }
+
+          // Reduzir a duração nunca pode derrubar o qtdhor da alocação vinculada abaixo do
+          // que já foi realizado — senão o consultor fica com apontamento já registrado
+          // "sobrando" acima do novo teto. Integridade de dado, não autorização: roda
+          // sempre, sem "confirmar mesmo assim" (mesmo espírito do bloqueio irmão em
+          // PATCH /atividades/:id/horas-excedentes). Só quando o responsável NÃO está
+          // trocando nesta mesma requisição — trocar soft-deleta a alocação atual e cria
+          // outra do zero (branch mais abaixo), então o qtdhor dela nunca é escrito por
+          // aqui, e não há o que proteger.
+          if (!houveMudancaResponsavel && duracaoHoras !== no.duracaoHoras) {
+            alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
+              where: { estruturaAtividadeId: id, sitreg: "A" },
+            });
+            if (alocacaoVinculada && duracaoHoras < (alocacaoVinculada.qtdhor ?? 0)) {
+              const { realizado } = await saldoDaAtividade(alocacaoVinculada);
+              const minimoPermitido = Math.max(0, realizado - alocacaoVinculada.horasExcedentes);
+              if (duracaoHoras < minimoPermitido) {
+                res.status(409).json({
+                  error: `Não é possível reduzir as horas alocadas abaixo de ${formatarMinutos(minimoPermitido)} — os apontamentos já registrados nesta atividade somam ${formatarMinutos(realizado)}${
+                    alocacaoVinculada.horasExcedentes > 0
+                      ? ` (considerando ${formatarMinutos(alocacaoVinculada.horasExcedentes)} de horas excedentes já autorizadas)`
+                      : ""
+                  }.`,
+                });
+                return;
+              }
             }
           }
         }
@@ -1950,8 +1986,6 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
     let atividadeConsultorSincronizadaId: number | null = null;
 
     if (no.tipo === "atividade") {
-      const houveMudancaResponsavel = responsavelCodfor !== undefined && responsavelCodfor !== no.responsavelCodfor;
-
       if (houveMudancaResponsavel) {
         // 1:1 na prática (confirmado: 0 de 993 nós com alocação têm mais de uma
         // AtividadeConsultor ativa vinculada) — `findFirst` cobre o caso real.
@@ -2061,9 +2095,9 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
           atividadeConsultorSincronizadaId = novaAlocacao.id;
         }
       } else if (duracaoHoras != null && duracaoHoras !== no.duracaoHoras) {
-        const alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
-          where: { estruturaAtividadeId: id, sitreg: "A" },
-        });
+        // alocacaoVinculada já foi buscada acima, na mesma condição (!houveMudancaResponsavel
+        // && duracaoHoras !== no.duracaoHoras) que valida a redução contra o realizado —
+        // reaproveita em vez de buscar de novo.
         if (alocacaoVinculada && alocacaoVinculada.qtdhor !== duracaoHoras) {
           await prisma.atividadeConsultor.update({
             where: { id: alocacaoVinculada.id },
@@ -2830,6 +2864,23 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
     if (!saldo.ok) {
       res.status(400).json({ error: saldo.erro });
       return;
+    }
+
+    // Mesma integridade de dado do bloqueio irmão em PATCH /estrutura/:id (modo "estrutura")
+    // e em PATCH /atividades/:id/horas-excedentes: reduzir nunca pode derrubar o teto abaixo
+    // do que já foi realizado. Roda sempre, sem bypass.
+    if (qtdhor < (atividade.qtdhor ?? 0)) {
+      const horasExcedentesEfetivo = horasExcedentes !== null ? horasExcedentes : atividade.horasExcedentes;
+      const { realizado } = await saldoDaAtividade(atividade);
+      const minimoPermitido = Math.max(0, realizado - horasExcedentesEfetivo);
+      if (qtdhor < minimoPermitido) {
+        res.status(409).json({
+          error: `Não é possível reduzir as horas alocadas abaixo de ${formatarMinutos(minimoPermitido)} — os apontamentos já registrados nesta atividade somam ${formatarMinutos(realizado)}${
+            horasExcedentesEfetivo > 0 ? ` (considerando ${formatarMinutos(horasExcedentesEfetivo)} de horas excedentes já autorizadas)` : ""
+          }.`,
+        });
+        return;
+      }
     }
 
     const entidadeId = entidadeIdAtividade(id);

@@ -81,6 +81,17 @@ export function DrawerAtividade({
   // igual ao ModalAlocarConsultores (que nunca teve esse bypass).
   const excedenteTravado = estouraOrcamento && bloqueiaExcedenteEstrutura;
 
+  // Nunca pode reduzir as horas previstas abaixo do que já foi realizado nesta atividade —
+  // o backend recusa com 409 (ver PATCH /alocacao/estrutura/:id e PATCH
+  // /alocacao/alocacoes/:id); isto aqui só adianta o aviso antes de bater no servidor. Sem
+  // bypass — diferente de estouraOrcamento, aqui não existe "confirmar mesmo assim" (é
+  // integridade de dado, não autorização).
+  const abaixoDoRealizado =
+    no.tipo === "atividade" &&
+    horasPrevistasProjetadas != null &&
+    no.horasRealizadas > 0 &&
+    horasPrevistasProjetadas < no.horasRealizadas;
+
   // Uma vez confirmada pelo Senior (seqati preenchido), o responsável não pode mais trocar
   // por aqui — trocar de verdade soft-deleta essa alocação e cria outra do zero (ver
   // PATCH /alocacao/estrutura/:id), o que deixaria um seqAti órfão pra trás. O backend já
@@ -276,10 +287,16 @@ export function DrawerAtividade({
                   value={horasTexto}
                   onChange={(e) => setHorasTexto(e.target.value)}
                   className={`w-full rounded-md border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                    estouraOrcamento ? "border-destructive" : "border-border"
+                    abaixoDoRealizado || estouraOrcamento ? "border-destructive" : "border-border"
                   }`}
                 />
-                {saldoProjetado != null && (
+                {abaixoDoRealizado && (
+                  <p className="mt-1 text-[11px] text-destructive">
+                    Já foram realizadas {formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade — não é
+                    possível alocar menos do que isso.
+                  </p>
+                )}
+                {!abaixoDoRealizado && saldoProjetado != null && (
                   <p className={`mt-1 text-[11px] ${estouraOrcamento ? "text-destructive" : "text-success"}`}>
                     Saldo do item após salvar: {formatHorasCompacto(saldoProjetado, larguraHoras)}
                   </p>
@@ -413,13 +430,27 @@ export function DrawerAtividade({
           </button>
           <button
             onClick={salvar}
-            disabled={salvando || excedenteTravado}
-            title={excedenteTravado ? "Esta proposta não permite ultrapassar o saldo do item — reduza as horas antes de salvar." : undefined}
+            disabled={salvando || excedenteTravado || abaixoDoRealizado}
+            title={
+              abaixoDoRealizado
+                ? `Já foram realizadas ${formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade — reduza menos, ou ajuste os apontamentos antes.`
+                : excedenteTravado
+                  ? "Esta proposta não permite ultrapassar o saldo do item — reduza as horas antes de salvar."
+                  : undefined
+            }
             className={`flex-1 rounded-md py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               estouraOrcamento ? "bg-destructive text-destructive-foreground" : "bg-primary text-primary-foreground"
             }`}
           >
-            {salvando ? "Salvando..." : excedenteTravado ? "Saldo do item excedido" : estouraOrcamento ? "Salvar mesmo excedendo" : "Salvar"}
+            {salvando
+              ? "Salvando..."
+              : abaixoDoRealizado
+                ? "Horas abaixo do realizado"
+                : excedenteTravado
+                  ? "Saldo do item excedido"
+                  : estouraOrcamento
+                    ? "Salvar mesmo excedendo"
+                    : "Salvar"}
           </button>
         </div>
       </div>
