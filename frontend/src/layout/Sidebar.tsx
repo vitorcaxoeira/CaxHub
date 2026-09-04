@@ -89,6 +89,7 @@ const groups: NavGroup[] = [
       { to: "/admin/sincronizacao", label: "Exportados para o Senior" },
       { to: "/admin/sincronizacao-erp", label: "Importados do Senior" },
       { to: "/admin/departamento-grupo-contabil", label: "Departamento x Grupo Contábil" },
+      { to: "/admin/paineis-tv", label: "Painéis de TV" },
     ],
     roles: ["admin"],
   },

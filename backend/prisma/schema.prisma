@@ -29,6 +29,7 @@ model User {
   consultor       Consultor? @relation(fields: [consultorCodemp, consultorCodusu], references: [codemp, codusu])
 
   preferenciaFluxoCaixa  PreferenciaFluxoCaixa?
+  painelTv               PainelTv?
   movimentacoesAtividade AtividadeHistoricoMovimentacao[]
   comentariosAtividade   AtividadeComentario[]
   anexosAtividade        AtividadeAnexo[]
@@ -55,6 +56,78 @@ model PreferenciaFluxoCaixa {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("preferencias_fluxo_caixa")
+}
+
+// ---------------------------------------------------------------------------
+// Modo Painel/TV — mecanismo GENÉRICO, pensado para ser portado a outros
+// projetos (CaxDivulgador, CaxHub-Hedel) quase sem alteração: uma conta de TV
+// (papel "painel") gira automaticamente por uma lista ordenada de painéis,
+// cada um com sua duração e seu modo de atualização. O que é específico do
+// CaxHub é só o CONTEÚDO de `painelId` (o catálogo de painéis em
+// domain/painelCatalogo.ts) e os campos de contexto abaixo — o formato da
+// rotação em si (ordem/duração/modo/filtros) não muda entre projetos.
+// ---------------------------------------------------------------------------
+
+// Config de uma conta de TV — 1 linha por usuário do papel "painel". Mesmo
+// formato `userId @id` de PreferenciaFluxoCaixa acima.
+model PainelTv {
+  userId Int    @id
+  nome   String @db.VarChar(60)
+
+  // Contexto base herdado por todo painel da rotação (ex.: "TV Consultoria" =
+  // depexe do departamento) — específico do domínio do CaxHub; um projeto sem
+  // conceito de departamento substituiria por outro campo de recorte, ou
+  // nenhum, sem mexer em PainelTvItem.
+  depexe Int?
+  codemp Int?
+
+  // Fator de escala tipográfica da sala (não é constante: TV de 43" a 2m e de
+  // 65" a 5m não pedem o mesmo número) e tema fixo — o painel não deve seguir
+  // o toggle de tema do navegador. Portáveis como estão.
+  zoom Decimal @default(1.60) @db.Decimal(3, 2)
+  tema String  @default("dark") @db.VarChar(10)
+
+  ativo        Boolean  @default(true)
+  atualizadoEm DateTime @updatedAt
+
+  user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itens PainelTvItem[]
+
+  @@map("paineis_tv")
+}
+
+// Uma linha da rotação. `ordem Int` no mesmo espírito de QuadroColuna.ordem.
+// `painelId` é um id de CATÁLOGO EM CÓDIGO, não uma FK — cada painel é um
+// componente, não uma linha de banco (ver domain/painelCatalogo.ts). Isso é o
+// que torna esta tabela portável: o projeto que a copiar só precisa trocar o
+// catálogo, nunca o schema.
+model PainelTvItem {
+  id             Int    @id @default(autoincrement())
+  painelTvUserId Int
+  painelId       String @db.VarChar(60)
+  ordem          Int
+
+  duracaoSegundos Int @default(30)
+
+  /// "nenhum" | "local" (refaz a consulta no Postgres) | "erp" (sincroniza a
+  /// origem externa antes de mostrar) — só o rótulo "erp" é específico de
+  /// projetos com ERP externo; o mecanismo de 3 modos é genérico.
+  modoAtualizacao String @default("local") @db.VarChar(10)
+
+  // Filtros PRÓPRIOS deste painel, sobrepondo o contexto de PainelTv.depexe/
+  // codemp. Json de propósito: o conjunto de filtros é declarado por painel no
+  // catálogo em código, e todo painel novo (inclusive de outro projeto) traz o
+  // seu — uma coluna por filtro exigiria uma migration por painel. O backend
+  // valida as chaves aqui contra o catálogo antes de gravar (chave
+  // desconhecida -> 400), pra isto nunca virar gaveta de bugigangas.
+  filtros Json?
+
+  ativo Boolean @default(true)
+
+  painelTv PainelTv @relation(fields: [painelTvUserId], references: [userId], onDelete: Cascade)
+
+  @@index([painelTvUserId, ordem])
+  @@map("paineis_tv_itens")
 }
 
 model Role {

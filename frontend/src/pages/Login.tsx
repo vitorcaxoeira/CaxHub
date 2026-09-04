@@ -2,6 +2,7 @@ import axios from "axios";
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { destinoInicial } from "../auth/destinoInicial";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -16,7 +17,7 @@ export function Login() {
     try {
       const { data } = await axios.post("/api/auth/login", { email, password });
       login(data.token, data.user);
-      navigate("/");
+      navigate(destinoInicial(data.user?.role));
     } catch {
       setError("Credenciais inválidas");
     }

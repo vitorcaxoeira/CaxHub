@@ -6,6 +6,10 @@ const STORAGE_KEY = "caxhub-theme";
 interface ThemeContextValue {
   theme: Theme;
   toggleTheme: () => void;
+  // Fixa o tema direto (sem alternar) — usado pelo PainelShell do modo Painel/TV pra
+  // aplicar o tema da config da TV (PainelTv.tema) sem depender do toggle nem do que já
+  // estava salvo no localStorage daquele navegador/quiosque.
+  setTheme: (theme: Theme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
@@ -26,7 +30,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setTheme((current) => (current === "dark" ? "light" : "dark"));
   }
 
-  return <ThemeContext.Provider value={{ theme, toggleTheme }}>{children}</ThemeContext.Provider>;
+  return <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme(): ThemeContextValue {

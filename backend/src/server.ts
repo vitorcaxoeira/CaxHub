@@ -31,6 +31,7 @@ import { solicitacoesConfigPropostaRouter } from "./routes/solicitacoesConfigPro
 import { jornadasRouter } from "./routes/jornadas";
 import { propostaVisualizacaoRouter } from "./routes/propostaVisualizacao";
 import { auditoriaRouter } from "./routes/auditoria";
+import { painelTvRouter } from "./routes/painelTv";
 import { attachCorrelationId } from "./audit/correlationId";
 import { scheduleEmpresaSync } from "./sync/empresaSync";
 import { scheduleFilialSync } from "./sync/filialSync";
@@ -143,6 +144,7 @@ app.use("/solicitacoes-config-proposta", solicitacoesConfigPropostaRouter);
 app.use("/jornadas", jornadasRouter);
 app.use("/proposta-visualizacao", propostaVisualizacaoRouter);
 app.use("/auditoria", auditoriaRouter);
+app.use("/painel-tv", painelTvRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 

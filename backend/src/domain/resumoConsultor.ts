@@ -38,14 +38,26 @@ export function diasDoPeriodo(de: Date, ate: Date): string[] {
   return dias;
 }
 
-// Horas realizadas de um consultor num período, já agrupadas por dia e por projeto (codpro).
-// `ate` é tratado como fim do dia (23:59:59.999) pra incluir o dia inteiro.
-export async function horasRealizadasNoPeriodo(
+export interface ResumoHorasConsultor {
+  porDia: Map<string, number>;
+  porProjeto: Map<number, number>;
+  totalMinutos: number;
+}
+
+// Horas realizadas de N consultores num período, já agrupadas por dia e por projeto
+// (codpro), UMA consulta só (não uma por consultor) — existe porque o painel de TV
+// "Horas do time no mês" (ver domain/painelCatalogo.ts) precisa do time inteiro de um
+// departamento de uma vez; `horasRealizadasNoPeriodo` abaixo é só um wrapper de 1
+// consultor sobre esta, pra nunca divergir do número que o Home mostra pro mesmo
+// consultor/mês. `ate` é tratado como fim do dia (23:59:59.999) pra incluir o dia inteiro.
+export async function horasRealizadasPorConsultorNoPeriodo(
   codemp: number,
-  codfor: number,
+  codfors: number[],
   de: Date,
   ate: Date
-): Promise<{ porDia: Map<string, number>; porProjeto: Map<number, number>; totalMinutos: number }> {
+): Promise<Map<number, ResumoHorasConsultor>> {
+  const resultado = new Map<number, ResumoHorasConsultor>();
+  if (codfors.length === 0) return resultado;
   const fimDoDia = new Date(ate);
   fimDoDia.setUTCHours(23, 59, 59, 999);
 
@@ -57,9 +69,9 @@ export async function horasRealizadasNoPeriodo(
         excluidaEm: null,
         // sitreg "A" filtra atividade soft-deletada — mesmo filtro de GET /sessoes-pendentes
         // em routes/apontamentos.ts (não é o mesmo `excluidaEm` da sessão, é da ATIVIDADE).
-        atividade: { codemp, codfor, sitreg: "A" },
+        atividade: { codemp, codfor: { in: codfors }, sitreg: "A" },
       },
-      select: { inicio: true, fim: true, atividade: { select: { codpro: true } } },
+      select: { inicio: true, fim: true, atividade: { select: { codpro: true, codfor: true } } },
     }),
     prisma.ratItem.findMany({
       where: {
@@ -67,34 +79,46 @@ export async function horasRealizadasNoPeriodo(
         horini: { not: null },
         horfim: { not: null },
         datati: { gte: de, lte: fimDoDia },
-        rat: { codfor, sitrat: { not: SITRAT_CANCELADO } },
+        rat: { codfor: { in: codfors }, sitrat: { not: SITRAT_CANCELADO } },
       },
-      select: { datati: true, horini: true, horfim: true, codpro: true },
+      select: { datati: true, horini: true, horfim: true, codpro: true, rat: { select: { codfor: true } } },
     }),
   ]);
 
-  const porDia = new Map<string, number>();
-  const porProjeto = new Map<number, number>();
-  let totalMinutos = 0;
-
-  function somar(dia: string, codpro: number | null, minutos: number) {
+  function bucket(codfor: number): ResumoHorasConsultor {
+    let b = resultado.get(codfor);
+    if (!b) {
+      b = { porDia: new Map(), porProjeto: new Map(), totalMinutos: 0 };
+      resultado.set(codfor, b);
+    }
+    return b;
+  }
+  function somar(codfor: number, dia: string, codpro: number | null, minutos: number) {
     if (minutos <= 0) return;
-    porDia.set(dia, (porDia.get(dia) ?? 0) + minutos);
-    if (codpro != null) porProjeto.set(codpro, (porProjeto.get(codpro) ?? 0) + minutos);
-    totalMinutos += minutos;
+    const b = bucket(codfor);
+    b.porDia.set(dia, (b.porDia.get(dia) ?? 0) + minutos);
+    if (codpro != null) b.porProjeto.set(codpro, (b.porProjeto.get(codpro) ?? 0) + minutos);
+    b.totalMinutos += minutos;
   }
 
   for (const s of sessoes) {
     if (!s.fim) continue;
     const minutos = Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000);
-    somar(chaveDia(s.inicio), s.atividade.codpro, minutos);
+    somar(s.atividade.codfor, chaveDia(s.inicio), s.atividade.codpro, minutos);
   }
   for (const r of ratItens) {
     if (r.horini == null || r.horfim == null || !r.datati) continue;
-    somar(chaveDia(r.datati), r.codpro, r.horfim - r.horini);
+    somar(r.rat.codfor, chaveDia(r.datati), r.codpro, r.horfim - r.horini);
   }
 
-  return { porDia, porProjeto, totalMinutos };
+  return resultado;
+}
+
+// Horas realizadas de UM consultor num período — wrapper de 3 linhas sobre a versão em
+// lote acima (ver comentário lá): nunca implementa a conta de novo, só recorta o mapa.
+export async function horasRealizadasNoPeriodo(codemp: number, codfor: number, de: Date, ate: Date): Promise<ResumoHorasConsultor> {
+  const mapa = await horasRealizadasPorConsultorNoPeriodo(codemp, [codfor], de, ate);
+  return mapa.get(codfor) ?? { porDia: new Map(), porProjeto: new Map(), totalMinutos: 0 };
 }
 
 // Meta de minutos de um dia da semana, a partir da jornada cadastrada (JornadaConsultor) —
@@ -118,28 +142,44 @@ export interface MetaPeriodo {
   diasComJornada: number;
 }
 
-// Soma a meta de cada dia de `de` até `ate` (inclusive), usando a jornada cadastrada do
-// consultor por dia da semana (0=domingo...6=sábado, mesma convenção de Date.getUTCDay()).
-export async function metaDoPeriodo(codemp: number, codfor: number, de: Date, ate: Date): Promise<MetaPeriodo> {
-  const jornadas = await prisma.jornadaConsultor.findMany({ where: { codemp, codfor } });
-  const porDiaSemana = new Map(jornadas.map((j) => [j.diaSemana, j]));
+// Soma a meta de cada dia de `de` até `ate` (inclusive) pra N consultores, UMA consulta só
+// — mesma razão de horasRealizadasPorConsultorNoPeriodo acima (o painel de TV precisa do
+// time inteiro de um departamento de uma vez). Usa a jornada cadastrada de cada consultor
+// por dia da semana (0=domingo...6=sábado, mesma convenção de Date.getUTCDay()).
+export async function metasDoPeriodo(codemp: number, codfors: number[], de: Date, ate: Date): Promise<Map<number, MetaPeriodo>> {
+  const resultado = new Map<number, MetaPeriodo>();
+  if (codfors.length === 0) return resultado;
 
-  let metaTotalMinutos = 0;
-  let diasComJornada = 0;
-  for (const diaStr of diasDoPeriodo(de, ate)) {
-    const data = new Date(`${diaStr}T00:00:00Z`);
-    const meta = metaDoDiaSemana(porDiaSemana.get(data.getUTCDay()));
-    if (meta > 0) {
-      metaTotalMinutos += meta;
-      diasComJornada += 1;
+  const jornadas = await prisma.jornadaConsultor.findMany({ where: { codemp, codfor: { in: codfors } } });
+  const porConsultorDiaSemana = new Map(jornadas.map((j) => [`${j.codfor}-${j.diaSemana}`, j]));
+  const dias = diasDoPeriodo(de, ate);
+
+  for (const codfor of codfors) {
+    let metaTotalMinutos = 0;
+    let diasComJornada = 0;
+    for (const diaStr of dias) {
+      const data = new Date(`${diaStr}T00:00:00Z`);
+      const meta = metaDoDiaSemana(porConsultorDiaSemana.get(`${codfor}-${data.getUTCDay()}`));
+      if (meta > 0) {
+        metaTotalMinutos += meta;
+        diasComJornada += 1;
+      }
     }
+    resultado.set(codfor, {
+      metaTotalMinutos,
+      metaDiariaMinutos: diasComJornada > 0 ? Math.round(metaTotalMinutos / diasComJornada) : null,
+      diasComJornada,
+    });
   }
 
-  return {
-    metaTotalMinutos,
-    metaDiariaMinutos: diasComJornada > 0 ? Math.round(metaTotalMinutos / diasComJornada) : null,
-    diasComJornada,
-  };
+  return resultado;
+}
+
+// Meta de UM consultor — wrapper de 3 linhas sobre a versão em lote acima (ver comentário
+// lá): nunca implementa a conta de novo, só recorta o mapa.
+export async function metaDoPeriodo(codemp: number, codfor: number, de: Date, ate: Date): Promise<MetaPeriodo> {
+  const mapa = await metasDoPeriodo(codemp, [codfor], de, ate);
+  return mapa.get(codfor) ?? { metaTotalMinutos: 0, metaDiariaMinutos: null, diasComJornada: 0 };
 }
 
 export interface ValorHoraConsultor {

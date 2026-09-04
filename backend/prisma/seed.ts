@@ -1,7 +1,10 @@
 import bcrypt from "bcrypt";
 import { prisma } from "../src/db/prisma";
 
-const PAPEIS_NOVOS = ["administrativo", "comercial", "consultoria", "suporte", "desenvolvimento", "system"];
+// "painel" = conta de TV do modo Painel/TV (ver domain/painelCatalogo.ts) — entra também
+// pela migration (20260904140000_modo_painel_tv), porque o deploy roda só
+// `prisma migrate deploy`, nunca este seed.
+const PAPEIS_NOVOS = ["administrativo", "comercial", "consultoria", "suporte", "desenvolvimento", "system", "painel"];
 
 // Papéis antigos que separavam gerente/colaborador por área — consolidados de volta
 // no papel único da área, já que "quem gerencia o quê" agora é derivado dinamicamente

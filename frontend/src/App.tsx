@@ -1,10 +1,12 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
+import { PainelShell } from "./layout/PainelShell";
+import { RedirecionaPainelDaHome, CatchAllPorPapel } from "./auth/RotaPorPapel";
 import { Login } from "./pages/Login";
 import { AceitarConvite } from "./pages/AceitarConvite";
 import { Home } from "./pages/Home";
@@ -32,6 +34,8 @@ import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
 import { DepartamentoGrupoContabil } from "./pages/admin/DepartamentoGrupoContabil";
+import { PaineisTv } from "./pages/admin/PaineisTv";
+import { PainelRotacao } from "./pages/painel/PainelRotacao";
 import { ListarPedidos } from "./pages/mercado/ListarPedidos";
 import { PedidoVisualizacao } from "./pages/mercado/PedidoVisualizacao";
 import { AnaliseFaturamento } from "./pages/mercado/AnaliseFaturamento";
@@ -48,7 +52,9 @@ export default function App() {
             <Route
               element={
                 <ProtectedRoute>
-                  <AppShell />
+                  <RedirecionaPainelDaHome>
+                    <AppShell />
+                  </RedirecionaPainelDaHome>
                 </ProtectedRoute>
               }
             >
@@ -86,12 +92,27 @@ export default function App() {
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
                 <Route path="/admin/departamento-grupo-contabil" element={<DepartamentoGrupoContabil />} />
+                <Route path="/admin/paineis-tv" element={<PaineisTv />} />
                 <Route path="/mercado/pedidos" element={<ListarPedidos />} />
                 <Route path="/mercado/pedido/:codemp/:codfil/:numped" element={<PedidoVisualizacao />} />
                 <Route path="/mercado/analise-faturamento" element={<AnaliseFaturamento />} />
               </Route>
             </Route>
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* Modo Painel/TV — layout route irmã da AppShell acima, mas SEM Sidebar/Topbar
+                (ver PainelShell). Papel painel cai só aqui; admin também acessa, pra
+                pré-visualizar a rotação de uma TV. */}
+            <Route
+              element={
+                <ProtectedRoute>
+                  <PainelShell />
+                </ProtectedRoute>
+              }
+            >
+              <Route element={<RequireRole roles={["painel", "admin"]} />}>
+                <Route path="/painel" element={<PainelRotacao />} />
+              </Route>
+            </Route>
+            <Route path="*" element={<CatchAllPorPapel />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
