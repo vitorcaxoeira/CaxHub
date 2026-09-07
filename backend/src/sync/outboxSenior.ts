@@ -574,17 +574,55 @@ export async function processarFilaSincronizacao(
       const registrado = await enviarParaSenior(item);
       const duracaoMs = Date.now() - inicioEnvio;
 
+      // "ratNovo" (enfileirado em prepararReenvioItem) é só um rótulo NOSSO — não vai no
+      // payload SOAP (montarPayloadApontamento não tem esse campo) e não controla nada do
+      // lado do Senior. Quem decide em qual RAT um item entra é o Senior, pela própria
+      // regra dele (aparentemente "qual RAT ainda está aberta pra este consultor neste
+      // projeto") — ele pode anexar o item numa RAT que já existe mesmo quando nosso
+      // `ideExt` é de uma RAT local nunca vista antes. Se essa RAT já pertence, aqui, a
+      // OUTRO cabeçalho local (`ratDono.id !== registrado.ratId`), a numrat que o Senior
+      // devolveu não é nossa pra gravar — é da RAT dona. Achado real 07/09/2026: RAT local
+      // 1302073 (sem numrat ainda) mandou um item, o Senior anexou na RAT 993377 (já
+      // pertencente à RAT local 758248), e o `rat.update` cego abaixo quebrava o
+      // UNIQUE(codemp,numprj,codfpj,numrat) toda tentativa, prendendo a pendência pra
+      // sempre (o reconciliador ANTES do envio, `procurarApontamentoNoSenior`, sempre
+      // achava o mesmo apontamento já registrado e nunca deixava reenviar de verdade).
+      let ratDestinoId = registrado?.tipo === "apontamento" ? registrado.ratId : null;
+      let colidiuComOutraRat = false;
+      if (registrado?.tipo === "apontamento") {
+        const ratOrigem = await prisma.rat.findUnique({ where: { id: registrado.ratId } });
+        const ratDono = ratOrigem
+          ? await prisma.rat.findFirst({
+              where: { codemp: ratOrigem.codemp, numprj: ratOrigem.numprj, codfpj: ratOrigem.codfpj, numrat: registrado.numrat },
+            })
+          : null;
+        if (ratDono && ratDono.id !== registrado.ratId) {
+          colidiuComOutraRat = true;
+          ratDestinoId = ratDono.id;
+        }
+      }
+
       // O write-back vai na MESMA transação que baixa a fila: ou o apontamento fica
       // marcado como registrado e a pendência fecha, ou nenhum dos dois. É o que impede
       // um item de ficar "enviado" sem numrat (e portanto ainda excluível na tela).
       await prisma.$transaction([
         ...(registrado?.tipo === "apontamento"
           ? [
-              prisma.rat.update({ where: { id: registrado.ratId }, data: { numrat: registrado.numrat } }),
+              // Só grava numrat no cabeçalho que REALMENTE vai recebê-lo — numa colisão, a
+              // RAT local original nunca vai ter esse número (é de outra), então não mexe
+              // nela aqui; só reaponta o item pra RAT dona (ratDestinoId) abaixo.
+              ...(colidiuComOutraRat ? [] : [prisma.rat.update({ where: { id: registrado.ratId }, data: { numrat: registrado.numrat } })]),
               prisma.ratItem.update({
                 where: { id: registrado.ratItemId },
-                data: { numrat: registrado.numrat, seqrat: registrado.seqrat, datreg: new Date() },
+                data: { ratId: ratDestinoId!, numrat: registrado.numrat, seqrat: registrado.seqrat, datreg: new Date() },
               }),
+              // Limpeza do cabeçalho órfão: só dispara de verdade se a RAT original ficou
+              // SEM NENHUM item depois do reaponte acima (o `itens: { none: {} }` é
+              // avaliado depois do update anterior, dentro da mesma transação) — em
+              // qualquer outro caso (sem colisão, ou RAT original com outros itens) é
+              // no-op. Uma RAT "Digitado" sem nenhum item nunca chegou a existir de
+              // verdade no Senior, então apagar aqui não perde nada.
+              prisma.rat.deleteMany({ where: { id: registrado.ratId, itens: { none: {} } } }),
             ]
           : []),
         ...(registrado?.tipo === "alocacao_criada"
