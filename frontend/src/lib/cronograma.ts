@@ -498,3 +498,15 @@ export function projetarSaldo(
   const horasContratadas = item.horasPrevistas ?? 0;
   return horasContratadas - distribuidasProjetadas;
 }
+
+// Mínimo que dá pra alocar (qtdhor) sem deixar o realizado "sobrando" acima do teto (alocado
+// + excedente). Mesma fórmula do backend (domain/tetoAtividade.ts, usada em PATCH
+// /alocacao/estrutura/:id, PATCH /alocacao/alocacoes/:id e PATCH
+// /atividades/:id/horas-excedentes): o excedente já autorizado cobre parte do realizado,
+// então só o que sobra depois dele precisa continuar coberto pelo alocado. Sem isso, reduzir
+// as horas previstas travava no realizado cheio mesmo quando o excedente já cobria a
+// diferença (caso real: atividade 86354, 46:00 realizadas, 30:00 de excedente — mínimo
+// alocável é 16:00, não 46:00).
+export function minimoAlocavel(horasRealizadas: number, horasExcedentes: number): number {
+  return Math.max(0, horasRealizadas - horasExcedentes);
+}

@@ -11,6 +11,7 @@ import {
   FaixaAninhamento,
   formatHorasCompacto,
   larguraHorasProposta,
+  minimoAlocavel,
   NoCronograma,
   orcamentoDeTotais,
   projetarSaldo,
@@ -451,6 +452,20 @@ describe("projetarSaldo", () => {
     const agregadosDepois = agregarHoras(depois);
     expect(calcularOrcamentoItem(depois[0], agregadosDepois).horasDistribuidas).toBe(0);
     expect(calcularOrcamentoItem(depois[1], agregadosDepois).horasDistribuidas).toBe(120);
+  });
+});
+
+describe("minimoAlocavel", () => {
+  it("subtrai o excedente do realizado quando ele cobre só parte (caso real: atividade 86354)", () => {
+    expect(minimoAlocavel(46 * 60, 30 * 60)).toBe(16 * 60);
+  });
+
+  it("nunca fica negativo quando o excedente cobre tudo, ou mais do que o realizado", () => {
+    expect(minimoAlocavel(46 * 60, 60 * 60)).toBe(0);
+  });
+
+  it("sem excedente, o mínimo é o próprio realizado (comportamento anterior à correção)", () => {
+    expect(minimoAlocavel(7 * 60 + 51, 0)).toBe(7 * 60 + 51);
   });
 });
 

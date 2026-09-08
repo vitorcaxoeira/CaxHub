@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { HorasAgregadas, StatusNo, formatHorasCompacto, formatarAlocacoes, projetarSaldo } from "../../lib/cronograma";
+import { HorasAgregadas, StatusNo, formatHorasCompacto, formatarAlocacoes, minimoAlocavel, projetarSaldo } from "../../lib/cronograma";
 import { NoCronogramaCompleto, PatchNo } from "../../hooks/useCronograma";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 
@@ -81,16 +81,19 @@ export function DrawerAtividade({
   // igual ao ModalAlocarConsultores (que nunca teve esse bypass).
   const excedenteTravado = estouraOrcamento && bloqueiaExcedenteEstrutura;
 
-  // Nunca pode reduzir as horas previstas abaixo do que já foi realizado nesta atividade —
-  // o backend recusa com 409 (ver PATCH /alocacao/estrutura/:id e PATCH
-  // /alocacao/alocacoes/:id); isto aqui só adianta o aviso antes de bater no servidor. Sem
+  // Nunca pode reduzir as horas previstas a ponto de "alocado + excedente" ficar abaixo do
+  // realizado nesta atividade — o backend recusa com 409 (ver PATCH /alocacao/estrutura/:id e
+  // PATCH /alocacao/alocacoes/:id); isto aqui só adianta o aviso antes de bater no servidor.
+  // O excedente já autorizado (no.horasExcedentes) cobre parte do realizado, por isso o
+  // mínimo alocável não é o realizado cheio (ver minimoAlocavel em lib/cronograma.ts). Sem
   // bypass — diferente de estouraOrcamento, aqui não existe "confirmar mesmo assim" (é
   // integridade de dado, não autorização).
+  const minimoHorasPrevistas = no.tipo === "atividade" ? minimoAlocavel(no.horasRealizadas, no.horasExcedentes) : 0;
   const abaixoDoRealizado =
     no.tipo === "atividade" &&
     horasPrevistasProjetadas != null &&
-    no.horasRealizadas > 0 &&
-    horasPrevistasProjetadas < no.horasRealizadas;
+    minimoHorasPrevistas > 0 &&
+    horasPrevistasProjetadas < minimoHorasPrevistas;
 
   // Uma vez confirmada pelo Senior (seqati preenchido), o responsável não pode mais trocar
   // por aqui — trocar de verdade soft-deleta essa alocação e cria outra do zero (ver
@@ -292,8 +295,10 @@ export function DrawerAtividade({
                 />
                 {abaixoDoRealizado && (
                   <p className="mt-1 text-[11px] text-destructive">
-                    Já foram realizadas {formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade — não é
-                    possível alocar menos do que isso.
+                    Já foram realizadas {formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade
+                    {no.horasExcedentes > 0 &&
+                      ` (considerando ${formatHorasCompacto(no.horasExcedentes, larguraHoras)} de horas excedentes já autorizadas)`}{" "}
+                    — não é possível alocar menos do que {formatHorasCompacto(minimoHorasPrevistas, larguraHoras)}.
                   </p>
                 )}
                 {!abaixoDoRealizado && saldoProjetado != null && (
@@ -433,7 +438,7 @@ export function DrawerAtividade({
             disabled={salvando || excedenteTravado || abaixoDoRealizado}
             title={
               abaixoDoRealizado
-                ? `Já foram realizadas ${formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade — reduza menos, ou ajuste os apontamentos antes.`
+                ? `Já foram realizadas ${formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade — reduza no máximo até ${formatHorasCompacto(minimoHorasPrevistas, larguraHoras)}, ou ajuste os apontamentos antes.`
                 : excedenteTravado
                   ? "Esta proposta não permite ultrapassar o saldo do item — reduza as horas antes de salvar."
                   : undefined
