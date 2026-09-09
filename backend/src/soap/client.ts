@@ -531,6 +531,173 @@ export async function alocarAtividadesViaSoap(payload: AlocarAtividadesPayload):
   };
 }
 
+// ---------------------------------------------------------------------------
+// Canal de ESCRITA — operação `ManterItemDespesa`, do mesmo serviço. Publicada em 07/09/2026
+// (confirmada baixando o `?wsdl`/`?xsd` reais, mesmo método usado pra descobrir as 3 anteriores).
+//
+// Grava despesa de viagem (RegistroDespesaViagem / USU_TE777RDV) lançada pelo CaxHub. Contrato
+// mais simples que os outros dois: não tem `codFor`/`codPro` (a despesa já pertence a um
+// `numRat` existente, sem a ambiguidade de "a qual RAT isso anexa" que `registrarAtividades`
+// tem) e a resposta é FLAT — `result[]` traz uma linha por despesa direto, sem aninhar um
+// `itens[]` por dentro de um resultado por header como as outras duas.
+//
+// `tipEve` aqui é campo do ITEM (não do envelope como nos outros dois) — domínio ainda não
+// confirmado contra o serviço, mas o operador escreve I/A/E nos outros dois; CaxHub só usa "I"
+// por ora (despesa lançada aqui nunca é editada, só criada ou apagada antes do envio).
+// ---------------------------------------------------------------------------
+
+/** Identificador externo mandado ao Senior pra despesa: o id local de RegistroDespesaViagem. */
+export const ideExtDespesa = (despesaId: number) => String(despesaId);
+
+export interface ItemDespesaSenior {
+  ideExt: string;
+  /** dd/mm/yyyy — mesmo formato de datAti, ver formatarDataSenior. */
+  datRdv: string;
+  desRdv: string;
+  tipDes: number;
+  /** Ausente pra despesa avulsa (só a aba Deslocamento preenche). */
+  modDes?: string;
+  qtdRdv: number;
+  vlrUni: number;
+  fatRdv: string;
+  /** Ausente pra despesa avulsa — só Deslocamento aponta uma rota (RegistroDespesaViagem.rotid). */
+  idRota?: number;
+  /** Ausente ao incluir — o Senior gera e devolve em `seqRdv` na resposta. */
+  seqRdv?: number;
+  tipEve: string;
+}
+
+export interface ManterItemDespesaPayload {
+  codEmp: number;
+  numRat: number;
+  sisOri: string;
+  despesas: ItemDespesaSenior[];
+}
+
+export interface ItemDespesaRegistrado {
+  ideExt: string | null;
+  seqRdv: number | null;
+  status: number | null;
+  msg: string | null;
+  // Valor unitário e quantidade que o Senior confirmou pra esta despesa — podem vir diferentes
+  // do que mandamos (arredondamento/ajuste do lado de lá). O chamador (outboxSeniorDespesa.ts)
+  // grava os dois de volta em RegistroDespesaViagem (vlrunt/qtdrdv) depois da confirmação, e
+  // recalcula vlrtot em cima deles, pra local nunca divergir do que o ERP tem registrado.
+  vlrUni: number | null;
+  qtdRdv: number | null;
+  // Horas de deslocamento (minutos), calculadas pelo Senior — campo publicado por lá em
+  // 09/09/2026, ainda não confirmado contra uma resposta real (mesmo cuidado do nome do
+  // elemento de resposta acima): `horDes` segue o mesmo padrão de casing de vlrUni/qtdRdv, mas
+  // vale reconferir no primeiro Result de verdade que trouxer o campo.
+  horDes: number | null;
+}
+
+export interface ManterItemDespesaResposta {
+  statusProcesso: number | null;
+  mensagemProcesso: string | null;
+  erroExecucao: string | null;
+  /** Flat — cada entrada já é uma despesa, sem nível de header como em registrarAtividades. */
+  resultados: ItemDespesaRegistrado[];
+}
+
+/** Monta o XML que seria enviado, sem enviar — mesmo uso dos irmãos de registrarAtividades/alocarAtividades. */
+export function montarEnvelopeManterItemDespesa(payload: ManterItemDespesaPayload, user: string, password: string): string {
+  const despesasXml = payload.despesas
+    .map(
+      (d) =>
+        `<despesas>` +
+        `<datRdv>${escapeXml(d.datRdv)}</datRdv>` +
+        `<desRdv>${escapeXml(d.desRdv)}</desRdv>` +
+        `<fatRdv>${escapeXml(d.fatRdv)}</fatRdv>` +
+        (d.idRota != null ? `<idRota>${d.idRota}</idRota>` : "") +
+        `<ideExt>${escapeXml(d.ideExt)}</ideExt>` +
+        (d.modDes != null ? `<modDes>${escapeXml(d.modDes)}</modDes>` : "") +
+        `<qtdRdv>${d.qtdRdv}</qtdRdv>` +
+        (d.seqRdv != null ? `<seqRdv>${d.seqRdv}</seqRdv>` : "") +
+        `<tipDes>${d.tipDes}</tipDes>` +
+        `<tipEve>${escapeXml(d.tipEve)}</tipEve>` +
+        `<vlrUni>${d.vlrUni}</vlrUni>` +
+        `</despesas>`
+    )
+    .join("");
+
+  const parametersXml =
+    `<codEmp>${payload.codEmp}</codEmp>` +
+    despesasXml +
+    `<numRat>${payload.numRat}</numRat>` +
+    `<sisOri>${escapeXml(payload.sisOri)}</sisOri>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ser:ManterItemDespesa>
+      <user>${escapeXml(user)}</user>
+      <password>${escapeXml(password)}</password>
+      <encryption>0</encryption>
+      <parameters>${parametersXml}</parameters>
+    </ser:ManterItemDespesa>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+}
+
+/**
+ * Grava despesa(s) de viagem no Senior via `ManterItemDespesa`.
+ *
+ * Mesmo contrato de responsabilidade dos irmãos: não decide sucesso/fracasso de negócio, só
+ * normaliza a resposta — quem decide é o chamador (sync/outboxSeniorDespesa.ts).
+ */
+export async function manterItemDespesaViaSoap(payload: ManterItemDespesaPayload): Promise<ManterItemDespesaResposta> {
+  const soapUrl = process.env.SOAP_URL;
+  const soapUser = process.env.SOAP_USER;
+  const soapPassword = process.env.SOAP_PASSWORD;
+
+  if (!soapUrl || !soapUser || !soapPassword) {
+    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
+  }
+
+  const endpoint = soapUrl.replace(/\?wsdl$/i, "");
+  const envelope = montarEnvelopeManterItemDespesa(payload, soapUser, soapPassword);
+
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "ManterItemDespesa"));
+    });
+
+  const parsed = parser.parse(response.data);
+  // Nome do elemento de resposta ("ns2:ManterItemDespesaResponse") segue o padrão das outras 3
+  // operações — AINDA NÃO confirmado contra uma chamada real (ver prisma/verificarEnvioDespesa.ts).
+  const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:ManterItemDespesaResponse"]?.result;
+
+  if (!result) {
+    throw new Error("Resposta SOAP de ManterItemDespesa em formato inesperado — ajustar parsing em soap/client.ts");
+  }
+
+  const erroExecucao = textoOuNulo(result.erroExecucao);
+  if (erroExecucao) {
+    throw new Error(`Erro no serviço Senior (ManterItemDespesa): ${erroExecucao}`);
+  }
+
+  return {
+    statusProcesso: numeroOuNulo(result.statusProcesso),
+    mensagemProcesso: textoOuNulo(result.mensagemProcesso),
+    erroExecucao,
+    resultados: comoArray<Record<string, unknown>>(result.result).map((r) => ({
+      ideExt: ideExtOuNulo(r.ideExt),
+      seqRdv: numeroOuNulo(r.seqRdv),
+      status: numeroOuNulo(r.status),
+      msg: textoOuNulo(r.msg),
+      vlrUni: numeroOuNulo(r.vlrUni),
+      qtdRdv: numeroOuNulo(r.qtdRdv),
+      horDes: numeroOuNulo(r.horDes),
+    })),
+  };
+}
+
 const PAGE_SIZE = 10000;
 
 /**

@@ -10,14 +10,13 @@ import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { ModalEditarDescricao } from "../../components/projetos/ModalEditarDescricao";
-import { ModalDespesasRat } from "../../components/projetos/ModalDespesasRat";
+import { DespesasRatPainel } from "../../components/projetos/DespesasRatPainel";
+import { Tabs } from "../../components/ui/Tabs";
 import { Modal } from "../../components/ui/Modal";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { IconeIntegracaoErp } from "../../components/ui/IconeIntegracaoErp";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
-import { useAuth } from "../../auth/AuthContext";
-
 
 // Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
 // apontamento ao Senior fica retido no servidor.
@@ -330,10 +329,6 @@ const ENVIO_MAX_TENTATIVAS = 13;
 
 export function MeusApontamentos() {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  // Despesas de Viagem: restrito a admin por enquanto, enquanto o recurso está em validação
-  // (mesma regra aplicada no backend, ver podeGerenciarDespesas em routes/rats.ts).
-  const podeGerenciarDespesas = user?.role === "admin";
   const [sessoes, setSessoes] = useState<SessaoPendente[]>([]);
   // Admin vê as sessões pendentes de todos os consultores; gestor vê as próprias + as do
   // time que gerencia (ver GET /sessoes-pendentes) — é o que liga a coluna Consultor e a
@@ -390,7 +385,12 @@ export function MeusApontamentos() {
   const [ratsExpandidas, setRatsExpandidas] = useState<Set<number>>(new Set());
   const [itensPorRat, setItensPorRat] = useState<Record<number, RatItemRow[] | "carregando" | "erro">>({});
   const [sincronizando, setSincronizando] = useState<number | null>(null);
-  const [despesasRat, setDespesasRat] = useState<RatRow | null>(null);
+  // Aba ativa do acordeão por RAT — "atividades" quando ausente. `rdvJaAberto` mantém o
+  // DespesasRatPainel montado (só oculto via CSS, não desmontado) depois da 1ª visita à aba
+  // RDVs daquela RAT, pra não refazer o GET /despesas a cada troca de aba — mesmo espírito de
+  // `itensPorRat` já cachear por RAT em vez de buscar de novo a cada expand/collapse.
+  const [abaExpandidaPorRat, setAbaExpandidaPorRat] = useState<Record<number, "atividades" | "rdvs">>({});
+  const [rdvJaAberto, setRdvJaAberto] = useState<Set<number>>(new Set());
 
   const [modalManual, setModalManual] = useState(false);
   // Por quem o apontamento pode ser lançado: o próprio usuário e, se for gestor, o time
@@ -768,6 +768,14 @@ export function MeusApontamentos() {
     });
   }
 
+  // Troca a aba (Atividades/RDVs) da linha expandida de uma RAT. `rdvJaAberto` só cresce — a
+  // 1ª vez que a aba RDVs é aberta pra uma RAT, `DespesasRatPainel` monta e faz seu próprio
+  // fetch; nas trocas seguintes ele continua montado (só oculto), sem novo fetch.
+  function selecionarAbaRat(ratId: number, aba: "atividades" | "rdvs") {
+    setAbaExpandidaPorRat((atual) => ({ ...atual, [ratId]: aba }));
+    if (aba === "rdvs") setRdvJaAberto((atual) => new Set(atual).add(ratId));
+  }
+
   // Após confirmar um apontamento, abre a RAT que recebeu o item (se ainda não estava
   // expandida) e força a releitura dos itens — senão o item recém-inserido só aparece
   // depois de recolher/reexpandir manualmente.
@@ -862,6 +870,9 @@ export function MeusApontamentos() {
             : `${data.itensReenviados} apontamento(s) pendente(s)/com erro foram reenviados, mas ainda há falha — ` +
                 `veja o detalhe na lista de itens.`
         );
+      }
+      if (data?.despesasReenviadas > 0) {
+        avisos.push(`${data.despesasReenviadas} despesa(s) pendente(s)/com erro foram reenviadas ao Senior.`);
       }
       if (avisos.length > 0) {
         setAvisoSinc(avisos.join(" "));
@@ -1661,6 +1672,7 @@ export function MeusApontamentos() {
                     rats.map((rat) => {
                       const expandida = ratsExpandidas.has(rat.id);
                       const itens = itensPorRat[rat.id];
+                      const abaRat = abaExpandidaPorRat[rat.id] ?? "atividades";
                       return (
                         <Fragment key={rat.id}>
                           <tr
@@ -1728,31 +1740,31 @@ export function MeusApontamentos() {
                                 <DropdownMenu.Content>
                                   <DropdownMenu.Item
                                     onSelect={() => sincronizarErp(rat)}
-                                    disabled={rat.integracao === "sincronizado" || sincronizando === rat.id}
-                                    title={
-                                      rat.integracao === "sincronizado"
-                                        ? "Já sincronizada — nada pendente ou com erro"
-                                        : "Busca o que mudou no ERP e reenvia os itens pendentes/com erro"
-                                    }
+                                    disabled={sincronizando === rat.id}
+                                    title="Busca o que mudou no ERP (itens e despesas) e reenvia o que ainda está pendente/com erro daqui pra lá"
                                   >
                                     {sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
                                   </DropdownMenu.Item>
-                                  {podeGerenciarDespesas && (
-                                    <DropdownMenu.Item
-                                      onSelect={() => setDespesasRat(rat)}
-                                      disabled={rat.numrat == null}
-                                      title={rat.numrat == null ? "Só disponível depois que a RAT tem número do ERP" : undefined}
-                                    >
-                                      Despesas de Viagem
-                                    </DropdownMenu.Item>
-                                  )}
                                 </DropdownMenu.Content>
                               </DropdownMenu>
                             </td>
                           </tr>
                           {expandida && (
                             <tr className="border-t border-border/60 bg-surface-2/40">
-                              <td colSpan={11} className="border-b border-l border-r border-primary px-2.5 py-3">
+                              {/* `pt-2` (8px), não `py-3` (12px) em cima — pra igualar o vão entre a borda
+                                  de cima do acordeon e as abas Atividades/RDVs com o vão que já existe
+                                  entre as abas e o conteúdo (8px, ver DespesasRatPainel.tsx). `pb-3` embaixo
+                                  fica como estava, não fazia parte do pedido. */}
+                              <td colSpan={11} className="border-b border-l border-r border-primary px-2.5 pt-2 pb-3">
+                                <Tabs
+                                  tabs={[
+                                    { key: "atividades", label: "Atividades" },
+                                    { key: "rdvs", label: "RDVs" },
+                                  ]}
+                                  activeKey={abaRat}
+                                  onChange={(key) => selecionarAbaRat(rat.id, key as "atividades" | "rdvs")}
+                                />
+                                <div className={abaRat === "atividades" ? "" : "hidden"}>
                                 {itens === "carregando" && <p className="py-2 text-sm text-muted">Carregando itens...</p>}
                                 {itens === "erro" && <p className="py-2 text-sm text-destructive">Falha ao carregar os itens desta RAT.</p>}
                                 {Array.isArray(itens) && itens.length === 0 && (
@@ -1856,6 +1868,12 @@ export function MeusApontamentos() {
                                       ))}
                                     </tbody>
                                   </table>
+                                )}
+                                </div>
+                                {rdvJaAberto.has(rat.id) && (
+                                  <div className={abaRat === "rdvs" ? "" : "hidden"}>
+                                    <DespesasRatPainel ratId={rat.id} />
+                                  </div>
                                 )}
                               </td>
                             </tr>
@@ -1995,14 +2013,6 @@ export function MeusApontamentos() {
             </div>
           </div>
         </Modal>
-      )}
-
-      {despesasRat && (
-        <ModalDespesasRat
-          ratId={despesasRat.id}
-          ratLabel={`RAT ${despesasRat.numrat ?? despesasRat.id} · ${despesasRat.cliente ?? "—"}`}
-          onFechar={() => setDespesasRat(null)}
-        />
       )}
 
       {/* Pedido de correção de horário. Não fecha por clique fora nem por Esc — tem texto

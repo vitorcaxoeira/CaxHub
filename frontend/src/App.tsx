@@ -28,6 +28,7 @@ import { AlocacaoPropostaDetalhe } from "./pages/projetos/AlocacaoPropostaDetalh
 import { CronogramaProposta } from "./pages/projetos/CronogramaProposta";
 import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
 import { RatVisualizacao } from "./pages/projetos/RatVisualizacao";
+import { RelatorioDespesasRat } from "./pages/projetos/RelatorioDespesasRat";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
@@ -45,6 +46,19 @@ export default function App() {
             <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/aceitar-convite" element={<AceitarConvite />} />
+            {/* Fora do AppShell de propósito — página de impressão do relatório de despesas de
+                viagem (RDV) de uma RAT, aberta numa aba própria pelo botão "Imprimir" em
+                DespesasRatPainel.tsx. window.print() imprime a aba inteira, então sem
+                Sidebar/Topbar/tema escuro só o relatório vai pro papel. Ainda exige login
+                (ProtectedRoute), mesmo padrão de /login fora do bloco do AppShell abaixo. */}
+            <Route
+              path="/projetos/rats/:ratId/despesas/relatorio"
+              element={
+                <ProtectedRoute>
+                  <RelatorioDespesasRat />
+                </ProtectedRoute>
+              }
+            />
             <Route
               element={
                 <ProtectedRoute>

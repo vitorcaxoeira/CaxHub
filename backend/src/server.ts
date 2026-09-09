@@ -77,6 +77,7 @@ import { scheduleItemProdutoNfVendaSync } from "./sync/itemProdutoNfVendaSync";
 import { scheduleRateioNfVendaSync } from "./sync/rateioNfVendaSync";
 import { scheduleMetaAnualSync } from "./sync/metaAnualSync";
 import { scheduleOutboxSeniorSync } from "./sync/outboxSenior";
+import { scheduleOutboxSeniorDespesaSync } from "./sync/outboxSeniorDespesa";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
@@ -211,6 +212,7 @@ async function iniciar() {
     scheduleRateioNfVendaSync();
     scheduleMetaAnualSync();
     scheduleOutboxSeniorSync();
+    scheduleOutboxSeniorDespesaSync();
     // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do
     // fim do expediente (5 em 5 min), e a que ficou sem resposta depois de a aba fechar
     // (15 em 15s — cadência bem mais curta, ver o comentário no arquivo).

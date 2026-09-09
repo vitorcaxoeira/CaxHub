@@ -9,6 +9,7 @@ export const ENTIDADES_AUDITORIA = {
   KANBAN_CARD: "kanban_card",
   USUARIO: "usuario",
   RAT: "rat",
+  DESPESA: "despesa",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -126,5 +127,16 @@ export const EVENTOS_AUDITORIA = {
   // via AtividadeSessaoExecucao.ratItemId -> atividadeId -> AtividadeConsultor.seqati, nunca
   // por codemp+codpro+seqite+codfor (colide quando há mais de uma alocação pro mesmo item).
   RAT_ITEM_SEQATI_CORRIGIDO: "RAT_ITEM_SEQATI_CORRIGIDO",
+
+  // Nasce no processamento assíncrono da fila outbox de despesa (outboxSeniorDespesa.ts), não
+  // no clique do usuário — mesmo espírito de ATIVIDADE_ENVIADA_SENIOR, canal `ManterItemDespesa`
+  // (publicado em 07/09/2026).
+  DESPESA_ENVIADA_SENIOR: "DESPESA_ENVIADA_SENIOR",
+
+  // Editar/excluir despesa já registrada no Senior (tipEve A/E + seqRdv) — liberado em
+  // 07/09/2026 enquanto Rat.sitrat = Digitado (ver podeAlterarDespesasDaRat em routes/rats.ts).
+  // Mesmo espírito de DESPESA_ENVIADA_SENIOR: nasce no processamento da fila, não no clique.
+  DESPESA_EDITADA_SENIOR: "DESPESA_EDITADA_SENIOR",
+  DESPESA_EXCLUIDA_SENIOR: "DESPESA_EXCLUIDA_SENIOR",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];

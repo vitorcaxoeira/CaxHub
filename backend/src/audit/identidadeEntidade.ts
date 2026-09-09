@@ -23,3 +23,7 @@ export function entidadeIdUsuario(id: number): string {
 export function entidadeIdRat(id: number): string {
   return String(id);
 }
+
+export function entidadeIdDespesa(id: number): string {
+  return String(id);
+}

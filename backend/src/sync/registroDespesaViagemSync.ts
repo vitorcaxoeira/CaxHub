@@ -123,6 +123,47 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
   }
 }
 
+// Sincroniza só as despesas da RAT com esse numrat — usado pela ação manual "Sinc. ERP" em
+// "Meus Apontamentos" (ver POST /rats/:id/sincronizar), mesmo espírito de
+// runRatItemSyncPorNumrat em ratItemSync.ts: consulta filtrada, upsert linha a linha (poucas
+// linhas por RAT — não precisa do upsert em lote da varredura completa), erro propaga pro
+// chamador em vez de só logar (é assim que o botão sabe reportar falha ao consultor).
+export async function runRegistroDespesaViagemSyncPorNumrat(codemp: number, numrat: number): Promise<void> {
+  const query = `${BASE_QUERY} WHERE USU_CODEMP = ${codemp} AND USU_NUMRAT = ${numrat}`;
+  const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrdv"])) as RegistroDespesaViagemRow[];
+
+  // origemCaxHub/enviadoEmSenior de propósito fora do payload — mesma proteção do upsert em
+  // lote acima: despesa lançada pelo consultor nunca tem seqrdv, então nunca cai neste upsert.
+  for (const row of rows) {
+    const data = {
+      codemp: row.codemp,
+      numrat: row.numrat,
+      seqrdv: row.seqrdv,
+      datemi: row.datemi ? new Date(row.datemi) : null,
+      desrdv: row.desrdv ?? null,
+      tipdes: row.tipdes ?? null,
+      moddes: row.moddes ?? null,
+      qtdrdv: row.qtdrdv ?? null,
+      vlrunt: row.vlrunt ?? null,
+      vlrtot: row.vlrtot ?? null,
+      fatrdv: row.fatrdv ?? null,
+      reerdv: row.reerdv ?? null,
+      rotid: row.rotid ?? null,
+      hordes: row.hordes ?? null,
+      nidpso: row.nidpso ?? null,
+    };
+    await prisma.registroDespesaViagem.upsert({
+      where: { codemp_numrat_seqrdv: { codemp: row.codemp, numrat: row.numrat, seqrdv: row.seqrdv } },
+      update: data,
+      create: data,
+    });
+  }
+
+  await prisma.syncLog.create({
+    data: { jobName: JOB_NAME, query, status: "success", message: `${rows.length} despesa(s) no Senior (RAT ${codemp}/${numrat})` },
+  });
+}
+
 // Despesa de viagem muda pouco depois de lançada — roda 1x por dia às 5h20.
 export function scheduleRegistroDespesaViagemSync(): void {
   cron.schedule(CRON_EXPR, runRegistroDespesaViagemSync);

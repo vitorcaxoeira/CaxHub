@@ -1677,18 +1677,50 @@ model RegistroDespesaViagem {
   nidpso Int? // Id espelhado de uma integração externa (PSOffice) — não usado no CaxHub.
 
   // true = lançada pelo consultor no CaxHub (ver POST /rats/:id/despesas); false = veio do
-  // Senior pelo sync. É o que protege a linha local: só o que nasceu aqui pode ser excluído
-  // pela tela, e é por aqui que a varredura de envio pendente acha o que falta mandar.
+  // Senior pelo sync. É por aqui que a varredura de envio pendente acha o que falta mandar
+  // (só quem nasceu aqui tem o que enviar). Editar/excluir (07/09/2026) não depende mais
+  // disso — qualquer despesa da RAT pode ser alterada enquanto Rat.sitrat = Digitado, ver
+  // podeAlterarDespesasDaRat em routes/rats.ts.
   origemCaxHub    Boolean   @default(false)
-  // Quando a despesa criada aqui foi de fato gravada no Senior. NULL + origemCaxHub = ainda
-  // não está no ERP. Hoje fica sempre NULL: o serviço do Senior não publica operação de
-  // gravação de RDV (o WSDL só expõe alocarAtividades/getData/getPropostaItemDev/
-  // registrarAtividades). Quando publicarem, um job varre origemCaxHub AND enviadoEmSenior
-  // IS NULL e envia o acumulado — nada precisa ser redigitado.
+  // Quando a despesa criada aqui foi de fato gravada no Senior — preenchido pelo write-back
+  // atômico de sync/outboxSeniorDespesa.ts (operação `ManterItemDespesa`, publicada em
+  // 07/09/2026). NULL + origemCaxHub = ainda não foi enviada (é o que faz `pendenteDeEnvio`
+  // em GET /rats/:id/despesas).
   enviadoEmSenior DateTime? @map("enviado_em_senior")
+  // Preenchido quando a exclusão foi efetivada: na hora, se a despesa nunca tinha ido pro
+  // Senior (seqrdv nulo — não há o que desfazer lá); só depois da confirmação de
+  // `ManterItemDespesa` com tipEve=E quando já tinha seqrdv. Soft delete de propósito (08/09/
+  // 2026, pedido do Vitor) — mesmo princípio de nunca apagar Rat/RatItem que já existiram no
+  // ERP, só desvincular/marcar: a despesa some das telas (ver filtro em GET /:id/despesas),
+  // mas o registro fica pra rastreabilidade de valor faturado/reembolsado.
+  excluidaEm      DateTime? @map("excluida_em")
+
+  sincronizacoesPendentes SincronizacaoPendenteDespesa[]
 
   @@unique([codemp, numrat, seqrdv])
   @@map("registros_despesa_viagem")
+}
+
+// Fila de envio de despesa (RDV) pro Senior via `ManterItemDespesa` — mesmas regras de
+// sync/outboxSenior.ts (pendente/enviando/enviado/bloqueado, retentativa, write-back atômico),
+// mas em tabela própria: RegistroDespesaViagem não tem relação com AtividadeConsultor, que é a
+// FK obrigatória de SincronizacaoPendente. Ver sync/outboxSeniorDespesa.ts.
+model SincronizacaoPendenteDespesa {
+  id        Int                   @id @default(autoincrement())
+  despesaId Int
+  despesa   RegistroDespesaViagem @relation(fields: [despesaId], references: [id])
+  // enviar_despesa (tipEve=I, default/legado) | editar_despesa (tipEve=A, exige seqrdv) |
+  // excluir_despesa (tipEve=E, exige seqrdv) — ver sync/outboxSeniorDespesa.ts.
+  tipo      String                @default("enviar_despesa") @db.VarChar(40)
+  payload   Json
+  // pendente | enviando | enviado | bloqueado — mesmo significado de SincronizacaoPendente.status.
+  status       String    @default("pendente") @db.VarChar(20)
+  tentativas   Int       @default(0)
+  ultimoErro   String?
+  criadoEm     DateTime  @default(now())
+  processadoEm DateTime?
+
+  @@map("sincronizacao_pendente_despesa")
 }
 
 // Espelho local da tabela USU_TRDVROTAS do Senior ERP (Tabela de Rotas) — rota de viagem

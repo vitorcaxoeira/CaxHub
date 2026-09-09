@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { reprocessar, processarFilaSincronizacao, previewEnvioSenior } from "../sync/outboxSenior";
+import { reprocessarDespesa, processarFilaDespesas, previewEnvioDespesa } from "../sync/outboxSeniorDespesa";
 
 // Painel de administração da fila de sincronização CaxHub -> Senior (outbox). Só admin,
 // já que é uma tela operacional/infra, não de negócio.
@@ -187,5 +188,135 @@ sincronizacaoRouter.post("/:id/invalidar", async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error, "invalidar");
+  }
+});
+
+// ---------- Despesas de viagem (RDV) — mesma tela, fila separada ----------
+//
+// SincronizacaoPendenteDespesa é uma fila IRMÃ, não a mesma tabela (o FK dela aponta pra
+// RegistroDespesaViagem, não AtividadeConsultor — ver o comentário do model no schema.prisma
+// pro motivo de não ter dado pra encaixar na mesma fila), então a lista/KPI/preview
+// abaixo são cópias paralelas das de cima, lendo da tabela certa — mesmo padrão de resposta,
+// pra reaproveitar o layout da tela (aba "Despesas de viagem" ao lado da aba "Atividades").
+//
+// Sem "invalido": diferente de SincronizacaoPendente (onde falta de horas na alocação chega a
+// ser enfileirada sem nunca poder ser enviada), toda despesa só entra na fila depois de passar
+// por validarCamposDespesa (routes/rats.ts) — não existe o caso "enfileirada mas sem dado
+// suficiente pra tentar".
+const STATUS_VALIDOS_DESPESA = ["pendente", "enviando", "enviado", "bloqueado"] as const;
+
+sincronizacaoRouter.get("/despesas", async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
+    const status =
+      typeof req.query.status === "string" && (STATUS_VALIDOS_DESPESA as readonly string[]).includes(req.query.status)
+        ? req.query.status
+        : null;
+    const tipos = parseStringListParam(req.query.tipo);
+    const numrats = parseIntListParam(req.query.numrat);
+    const despesaIds = parseIntListParam(req.query.despesaId);
+
+    const where: Prisma.SincronizacaoPendenteDespesaWhereInput = {};
+    if (status) where.status = status;
+    if (tipos) where.tipo = { in: tipos };
+    if (despesaIds) where.despesaId = { in: despesaIds };
+    if (numrats) where.despesa = { numrat: { in: numrats } };
+
+    const [total, itens] = await Promise.all([
+      prisma.sincronizacaoPendenteDespesa.count({ where }),
+      prisma.sincronizacaoPendenteDespesa.findMany({
+        where,
+        orderBy: { criadoEm: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { despesa: { select: { codemp: true, numrat: true, desrdv: true, vlrtot: true } } },
+      }),
+    ]);
+
+    // Id interno de Rat pra linkar pro RatVisualizacao (rota usa Rat.id, não numrat) — 1
+    // query em lote pros pares codemp+numrat distintos da página, não uma por linha. Mesmo
+    // casamento que ratDaDespesaComPermissao (routes/rats.ts) já usa pra despesa avulsa.
+    const paresRat = Array.from(new Set(itens.map((i) => `${i.despesa.codemp}:${i.despesa.numrat}`))).map((par) => {
+      const [codemp, numrat] = par.split(":").map(Number);
+      return { codemp, numrat };
+    });
+    const rats =
+      paresRat.length > 0
+        ? await prisma.rat.findMany({ where: { OR: paresRat }, select: { id: true, codemp: true, numrat: true } })
+        : [];
+    const ratIdPorChave = new Map(rats.map((r) => [`${r.codemp}:${r.numrat}`, r.id]));
+
+    res.json({
+      total,
+      itens: itens.map((i) => ({
+        id: i.id,
+        despesaId: i.despesaId,
+        ratId: ratIdPorChave.get(`${i.despesa.codemp}:${i.despesa.numrat}`) ?? null,
+        codemp: i.despesa.codemp,
+        numrat: i.despesa.numrat,
+        desrdv: i.despesa.desrdv,
+        // Decimal do Prisma serializa como string em JSON — mesmo cuidado de routes/rats.ts.
+        vlrtot: i.despesa.vlrtot != null ? Number(i.despesa.vlrtot) : null,
+        tipo: i.tipo,
+        payload: i.payload,
+        status: i.status,
+        tentativas: i.tentativas,
+        ultimoErro: i.ultimoErro,
+        criadoEm: i.criadoEm,
+        processadoEm: i.processadoEm,
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "listar-despesas");
+  }
+});
+
+sincronizacaoRouter.get("/despesas/indicadores", async (_req, res) => {
+  try {
+    const grupos = await prisma.sincronizacaoPendenteDespesa.groupBy({ by: ["status"], _count: true });
+    const totais: Record<string, number> = { pendente: 0, enviando: 0, enviado: 0, bloqueado: 0 };
+    for (const g of grupos) {
+      if (g.status in totais) totais[g.status] = g._count;
+    }
+    res.json(totais);
+  } catch (error) {
+    handleError(res, error, "indicadores-despesas");
+  }
+});
+
+sincronizacaoRouter.get("/despesas/:id/preview", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const item = await prisma.sincronizacaoPendenteDespesa.findUnique({ where: { id } });
+    if (!item) {
+      res.status(404).json({ error: "Pendência não encontrada" });
+      return;
+    }
+    const preview = await previewEnvioDespesa(item);
+    res.json(preview);
+  } catch (error) {
+    handleError(res, error, "preview-despesa");
+  }
+});
+
+// Mesmo espírito de POST /:id/reprocessar acima — reseta e já tenta na hora, restrito a este
+// item via `apenasId`.
+sincronizacaoRouter.post("/despesas/:id/reprocessar", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    await reprocessarDespesa(id);
+    await processarFilaDespesas({ apenasId: id });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "reprocessar-despesa");
   }
 });
