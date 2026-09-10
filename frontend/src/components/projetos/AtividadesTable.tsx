@@ -545,6 +545,8 @@ export function AtividadesTable({
                                                 estruturaNome: row.estruturaNome,
                                                 horasRealizadas: row.horasRealizadas,
                                                 estruturaPercentual: row.estruturaPercentual,
+                                                estruturaAtividadeId: row.estruturaAtividadeId,
+                                                depexeLabel: row.depexeLabel,
                                                 podeVerCronograma: row.podeVerCronograma,
                                                 qtdhorPrevisto: row.qtdhorPrevisto,
                                                 horasExcedentes: row.horasExcedentes,

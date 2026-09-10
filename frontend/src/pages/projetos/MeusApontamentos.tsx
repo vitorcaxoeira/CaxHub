@@ -169,6 +169,8 @@ interface AtividadeDetalheDados {
   itemRealizado: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
+  estruturaAtividadeId: number | null;
+  depexeLabel: string;
   podeVerCronograma: boolean;
   // Opcionais porque esta tela monta o objeto a partir de outra rota, que pode não trazer
   // os dois — o painel trata a ausência como "sem excedente".
@@ -2122,6 +2124,8 @@ export function MeusApontamentos() {
           itemRealizado={detalheAtividade.itemRealizado}
           estruturaNome={detalheAtividade.estruturaNome}
           estruturaPercentual={detalheAtividade.estruturaPercentual}
+          estruturaAtividadeId={detalheAtividade.estruturaAtividadeId}
+          depexeLabel={detalheAtividade.depexeLabel}
           podeVerCronograma={detalheAtividade.podeVerCronograma}
           qtdhorPrevisto={detalheAtividade.qtdhorPrevisto ?? null}
           horasExcedentes={detalheAtividade.horasExcedentes ?? 0}

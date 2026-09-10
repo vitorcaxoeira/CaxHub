@@ -28,6 +28,8 @@ interface AtividadeDetalheDados {
   itemRealizado: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
+  estruturaAtividadeId: number | null;
+  depexeLabel: string;
   podeVerCronograma: boolean;
   qtdhorPrevisto: number | null;
   horasExcedentes: number;
@@ -1445,6 +1447,8 @@ export function Aprovacoes() {
           itemRealizado={atividadeAberta.itemRealizado}
           estruturaNome={atividadeAberta.estruturaNome}
           estruturaPercentual={atividadeAberta.estruturaPercentual}
+          estruturaAtividadeId={atividadeAberta.estruturaAtividadeId}
+          depexeLabel={atividadeAberta.depexeLabel}
           podeVerCronograma={atividadeAberta.podeVerCronograma}
           qtdhorPrevisto={atividadeAberta.qtdhorPrevisto}
           horasExcedentes={atividadeAberta.horasExcedentes}

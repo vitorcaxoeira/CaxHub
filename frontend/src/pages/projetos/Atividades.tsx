@@ -598,6 +598,8 @@ export function Atividades() {
           horasRealizadas={detalhe.horasRealizadas}
           estruturaNome={detalhe.estruturaNome}
           estruturaPercentual={detalhe.estruturaPercentual}
+          estruturaAtividadeId={detalhe.estruturaAtividadeId}
+          depexeLabel={detalhe.depexeLabel}
           podeVerCronograma={detalhe.podeVerCronograma}
           qtdhorPrevisto={detalhe.qtdhorPrevisto}
           horasExcedentes={detalhe.horasExcedentes}

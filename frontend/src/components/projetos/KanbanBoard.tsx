@@ -106,6 +106,12 @@ export interface DetalheInfo {
   horasRealizadas: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
+  // Id do nó da EAP (não só o nome) — dá pra tela de Detalhe montar a mesma tooltip rica de
+  // hierarquia da Lista/Kanban (ver HierarquiaAtividadeTooltip), em vez de só o nome da folha.
+  estruturaAtividadeId: number | null;
+  // Departamento executor do ITEM — precisa aqui pelo mesmo motivo (badge do cabeçalho da
+  // hierarquia, igual ao card/tooltip).
+  depexeLabel: string;
   podeVerCronograma: boolean;
   qtdhorPrevisto: number | null;
   horasExcedentes: number;
@@ -203,6 +209,8 @@ function DraggableCard({
       horasRealizadas: atividade.horasRealizadas,
       estruturaNome: atividade.estruturaNome,
       estruturaPercentual: atividade.estruturaPercentual,
+      estruturaAtividadeId: atividade.estruturaAtividadeId,
+      depexeLabel: atividade.depexeLabel,
       podeVerCronograma: atividade.podeVerCronograma,
       qtdhorPrevisto: atividade.qtdhorPrevisto,
       horasExcedentes: atividade.horasExcedentes,
