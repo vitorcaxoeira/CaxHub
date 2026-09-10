@@ -418,7 +418,18 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    const itens = await prisma.ratItem.findMany({ where: { ratId: id }, include: { sessoes: true }, orderBy: { id: "asc" } });
+    // Data/hora decrescente (mais recente primeiro) — pedido do Vitor (10/09/2026), mesma
+    // ordem agora usada em "Sessões pendentes de confirmação" (GET /apontamentos/sessoes-
+    // pendentes). `datati`+`horini` porque RatItem não tem um único DateTime combinado (herança
+    // do formato do Senior: data e "minutos desde meia-noite" em colunas separadas — ver
+    // comentário do campo no schema). `nulls: "last"` pra item sem data/hora (raro, mas
+    // possível antes de confirmado no Senior) não pular pra frente da fila por padrão do
+    // Postgres em DESC; `id desc` como desempate final determinístico.
+    const itens = await prisma.ratItem.findMany({
+      where: { ratId: id },
+      include: { sessoes: true },
+      orderBy: [{ datati: { sort: "desc", nulls: "last" } }, { horini: { sort: "desc", nulls: "last" } }, { id: "desc" }],
+    });
 
     const chavesItem = itens
       .filter((i): i is typeof i & { seqite: number } => i.seqite != null && i.codpro != null)

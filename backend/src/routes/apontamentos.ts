@@ -504,7 +504,11 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
         atividade: { sitreg: "A", ...(role === "admin" ? {} : { codfor: { in: [...codforsPermitidos!] } }) },
       },
       include: { atividade: true, coluna: true },
-      orderBy: { id: "desc" },
+      // Data/hora de início decrescente (mais recente primeiro) — pedido do Vitor
+      // (10/09/2026). Antes era por id desc, que coincide na maioria dos casos (sessão criada
+      // em ordem cronológica) mas diverge quando uma sessão mais antiga é rastreada/ajustada
+      // depois de outras mais novas já existirem.
+      orderBy: { inicio: "desc" },
     });
 
     const chavesProposta = [...new Set(sessoes.map((s) => `${s.atividade.codemp}-${s.atividade.codpro}`))];
