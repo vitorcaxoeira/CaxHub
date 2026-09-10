@@ -9,6 +9,14 @@ export interface NoHierarquia {
   responsavelNome: string | null;
 }
 
+export interface HierarquiaAtividade {
+  // Pasta(s) raiz da PROPOSTA acima do item (10/09/2026) — vazio quando o item está solto
+  // na raiz da árvore, sem pasta organizacional agrupando-o.
+  cadeiaRaiz: NoHierarquia[];
+  // Pasta(s)/atividade DENTRO do item (comportamento original, já existia).
+  cadeia: NoHierarquia[];
+}
+
 // Cache em memória (module-level, não é hook) da cadeia de ancestrais de UMA atividade —
 // usado pela tooltip de hierarquia da Lista de Atividades (ver HierarquiaAtividadeTooltip).
 // Chave é o id da ATIVIDADE (AtividadeConsultor), não do item/proposta: o endpoint (GET
@@ -17,12 +25,12 @@ export interface NoHierarquia {
 //
 // Sem invalidação/TTL de propósito, mesmo raciocínio do cache antigo que este substituiu:
 // vive só enquanto a Lista de Atividades está montada.
-const cache = new Map<number, Promise<NoHierarquia[]>>();
+const cache = new Map<number, Promise<HierarquiaAtividade>>();
 
 export function carregarHierarquiaAtividade(atividadeId: number) {
   let entrada = cache.get(atividadeId);
   if (!entrada) {
-    entrada = axios.get(`/api/atividades/${atividadeId}/hierarquia`).then(({ data }) => data.cadeia as NoHierarquia[]);
+    entrada = axios.get(`/api/atividades/${atividadeId}/hierarquia`).then(({ data }) => data as HierarquiaAtividade);
     // Falha não fica em cache — o próximo hover tenta buscar de novo.
     entrada.catch(() => cache.delete(atividadeId));
     cache.set(atividadeId, entrada);

@@ -6,6 +6,8 @@ import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { toneBadge, priproTone } from "../ui/badges";
 import { IconePlay, IconeStop, IconeLapis } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
+import { Tooltip } from "../ui/Tooltip";
+import { HierarquiaAtividadeTooltip } from "../cronograma/HierarquiaAtividadeTooltip";
 import { useCronometro } from "../../hooks/useCronometro";
 import {
   EXIBIR_AMBOS_BOTOES,
@@ -247,23 +249,37 @@ function DraggableCard({
           tem o mesmo nome do item o texto aparecia duplicado no card. Trunca porque a
           descrição do item é bem mais longa que um nome de nó. */}
       {contexto && (
-        <span
-          // Duas linhas SEMPRE ocupadas: `line-clamp-2` corta na segunda com reticências e
-          // o `min-h` garante o espaço mesmo com texto curto, então a caixa tem a mesma
-          // altura em todos os cards e as colunas do quadro ficam alinhadas. A conta do
-          // min-h: 2 linhas de 13px + py-0.5 (2px em cima e embaixo), porque o
-          // box-sizing border-box do Tailwind faz o min-h incluir o padding.
-          //
-          // Classes escritas à mão em vez de `toneBadge.neutral` de propósito: aquele token
-          // é compartilhado com os badges de prioridade e com as situações de pedido em
-          // Mercado, e o fundo aqui é mais suave (bg-muted/8) que o dos badges. Também não
-          // daria pra sobrepor a classe depois do token — com a mesma especificidade quem
-          // vence é a ordem no CSS gerado, não a ordem no atributo class.
-          className="mt-1 line-clamp-2 min-h-[30px] rounded bg-muted/8 px-1.5 py-0.5 font-mono text-[9.5px] leading-[13px] text-muted"
-          title={contexto}
+        // Mesma tooltip rica da Lista de Atividades (item → pasta(s) → atividade, ver
+        // HierarquiaAtividadeTooltip) — só quando há nó de estrutura pra mostrar
+        // (estruturaAtividadeId), senão fica só o `title` nativo de sempre.
+        <Tooltip
+          disabled={atividade.estruturaAtividadeId == null}
+          content={
+            <HierarquiaAtividadeTooltip
+              atividadeId={atividade.id}
+              itemNome={atividade.itemDescricao ?? "—"}
+              itemDepexeLabel={atividade.depexeLabel}
+            />
+          }
         >
-          {contexto}
-        </span>
+          <span
+            // Duas linhas SEMPRE ocupadas: `line-clamp-2` corta na segunda com reticências e
+            // o `min-h` garante o espaço mesmo com texto curto, então a caixa tem a mesma
+            // altura em todos os cards e as colunas do quadro ficam alinhadas. A conta do
+            // min-h: 2 linhas de 13px + py-0.5 (2px em cima e embaixo), porque o
+            // box-sizing border-box do Tailwind faz o min-h incluir o padding.
+            //
+            // Classes escritas à mão em vez de `toneBadge.neutral` de propósito: aquele token
+            // é compartilhado com os badges de prioridade e com as situações de pedido em
+            // Mercado, e o fundo aqui é mais suave (bg-muted/8) que o dos badges. Também não
+            // daria pra sobrepor a classe depois do token — com a mesma especificidade quem
+            // vence é a ordem no CSS gerado, não a ordem no atributo class.
+            className="mt-1 line-clamp-2 min-h-[30px] rounded bg-muted/8 px-1.5 py-0.5 font-mono text-[9.5px] leading-[13px] text-muted"
+            title={contexto}
+          >
+            {contexto}
+          </span>
+        </Tooltip>
       )}
       <div className="mt-2 flex items-center gap-1.5">
         {emAndamento && (

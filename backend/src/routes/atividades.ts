@@ -712,9 +712,9 @@ atividadesRouter.get("/:id/detalhe", async (req: AuthenticatedRequest, res) => {
 });
 
 // GET /:id/hierarquia — cadeia de ancestrais (pasta(s) → a própria atividade) do nó de
-// estrutura da atividade, pra tooltip de hierarquia da Lista (ver AtividadesTable.tsx /
-// HierarquiaAtividadeTooltip.tsx). O item em si NÃO vem aqui: quem chama já tem
-// itemDescricao/depexeLabel na própria linha, sem precisar de outra viagem ao servidor.
+// estrutura da atividade, pra tooltip de hierarquia da Lista/Kanban (ver AtividadesTable.tsx,
+// KanbanBoard.tsx e HierarquiaAtividadeTooltip.tsx). O item em si NÃO vem aqui: quem chama já
+// tem itemDescricao/depexeLabel na própria linha, sem precisar de outra viagem ao servidor.
 //
 // Autorização: a MESMA de `/:id/detalhe` (achar a atividade dentro de `carregarAtividadesVisiveis`
 // — 404 se não estiver na lista que o usuário já vê). De propósito NÃO usa `podeVerCronograma`
@@ -723,8 +723,10 @@ atividadesRouter.get("/:id/detalhe", async (req: AuthenticatedRequest, res) => {
 // mesmo sem ele gerenciar aquele departamento — daí também não reaproveitar a rota
 // /alocacao/propostas/:codemp/:codpro/cronograma (que devolve a proposta INTEIRA e é
 // guardada por `podeVerProposta`/gerenciaDepartamento). Numa comparação, isso expõe MENOS,
-// não mais: só a estrutura do ITEM desta atividade (pastas + atividades dele), nunca os
-// outros itens da mesma proposta.
+// não mais: só a estrutura do ITEM desta atividade (pastas + atividades dele) + a cadeia de
+// pasta(s) RAIZ da proposta acima do item, quando ele estiver agrupado numa (10/09/2026, a
+// pedido do usuário) — nunca o conteúdo de outros itens da mesma proposta, só o rótulo das
+// pastas organizacionais que os agrupam.
 atividadesRouter.get("/:id/hierarquia", async (req: AuthenticatedRequest, res) => {
   try {
     const id = Number(req.params.id);
@@ -745,42 +747,68 @@ atividadesRouter.get("/:id/hierarquia", async (req: AuthenticatedRequest, res) =
       return;
     }
     if (atividade.estruturaAtividadeId == null) {
-      res.json({ cadeia: [] });
+      res.json({ cadeia: [], cadeiaRaiz: [] });
       return;
     }
 
-    const nos = await prisma.estruturaAtividade.findMany({
-      where: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite },
-      select: { id: true, parentId: true, tipo: true, nome: true, status: true, responsavelCodfor: true },
-    });
-    const porId = new Map(nos.map((n) => [n.id, n]));
+    const [nos, posicaoItem] = await Promise.all([
+      prisma.estruturaAtividade.findMany({
+        where: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite },
+        select: { id: true, parentId: true, tipo: true, nome: true, status: true, responsavelCodfor: true },
+      }),
+      // Pasta raiz (fora do escopo de qualquer item, seqite null) onde o ITEM foi agrupado —
+      // mesma tabela que a árvore do Cronograma usa pra decidir isso (ver useCronograma.ts).
+      // Sem linha aqui = item solto na raiz da proposta, nada a acrescentar acima dele.
+      prisma.propostaItemPosicao.findUnique({
+        where: { codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite } },
+      }),
+    ]);
 
-    const codforUnicos = [...new Set(nos.map((n) => n.responsavelCodfor).filter((c): c is number => c != null))];
+    const nosRaiz = posicaoItem
+      ? await prisma.estruturaAtividade.findMany({
+          where: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: null },
+          select: { id: true, parentId: true, tipo: true, nome: true, status: true, responsavelCodfor: true },
+        })
+      : [];
+
+    const todosOsNos = [...nos, ...nosRaiz];
+    const codforUnicos = [...new Set(todosOsNos.map((n) => n.responsavelCodfor).filter((c): c is number => c != null))];
     const consultores = codforUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforUnicos } } }) : [];
     const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
 
-    // Sobe de pai em pai a partir da folha — dentro deste `where` só existem nós do MESMO
-    // item (seqite), então o topo (parentId null) já é a pasta raiz do item, sem precisar
-    // de um tipo "item" sintético como faz o Cronograma completo (ver useCronograma.ts).
-    const cadeiaReversa: (typeof nos)[number][] = [];
-    let atual = porId.get(atividade.estruturaAtividadeId);
-    while (atual) {
-      cadeiaReversa.push(atual);
-      atual = atual.parentId != null ? porId.get(atual.parentId) : undefined;
+    function serializar(n: (typeof todosOsNos)[number]) {
+      return {
+        id: n.id,
+        tipo: n.tipo,
+        nome: n.nome,
+        status: n.status,
+        responsavelNome:
+          n.responsavelCodfor != null
+            ? consultorPorCodfor.get(n.responsavelCodfor)?.nomcom ?? consultorPorCodfor.get(n.responsavelCodfor)?.nomfor ?? null
+            : null,
+      };
     }
 
-    const cadeia = cadeiaReversa.reverse().map((n) => ({
-      id: n.id,
-      tipo: n.tipo,
-      nome: n.nome,
-      status: n.status,
-      responsavelNome:
-        n.responsavelCodfor != null
-          ? consultorPorCodfor.get(n.responsavelCodfor)?.nomcom ?? consultorPorCodfor.get(n.responsavelCodfor)?.nomfor ?? null
-          : null,
-    }));
+    // Sobe de pai em pai a partir de `idInicial` até a raiz (parentId null) e devolve do
+    // topo pra baixo — mesma lógica pro trecho ACIMA do item (pastas raiz) e pro trecho
+    // DENTRO dele (pastas/atividade do próprio item), só troca o mapa e o ponto de partida.
+    function subirCadeia(porId: Map<number, (typeof todosOsNos)[number]>, idInicial: number | undefined) {
+      const reversa: (typeof todosOsNos)[number][] = [];
+      let atual = idInicial != null ? porId.get(idInicial) : undefined;
+      while (atual) {
+        reversa.push(atual);
+        atual = atual.parentId != null ? porId.get(atual.parentId) : undefined;
+      }
+      return reversa.reverse();
+    }
 
-    res.json({ cadeia });
+    const porIdItem = new Map(nos.map((n) => [n.id, n]));
+    const cadeia = subirCadeia(porIdItem, atividade.estruturaAtividadeId).map(serializar);
+
+    const porIdRaiz = new Map(nosRaiz.map((n) => [n.id, n]));
+    const cadeiaRaiz = subirCadeia(porIdRaiz, posicaoItem?.parentId).map(serializar);
+
+    res.json({ cadeia, cadeiaRaiz });
   } catch (error) {
     handleError(res, error, "hierarquia");
   }
