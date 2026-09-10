@@ -1,9 +1,11 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "centros_custo-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -41,9 +43,7 @@ interface CentroCustoRow {
   mskccu?: string;
 }
 
-// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores. Sem carimbo (`carimbo`
-// omitido abaixo) — esta tabela não grava visto_em_sync/removido_em_senior hoje, e a
-// conversão pra lote não muda esse comportamento (ligar carimbo aqui é decisão à parte).
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores.
 const COLUNAS: ColunaUpsert[] = [
   { nome: "codemp", cast: "int" },
   { nome: "codccu", cast: "text" },
@@ -92,8 +92,22 @@ export async function runCentroCustoSync(desde?: Date): Promise<void> {
       tabela: "centros_custo",
       colunas: COLUNAS,
       colunasPk: ["codemp", "codccu"],
+      carimbo: inicio,
     });
     const msEscrita = Date.now() - inicioEscrita;
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.CentroCustoWhereInput>(prisma.centroCusto, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(BASE_QUERY),
+      inicio,
+      linhasProcessadas: resultado.linhasProcessadas,
+      desde,
+    });
 
     await prisma.syncLog.create({
       data: {
@@ -102,7 +116,11 @@ export async function runCentroCustoSync(desde?: Date): Promise<void> {
         status: "success",
         message:
           `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
-          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
         duracaoMs: Date.now() - inicio.getTime(),
       },
     });

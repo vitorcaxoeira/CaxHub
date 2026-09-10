@@ -2,9 +2,9 @@ import cron from "node-cron";
 import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { varrerRemovidos } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "lancamentos_contabeis-sync";
@@ -87,26 +87,19 @@ export async function runLancamentoContabilSync(): Promise<void> {
     // pedido do Vitor: lançamento contábil tem manutenção pesada do lado do Senior (edição e
     // remoção frequentes, não é cadastro estático), e o upsert em lote só cobre incluir/
     // alterar. Sem isso, registro removido no Senior virava fantasma permanente no espelho.
-    // Começa em "simular" (politicaVarredura.ts) — nunca direto em "marcar". Escopo `{}`:
-    // espelho só-leitura (Senior -> CaxHub), sem escrita de volta, então não há registro
-    // "nascido no CaxHub" pra excluir do escopo.
-    //
-    // Fase 4 do plano de filtros: com filtro ativo, esse escopo `{}` vira o `escopoLocal`
-    // resolvido (mesmo predicado, na coluna espelhada) e a contagem de origem recebe o MESMO
-    // WHERE — sem isso a varredura compararia "linhas do recorte filtrado" contra "total da
-    // tabela inteira" e acusaria truncamento onde não houve. Quando o filtro toca campo NÃO
-    // espelhado (sem escopo local possível), a varredura fica desligada nessa rodada — rodar
-    // sem escopo marcaria a base inteira como removida.
+    // Hoje já "marcar" (politicaVarredura.ts, promovida em 22/08/2026). Escopo `{}`: espelho
+    // só-leitura (Senior -> CaxHub), sem escrita de volta, então não há registro "nascido no
+    // CaxHub" pra excluir do escopo. `executarVarreduraDoJob` (10/09/2026, porte do
+    // CaxHub_Atlas) decide sozinho se filtro ativo permite escopar — mesma regra de antes
+    // (Fase 4 do plano de filtros), só que centralizada: `filtroNaoEscopavel` abaixo é
+    // calculado só pra diferenciar a MENSAGEM do syncLog, não pra decidir se roda.
     const filtroNaoEscopavel = filtro.predicadosSql.length > 0 && filtro.escopoLocal === null;
-    const varredura = filtroNaoEscopavel
-      ? null
-      : await varrerRemovidos<Prisma.LancamentoContabilWhereInput>(prisma.lancamentoContabil, {
-          jobName: JOB_NAME,
-          inicio,
-          linhasProcessadas: rows.length,
-          escopo: (filtro.escopoLocal ?? {}) as Prisma.LancamentoContabilWhereInput,
-          queryContagemOrigem: montarQuerySenior(`SELECT COUNT(*) AS total FROM e640lct`, filtro.predicadosSql),
-        });
+    const varredura = await executarVarreduraDoJob<Prisma.LancamentoContabilWhereInput>(prisma.lancamentoContabil, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+    });
 
     await prisma.syncLog.create({
       data: {

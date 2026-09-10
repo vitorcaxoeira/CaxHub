@@ -81,6 +81,7 @@ import { scheduleOutboxSeniorDespesaSync } from "./sync/outboxSeniorDespesa";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
+import { carregarModosVarreduraAtivos } from "./sync/politicaVarredura";
 import { SYNC_JOBS } from "./sync/registry";
 
 garantirDiretorioUploads();
@@ -158,6 +159,16 @@ async function iniciar() {
     await carregarFiltrosAtivos(SYNC_JOBS);
   } catch (error) {
     console.error("[boot] falhou ao carregar filtros ativos — subindo sem filtro nenhum:", error instanceof Error ? error.message : error);
+  }
+
+  // Mesmo cuidado do carregamento de filtros acima: carregar ANTES de aceitar requisição ou
+  // agendar cron, senão a primeira sincronização rodaria com o modo de varredura errado até
+  // o carregamento terminar. Falha aqui sobe sem varredura nenhuma (default "desligada" do
+  // Map vazio) — estado seguro, nunca marca nada sozinho.
+  try {
+    await carregarModosVarreduraAtivos();
+  } catch (error) {
+    console.error("[boot] falhou ao carregar modos de varredura — subindo com varredura desligada em tudo:", error instanceof Error ? error.message : error);
   }
 
   app.listen(port, () => {

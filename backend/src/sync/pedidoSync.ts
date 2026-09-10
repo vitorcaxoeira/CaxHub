@@ -2,9 +2,9 @@ import cron from "node-cron";
 import { Prisma } from "@prisma/client";
 import { runSqlViaSoap, runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { carimbo, varrerRemovidos } from "./varrerRemovidos";
+import { carimbo, varrerRemovidos, executarVarreduraDoJob } from "./varrerRemovidos";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "pedidos-sync";
@@ -16,11 +16,6 @@ export const JOB_NAME_CLIENTE = "pedidos-sync-cliente";
 export const CRON_EXPR = "35 4 * * *"; // horário livre, sem dependência de outro job
 export const CAMPO_DATA: string | null = "DatEmi";
 export const BASE_QUERY =`SELECT CodEmp AS codemp, CodFil AS codfil, NumPed AS numped, TipPed AS tipped, PrcPed AS prcped, TnsPro AS tnspro, TnsSer AS tnsser, DatEmi AS datemi, HorEmi AS horemi, DatPrv AS datprv, ObsPed AS obsped, VlrLiq AS vlrliq, ObsMot AS obsmot, CodCli AS codcli, PedCli AS pedcli, CodCpg AS codcpg, CodFpg AS codfpg, SitPed AS sitped, usu_numrat AS numrat FROM E120PED`;
-
-// Guarda principal da varredura: quantas linhas a origem diz ter. Precisa ter o MESMO
-// FROM/WHERE da consulta do sync, senão a comparação acusa truncamento onde não houve.
-// O alias é obrigatório — o serviço usa FOR JSON internamente e recusa coluna sem alias.
-const QUERY_CONTAGEM_ORIGEM = `SELECT COUNT(*) AS total FROM E120PED`;
 
 // Fase 1 do plano de filtros na importação: acumulador de predicados
 // (sync/consultaSenior.ts), não concatenação — lista vazia devolve BASE_QUERY intacta.
@@ -163,22 +158,20 @@ export async function runPedidoSync(desde?: Date): Promise<void> {
     // escopo local casa pela coluna espelhada). Quando o filtro toca campo NÃO espelhado não
     // há como montar esse escopo local — rodar sem ele marcaria a tabela inteira como
     // removida (o que sumiu foi só do RECORTE, não da base) —, então a varredura fica
-    // desligada nessa rodada, igual ao sync incremental.
+    // desligada nessa rodada, igual ao sync incremental. `filtro`/`filtroNaoEscopavel` só
+    // servem pra MENSAGEM abaixo agora — a decisão de rodar é do `executarVarreduraDoJob`
+    // (10/09/2026, porte do CaxHub_Atlas), que já sabe "incremental nunca varre" e "filtro não
+    // escopável nunca varre" (mesmas duas regras de sempre, centralizadas).
     const filtro = filtroDoJob(JOB_NAME, "todos");
     const filtroNaoEscopavel = filtro.predicadosSql.length > 0 && filtro.escopoLocal === null;
 
-    // Varredura só faz sentido no modo COMPLETO: no incremental a query é um recorte por
-    // DatEmi, então quase toda a tabela ficaria sem carimbo e seria acusada de removida.
-    const varredura =
-      desde || filtroNaoEscopavel
-        ? null
-        : await varrerRemovidos<Prisma.PedidoWhereInput>(prisma.pedido, {
-            jobName: JOB_NAME,
-            inicio,
-            linhasProcessadas: rows.length,
-            escopo: (filtro.escopoLocal ?? {}) as Prisma.PedidoWhereInput,
-            queryContagemOrigem: montarQuerySenior(QUERY_CONTAGEM_ORIGEM, filtro.predicadosSql),
-          });
+    const varredura = await executarVarreduraDoJob<Prisma.PedidoWhereInput>(prisma.pedido, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(BASE_QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+      desde,
+    });
 
     const tempo = `${((msFetch + msEscrita) / 1000).toFixed(1)}s (fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s)`;
     await prisma.syncLog.create({

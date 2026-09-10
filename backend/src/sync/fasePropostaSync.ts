@@ -1,8 +1,10 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "fases_proposta-sync";
 export const CRON_EXPR = "50 3 * * *";
@@ -26,7 +28,7 @@ export async function runFasePropostaSync(): Promise<void> {
     const rows = (await runSqlViaSoapPaginated(query, ["fasid"])) as FasePropostaRow[];
 
     for (const row of rows) {
-      const data = { fasid: row.fasid, fasdes: row.fasdes };
+      const data = { fasid: row.fasid, fasdes: row.fasdes, ...carimbo(inicio) };
       await prisma.faseProposta.upsert({
         where: { fasid: row.fasid },
         update: data,
@@ -34,8 +36,29 @@ export async function runFasePropostaSync(): Promise<void> {
       });
     }
 
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.FasePropostaWhereInput>(prisma.faseProposta, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+    });
+
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: varredura ? varredura.resumo : undefined,
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

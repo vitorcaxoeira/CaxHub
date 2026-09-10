@@ -1,8 +1,10 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "representantes-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -44,7 +46,7 @@ export async function runRepresentanteSync(desde?: Date): Promise<void> {
     const rows = (await runSqlViaSoapPaginated(query, ["codrep"])) as RepresentanteRow[];
 
     for (const row of rows) {
-      const data = { codrep: row.codrep, nomrep: row.nomrep, aperep: row.aperep, tiprep: row.tiprep, cgccpf: row.cgccpf != null ? BigInt(row.cgccpf) : null, sitrep: row.sitrep, cidrep: row.cidrep, sigufs: row.sigufs };
+      const data = { codrep: row.codrep, nomrep: row.nomrep, aperep: row.aperep, tiprep: row.tiprep, cgccpf: row.cgccpf != null ? BigInt(row.cgccpf) : null, sitrep: row.sitrep, cidrep: row.cidrep, sigufs: row.sigufs, ...carimbo(inicio) };
       await prisma.representante.upsert({
         where: { codrep: row.codrep },
         update: data,
@@ -52,8 +54,30 @@ export async function runRepresentanteSync(desde?: Date): Promise<void> {
       });
     }
 
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.RepresentanteWhereInput>(prisma.representante, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(BASE_QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+      desde,
+    });
+
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: varredura ? varredura.resumo : undefined,
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

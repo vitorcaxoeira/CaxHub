@@ -232,9 +232,11 @@ ${modelLines.join("\n")}${colunasVarredura}${idLine}
   const pkColunas = pkAliases.map((a) => `"${a}"`).join(", ");
 
   const syncFileContent = `import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
 
 const JOB_NAME = "${jobName}";
 const QUERY = \`${query.replace(/`/g, "\\`")}\`;
@@ -279,43 +281,36 @@ export async function run${modelName}Sync(): Promise<void> {
     });
     const msEscrita = Date.now() - inicioEscrita;
 
-    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — vem comentada de
-    // propósito: ligar a varredura exige duas decisões que um gerador não tem como
-    // adivinhar, e o default de politicaVarredura.ts é "desligada" justamente pra tabela
-    // nova nunca começar a marcar registro sozinha.
-    //   1. ESCOPO — precisa excluir registro nascido no CaxHub, se esta tabela for de mão
-    //      dupla (ex.: { origemCaxHub: false }), senão ele é acusado de removido.
-    //   2. CONTAGEM NA ORIGEM — tem que repetir exatamente o mesmo FROM/WHERE da QUERY
-    //      acima, incluindo filtro aplicado às linhas dentro do laço, senão a guarda
-    //      acusa truncamento onde não houve.
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — já ligada: toda tabela
+    // espelho do Senior nasce com o controle completo (schema + carimbo + varredura +
+    // registry), nunca só o schema — convenção do projeto desde 10/09/2026 (ver
+    // sempre-criar-controle-de-removidos-tabela-senior no segundo cérebro). A tabela só
+    // COMEÇA em "desligada" (default do model ConfiguracaoVarredura, sem linha salva) — não
+    // marca nada sozinha até alguém promover pela tela (Administração > Sincronização ERP).
     //
-    // Pra ligar: descomentar o bloco, acrescentar aos imports
-    //   import { Prisma } from "@prisma/client";
-    //   import { varrerRemovidos } from "./varrerRemovidos";
-    // e registrar o JOB_NAME em src/sync/politicaVarredura.ts começando por "simular" —
-    // nunca direto em "marcar", sem antes conferir os detectados contra o ERP.
-    //
-    // const varredura = await varrerRemovidos<Prisma.${modelName}WhereInput>(prisma.${modelAccessor}, {
-    //   jobName: JOB_NAME,
-    //   inicio,
-    //   linhasProcessadas: rows.length,
-    //   escopo: {},
-    //   queryContagemOrigem: \`SELECT COUNT(*) AS total FROM ${tableName}\`,
-    // });
+    // Se esta tabela for de MÃO DUPLA (o CaxHub também escreve nela, não só lê do Senior):
+    // trocar esta chamada por \`varrerRemovidos()\` direto (não este wrapper) com um escopo
+    // que exclua o registro nascido localmente e ainda não confirmado lá (ex.:
+    // \`{ origemCaxHub: false }\`) — ver atividadeConsultorSync.ts/ratSync.ts pro padrão.
+    const varredura = await executarVarreduraDoJob<Prisma.${modelName}WhereInput>(prisma.${modelAccessor}, {
+      jobName: JOB_NAME,
+      tabelaSenior: "${tableName}",
+      inicio,
+      linhasProcessadas: resultado.linhasProcessadas,
+    });
 
     await prisma.syncLog.create({
-      // Ao ligar a varredura, acrescentar aqui pra ela aparecer no painel:
-      //   message: \`\${resultado.linhasProcessadas} linhas em ...s — \${varredura.resumo}\`,
-      //   varreduraModo: varredura.modo,
-      //   varreduraDetectados: varredura.candidatos,
-      //   varreduraInicio: inicio,
       data: {
         jobName: JOB_NAME,
         query: QUERY,
         status: "success",
         message:
           \`\${resultado.linhasProcessadas} linhas em \${((msFetch + msEscrita) / 1000).toFixed(1)}s \` +
-          \`(fetch \${(msFetch / 1000).toFixed(1)}s, escrita \${(msEscrita / 1000).toFixed(1)}s, \${resultado.lotes} lotes)\`,
+          \`(fetch \${(msFetch / 1000).toFixed(1)}s, escrita \${(msEscrita / 1000).toFixed(1)}s, \${resultado.lotes} lotes)\` +
+          (varredura ? \` — \${varredura.resumo}\` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
       },
     });
   } catch (error) {
@@ -350,7 +345,13 @@ export function schedule${modelName}Sync(): void {
   );
   console.log("5. Rodar o job manualmente uma vez pra validar com dado real antes de confiar no agendamento.");
   console.log(
-    "6. Detecção de exclusão no Senior: o model e o job já nascem com as colunas e o carimbo, mas a varredura vem COMENTADA. Pra ligar, seguir as instruções no próprio job gerado e acrescentar a tabela em src/sync/politicaVarredura.ts começando por \"simular\"."
+    `6. Registrar em backend/src/sync/registry.ts (SYNC_JOBS): contarRegistros, e contarRemovidos/listarRemovidos via contarRemovidosGenerico("${localTableName}")/listarRemovidosGenerico("${localTableName}", "<Nome de Exibição>") — já ligam a coluna "Removidos" e o seletor de modo na tela.`
+  );
+  console.log(
+    "7. Detecção de exclusão já vem LIGADA no código (contarRegistros só falta o passo 6 acima pra aparecer na tela) — nasce em \"desligada\" por padrão, sem marcar nada sozinha. Promover pra \"Simular\" depois \"Marcar\" é decisão manual pela tela (Administração > Sincronização ERP), nunca direto pra \"Marcar\"."
+  );
+  console.log(
+    "8. Se esta tabela for de MÃO DUPLA (o CaxHub também escreve nela): trocar a chamada de executarVarreduraDoJob no job gerado por varrerRemovidos() direto, com escopo que exclua registro nascido localmente — ver comentário no próprio arquivo gerado."
   );
 }
 

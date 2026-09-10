@@ -1,8 +1,10 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "historicos_padrao-sync";
 export const CRON_EXPR = "10 5 * * *";
@@ -19,9 +21,10 @@ interface HistoricoPadraoRow {
   intagr?: string;
 }
 
-// Catálogo de configuração (templates de texto do "Complemento Hist."), não dado transacional
-// — upsert simples, sem varredura de exclusão (decisão confirmada com o Vitor, mesmo espírito
-// de formaPagamentoSync.ts).
+// Catálogo de configuração (templates de texto do "Complemento Hist."), GLOBAL (sem codemp).
+// Até 10/09/2026 ficava sem varredura de propósito (decisão de 01/09/2026) — revertido: a
+// convenção nova (sempre completo em toda tabela espelho) passou a valer também aqui, ver
+// comentário em schema.prisma.
 export async function runHistoricoPadraoSync(): Promise<void> {
   const inicio = new Date();
   const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
@@ -38,6 +41,7 @@ export async function runHistoricoPadraoSync(): Promise<void> {
         deshpd: row.deshpd,
         tiphpd: row.tiphpd,
         intagr: row.intagr != null ? row.intagr : null,
+        ...carimbo(inicio),
       };
       await prisma.historicoPadrao.upsert({
         where: { codhpd: row.codhpd },
@@ -46,8 +50,26 @@ export async function runHistoricoPadraoSync(): Promise<void> {
       });
     }
 
+    // Escopo `{}`: catálogo GLOBAL sem partição por empresa, mesmo raciocínio de qualquer
+    // outra tabela sem escopo especial — ver comentário em schema.prisma.
+    const varredura = await executarVarreduraDoJob<Prisma.HistoricoPadraoWhereInput>(prisma.historicoPadrao, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+    });
+
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", message: `${rows.length} linhas`, duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: `${rows.length} linhas` + (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

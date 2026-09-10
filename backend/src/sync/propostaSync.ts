@@ -8,8 +8,9 @@ import { CAMPOS_AUDITADOS_PROPOSTA } from "../audit/camposAuditados";
 import { EVENTOS_AUDITORIA, ENTIDADES_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdProposta } from "../audit/identidadeEntidade";
 import { sitproLabel } from "../domain/propostasDominio";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "propostas-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -78,10 +79,13 @@ export interface PropostaRow {
 
 // Corpo do processamento extraído à parte de runPropostaSync() para poder ser exercitado
 // com linhas sintéticas (ver backend/prisma/verificarAceiteAuditoria.ts) sem depender do
-// webservice SOAP real — mesma lógica, sem mudança de comportamento.
-export async function processarLinhasProposta(rows: PropostaRow[]): Promise<void> {
+// webservice SOAP real — mesma lógica, sem mudança de comportamento. `inicio` tem default
+// pra não quebrar chamadas existentes que não passam (o script de verificação, e
+// runPropostaSyncPorCodpro abaixo, que roda fora do fluxo de varredura) — nesses casos o
+// carimbo só documenta quando a linha foi vista, sem afetar nada além dela mesma.
+export async function processarLinhasProposta(rows: PropostaRow[], inicio: Date = new Date()): Promise<void> {
   for (const row of rows) {
-    const data = { codemp: row.codemp, codpro: row.codpro, codcli: row.codcli, qtdhor: row.qtdhor, datpro: row.datpro != null ? new Date(row.datpro) : null, usuger: row.usuger, forate: row.forate, sitpro: row.sitpro, horpro: row.horpro, tippro: row.tippro, dessol: row.dessol, consol: row.consol, prarea: row.prarea, datenv: row.datenv != null ? new Date(row.datenv) : null, datret: row.datret != null ? new Date(row.datret) : null, numprj: row.numprj, datval: row.datval != null ? new Date(row.datval) : null, codfpj: row.codfpj, sispro: row.sispro, despro: row.despro, numero: row.numero != null ? BigInt(row.numero) : null, obrfas: row.obrfas, executor: row.executor, obssit: row.obssit, liqbru: row.liqbru, codccu: row.codccu, ctafin: row.ctafin, clapro: row.clapro, areexe: row.areexe, idcom: row.idcom, codrep: row.codrep, forfat: row.forfat, dscfpg: row.dscfpg, hispro: row.hispro, obspro: row.obspro, preent: row.preent != null ? new Date(row.preent) : null, pripro: row.pripro, stapro: row.stapro, tipven: row.tipven, ordemcns: row.ordemcns, sitmot: row.sitmot, tipprj: row.tipprj, frmprj: row.frmprj, codlev2: row.codlev2, clifat: row.clifat, exipedcli: row.exipedcli, pedcli: row.pedcli, forfatrdv: row.forfatrdv, modpro: row.modpro, forfatlev: row.forfatlev, numped: row.numped, idbpm: row.idbpm, depexe: row.depexe, fathrsdes: row.fathrsdes };
+    const data = { codemp: row.codemp, codpro: row.codpro, codcli: row.codcli, qtdhor: row.qtdhor, datpro: row.datpro != null ? new Date(row.datpro) : null, usuger: row.usuger, forate: row.forate, sitpro: row.sitpro, horpro: row.horpro, tippro: row.tippro, dessol: row.dessol, consol: row.consol, prarea: row.prarea, datenv: row.datenv != null ? new Date(row.datenv) : null, datret: row.datret != null ? new Date(row.datret) : null, numprj: row.numprj, datval: row.datval != null ? new Date(row.datval) : null, codfpj: row.codfpj, sispro: row.sispro, despro: row.despro, numero: row.numero != null ? BigInt(row.numero) : null, obrfas: row.obrfas, executor: row.executor, obssit: row.obssit, liqbru: row.liqbru, codccu: row.codccu, ctafin: row.ctafin, clapro: row.clapro, areexe: row.areexe, idcom: row.idcom, codrep: row.codrep, forfat: row.forfat, dscfpg: row.dscfpg, hispro: row.hispro, obspro: row.obspro, preent: row.preent != null ? new Date(row.preent) : null, pripro: row.pripro, stapro: row.stapro, tipven: row.tipven, ordemcns: row.ordemcns, sitmot: row.sitmot, tipprj: row.tipprj, frmprj: row.frmprj, codlev2: row.codlev2, clifat: row.clifat, exipedcli: row.exipedcli, pedcli: row.pedcli, forfatrdv: row.forfatrdv, modpro: row.modpro, forfatlev: row.forfatlev, numped: row.numped, idbpm: row.idbpm, depexe: row.depexe, fathrsdes: row.fathrsdes, ...carimbo(inicio) };
 
     const existente = await prisma.proposta.findUnique({
       where: { codemp_codpro: { codemp: row.codemp, codpro: row.codpro } },
@@ -174,10 +178,32 @@ export async function runPropostaSync(): Promise<void> {
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codpro"])) as PropostaRow[];
-    await processarLinhasProposta(rows);
+    await processarLinhasProposta(rows, inicio);
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva. Só aqui (não em runPropostaSyncPorCodpro, que
+    // varre 1 proposta só — rodar a varredura ali marcaria a tabela inteira como suspeita).
+    const varredura = await executarVarreduraDoJob<Prisma.PropostaWhereInput>(prisma.proposta, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+    });
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: varredura ? varredura.resumo : undefined,
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

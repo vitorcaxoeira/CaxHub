@@ -114,6 +114,12 @@ model Empresa {
   codemp  Int      @id
   nomemp  String
   sigemp  String   @db.VarChar(30)
+  // Colunas de controle de exclusão — ver comentário completo em Pedido (mesmo par de
+  // campos, mesma engine, mesmo raciocínio). Padronizado pra todas as tabelas espelho do
+  // Senior a partir de 10/09/2026 (antes só Pedido/Lançamento Contábil/Rateio de Lançamento
+  // tinham).
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
   filiais Filial[]
 
   // Modelo de plano de contas/centro de custo que esta empresa usa no Senior (ver SQL de
@@ -132,6 +138,9 @@ model Filial {
   codfil Int
   nomfil String
   sigfil String
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   empresa Empresa @relation(fields: [codemp], references: [codemp])
 
@@ -158,6 +167,9 @@ model Cliente {
   cidcli String
   sigufs String
   codpai String
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   titulosReceber   TituloReceber[]
   propostas        Proposta[]
@@ -179,6 +191,9 @@ model TipoTitulo {
   apltpt String? @db.VarChar(1)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
   sittpt String? @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   titulosReceber TituloReceber[]
 
@@ -200,6 +215,9 @@ model TituloReceber {
   vlrori Decimal  @db.Decimal(15, 2)
   vlrabe Decimal? @db.Decimal(15, 2)
   codpor String?  @db.VarChar(4)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   cliente    Cliente                  @relation(fields: [codcli], references: [codcli])
   tipoTitulo TipoTitulo               @relation(fields: [codtpt], references: [codtpt])
@@ -231,6 +249,9 @@ model MovimentoTituloReceber {
   codcrt String?   @db.VarChar(2)
   codccu String?   @db.VarChar(9)
   numcco String?   @db.VarChar(14)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   tituloReceber TituloReceber @relation(fields: [codemp, codfil, numtit, codtpt], references: [codemp, codfil, numtit, codtpt])
   transacao     Transacao     @relation(fields: [codemp, codtns], references: [codemp, codtns])
@@ -251,6 +272,9 @@ model Representante {
   sitrep String  @db.VarChar(1)
   cidrep String? @db.VarChar(60)
   sigufs String? @db.VarChar(2)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@map("representantes")
 }
@@ -277,6 +301,9 @@ model CentroCusto {
   // nativo e já vem preenchido pelo sync.
   nivccu Int?
   mskccu String? @db.VarChar(40)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@id([codemp, codccu])
   @@map("centros_custo")
@@ -299,6 +326,9 @@ model MovimentoConta {
   tptmcr String?  @db.VarChar(3)
   seqmcr Int?
   codpor String?  @db.VarChar(4)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@id([codemp, numcco, datmov, seqmov])
   @@map("movimentos_conta")
@@ -318,6 +348,9 @@ model NaturezaFinanceira {
   natfin String @db.VarChar(1)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
   sitfin String @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@id([codemp, ctafin])
   @@map("naturezas_financeiras")
@@ -332,6 +365,9 @@ model Portador {
   codban String? @db.VarChar(3)
   codage String? @db.VarChar(7)
   numcco String? @db.VarChar(14)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   titulosReceber TituloReceber[]
 
@@ -346,6 +382,9 @@ model Moeda {
   sigmoe String @db.VarChar(5)
   /// Domínio "LTipMoe": V=Valor, D=Índice, P=Percentual, E=Especial, H=Hora
   tipmoe String @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@map("moedas")
 }
@@ -357,6 +396,9 @@ model Transacao {
   destns String  @db.VarChar(60)
   /// Domínio "LTipBai": PG=Pagamento, DV=Devolução, AB=Abatimento, CA=Cancelamento, CR=Baixa Crédito, CP=Compensação, LP=Lucros e Perdas, SU=Substituição, NA=NÃO É BAIXA
   rectpb String? @db.VarChar(2)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   movimentos MovimentoTituloReceber[]
 
@@ -442,6 +484,9 @@ model Proposta {
   depexe    Int?
   /// Domínio "LSimNao": S=Sim, N=Não
   fathrsdes String?   @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   cliente      Cliente        @relation(fields: [codcli], references: [codcli])
   itens        PropostaItem[]
@@ -483,6 +528,9 @@ model PropostaItem {
   atvpso BigInt?
   /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
   depexe Int?
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   proposta Proposta @relation(fields: [codemp, codpro], references: [codemp, codpro])
 
@@ -509,6 +557,9 @@ model Consultor {
   depexe    Int?
   depexedes String? @db.VarChar(250)
   email     String? @db.VarChar(200)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   usuariosCaxHub User[]
 
@@ -562,6 +613,9 @@ model ContaCorrente {
   abrcco String @db.VarChar(10)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
   sitcco String @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@id([codemp, numcco])
   @@map("contas_correntes")
@@ -573,6 +627,9 @@ model DepartamentoGestor {
   depexe Int
   codemp Int
   usuges BigInt
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@id([codemp, depexe])
   @@map("departamentos_gestores")
@@ -589,6 +646,9 @@ model DepartamentoTime {
   horger Int?
   /// Domínio "LSitReg": A=Ativo, I=Inativo
   sitreg String    @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@id([codemp, depexe, codusu])
   @@map("departamento_time")
@@ -659,6 +719,13 @@ model AtividadeConsultor {
   seqite Int
   codfor Int
   qtdhor Int?
+  // Colunas de controle de exclusão — ver comentário em Pedido. MÃO DUPLA: o escopo da
+  // varredura aqui precisa ser `{ seqati: { not: null } }` — nunca a tabela toda —, senão
+  // toda alocação criada no CaxHub e ainda sem `seqati` confirmado pelo Senior seria
+  // acusada de "removida" por nunca ter existido lá (ver comentário de `seqati` acima e
+  // [[deteccao-exclusao-sem-apagar-sempre-simular]] no segundo cérebro).
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
   /// Horas excedentes autorizadas pelo gestor, em minutos (mesma unidade de qtdhor).
   /// Desde 10/08/2026 tem equivalente no Senior: vai no campo `hrsExc` de `alocarAtividades`
   /// (ver sync/outboxSenior.ts) — mapeamento por semelhança de nome, ainda sem confirmação
@@ -1042,6 +1109,13 @@ model Rat {
   // Senior via ratSync (apontamento feito direto no desktop por outro consultor).
   origemCaxHub Boolean @default(false)
 
+  // Colunas de controle de exclusão — ver comentário em Pedido. MÃO DUPLA: o escopo da
+  // varredura precisa ser `{ origemCaxHub: false }` — nunca a tabela toda —, senão todo
+  // rascunho criado no CaxHub (ainda sem numrat confirmado) seria acusado de "removido" por
+  // nunca ter existido no Senior (mesmo raciocínio de AtividadeConsultor).
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
   itens RatItem[]
 
   @@unique([codemp, numprj, codfpj, numrat])
@@ -1082,6 +1156,12 @@ model RatItem {
   seqati BigInt?
 
   origemCaxHub Boolean @default(false)
+
+  // Colunas de controle de exclusão — ver comentário em Pedido e em Rat. MÃO DUPLA: mesmo
+  // escopo `{ origemCaxHub: false }` de Rat, mesmo raciocínio.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
   sessoes      AtividadeSessaoExecucao[]
 
   @@unique([codemp, numrat, seqrat])
@@ -1331,6 +1411,9 @@ model Notificacao {
 model FaseProposta {
   fasid  Int    @id
   fasdes String @db.VarChar(50)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   atividades AtividadeConsultor[]
 
@@ -1458,6 +1541,9 @@ model FormaPagamento {
   abrfpg String @db.VarChar(10)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
   sitfpg String @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
   @@id([codemp, codfpg])
 
   @@map("formas_pagamento")
@@ -1473,6 +1559,9 @@ model CondicaoPagamento {
   aplcpg String @db.VarChar(1)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
   sitcpg String @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
   @@id([codemp, codcpg])
 
   @@map("condicoes_pagamento")
@@ -1534,9 +1623,12 @@ model PlanoContabil {
 
 // Espelho local da tabela E046HPD do Senior ERP (Tabelas - Históricos Padrões) — catálogo de
 // templates de texto usado pra montar o "Complemento Hist." de um lançamento contábil (ver
-// LancamentoContabil.codhpd/cpllct e domain/historicoPadrao.ts). Sem `removidoEmSenior`: é
-// catálogo de configuração (raramente muda), não dado transacional — decisão confirmada com o
-// Vitor em 01/09/2026, mesmo espírito de formaPagamentoSync.ts (upsert simples, sem varredura).
+// LancamentoContabil.codhpd/cpllct e domain/historicoPadrao.ts). Até 10/09/2026 ficava SEM
+// `removidoEmSenior` de propósito (decisão confirmada com o Vitor em 01/09/2026: catálogo de
+// configuração, raramente muda, não é dado transacional). Revertido em 10/09/2026: a convenção
+// nova (sempre o controle completo em toda tabela espelho, sem exceção por "tabela pequena")
+// passou a valer também pra esta — ver `sempre-criar-controle-de-removidos-tabela-senior` no
+// segundo cérebro.
 model HistoricoPadrao {
   // SEM codemp — confirmado ao vivo contra o dicionário de dados do Senior (r996tbl.pkflds =
   // "CodHpd" sozinho): E046HPD é catálogo GLOBAL, não por empresa, diferente da maioria das
@@ -1553,6 +1645,10 @@ model HistoricoPadrao {
   tiphpd String @db.VarChar(1)
   /// Domínio "LSimNao"
   intagr String? @db.VarChar(1)
+  // Colunas de controle de exclusão — ver comentário em Pedido. Catálogo GLOBAL (sem
+  // codemp) — escopo da varredura é `{}` (tabela toda), igual a qualquer outra sem partição.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@map("historicos_padrao")
 }
@@ -1695,6 +1791,14 @@ model RegistroDespesaViagem {
   // mas o registro fica pra rastreabilidade de valor faturado/reembolsado.
   excluidaEm      DateTime? @map("excluida_em")
 
+  // Colunas de controle de exclusão — ver comentário em Pedido e em Rat. MÃO DUPLA: mesmo
+  // escopo `{ origemCaxHub: false }` de Rat/RatItem — nunca marcar como "removida do Senior"
+  // uma despesa lançada aqui e ainda não enviada (`enviadoEmSenior` nulo). Sem relação com
+  // `excluidaEm` acima: aquele é soft-delete por ação do usuário (exclusão INTENCIONAL),
+  // este é detecção de sumiço na ORIGEM — os dois podem, em tese, coexistir na mesma linha.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
   sincronizacoesPendentes SincronizacaoPendenteDespesa[]
 
   @@unique([codemp, numrat, seqrdv])
@@ -1736,6 +1840,9 @@ model RotaViagem {
   idagp  Int?
   tolhrs Decimal? @db.Decimal(7, 2)
   tolkm  Decimal? @db.Decimal(7, 2)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@map("rotas_viagem")
 }
@@ -1753,6 +1860,9 @@ model PercursoViagem {
   /// transporte; sem tradução no dicionário desta instalação.
   modtra String? @db.VarChar(1)
   horpag Int?
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@map("percursos_viagem")
 }
@@ -1766,6 +1876,9 @@ model RotaPercurso {
   rotid  Int
   perid  Int
   ordseq Int
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@map("rotas_percursos")
 }
@@ -1790,6 +1903,24 @@ model FiltroSincronizacao {
 
   @@id([jobName, modo])
   @@map("filtros_sincronizacao")
+}
+
+// Modo de varredura de removidos configurado pelo admin, por job — substitui o Record fixo
+// que vivia em sync/politicaVarredura.ts (mudar exigia deploy). "desligada" | "simular" |
+// "marcar" — rollout obrigatório em 3 estágios, nunca pula direto pra "marcar" (ver
+// sync/varrerRemovidos.ts). Resolvido em memória no boot por sync/politicaVarredura.ts (mesmo
+// padrão de FiltroSincronizacao/filtrosAtivos.ts), nunca lido cru pelos jobs de sync.
+// `SYNC_VARREDURA=off` no .env continua checado ANTES disso — válvula de emergência sem
+// deploy, intocada por este recurso. `modo` aqui é um conceito DIFERENTE do `modo` de
+// FiltroSincronizacao acima (aquele é "todos"/"alterados", filtro de importação) — mesma
+// palavra, tabelas e propósitos diferentes, cuidado ao ler/escrever os dois.
+model ConfiguracaoVarredura {
+  jobName       String   @id @map("job_name")
+  modo          String   @default("desligada")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+  atualizadoPor Int?     @map("atualizado_por")
+
+  @@map("configuracoes_varredura")
 }
 
 // Espelho local da tabela E075PRO do Senior ERP (Cadastros - Produtos).

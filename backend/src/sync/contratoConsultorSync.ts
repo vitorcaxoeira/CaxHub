@@ -1,8 +1,9 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { carimbo } from "./varrerRemovidos";
-import { montarQuerySenior } from "./consultaSenior";
+import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 
 export const JOB_NAME = "contratos-consultores-sync";
@@ -52,21 +53,29 @@ export async function runContratoConsultorSync(): Promise<void> {
       });
     }
 
-    // DETECÇÃO DE EXCLUSÃO NO SENIOR — nasce desligada de propósito (decisão do usuário,
-    // 17/08/2026): é uma view só-leitura de BI, sem indício de uso urgente pra saber quando
-    // um contrato sai do ar. Pra ligar depois (modo "simular" primeiro, nunca "marcar" direto),
-    // ver o mesmo bloco-modelo em orcamentoContabilSync.ts.
-    //
-    // const varredura = await varrerRemovidos<Prisma.ContratoConsultorWhereInput>(prisma.contratoConsultor, {
-    //   jobName: JOB_NAME,
-    //   inicio,
-    //   linhasProcessadas: rows.length,
-    //   escopo: {},
-    //   queryContagemOrigem: `SELECT COUNT(*) AS total FROM USU_VBI01CTRCS`,
-    // });
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo, nunca só o schema). Continua
+    // nascendo em "desligada" (default do model ConfiguracaoVarredura) — a ressalva de
+    // 17/08/2026 (view só-leitura de BI, sem indício de uso urgente) só dizia respeito à
+    // PROMOÇÃO de modo, que segue decisão manual pela tela, não à execução em si.
+    const varredura = await executarVarreduraDoJob<Prisma.ContratoConsultorWhereInput>(prisma.contratoConsultor, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+    });
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: varredura ? varredura.resumo : undefined,
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

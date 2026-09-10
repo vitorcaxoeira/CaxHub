@@ -10,7 +10,8 @@ import { PredicadoFiltro, OperadorFiltro, VALOR_VARIAVEL_ULTIMA_SINCRONIZACAO, s
 import { montarQuerySenior } from "../sync/consultaSenior";
 import { AuthenticatedRequest } from "../auth/middleware";
 import { DIMENSOES, dimensaoPorChave, jobsComDimensao, jobsSemDimensao } from "../sync/dimensoesFiltro";
-import { diagnosticarRecorte, marcarOrfaosDoRecorte } from "../sync/recorteRetroativo";
+import { diagnosticarRecorte, marcarOrfaosDoRecorte, suportaMarcarRemovido } from "../sync/recorteRetroativo";
+import { modoConfiguradoDoJob, carregarModosVarreduraAtivos, ModoVarredura } from "../sync/politicaVarredura";
 
 // Painel de administração dos jobs de sincronização Senior -> CaxHub: quando cada
 // tabela sincronizou pela última vez, quando roda de novo automaticamente, e uma ação
@@ -164,6 +165,16 @@ syncErpRouter.get("/", async (_req, res) => {
           // true = a tabela tem detecção configurada mas a última execução não varreu
           // (sync incremental). Vira alerta na tela quando persiste.
           temDeteccao: job.contarRemovidos != null,
+          // Modo CONFIGURADO (salvo em ConfiguracaoVarredura, 10/09/2026 — porte do
+          // CaxHub_Atlas), diferente de `ultimaVarredura.modo` acima, que é o modo da ÚLTIMA
+          // EXECUÇÃO (pode estar desatualizado se a config mudou depois do último sync, ou se
+          // o job só roda Alterados, que nunca varre). `varreduraDisponivel` exige as DUAS
+          // coisas: a coluna `removidoEmSenior` no schema (`suportaMarcarRemovido`) E o job já
+          // ter `contarRemovidos` registrado (a EXECUÇÃO ligada de verdade) — só a coluna não
+          // basta (achado do Atlas: deixaria o seletor da tela habilitado sem nada acontecer
+          // de verdade ao mudar de modo).
+          varreduraModo: modoConfiguradoDoJob(job.jobName),
+          varreduraDisponivel: suportaMarcarRemovido(job) && job.contarRemovidos != null,
           // Fase 3/4/6 do plano de filtros — true nos 35 jobs cujo `run()` já lê
           // `filtroDoJob()` (JOBS_COM_FILTRO em registry.ts). A tela usa isso pra mostrar as
           // abas Filtro(Todos)/Filtro(Alterados) só onde elas funcionam de verdade — a
@@ -206,6 +217,57 @@ syncErpRouter.get("/:jobName/removidos", async (req, res) => {
     res.json({ itens: await job.listarRemovidos(limite, ultimaVarredura?.varreduraInicio ?? null) });
   } catch (error) {
     handleError(res, error, "removidos");
+  }
+});
+
+const MODOS_VARREDURA_VALIDOS: ModoVarredura[] = ["desligada", "simular", "marcar"];
+
+// PUT /:jobName/varredura — muda o modo de varredura de removidos DESSA tabela (10/09/2026,
+// porte do CaxHub_Atlas: campo editável na tela em vez de editar politicaVarredura.ts e fazer
+// deploy). Só aceita "marcar" se o modo ATUAL salvo já for "simular" — nenhuma tabela pula
+// direto pra "marcar" (mesma regra documentada em sync/varrerRemovidos.ts), reforçada aqui,
+// não só no client.
+syncErpRouter.put("/:jobName/varredura", async (req: AuthenticatedRequest, res) => {
+  try {
+    const job = SYNC_JOBS.find((j) => j.jobName === req.params.jobName);
+    if (!job) {
+      res.status(404).json({ error: "Job não encontrado" });
+      return;
+    }
+    // As duas condições, mesma regra de GET / (varreduraDisponivel) — coluna sozinha não
+    // basta: uma tabela pode ter a coluna sem `contarRemovidos`/execução ligada. Salvar um
+    // modo nela seria um 200 que não faz nada acontecer de verdade.
+    if (!suportaMarcarRemovido(job) || job.contarRemovidos == null) {
+      res.status(400).json({
+        error: `"${job.displayName}" ainda não tem a execução da varredura ligada (só a coluna no banco, se houver) — não é possível controlar o modo aqui.`,
+      });
+      return;
+    }
+
+    const modoNovo = req.body?.modo;
+    if (!MODOS_VARREDURA_VALIDOS.includes(modoNovo)) {
+      res.status(400).json({ error: `Modo "${modoNovo}" inválido — use "desligada", "simular" ou "marcar".` });
+      return;
+    }
+
+    const modoAtual = modoConfiguradoDoJob(job.jobName);
+    if (modoNovo === "marcar" && modoAtual !== "simular") {
+      res.status(400).json({
+        error: `"${job.displayName}" está em "${modoAtual}" — passe por "Simular" primeiro e confira os candidatos antes de ligar "Marcar".`,
+      });
+      return;
+    }
+
+    await prisma.configuracaoVarredura.upsert({
+      where: { jobName: job.jobName },
+      update: { modo: modoNovo, atualizadoPor: req.user?.userId ?? null },
+      create: { jobName: job.jobName, modo: modoNovo, atualizadoPor: req.user?.userId ?? null },
+    });
+    await carregarModosVarreduraAtivos();
+
+    res.json({ modo: modoNovo });
+  } catch (error) {
+    handleError(res, error, "varredura:put");
   }
 });
 

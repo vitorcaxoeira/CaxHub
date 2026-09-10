@@ -1,5 +1,7 @@
 import { runSqlViaSoap } from "../soap/client";
 import { modoVarredura, ModoVarredura } from "./politicaVarredura";
+import { filtroDoJob } from "./filtrosAtivos";
+import { montarQuerySenior } from "./consultaSenior";
 
 // Detecção de registros EXCLUÍDOS no Senior.
 //
@@ -221,4 +223,52 @@ export async function varrerRemovidos<TWhere extends object>(
     linhasOrigem,
     resumo: `varredura: ${count} marcado(s) como removido(s) no Senior (de ${totalEscopo})`,
   };
+}
+
+export interface OpcoesVarreduraDoJob {
+  jobName: string;
+  /** FROM da query do job (ex.: "e070emp") — normalmente `extrairTabela(QUERY|BASE_QUERY)`,
+   * já usado por sync/registry.ts pro catálogo. */
+  tabelaSenior: string;
+  inicio: Date;
+  linhasProcessadas: number;
+  /** Quando presente, é sync incremental — varredura sempre pula: a query já vem recortada
+   * por data, quase a base inteira ficaria sem carimbo e seria acusada de removida (mesmo
+   * motivo de pedidoSync.ts). */
+  desde?: Date;
+}
+
+// Wiring padrão de varredura pra um job de sync comum (tabela inteira, sem partição por
+// cliente/numrat como o fluxo especial de pedidoSync.ts/runPedidoSyncPorClientes) — porte do
+// CaxHub_Atlas (10/09/2026, pedido do Vitor: tornar padrão), extraído do padrão REAL já
+// validado em produção em pedidoSync.ts/lancamentoContabilSync.ts/rateioLancamentoSync.ts (os
+// 3 únicos jobs que já chamavam varrerRemovidos() antes desta data), não de um molde
+// hipotético — ver [[extrair-padrao-do-exemplo-que-roda-nao-do-molde-comentado]] no segundo
+// cérebro. Usa só peças que todo job de sync já tem (JOB_NAME, QUERY/BASE_QUERY, filtroDoJob,
+// contagem de linhas processadas), então reduz o que cada arquivo precisa escrever a poucas
+// linhas em vez de repetir o bloco inteiro em cada um.
+//
+// NÃO serve para tabela de mão dupla (AtividadeConsultor, Rat, RatItem,
+// RegistroDespesaViagem): essas continuam chamando varrerRemovidos() direto, com escopo que
+// exclui registro nascido no CaxHub e ainda não confirmado no Senior — ver comentário de cada
+// uma em schema.prisma.
+export async function executarVarreduraDoJob<TWhere extends object>(
+  delegate: DelegateEspelho<TWhere>,
+  opcoes: OpcoesVarreduraDoJob
+): Promise<ResultadoVarredura | null> {
+  if (opcoes.desde) return null;
+
+  const filtroTodos = filtroDoJob(opcoes.jobName, "todos");
+  // Filtro salvo toca campo NÃO espelhado localmente (escopoLocal === null) — sem isso a
+  // varredura marcaria a base inteira como removida, porque não tem como escopar localmente
+  // o que o filtro recortou lá na origem (mesmo motivo de pedidoSync.ts/runPedidoSync).
+  if (filtroTodos.predicadosSql.length > 0 && filtroTodos.escopoLocal === null) return null;
+
+  return varrerRemovidos(delegate, {
+    jobName: opcoes.jobName,
+    inicio: opcoes.inicio,
+    linhasProcessadas: opcoes.linhasProcessadas,
+    escopo: (filtroTodos.escopoLocal ?? {}) as TWhere,
+    queryContagemOrigem: montarQuerySenior(`SELECT COUNT(*) AS total FROM ${opcoes.tabelaSenior}`, filtroTodos.predicadosSql),
+  });
 }

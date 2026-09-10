@@ -43,6 +43,12 @@ interface JobSync {
   temFiltroAlterados: boolean;
   proximaExecucao: string;
   emAndamento: boolean;
+  // Modo CONFIGURADO (10/09/2026, porte do CaxHub_Atlas) — diferente de `ultimaVarredura.modo`
+  // acima, que é o modo da ÚLTIMA EXECUÇÃO. Editável pelo <select> na aba "Removidos" quando
+  // varreduraDisponivel; os dois podem divergir logo depois de mudar o modo pela tela, antes
+  // do próximo sync rodar.
+  varreduraModo: "desligada" | "simular" | "marcar";
+  varreduraDisponivel: boolean;
 }
 
 interface ItemRemovido {
@@ -260,6 +266,9 @@ export function SincronizacaoErp() {
   // (true nos 35 jobs hoje).
   const [abaExpandida, setAbaExpandida] = useState<"removidos" | "filtroTodos" | "filtroAlterados">("filtroTodos");
   const [removidosPorJob, setRemovidosPorJob] = useState<Record<string, ItemRemovido[] | "carregando" | "erro">>({});
+  // Modo de varredura sendo salvo agora (10/09/2026, porte do CaxHub_Atlas) — um jobName de
+  // cada vez, mesmo padrão de `salvandoFiltro` abaixo.
+  const [salvandoVarredura, setSalvandoVarredura] = useState<string | null>(null);
   // Chave composta `jobName:fonte` — permite guardar o resultado espelhado e o do ERP ao
   // mesmo tempo (trocar de fonte não descarta o que já foi buscado).
   const [camposPorJob, setCamposPorJob] = useState<Record<string, RespostaCampos | "carregando" | { erro: string }>>({});
@@ -474,13 +483,13 @@ export function SincronizacaoErp() {
 
   function carregarRemovidos(job: JobSync) {
     if (removidosPorJob[job.jobName]) return;
-    // Tabela sem detecção configurada (job.totalRemovidos===null) não tem nada pra buscar —
-    // a rota devolveria 400 ("esta tabela ainda não tem detecção") e isso virava sempre
-    // "Falha ao carregar", escondendo a mensagem amigável que já existe pra esse caso. Como a
-    // linha inteira agora abre o painel (e por padrão vai pra "Filtro(Todos)", mas a aba
-    // "Removidos" continua alcançável em qualquer tabela), essa checagem local evita o
+    // Tabela sem execução de varredura ligada (!job.varreduraDisponivel) não tem nada pra
+    // buscar — a rota devolveria 400 ("esta tabela ainda não tem detecção") e isso virava
+    // sempre "Falha ao carregar", escondendo a mensagem amigável que já existe pra esse caso.
+    // Como a linha inteira agora abre o painel (e por padrão vai pra "Filtro(Todos)", mas a
+    // aba "Removidos" continua alcançável em qualquer tabela), essa checagem local evita o
     // round-trip inútil.
-    if (job.totalRemovidos === null) return;
+    if (!job.varreduraDisponivel) return;
     setRemovidosPorJob((r) => ({ ...r, [job.jobName]: "carregando" }));
     axios
       .get<{ itens: ItemRemovido[] }>(`/api/sync-erp/${job.jobName}/removidos`)
@@ -582,6 +591,23 @@ export function SincronizacaoErp() {
   // Fase 6: salvar em "todos" numa tabela que também tem "Alterados" nunca trava esperando
   // decisão de propagação (decisão do Vitor 21/08/2026) — o backend já diz em
   // `alteradosDivergente` se vale a pena perguntar, e o aviso aparece DEPOIS, dispensável.
+  // Muda o modo de varredura de removidos DESSA tabela (10/09/2026, porte do CaxHub_Atlas:
+  // campo editável na tela em vez de editar politicaVarredura.ts e fazer deploy). O backend
+  // recusa pular direto pra "marcar" (400) — essa mensagem chega pronta em
+  // err.response.data.error, mesmo padrão de erro do resto da tela.
+  async function salvarModoVarredura(job: JobSync, modo: "desligada" | "simular" | "marcar") {
+    setSalvandoVarredura(job.jobName);
+    setErro(null);
+    try {
+      await axios.put(`/api/sync-erp/${job.jobName}/varredura`, { modo });
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao mudar o modo de varredura");
+    } finally {
+      setSalvandoVarredura(null);
+    }
+  }
+
   async function salvarFiltro(job: JobSync, modo: "todos" | "alterados", acaoRecorte?: "deixar" | "marcar") {
     const chave = `${job.jobName}:${modo}`;
     setSalvandoFiltro(chave);
@@ -1171,6 +1197,29 @@ export function SincronizacaoErp() {
 
                       {abaExpandida === "removidos" && (
                         <>
+                          <div className="mb-3 flex flex-wrap items-center gap-2">
+                            <span className="text-[11.5px] text-muted">Detecção de exclusão:</span>
+                            <select
+                              value={job.varreduraModo}
+                              disabled={!job.varreduraDisponivel || salvandoVarredura === job.jobName}
+                              onChange={(e) =>
+                                salvarModoVarredura(job, e.target.value as "desligada" | "simular" | "marcar")
+                              }
+                              title={
+                                job.varreduraModo !== "simular" && job.varreduraModo !== "marcar"
+                                  ? 'Passe por "Simular" antes de "Marcar" — nenhuma tabela pula direto pra marcar registro como removido.'
+                                  : undefined
+                              }
+                              className="rounded-md border border-border bg-surface px-2 py-1 text-[12.5px] text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <option value="desligada">Desligada</option>
+                              <option value="simular">Simular</option>
+                              <option value="marcar" disabled={job.varreduraModo !== "simular" && job.varreduraModo !== "marcar"}>
+                                Marcar
+                              </option>
+                            </select>
+                            {salvandoVarredura === job.jobName && <span className="text-[11px] text-muted">salvando...</span>}
+                          </div>
                           <p className="mb-2 text-[11.5px] text-muted">
                             Registros que não vieram mais na consulta ao Senior. Confira alguns direto no ERP: se eles
                             realmente não existem mais lá, a detecção está correta.
@@ -1181,8 +1230,11 @@ export function SincronizacaoErp() {
                           {removidosPorJob[job.jobName] === "erro" && (
                             <p className="py-2 text-sm text-destructive">Falha ao carregar os registros removidos.</p>
                           )}
-                          {job.totalRemovidos === null && !removidosPorJob[job.jobName] && (
-                            <p className="py-2 text-sm text-muted">Detecção de exclusão ainda não ligada nesta tabela.</p>
+                          {!job.varreduraDisponivel && !removidosPorJob[job.jobName] && (
+                            <p className="py-2 text-sm text-muted">
+                              Detecção de exclusão ainda não disponível nesta tabela (falta ligar a execução no código,
+                              não é só a coluna no banco) — não é possível controlar o modo aqui.
+                            </p>
                           )}
                           {Array.isArray(removidosPorJob[job.jobName]) && (
                             <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">

@@ -1,9 +1,11 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { carimbo, varrerRemovidos } from "./varrerRemovidos";
 
 export const JOB_NAME = "registros_despesa_viagem-sync";
 export const CRON_EXPR = "20 5 * * *";
@@ -31,12 +33,12 @@ interface RegistroDespesaViagemRow {
 }
 
 // Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
-// schema.prisma (RegistroDespesaViagem): vlrunt/vlrtot Decimal(9,2). Sem carimbo — esta
-// tabela não tem vistoEmSync/removidoEmSenior. `id` (autoincrement) e `origemCaxHub`/
-// `enviadoEmSenior` (nunca tocados por este sync, nem no upsert antigo — origemCaxHub
-// protege despesa lançada pelo consultor no CaxHub) ficam de fora de propósito: uma
-// coluna ausente do lote não é tocada pelo DO UPDATE e, no INSERT, recebe o DEFAULT do
-// schema — mesmo comportamento que o upsert linha-a-linha já tinha.
+// schema.prisma (RegistroDespesaViagem): vlrunt/vlrtot Decimal(9,2). `id` (autoincrement) e
+// `origemCaxHub`/`enviadoEmSenior` (nunca tocados por este sync — origemCaxHub protege
+// despesa lançada pelo consultor no CaxHub) ficam de fora de propósito: uma coluna ausente
+// do lote não é tocada pelo DO UPDATE e, no INSERT, recebe o DEFAULT do schema — mesmo
+// comportamento que o upsert linha-a-linha já tinha. Carimbo (`visto_em_sync`/
+// `removido_em_senior`) ligado em 10/09/2026 via `carimbo: inicio` abaixo, no `upsertEmLote`.
 const COLUNAS: ColunaUpsert[] = [
   { nome: "codemp", cast: "int" },
   { nome: "numrat", cast: "int" },
@@ -100,8 +102,26 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
       tabela: "registros_despesa_viagem",
       colunas: COLUNAS,
       colunasPk: ["codemp", "numrat", "seqrdv"],
+      carimbo: inicio,
     });
     const msEscrita = Date.now() - inicioEscrita;
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // MÃO DUPLA: chamada MANUAL (não `executarVarreduraDoJob`) porque o escopo aqui SEMPRE
+    // precisa excluir `origemCaxHub: true` (despesa lançada pelo consultor no CaxHub, ainda
+    // sem seqrdv confirmado no Senior) além do filtro salvo, se houver.
+    const filtro = filtroDoJob(JOB_NAME, "todos");
+    const filtroNaoEscopavel = filtro.predicadosSql.length > 0 && filtro.escopoLocal === null;
+    const varredura = filtroNaoEscopavel
+      ? null
+      : await varrerRemovidos<Prisma.RegistroDespesaViagemWhereInput>(prisma.registroDespesaViagem, {
+          jobName: JOB_NAME,
+          inicio,
+          linhasProcessadas: resultado.linhasProcessadas,
+          escopo: { origemCaxHub: false, ...(filtro.escopoLocal ?? {}) } as Prisma.RegistroDespesaViagemWhereInput,
+          queryContagemOrigem: montarQuerySenior(`SELECT COUNT(*) AS total FROM USU_TE777RDV`, filtro.predicadosSql),
+        });
 
     await prisma.syncLog.create({
       data: {
@@ -110,7 +130,11 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
         status: "success",
         message:
           `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
-          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
         duracaoMs: Date.now() - inicio.getTime(),
       },
     });
@@ -130,10 +154,14 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
 // chamador em vez de só logar (é assim que o botão sabe reportar falha ao consultor).
 export async function runRegistroDespesaViagemSyncPorNumrat(codemp: number, numrat: number): Promise<void> {
   const query = `${BASE_QUERY} WHERE USU_CODEMP = ${codemp} AND USU_NUMRAT = ${numrat}`;
+  const inicio = new Date();
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrdv"])) as RegistroDespesaViagemRow[];
 
   // origemCaxHub/enviadoEmSenior de propósito fora do payload — mesma proteção do upsert em
   // lote acima: despesa lançada pelo consultor nunca tem seqrdv, então nunca cai neste upsert.
+  // Carimbo aplicado (seguro mesmo num sync parcial — só documenta quando a linha foi vista);
+  // SEM chamada de varredura aqui: escopo de 1 RAT só marcaria a tabela inteira como suspeita
+  // (mesmo raciocínio de runRatItemSyncPorNumrat em ratItemSync.ts).
   for (const row of rows) {
     const data = {
       codemp: row.codemp,
@@ -151,6 +179,7 @@ export async function runRegistroDespesaViagemSyncPorNumrat(codemp: number, numr
       rotid: row.rotid ?? null,
       hordes: row.hordes ?? null,
       nidpso: row.nidpso ?? null,
+      ...carimbo(inicio),
     };
     await prisma.registroDespesaViagem.upsert({
       where: { codemp_numrat_seqrdv: { codemp: row.codemp, numrat: row.numrat, seqrdv: row.seqrdv } },

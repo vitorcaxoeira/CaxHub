@@ -1,8 +1,10 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { carimbo, varrerRemovidos } from "./varrerRemovidos";
 
 export const JOB_NAME = "rat-item-sync";
 export const CRON_EXPR = "30 4 * * *"; // depois de rat-sync (15 4 * * *) — RatItem.ratId depende de Rat já existir
@@ -52,9 +54,23 @@ interface RatItemRow {
 // Devolve os `seqrat` que a origem trouxe. Quem chama por RAT específica usa isso pra
 // descobrir o que NÃO voltou — item apagado no Senior simplesmente não vem na consulta,
 // e é assim que a desvinculação em POST /rats/:id/sincronizar identifica o que reintegrar.
-async function executarUpsert(query: string): Promise<number[]> {
+// `inicio` tem default pra não quebrar runRatItemSyncPorNumrat abaixo (que não roda
+// varredura — escopo de 1 RAT só marcaria a tabela inteira como suspeita) — o carimbo em si
+// é seguro em qualquer chamada, só documenta quando a linha foi vista.
+interface ResultadoExecutarUpsert {
+  seqratsVistos: number[];
+  // Linhas que vieram da origem mas NÃO foram carimbadas (Rat ainda não sincronizado) —
+  // repassado como `puladas` pra varrerRemovidos.ts: sem isso, um item que já existia
+  // localmente (de um sync anterior) e ficou órfão só NESTA rodada teria o carimbo antigo
+  // preservado e seria acusado de removido na próxima varredura, por motivo técnico, não
+  // por ter sumido de verdade do Senior.
+  puladas: number;
+}
+
+async function executarUpsert(query: string, inicio: Date = new Date()): Promise<ResultadoExecutarUpsert> {
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrat"])) as RatItemRow[];
   const seqratsVistos: number[] = [];
+  let puladas = 0;
 
   for (const row of rows) {
     seqratsVistos.push(row.seqrat);
@@ -63,6 +79,7 @@ async function executarUpsert(query: string): Promise<number[]> {
     });
     if (!rat) {
       console.warn(`[${JOB_NAME}] RatItem órfão (codemp=${row.codemp}, numrat=${row.numrat}, codpro=${row.codpro}) — Rat correspondente ainda não sincronizado, linha ignorada`);
+      puladas++;
       continue;
     }
 
@@ -83,6 +100,7 @@ async function executarUpsert(query: string): Promise<number[]> {
       datreg: row.datreg != null ? new Date(row.datreg) : null,
       seqati: row.seqati != null ? BigInt(row.seqati) : null,
       origemCaxHub: false,
+      ...carimbo(inicio),
     };
     await prisma.ratItem.upsert({
       where: { codemp_numrat_seqrat: { codemp: row.codemp, numrat: row.numrat, seqrat: row.seqrat } },
@@ -91,16 +109,46 @@ async function executarUpsert(query: string): Promise<number[]> {
     });
   }
 
-  return seqratsVistos;
+  return { seqratsVistos, puladas };
 }
 
 export async function runRatItemSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
   try {
-    await executarUpsert(query);
+    const { seqratsVistos, puladas } = await executarUpsert(query, inicio);
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // MÃO DUPLA: chamada MANUAL (não `executarVarreduraDoJob`) porque o escopo aqui SEMPRE
+    // precisa excluir `origemCaxHub: true` (apontamento criado no CaxHub, ainda sem seqrat
+    // confirmado no Senior) além do filtro salvo, se houver. `puladas` (RatItem órfão, Rat
+    // ainda não sincronizado) aborta a varredura inteira nesta rodada — ver ResultadoExecutarUpsert.
+    const filtro = filtroDoJob(JOB_NAME, "todos");
+    const filtroNaoEscopavel = filtro.predicadosSql.length > 0 && filtro.escopoLocal === null;
+    const varredura =
+      desde || filtroNaoEscopavel
+        ? null
+        : await varrerRemovidos<Prisma.RatItemWhereInput>(prisma.ratItem, {
+            jobName: JOB_NAME,
+            inicio,
+            linhasProcessadas: seqratsVistos.length,
+            escopo: { origemCaxHub: false, ...(filtro.escopoLocal ?? {}) } as Prisma.RatItemWhereInput,
+            queryContagemOrigem: montarQuerySenior(`SELECT COUNT(*) AS total FROM USU_TE777IAT`, filtro.predicadosSql),
+            puladas,
+          });
+
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: varredura ? varredura.resumo : undefined,
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -119,7 +167,7 @@ export async function runRatItemSync(desde?: Date): Promise<void> {
 // localmente o que foi apagado lá (ver POST /rats/:id/sincronizar).
 export async function runRatItemSyncPorNumrat(codemp: number, numrat: number): Promise<number[]> {
   const query = `${BASE_QUERY} WHERE USU_CODEMP = ${codemp} AND USU_NUMRAT = ${numrat}`;
-  const seqratsVistos = await executarUpsert(query);
+  const { seqratsVistos } = await executarUpsert(query);
   await prisma.syncLog.create({
     data: { jobName: JOB_NAME, query, status: "success", message: `${seqratsVistos.length} item(ns) no Senior` },
   });

@@ -7,8 +7,9 @@ import { diffCampos, criarEventoAuditoria, paraDiff } from "../audit/registrarEv
 import { CAMPOS_AUDITADOS_PROPOSTA_ITEM } from "../audit/camposAuditados";
 import { EVENTOS_AUDITORIA, ENTIDADES_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdPropostaItem } from "../audit/identidadeEntidade";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "propostas_itens-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -39,10 +40,12 @@ export interface PropostaItemRow {
 
 // Corpo do processamento extraído à parte de runPropostaItemSync() para poder ser
 // exercitado com linhas sintéticas (ver backend/prisma/verificarAceiteAuditoria.ts) sem
-// depender do webservice SOAP real — mesma lógica, sem mudança de comportamento.
-export async function processarLinhasPropostaItem(rows: PropostaItemRow[]): Promise<void> {
+// depender do webservice SOAP real — mesma lógica, sem mudança de comportamento. `inicio`
+// tem default pra não quebrar chamadas existentes que não passam — ver mesmo raciocínio em
+// propostaSync.ts.
+export async function processarLinhasPropostaItem(rows: PropostaItemRow[], inicio: Date = new Date()): Promise<void> {
   for (const row of rows) {
-    const data = { codemp: row.codemp, codpro: row.codpro, seqite: row.seqite, numprj: row.numprj, codser: row.codser, qtdhor: row.qtdhor, valhor: row.valhor, despro: row.despro, entpro: row.entpro, codfpj: row.codfpj, fatser: row.fatser, sitmot: row.sitmot, forfat: row.forfat, tipprj: row.tipprj, frmprj: row.frmprj, sitprz: row.sitprz, atvpso: row.atvpso != null ? BigInt(row.atvpso) : null, depexe: row.depexe };
+    const data = { codemp: row.codemp, codpro: row.codpro, seqite: row.seqite, numprj: row.numprj, codser: row.codser, qtdhor: row.qtdhor, valhor: row.valhor, despro: row.despro, entpro: row.entpro, codfpj: row.codfpj, fatser: row.fatser, sitmot: row.sitmot, forfat: row.forfat, tipprj: row.tipprj, frmprj: row.frmprj, sitprz: row.sitprz, atvpso: row.atvpso != null ? BigInt(row.atvpso) : null, depexe: row.depexe, ...carimbo(inicio) };
 
     const existente = await prisma.propostaItem.findUnique({
       where: { codemp_codpro_seqite: { codemp: row.codemp, codpro: row.codpro, seqite: row.seqite } },
@@ -93,10 +96,32 @@ export async function runPropostaItemSync(): Promise<void> {
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codpro", "seqite"])) as PropostaItemRow[];
-    await processarLinhasPropostaItem(rows);
+    await processarLinhasPropostaItem(rows, inicio);
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva. Só aqui (não em
+    // runPropostaItemSyncPorCodpro, que varre 1 proposta só).
+    const varredura = await executarVarreduraDoJob<Prisma.PropostaItemWhereInput>(prisma.propostaItem, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+    });
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: varredura ? varredura.resumo : undefined,
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

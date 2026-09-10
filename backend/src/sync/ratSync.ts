@@ -1,9 +1,11 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { varrerRemovidos } from "./varrerRemovidos";
 
 export const JOB_NAME = "rat-sync";
 export const CRON_EXPR = "15 4 * * *"; // logo depois de atividades_consultor-sync (0 4 * * *)
@@ -92,12 +94,16 @@ function linhaDe(row: RatRow): LinhaUpsert {
 // (codemp+numprj+codfpj+numrat) só existe depois que o Senior confirma o documento — o
 // CaxHub cria localmente sem numrat (ver POST /apontamentos/confirmar), e essa leitura
 // NUNCA cria linha com numrat nulo (as 4 colunas da chave são NOT NULL na origem).
-async function executarUpsert(query: string): Promise<number> {
+// `inicio` tem default pra não quebrar runRatSyncPorNumrat abaixo (que não roda varredura —
+// escopo de 1 RAT só marcaria a tabela inteira como suspeita) — o carimbo em si é seguro em
+// qualquer chamada, só documenta quando a linha foi vista.
+async function executarUpsert(query: string, inicio: Date = new Date()): Promise<number> {
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat"])) as RatRow[];
   const resultado = await upsertEmLote(rows.map(linhaDe), {
     tabela: "rats",
     colunas: COLUNAS,
     colunasPk: ["codemp", "numprj", "codfpj", "numrat"],
+    carimbo: inicio,
   });
   return resultado.linhasProcessadas;
 }
@@ -106,13 +112,37 @@ export async function runRatSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
   try {
-    const total = await executarUpsert(query);
+    const total = await executarUpsert(query, inicio);
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // MÃO DUPLA: chamada MANUAL (não `executarVarreduraDoJob`) porque o escopo aqui SEMPRE
+    // precisa excluir `origemCaxHub: true` (rascunho criado no CaxHub, ainda sem numrat
+    // confirmado no Senior) além do filtro salvo, se houver.
+    const filtro = filtroDoJob(JOB_NAME, "todos");
+    const filtroNaoEscopavel = filtro.predicadosSql.length > 0 && filtro.escopoLocal === null;
+    const varredura =
+      desde || filtroNaoEscopavel
+        ? null
+        : await varrerRemovidos<Prisma.RatWhereInput>(prisma.rat, {
+            jobName: JOB_NAME,
+            inicio,
+            linhasProcessadas: total,
+            escopo: { origemCaxHub: false, ...(filtro.escopoLocal ?? {}) } as Prisma.RatWhereInput,
+            queryContagemOrigem: montarQuerySenior(`SELECT COUNT(*) AS total FROM USU_TE777RAT`, filtro.predicadosSql),
+          });
+
     await prisma.syncLog.create({
       data: {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: `${total} linha(s) em ${((Date.now() - inicio.getTime()) / 1000).toFixed(1)}s`,
+        message:
+          `${total} linha(s) em ${((Date.now() - inicio.getTime()) / 1000).toFixed(1)}s` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
         duracaoMs: Date.now() - inicio.getTime(),
       },
     });

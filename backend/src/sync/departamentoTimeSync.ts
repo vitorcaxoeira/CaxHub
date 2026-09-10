@@ -1,8 +1,10 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "departamento_time-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -43,7 +45,7 @@ export async function runDepartamentoTimeSync(desde?: Date): Promise<void> {
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "depexe", "codusu"])) as DepartamentoTimeRow[];
 
     for (const row of rows) {
-      const data = { depexe: row.depexe, codemp: row.codemp, codusu: BigInt(row.codusu), usuger: row.usuger != null ? BigInt(row.usuger) : null, datger: row.datger != null ? new Date(row.datger) : null, horger: row.horger, sitreg: row.sitreg };
+      const data = { depexe: row.depexe, codemp: row.codemp, codusu: BigInt(row.codusu), usuger: row.usuger != null ? BigInt(row.usuger) : null, datger: row.datger != null ? new Date(row.datger) : null, horger: row.horger, sitreg: row.sitreg, ...carimbo(inicio) };
       await prisma.departamentoTime.upsert({
         where: { codemp_depexe_codusu: { codemp: row.codemp, depexe: row.depexe, codusu: BigInt(row.codusu) } },
         update: data,
@@ -51,8 +53,30 @@ export async function runDepartamentoTimeSync(desde?: Date): Promise<void> {
       });
     }
 
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.DepartamentoTimeWhereInput>(prisma.departamentoTime, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(BASE_QUERY),
+      inicio,
+      linhasProcessadas: rows.length,
+      desde,
+    });
+
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message: varredura ? varredura.resumo : undefined,
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
