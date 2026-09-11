@@ -1923,6 +1923,22 @@ model ConfiguracaoVarredura {
   @@map("configuracoes_varredura")
 }
 
+// Tamanho do lote de upsert (sync/upsertEmLote.ts), configurado pelo admin, por job — mesmo
+// padrão de ConfiguracaoVarredura acima (11/09/2026, porte do CaxHub_Atlas a pedido do
+// Vitor). `tamanhoLote` nullable: sem linha salva já significa "usa o default de
+// upsertEmLote.ts" (TAMANHO_LOTE_PADRAO = 1000) — não duplica esse número aqui. Resolvido em
+// memória no boot por sync/politicaLote.ts, nunca lido cru pelos jobs de sync. Só faz sentido
+// pra jobs com `usaUpsertEmLote: true` em registry.ts — os demais ainda gravam linha a linha,
+// sem opção de lote nenhuma (não é config, é código que ainda não foi escrito).
+model ConfiguracaoLote {
+  jobName       String   @id @map("job_name")
+  tamanhoLote   Int?     @map("tamanho_lote")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+  atualizadoPor Int?     @map("atualizado_por")
+
+  @@map("configuracoes_lote")
+}
+
 // Espelho local da tabela E075PRO do Senior ERP (Cadastros - Produtos).
 model Produto {
   codemp Int

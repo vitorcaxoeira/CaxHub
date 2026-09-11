@@ -4,7 +4,9 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "representantes-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -36,6 +38,33 @@ interface RepresentanteRow {
   sigufs?: string;
 }
 
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codrep", cast: "int" },
+  { nome: "nomrep", cast: "text" },
+  { nome: "aperep", cast: "text" },
+  { nome: "tiprep", cast: "text" },
+  { nome: "cgccpf", cast: "bigint" },
+  { nome: "sitrep", cast: "text" },
+  { nome: "cidrep", cast: "text" },
+  { nome: "sigufs", cast: "text" },
+];
+
+function linhaDe(row: RepresentanteRow): LinhaUpsert {
+  return {
+    chave: String(row.codrep),
+    valores: [
+      String(row.codrep),
+      row.nomrep,
+      row.aperep,
+      row.tiprep,
+      row.cgccpf != null ? String(row.cgccpf) : null,
+      row.sitrep,
+      row.cidrep != null ? row.cidrep : null,
+      row.sigufs != null ? row.sigufs : null,
+    ],
+  };
+}
+
 export async function runRepresentanteSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
@@ -43,16 +72,19 @@ export async function runRepresentanteSync(desde?: Date): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codrep"])) as RepresentanteRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codrep: row.codrep, nomrep: row.nomrep, aperep: row.aperep, tiprep: row.tiprep, cgccpf: row.cgccpf != null ? BigInt(row.cgccpf) : null, sitrep: row.sitrep, cidrep: row.cidrep, sigufs: row.sigufs, ...carimbo(inicio) };
-      await prisma.representante.upsert({
-        where: { codrep: row.codrep },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "representantes",
+      colunas: COLUNAS,
+      colunasPk: ["codrep"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -63,7 +95,7 @@ export async function runRepresentanteSync(desde?: Date): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(BASE_QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
       desde,
     });
 
@@ -72,7 +104,10 @@ export async function runRepresentanteSync(desde?: Date): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

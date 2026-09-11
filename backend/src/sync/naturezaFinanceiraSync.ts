@@ -4,7 +4,9 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "naturezas_financeiras-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -22,6 +24,33 @@ interface NaturezaFinanceiraRow {
   sitfin: string;
 }
 
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "ctafin", cast: "int" },
+  { nome: "descta", cast: "text" },
+  { nome: "abrcta", cast: "text" },
+  { nome: "defgru", cast: "text" },
+  { nome: "anasin", cast: "text" },
+  { nome: "natfin", cast: "text" },
+  { nome: "sitfin", cast: "text" },
+];
+
+function linhaDe(row: NaturezaFinanceiraRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.ctafin}`,
+    valores: [
+      String(row.codemp),
+      String(row.ctafin),
+      row.descta,
+      row.abrcta,
+      row.defgru,
+      row.anasin,
+      row.natfin,
+      row.sitfin,
+    ],
+  };
+}
+
 export async function runNaturezaFinanceiraSync(): Promise<void> {
   const inicio = new Date();
   // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
@@ -30,16 +59,19 @@ export async function runNaturezaFinanceiraSync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "ctafin"])) as NaturezaFinanceiraRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, ctafin: row.ctafin, descta: row.descta, abrcta: row.abrcta, defgru: row.defgru, anasin: row.anasin, natfin: row.natfin, sitfin: row.sitfin, ...carimbo(inicio) };
-      await prisma.naturezaFinanceira.upsert({
-        where: { codemp_ctafin: { codemp: row.codemp, ctafin: row.ctafin } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "naturezas_financeiras",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "ctafin"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -50,7 +82,7 @@ export async function runNaturezaFinanceiraSync(): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
     });
 
     await prisma.syncLog.create({
@@ -58,7 +90,10 @@ export async function runNaturezaFinanceiraSync(): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

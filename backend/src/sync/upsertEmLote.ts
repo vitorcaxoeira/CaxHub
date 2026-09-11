@@ -53,10 +53,14 @@ export interface ResultadoUpsertEmLote {
   lotes: number;
 }
 
-const TAMANHO_LOTE_PADRAO = 1000;
+// Exportadas (11/09/2026) porque routes/syncErp.ts (PUT /:jobName/lote) precisa calcular, por
+// job, o teto real de `tamanhoLote` ANTES de salvar — sem isso, um valor grande demais seria
+// aceito e depois clampado em silêncio aqui dentro, e a tela mostraria um número que nunca foi
+// o que de fato rodou.
+export const TAMANHO_LOTE_PADRAO = 1000;
 // Bind carrega a contagem de parâmetros do statement num Int16 do protocolo — 65535 é o
 // teto real, não um número arbitrário escolhido por conservadorismo.
-const TETO_PARAMS_PROTOCOLO = 65535;
+export const TETO_PARAMS_PROTOCOLO = 65535;
 
 export async function upsertEmLote(linhas: LinhaUpsert[], opcoes: OpcoesUpsertEmLote): Promise<ResultadoUpsertEmLote> {
   if (linhas.length === 0) return { linhasProcessadas: 0, lotes: 0 };

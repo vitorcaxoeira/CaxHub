@@ -4,7 +4,9 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "condicoes_pagamento-sync";
 export const CRON_EXPR = "45 4 * * *";
@@ -20,6 +22,22 @@ interface CondicaoPagamentoRow {
   sitcpg: string;
 }
 
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codcpg", cast: "text" },
+  { nome: "descpg", cast: "text" },
+  { nome: "abrcpg", cast: "text" },
+  { nome: "aplcpg", cast: "text" },
+  { nome: "sitcpg", cast: "text" },
+];
+
+function linhaDe(row: CondicaoPagamentoRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codcpg}`,
+    valores: [String(row.codemp), row.codcpg, row.descpg, row.abrcpg, row.aplcpg, row.sitcpg],
+  };
+}
+
 export async function runCondicaoPagamentoSync(): Promise<void> {
   const inicio = new Date();
   // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
@@ -28,16 +46,19 @@ export async function runCondicaoPagamentoSync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codcpg"])) as CondicaoPagamentoRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, codcpg: row.codcpg, descpg: row.descpg, abrcpg: row.abrcpg, aplcpg: row.aplcpg, sitcpg: row.sitcpg, ...carimbo(inicio) };
-      await prisma.condicaoPagamento.upsert({
-        where: { codemp_codcpg: { codemp: row.codemp, codcpg: row.codcpg } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "condicoes_pagamento",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "codcpg"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -48,7 +69,7 @@ export async function runCondicaoPagamentoSync(): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
     });
 
     await prisma.syncLog.create({
@@ -56,7 +77,10 @@ export async function runCondicaoPagamentoSync(): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

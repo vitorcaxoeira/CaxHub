@@ -4,7 +4,9 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "contas_correntes-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -33,6 +35,21 @@ interface ContaCorrenteRow {
   sitcco: string;
 }
 
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "numcco", cast: "text" },
+  { nome: "descco", cast: "text" },
+  { nome: "abrcco", cast: "text" },
+  { nome: "sitcco", cast: "text" },
+];
+
+function linhaDe(row: ContaCorrenteRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.numcco}`,
+    valores: [String(row.codemp), row.numcco, row.descco, row.abrcco, row.sitcco],
+  };
+}
+
 export async function runContaCorrenteSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
@@ -40,16 +57,19 @@ export async function runContaCorrenteSync(desde?: Date): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numcco"])) as ContaCorrenteRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, numcco: row.numcco, descco: row.descco, abrcco: row.abrcco, sitcco: row.sitcco, ...carimbo(inicio) };
-      await prisma.contaCorrente.upsert({
-        where: { codemp_numcco: { codemp: row.codemp, numcco: row.numcco } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "contas_correntes",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "numcco"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -60,7 +80,7 @@ export async function runContaCorrenteSync(desde?: Date): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(BASE_QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
       desde,
     });
 
@@ -69,7 +89,10 @@ export async function runContaCorrenteSync(desde?: Date): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

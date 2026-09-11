@@ -4,7 +4,9 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, varrerRemovidos } from "./varrerRemovidos";
+import { varrerRemovidos } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "rat-item-sync";
 export const CRON_EXPR = "30 4 * * *"; // depois de rat-sync (15 4 * * *) — RatItem.ratId depende de Rat já existir
@@ -42,6 +44,55 @@ interface RatItemRow {
   seqati?: number;
 }
 
+// schema.prisma (RatItem): datati/datreg Date (nunca timestamp — String(...).slice(0,10),
+// nunca `new Date(v)`, mesmo cuidado de rateioLancamentoSync.ts), seqati BigInt. `ratId` não
+// vem da query — é resolvido por linha contra o `Rat` local (ver executarUpsert).
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "ratId", cast: "int" },
+  { nome: "codemp", cast: "int" },
+  { nome: "numprj", cast: "int" },
+  { nome: "numrat", cast: "int" },
+  { nome: "seqrat", cast: "int" },
+  { nome: "codser", cast: "text" },
+  { nome: "datati", cast: "date" },
+  { nome: "horini", cast: "int" },
+  { nome: "horfim", cast: "int" },
+  { nome: "desati", cast: "text" },
+  { nome: "codpro", cast: "int" },
+  { nome: "seqite", cast: "int" },
+  { nome: "codfas", cast: "int" },
+  { nome: "datreg", cast: "date" },
+  { nome: "seqati", cast: "bigint" },
+  // Sempre `false` nesta origem (mesmo valor que o upsert linha-a-linha de sempre gravava
+  // incondicionalmente) — item nascido no CaxHub (origemCaxHub=true) nunca aparece nesta
+  // consulta, então nunca colide com esta chave antes de ter seqrat confirmado.
+  { nome: "origemCaxHub", cast: "boolean" },
+];
+
+function linhaDe(row: RatItemRow, ratId: number): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.numrat}-${row.seqrat}`,
+    valores: [
+      String(ratId),
+      String(row.codemp),
+      row.numprj != null ? String(row.numprj) : null,
+      String(row.numrat),
+      String(row.seqrat),
+      row.codser != null ? row.codser : null,
+      row.datati != null ? String(row.datati).slice(0, 10) : null,
+      row.horini != null ? String(row.horini) : null,
+      row.horfim != null ? String(row.horfim) : null,
+      row.desati != null ? row.desati : null,
+      row.codpro != null ? String(row.codpro) : null,
+      row.seqite != null ? String(row.seqite) : null,
+      row.codfas != null ? String(row.codfas) : null,
+      row.datreg != null ? String(row.datreg).slice(0, 10) : null,
+      row.seqati != null ? String(row.seqati) : null,
+      "false",
+    ],
+  };
+}
+
 // Linha de apontamento (IAT) — espelho parcial de USU_TE777IAT (ver comentário do model
 // RatItem no schema.prisma). Roda sempre DEPOIS de rat-sync (ver CRON_EXPR): cada linha
 // precisa achar o `Rat` local correspondente antes de poder ser gravada.
@@ -65,58 +116,58 @@ interface ResultadoExecutarUpsert {
   // preservado e seria acusado de removido na próxima varredura, por motivo técnico, não
   // por ter sumido de verdade do Senior.
   puladas: number;
+  linhasProcessadas: number;
+  lotes: number;
+  msFetch: number;
+  msEscrita: number;
 }
 
 async function executarUpsert(query: string, inicio: Date = new Date()): Promise<ResultadoExecutarUpsert> {
+  const inicioFetch = Date.now();
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrat"])) as RatItemRow[];
+  const msFetch = Date.now() - inicioFetch;
+
+  // Resolve o `Rat` local de TODAS as linhas de uma vez (achado real do plano de filtros,
+  // 21/08/2026: "rat-item-sync tem N+1 query, não é só trocar o upsert") — um único
+  // `findMany` por `codemp` em vez de um `findFirst` por linha dentro do loop.
+  const codemps = [...new Set(rows.map((r) => r.codemp))];
+  const rats = codemps.length > 0 ? await prisma.rat.findMany({ where: { codemp: { in: codemps } }, select: { id: true, codemp: true, numrat: true, codpro: true } }) : [];
+  const ratPorChave = new Map(rats.map((r) => [`${r.codemp}-${r.numrat}-${r.codpro ?? "null"}`, r.id]));
+
   const seqratsVistos: number[] = [];
+  const linhas: LinhaUpsert[] = [];
   let puladas = 0;
 
   for (const row of rows) {
     seqratsVistos.push(row.seqrat);
-    const rat = await prisma.rat.findFirst({
-      where: { codemp: row.codemp, numrat: row.numrat, codpro: row.codpro ?? null },
-    });
-    if (!rat) {
+    const chave = `${row.codemp}-${row.numrat}-${row.codpro ?? "null"}`;
+    const ratId = ratPorChave.get(chave);
+    if (ratId == null) {
       console.warn(`[${JOB_NAME}] RatItem órfão (codemp=${row.codemp}, numrat=${row.numrat}, codpro=${row.codpro}) — Rat correspondente ainda não sincronizado, linha ignorada`);
       puladas++;
       continue;
     }
-
-    const data = {
-      ratId: rat.id,
-      codemp: row.codemp,
-      numprj: row.numprj ?? null,
-      numrat: row.numrat,
-      seqrat: row.seqrat,
-      codser: row.codser ?? null,
-      datati: row.datati != null ? new Date(row.datati) : null,
-      horini: row.horini ?? null,
-      horfim: row.horfim ?? null,
-      desati: row.desati ?? null,
-      codpro: row.codpro ?? null,
-      seqite: row.seqite ?? null,
-      codfas: row.codfas ?? null,
-      datreg: row.datreg != null ? new Date(row.datreg) : null,
-      seqati: row.seqati != null ? BigInt(row.seqati) : null,
-      origemCaxHub: false,
-      ...carimbo(inicio),
-    };
-    await prisma.ratItem.upsert({
-      where: { codemp_numrat_seqrat: { codemp: row.codemp, numrat: row.numrat, seqrat: row.seqrat } },
-      update: data,
-      create: data,
-    });
+    linhas.push(linhaDe(row, ratId));
   }
 
-  return { seqratsVistos, puladas };
+  const inicioEscrita = Date.now();
+  const resultado = await upsertEmLote(linhas, {
+    tabela: "rat_itens",
+    colunas: COLUNAS,
+    colunasPk: ["codemp", "numrat", "seqrat"],
+    carimbo: inicio,
+    tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+  });
+  const msEscrita = Date.now() - inicioEscrita;
+
+  return { seqratsVistos, puladas, linhasProcessadas: resultado.linhasProcessadas, lotes: resultado.lotes, msFetch, msEscrita };
 }
 
 export async function runRatItemSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
   try {
-    const { seqratsVistos, puladas } = await executarUpsert(query, inicio);
+    const { seqratsVistos, puladas, linhasProcessadas, lotes, msFetch, msEscrita } = await executarUpsert(query, inicio);
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -143,7 +194,10 @@ export async function runRatItemSync(desde?: Date): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

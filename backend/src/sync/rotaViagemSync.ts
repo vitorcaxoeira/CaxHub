@@ -4,7 +4,9 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "rotas_viagem-sync";
 export const CRON_EXPR = "25 5 * * *";
@@ -24,6 +26,36 @@ interface RotaViagemRow {
   tolkm?: number;
 }
 
+// schema.prisma (RotaViagem): kmtrot/tolhrs/tolkm Decimal(_,2) — toFixed(2), nunca number cru.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "id", cast: "int" },
+  { nome: "codcli", cast: "int" },
+  { nome: "desrot", cast: "text" },
+  { nome: "kmtrot", cast: "numeric" },
+  { nome: "horrot", cast: "int" },
+  { nome: "sitreg", cast: "text" },
+  { nome: "idagp", cast: "int" },
+  { nome: "tolhrs", cast: "numeric" },
+  { nome: "tolkm", cast: "numeric" },
+];
+
+function linhaDe(row: RotaViagemRow): LinhaUpsert {
+  return {
+    chave: String(row.id),
+    valores: [
+      String(row.id),
+      row.codcli != null ? String(row.codcli) : null,
+      row.desrot != null ? row.desrot : null,
+      row.kmtrot != null ? row.kmtrot.toFixed(2) : null,
+      row.horrot != null ? String(row.horrot) : null,
+      row.sitreg != null ? row.sitreg : null,
+      row.idagp != null ? String(row.idagp) : null,
+      row.tolhrs != null ? row.tolhrs.toFixed(2) : null,
+      row.tolkm != null ? row.tolkm.toFixed(2) : null,
+    ],
+  };
+}
+
 // Rota de viagem pré-cadastrada por cliente — 168 linhas em 13/08/2026, catálogo quase
 // estático.
 export async function runRotaViagemSync(): Promise<void> {
@@ -34,27 +66,19 @@ export async function runRotaViagemSync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária, mesmo em tabelas pequenas como esta.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["id"])) as RotaViagemRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = {
-        id: row.id,
-        codcli: row.codcli,
-        desrot: row.desrot,
-        kmtrot: row.kmtrot,
-        horrot: row.horrot,
-        sitreg: row.sitreg,
-        idagp: row.idagp,
-        tolhrs: row.tolhrs,
-        tolkm: row.tolkm,
-        ...carimbo(inicio),
-      };
-      await prisma.rotaViagem.upsert({
-        where: { id: row.id },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "rotas_viagem",
+      colunas: COLUNAS,
+      colunasPk: ["id"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -65,7 +89,7 @@ export async function runRotaViagemSync(): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
     });
 
     await prisma.syncLog.create({
@@ -73,7 +97,10 @@ export async function runRotaViagemSync(): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

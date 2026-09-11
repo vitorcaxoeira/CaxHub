@@ -4,7 +4,9 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "fases_proposta-sync";
 export const CRON_EXPR = "50 3 * * *";
@@ -17,6 +19,18 @@ interface FasePropostaRow {
   fasdes: string;
 }
 
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "fasid", cast: "int" },
+  { nome: "fasdes", cast: "text" },
+];
+
+function linhaDe(row: FasePropostaRow): LinhaUpsert {
+  return {
+    chave: String(row.fasid),
+    valores: [String(row.fasid), row.fasdes],
+  };
+}
+
 export async function runFasePropostaSync(): Promise<void> {
   const inicio = new Date();
   // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
@@ -25,16 +39,19 @@ export async function runFasePropostaSync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["fasid"])) as FasePropostaRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { fasid: row.fasid, fasdes: row.fasdes, ...carimbo(inicio) };
-      await prisma.faseProposta.upsert({
-        where: { fasid: row.fasid },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "fases_proposta",
+      colunas: COLUNAS,
+      colunasPk: ["fasid"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -45,7 +62,7 @@ export async function runFasePropostaSync(): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
     });
 
     await prisma.syncLog.create({
@@ -53,7 +70,10 @@ export async function runFasePropostaSync(): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

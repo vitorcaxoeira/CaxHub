@@ -2,9 +2,11 @@ import cron from "node-cron";
 import { Prisma } from "@prisma/client";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "contratos-consultores-sync";
 export const CRON_EXPR = "20 3 * * *";
@@ -25,6 +27,34 @@ interface ContratoConsultorRow {
   vlrmin?: number;
 }
 
+// schema.prisma (ContratoConsultor): vlrhor Decimal(15,5), vlrmin Decimal(15,8) — toFixed no
+// número exato de casas do schema, mesmo cuidado do resto do projeto (nunca String() cru,
+// que herdaria a representação de ponto flutuante do JS).
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codusu", cast: "int" },
+  { nome: "codfor", cast: "int" },
+  { nome: "numctr", cast: "int" },
+  { nome: "codmot", cast: "int" },
+  { nome: "vlrhor", cast: "numeric" },
+  { nome: "vlrmin", cast: "numeric" },
+];
+
+function linhaDe(row: ContratoConsultorRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codusu}`,
+    valores: [
+      String(row.codemp),
+      String(row.codusu),
+      row.codfor != null ? String(row.codfor) : null,
+      row.numctr != null ? String(row.numctr) : null,
+      row.codmot != null ? String(row.codmot) : null,
+      row.vlrhor != null ? row.vlrhor.toFixed(5) : null,
+      row.vlrmin != null ? row.vlrmin.toFixed(8) : null,
+    ],
+  };
+}
+
 // View sem registro em r998tbl (mesmo caso de USU_VBI00Cons, ver consultorSync.ts) — job
 // escrito à mão, não pelo scaffold-table.ts. Só 117 linhas hoje (cadastro de consultores),
 // não precisa de runSqlViaSoapPaginated.
@@ -33,25 +63,19 @@ export async function runContratoConsultorSync(): Promise<void> {
   // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
   const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoap(query)) as ContratoConsultorRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = {
-        codemp: row.codemp,
-        codusu: row.codusu,
-        codfor: row.codfor,
-        numctr: row.numctr,
-        codmot: row.codmot,
-        vlrhor: row.vlrhor,
-        vlrmin: row.vlrmin,
-        ...carimbo(inicio),
-      };
-      await prisma.contratoConsultor.upsert({
-        where: { codemp_codusu: { codemp: row.codemp, codusu: row.codusu } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "contratos_consultores",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "codusu"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo, nunca só o schema). Continua
@@ -62,7 +86,7 @@ export async function runContratoConsultorSync(): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
     });
 
     await prisma.syncLog.create({
@@ -70,7 +94,10 @@ export async function runContratoConsultorSync(): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

@@ -4,7 +4,9 @@ import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "transacoes-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -32,6 +34,20 @@ interface TransacaoRow {
   rectpb?: string;
 }
 
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codtns", cast: "text" },
+  { nome: "destns", cast: "text" },
+  { nome: "rectpb", cast: "text" },
+];
+
+function linhaDe(row: TransacaoRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codtns}`,
+    valores: [String(row.codemp), row.codtns, row.destns, row.rectpb != null ? row.rectpb : null],
+  };
+}
+
 export async function runTransacaoSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
@@ -39,16 +55,19 @@ export async function runTransacaoSync(desde?: Date): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codtns"])) as TransacaoRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { codemp: row.codemp, codtns: row.codtns, destns: row.destns, rectpb: row.rectpb, ...carimbo(inicio) };
-      await prisma.transacao.upsert({
-        where: { codemp_codtns: { codemp: row.codemp, codtns: row.codtns } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "transacoes",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "codtns"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -59,7 +78,7 @@ export async function runTransacaoSync(desde?: Date): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(BASE_QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
       desde,
     });
 
@@ -68,7 +87,10 @@ export async function runTransacaoSync(desde?: Date): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

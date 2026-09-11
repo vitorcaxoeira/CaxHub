@@ -49,6 +49,14 @@ interface JobSync {
   // do próximo sync rodar.
   varreduraModo: "desligada" | "simular" | "marcar";
   varreduraDisponivel: boolean;
+  // Tamanho de lote de upsert (11/09/2026, porte do CaxHub_Atlas) — editável só em jobs com
+  // `usaUpsertEmLote: true` (o upsert dos demais ainda é linha a linha, sem opção nenhuma de
+  // lote). `tamanhoLoteConfigurado` é `null` quando não há config salva; `tamanhoLoteEfetivo`
+  // é o número que de fato vale (o configurado, ou o default de upsertEmLote.ts) — mostrar os
+  // dois evita a tela sugerir que 1000 foi uma escolha do admin quando é só o default.
+  usaUpsertEmLote: boolean;
+  tamanhoLoteConfigurado: number | null;
+  tamanhoLoteEfetivo: number;
 }
 
 interface ItemRemovido {
@@ -264,11 +272,17 @@ export function SincronizacaoErp() {
   // seletor de campo dos predicados (Filtro Todos/Alterados) passou a listar os mesmos campos
   // com busca — "Filtro(Todos)" é a aba padrão agora, único requisito é `job.suportaFiltro`
   // (true nos 35 jobs hoje).
-  const [abaExpandida, setAbaExpandida] = useState<"removidos" | "filtroTodos" | "filtroAlterados">("filtroTodos");
+  const [abaExpandida, setAbaExpandida] = useState<"removidos" | "lote" | "filtroTodos" | "filtroAlterados">("filtroTodos");
   const [removidosPorJob, setRemovidosPorJob] = useState<Record<string, ItemRemovido[] | "carregando" | "erro">>({});
   // Modo de varredura sendo salvo agora (10/09/2026, porte do CaxHub_Atlas) — um jobName de
   // cada vez, mesmo padrão de `salvandoFiltro` abaixo.
   const [salvandoVarredura, setSalvandoVarredura] = useState<string | null>(null);
+  // Tamanho de lote sendo salvo agora (11/09/2026, porte do CaxHub_Atlas), mesmo espírito de
+  // salvandoVarredura. Valor do input enquanto o admin edita (chaveado por jobName) — só vira
+  // PUT de verdade ao clicar "Salvar" (número livre merece confirmação, diferente do <select>
+  // de varredura que salva a cada troca).
+  const [salvandoLote, setSalvandoLote] = useState<string | null>(null);
+  const [rascunhoLotePorJob, setRascunhoLotePorJob] = useState<Record<string, string>>({});
   // Chave composta `jobName:fonte` — permite guardar o resultado espelhado e o do ERP ao
   // mesmo tempo (trocar de fonte não descarta o que já foi buscado).
   const [camposPorJob, setCamposPorJob] = useState<Record<string, RespostaCampos | "carregando" | { erro: string }>>({});
@@ -465,7 +479,7 @@ export function SincronizacaoErp() {
   // Abre/fecha o painel expansível da linha numa aba específica. Clicar de novo na mesma
   // aba já aberta fecha o painel (mesmo toggle que "Sumidos" já tinha); clicar numa aba
   // diferente com o painel já aberto só troca de conteúdo, sem fechar.
-  function abrirPainel(job: JobSync, aba: "removidos" | "filtroTodos" | "filtroAlterados") {
+  function abrirPainel(job: JobSync, aba: "removidos" | "lote" | "filtroTodos" | "filtroAlterados") {
     if (expandido === job.jobName && abaExpandida === aba) {
       setExpandido(null);
       return;
@@ -605,6 +619,26 @@ export function SincronizacaoErp() {
       setErro(err.response?.data?.error ?? "Falha ao mudar o modo de varredura");
     } finally {
       setSalvandoVarredura(null);
+    }
+  }
+
+  // Muda o tamanho do lote de upsert DESSA tabela (11/09/2026, porte do CaxHub_Atlas: campo
+  // editável na tela em vez de deploy, mesmo padrão de salvarModoVarredura). `tamanhoLote:
+  // null` restaura o default de upsertEmLote.ts — apaga a config salva.
+  async function salvarTamanhoLote(job: JobSync, tamanhoLote: number | null) {
+    setSalvandoLote(job.jobName);
+    setErro(null);
+    try {
+      await axios.put(`/api/sync-erp/${job.jobName}/lote`, { tamanhoLote });
+      setRascunhoLotePorJob((r) => {
+        const { [job.jobName]: _descartado, ...resto } = r;
+        return resto;
+      });
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao mudar o tamanho do lote");
+    } finally {
+      setSalvandoLote(null);
     }
   }
 
@@ -1115,6 +1149,16 @@ export function SincronizacaoErp() {
                         >
                           Removidos
                         </button>
+                        <button
+                          onClick={() => abrirPainel(job, "lote")}
+                          className={`-mb-px border-b-2 pb-1.5 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
+                            abaExpandida === "lote"
+                              ? "border-primary text-primary"
+                              : "border-transparent text-muted hover:text-foreground"
+                          }`}
+                        >
+                          Lote
+                        </button>
                         {job.suportaFiltro && (
                           <button
                             onClick={() => abrirPainel(job, "filtroTodos")}
@@ -1253,6 +1297,56 @@ export function SincronizacaoErp() {
                               ))}
                             </ul>
                           )}
+                        </>
+                      )}
+                      {abaExpandida === "lote" && (
+                        <>
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="text-[11.5px] text-muted">Tamanho do lote de upsert:</span>
+                            <input
+                              type="number"
+                              min={1}
+                              disabled={!job.usaUpsertEmLote || salvandoLote === job.jobName}
+                              value={rascunhoLotePorJob[job.jobName] ?? String(job.tamanhoLoteConfigurado ?? "")}
+                              onChange={(e) =>
+                                setRascunhoLotePorJob((r) => ({ ...r, [job.jobName]: e.target.value }))
+                              }
+                              placeholder={String(job.tamanhoLoteEfetivo)}
+                              className="w-28 rounded-md border border-border bg-surface px-2 py-1 text-[12.5px] text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            />
+                            <button
+                              onClick={() => {
+                                const bruto = rascunhoLotePorJob[job.jobName];
+                                const numero = bruto != null && bruto.trim() !== "" ? Number(bruto) : null;
+                                salvarTamanhoLote(job, numero);
+                              }}
+                              disabled={!job.usaUpsertEmLote || salvandoLote === job.jobName || rascunhoLotePorJob[job.jobName] == null}
+                              className="rounded-md border border-border px-2 py-1 text-[11px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Salvar
+                            </button>
+                            {job.tamanhoLoteConfigurado != null && (
+                              <button
+                                onClick={() => salvarTamanhoLote(job, null)}
+                                disabled={salvandoLote === job.jobName}
+                                className="rounded-md border border-border px-2 py-1 text-[11px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                Restaurar padrão
+                              </button>
+                            )}
+                            {salvandoLote === job.jobName && <span className="text-[11px] text-muted">salvando...</span>}
+                          </div>
+                          <p className="text-[11.5px] text-muted">
+                            {job.usaUpsertEmLote ? (
+                              <>
+                                Quantas linhas por <code>INSERT</code> — hoje vale{" "}
+                                <span className="font-mono text-foreground">{job.tamanhoLoteEfetivo}</span>
+                                {job.tamanhoLoteConfigurado == null ? " (padrão, sem configuração salva)." : " (configurado pela tela)."}
+                              </>
+                            ) : (
+                              "Esta tabela ainda não usa upsert em lote — o upsert é linha a linha, sem opção de lote aqui."
+                            )}
+                          </p>
                         </>
                       )}
                     </td>

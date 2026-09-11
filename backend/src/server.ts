@@ -82,6 +82,7 @@ import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
 import { carregarModosVarreduraAtivos } from "./sync/politicaVarredura";
+import { carregarTamanhosLoteAtivos } from "./sync/politicaLote";
 import { SYNC_JOBS } from "./sync/registry";
 
 garantirDiretorioUploads();
@@ -169,6 +170,15 @@ async function iniciar() {
     await carregarModosVarreduraAtivos();
   } catch (error) {
     console.error("[boot] falhou ao carregar modos de varredura — subindo com varredura desligada em tudo:", error instanceof Error ? error.message : error);
+  }
+
+  try {
+    await carregarTamanhosLoteAtivos();
+  } catch (error) {
+    console.error(
+      "[boot] falhou ao carregar tamanhos de lote configurados — subindo com o default (1000) em tudo:",
+      error instanceof Error ? error.message : error
+    );
   }
 
   app.listen(port, () => {

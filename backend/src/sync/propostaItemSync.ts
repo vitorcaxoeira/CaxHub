@@ -9,7 +9,9 @@ import { EVENTOS_AUDITORIA, ENTIDADES_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdPropostaItem } from "../audit/identidadeEntidade";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "propostas_itens-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -38,31 +40,116 @@ export interface PropostaItemRow {
   depexe?: number;
 }
 
+// Objeto tipado usado só pro diff de auditoria — ver mesmo raciocínio em propostaSync.ts.
+function dataTipada(row: PropostaItemRow, inicio: Date) {
+  return {
+    codemp: row.codemp, codpro: row.codpro, seqite: row.seqite, numprj: row.numprj, codser: row.codser,
+    qtdhor: row.qtdhor, valhor: row.valhor, despro: row.despro, entpro: row.entpro, codfpj: row.codfpj,
+    fatser: row.fatser, sitmot: row.sitmot, forfat: row.forfat, tipprj: row.tipprj, frmprj: row.frmprj,
+    sitprz: row.sitprz, atvpso: row.atvpso != null ? BigInt(row.atvpso) : null, depexe: row.depexe,
+    vistoEmSync: inicio, removidoEmSenior: null as Date | null,
+  };
+}
+
+// schema.prisma (PropostaItem): valhor Decimal(11,2), atvpso BigInt.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codpro", cast: "int" },
+  { nome: "seqite", cast: "int" },
+  { nome: "numprj", cast: "int" },
+  { nome: "codser", cast: "text" },
+  { nome: "qtdhor", cast: "int" },
+  { nome: "valhor", cast: "numeric" },
+  { nome: "despro", cast: "text" },
+  { nome: "entpro", cast: "text" },
+  { nome: "codfpj", cast: "int" },
+  { nome: "fatser", cast: "text" },
+  { nome: "sitmot", cast: "int" },
+  { nome: "forfat", cast: "int" },
+  { nome: "tipprj", cast: "int" },
+  { nome: "frmprj", cast: "int" },
+  { nome: "sitprz", cast: "int" },
+  { nome: "atvpso", cast: "bigint" },
+  { nome: "depexe", cast: "int" },
+];
+
+function linhaDe(row: PropostaItemRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codpro}-${row.seqite}`,
+    valores: [
+      String(row.codemp),
+      String(row.codpro),
+      String(row.seqite),
+      String(row.numprj),
+      row.codser,
+      row.qtdhor != null ? String(row.qtdhor) : null,
+      row.valhor != null ? row.valhor.toFixed(2) : null,
+      row.despro != null ? row.despro : null,
+      row.entpro != null ? row.entpro : null,
+      String(row.codfpj),
+      row.fatser != null ? row.fatser : null,
+      row.sitmot != null ? String(row.sitmot) : null,
+      row.forfat != null ? String(row.forfat) : null,
+      row.tipprj != null ? String(row.tipprj) : null,
+      row.frmprj != null ? String(row.frmprj) : null,
+      row.sitprz != null ? String(row.sitprz) : null,
+      row.atvpso != null ? String(row.atvpso) : null,
+      row.depexe != null ? String(row.depexe) : null,
+    ],
+  };
+}
+
 // Corpo do processamento extraído à parte de runPropostaItemSync() para poder ser
 // exercitado com linhas sintéticas (ver backend/prisma/verificarAceiteAuditoria.ts) sem
 // depender do webservice SOAP real — mesma lógica, sem mudança de comportamento. `inicio`
 // tem default pra não quebrar chamadas existentes que não passam — ver mesmo raciocínio em
 // propostaSync.ts.
-export async function processarLinhasPropostaItem(rows: PropostaItemRow[], inicio: Date = new Date()): Promise<void> {
-  for (const row of rows) {
-    const data = { codemp: row.codemp, codpro: row.codpro, seqite: row.seqite, numprj: row.numprj, codser: row.codser, qtdhor: row.qtdhor, valhor: row.valhor, despro: row.despro, entpro: row.entpro, codfpj: row.codfpj, fatser: row.fatser, sitmot: row.sitmot, forfat: row.forfat, tipprj: row.tipprj, frmprj: row.frmprj, sitprz: row.sitprz, atvpso: row.atvpso != null ? BigInt(row.atvpso) : null, depexe: row.depexe, ...carimbo(inicio) };
+//
+// HÍBRIDO (11/09/2026, porte do upsert em lote do CaxHub_Atlas) — mesmo raciocínio de
+// propostaSync.ts: linha SEM mudança de campo auditado vai pro upsertEmLote (caminho quente,
+// maioria numa sync incremental); linha NOVA ou com alteração continua upsert+evento na
+// MESMA transação, preservando a atomicidade só onde ela importa (auditoria).
+export async function processarLinhasPropostaItem(rows: PropostaItemRow[], inicio: Date = new Date()): Promise<{ msFetch: number; msEscrita: number; lotes: number }> {
+  if (rows.length === 0) return { msFetch: 0, msEscrita: 0, lotes: 0 };
 
-    const existente = await prisma.propostaItem.findUnique({
-      where: { codemp_codpro_seqite: { codemp: row.codemp, codpro: row.codpro, seqite: row.seqite } },
-    });
+  const inicioFetch = Date.now();
+  const existentes = await prisma.propostaItem.findMany({
+    where: { OR: rows.map((r) => ({ codemp: r.codemp, codpro: r.codpro, seqite: r.seqite })) },
+  });
+  const msFetch = Date.now() - inicioFetch;
+  const existentePorChave = new Map(existentes.map((e) => [`${e.codemp}-${e.codpro}-${e.seqite}`, e]));
+
+  const linhasSemMudanca: LinhaUpsert[] = [];
+  const linhasComMudanca: { row: PropostaItemRow; data: ReturnType<typeof dataTipada>; ehNovo: boolean; alteracoes: ReturnType<typeof diffCampos>["alteracoes"] }[] = [];
+
+  for (const row of rows) {
+    const existente = existentePorChave.get(`${row.codemp}-${row.codpro}-${row.seqite}`) ?? null;
+    const data = dataTipada(row, inicio);
     const ehNovo = existente === null;
     const { alteracoes, algumaMudanca } = diffCampos(CAMPOS_AUDITADOS_PROPOSTA_ITEM, existente, paraDiff(data));
 
+    if (!ehNovo && !algumaMudanca) {
+      linhasSemMudanca.push(linhaDe(row));
+    } else {
+      linhasComMudanca.push({ row, data, ehNovo, alteracoes });
+    }
+  }
+
+  const inicioEscrita = Date.now();
+  const resultado = await upsertEmLote(linhasSemMudanca, {
+    tabela: "propostas_itens",
+    colunas: COLUNAS,
+    colunasPk: ["codemp", "codpro", "seqite"],
+    carimbo: inicio,
+    tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+  });
+
+  for (const { row, data, ehNovo, alteracoes } of linhasComMudanca) {
     const upsert = prisma.propostaItem.upsert({
       where: { codemp_codpro_seqite: { codemp: row.codemp, codpro: row.codpro, seqite: row.seqite } },
       update: data,
       create: data,
     });
-
-    if (!ehNovo && !algumaMudanca) {
-      await upsert;
-      continue;
-    }
 
     const correlationId = randomUUID();
     const entidadeId = entidadeIdPropostaItem(row.codemp, row.codpro, row.seqite);
@@ -85,6 +172,9 @@ export async function processarLinhasPropostaItem(rows: PropostaItemRow[], inici
 
     await prisma.$transaction(operacoes);
   }
+  const msEscrita = Date.now() - inicioEscrita;
+
+  return { msFetch, msEscrita, lotes: resultado.lotes };
 }
 
 export async function runPropostaItemSync(): Promise<void> {
@@ -95,8 +185,10 @@ export async function runPropostaItemSync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetchSoap = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codpro", "seqite"])) as PropostaItemRow[];
-    await processarLinhasPropostaItem(rows, inicio);
+    const msFetchSoap = Date.now() - inicioFetchSoap;
+    const { msFetch, msEscrita, lotes } = await processarLinhasPropostaItem(rows, inicio);
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -116,7 +208,10 @@ export async function runPropostaItemSync(): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${rows.length} linhas em ${((msFetchSoap + msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${((msFetchSoap + msFetch) / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${lotes} lote(s))` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

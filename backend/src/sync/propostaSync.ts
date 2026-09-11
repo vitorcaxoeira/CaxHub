@@ -10,7 +10,9 @@ import { entidadeIdProposta } from "../audit/identidadeEntidade";
 import { sitproLabel } from "../domain/propostasDominio";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "propostas-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -77,34 +79,139 @@ export interface PropostaRow {
   fathrsdes?: string;
 }
 
+// Objeto tipado (datas como Date, numero como BigInt) usado só pro diff de auditoria — mesma
+// forma que `prisma.proposta.upsert` recebia antes da conversão pra lote. Casts de data
+// String(...).slice(0,10) (nunca `new Date(v)`) só existem na versão STRING pro upsertEmLote
+// (ver linhaDe), não aqui: o diff compara contra o valor já tipado que o Prisma devolve.
+function dataTipada(row: PropostaRow, inicio: Date) {
+  return {
+    codemp: row.codemp, codpro: row.codpro, codcli: row.codcli, qtdhor: row.qtdhor,
+    datpro: row.datpro != null ? new Date(row.datpro) : null, usuger: row.usuger, forate: row.forate,
+    sitpro: row.sitpro, horpro: row.horpro, tippro: row.tippro, dessol: row.dessol, consol: row.consol,
+    prarea: row.prarea, datenv: row.datenv != null ? new Date(row.datenv) : null,
+    datret: row.datret != null ? new Date(row.datret) : null, numprj: row.numprj,
+    datval: row.datval != null ? new Date(row.datval) : null, codfpj: row.codfpj, sispro: row.sispro,
+    despro: row.despro, numero: row.numero != null ? BigInt(row.numero) : null, obrfas: row.obrfas,
+    executor: row.executor, obssit: row.obssit, liqbru: row.liqbru, codccu: row.codccu, ctafin: row.ctafin,
+    clapro: row.clapro, areexe: row.areexe, idcom: row.idcom, codrep: row.codrep, forfat: row.forfat,
+    dscfpg: row.dscfpg, hispro: row.hispro, obspro: row.obspro,
+    preent: row.preent != null ? new Date(row.preent) : null, pripro: row.pripro, stapro: row.stapro,
+    tipven: row.tipven, ordemcns: row.ordemcns, sitmot: row.sitmot, tipprj: row.tipprj, frmprj: row.frmprj,
+    codlev2: row.codlev2, clifat: row.clifat, exipedcli: row.exipedcli, pedcli: row.pedcli,
+    forfatrdv: row.forfatrdv, modpro: row.modpro, forfatlev: row.forfatlev, numped: row.numped,
+    idbpm: row.idbpm, depexe: row.depexe, fathrsdes: row.fathrsdes,
+    vistoEmSync: inicio, removidoEmSenior: null as Date | null,
+  };
+}
+
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" }, { nome: "codpro", cast: "int" }, { nome: "codcli", cast: "int" },
+  { nome: "qtdhor", cast: "int" }, { nome: "datpro", cast: "date" }, { nome: "usuger", cast: "int" },
+  { nome: "forate", cast: "text" }, { nome: "sitpro", cast: "int" }, { nome: "horpro", cast: "int" },
+  { nome: "tippro", cast: "int" }, { nome: "dessol", cast: "text" }, { nome: "consol", cast: "text" },
+  { nome: "prarea", cast: "text" }, { nome: "datenv", cast: "date" }, { nome: "datret", cast: "date" },
+  { nome: "numprj", cast: "int" }, { nome: "datval", cast: "date" }, { nome: "codfpj", cast: "int" },
+  { nome: "sispro", cast: "int" }, { nome: "despro", cast: "text" }, { nome: "numero", cast: "bigint" },
+  { nome: "obrfas", cast: "text" }, { nome: "executor", cast: "int" }, { nome: "obssit", cast: "text" },
+  { nome: "liqbru", cast: "text" }, { nome: "codccu", cast: "text" }, { nome: "ctafin", cast: "int" },
+  { nome: "clapro", cast: "int" }, { nome: "areexe", cast: "int" }, { nome: "idcom", cast: "int" },
+  { nome: "codrep", cast: "int" }, { nome: "forfat", cast: "int" }, { nome: "dscfpg", cast: "text" },
+  { nome: "hispro", cast: "text" }, { nome: "obspro", cast: "text" }, { nome: "preent", cast: "date" },
+  { nome: "pripro", cast: "int" }, { nome: "stapro", cast: "int" }, { nome: "tipven", cast: "int" },
+  { nome: "ordemcns", cast: "int" }, { nome: "sitmot", cast: "int" }, { nome: "tipprj", cast: "int" },
+  { nome: "frmprj", cast: "int" }, { nome: "codlev2", cast: "int" }, { nome: "clifat", cast: "int" },
+  { nome: "exipedcli", cast: "text" }, { nome: "pedcli", cast: "text" }, { nome: "forfatrdv", cast: "int" },
+  { nome: "modpro", cast: "int" }, { nome: "forfatlev", cast: "int" }, { nome: "numped", cast: "int" },
+  { nome: "idbpm", cast: "int" }, { nome: "depexe", cast: "int" }, { nome: "fathrsdes", cast: "text" },
+];
+
+function n(v: number | undefined | null): string | null {
+  return v != null ? String(v) : null;
+}
+function t(v: string | undefined | null): string | null {
+  return v != null ? v : null;
+}
+function d(v: string | undefined | null): string | null {
+  // `String(...).slice(0,10)` pra data, nunca `new Date(v)` — mesmo cuidado de
+  // rateioLancamentoSync.ts.
+  return v != null ? String(v).slice(0, 10) : null;
+}
+
+function linhaDe(row: PropostaRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codpro}`,
+    valores: [
+      String(row.codemp), String(row.codpro), String(row.codcli), n(row.qtdhor), d(row.datpro), n(row.usuger),
+      t(row.forate), n(row.sitpro), n(row.horpro), n(row.tippro), t(row.dessol), t(row.consol), t(row.prarea),
+      d(row.datenv), d(row.datret), String(row.numprj), d(row.datval), String(row.codfpj), n(row.sispro),
+      t(row.despro), row.numero != null ? String(row.numero) : null, t(row.obrfas), n(row.executor), t(row.obssit),
+      t(row.liqbru), t(row.codccu), n(row.ctafin), n(row.clapro), n(row.areexe), String(row.idcom), String(row.codrep),
+      n(row.forfat), t(row.dscfpg), t(row.hispro), t(row.obspro), d(row.preent), n(row.pripro), n(row.stapro),
+      n(row.tipven), n(row.ordemcns), n(row.sitmot), n(row.tipprj), n(row.frmprj), n(row.codlev2), n(row.clifat),
+      t(row.exipedcli), t(row.pedcli), n(row.forfatrdv), n(row.modpro), n(row.forfatlev), String(row.numped),
+      n(row.idbpm), n(row.depexe), t(row.fathrsdes),
+    ],
+  };
+}
+
 // Corpo do processamento extraído à parte de runPropostaSync() para poder ser exercitado
 // com linhas sintéticas (ver backend/prisma/verificarAceiteAuditoria.ts) sem depender do
 // webservice SOAP real — mesma lógica, sem mudança de comportamento. `inicio` tem default
 // pra não quebrar chamadas existentes que não passam (o script de verificação, e
 // runPropostaSyncPorCodpro abaixo, que roda fora do fluxo de varredura) — nesses casos o
 // carimbo só documenta quando a linha foi vista, sem afetar nada além dela mesma.
-export async function processarLinhasProposta(rows: PropostaRow[], inicio: Date = new Date()): Promise<void> {
-  for (const row of rows) {
-    const data = { codemp: row.codemp, codpro: row.codpro, codcli: row.codcli, qtdhor: row.qtdhor, datpro: row.datpro != null ? new Date(row.datpro) : null, usuger: row.usuger, forate: row.forate, sitpro: row.sitpro, horpro: row.horpro, tippro: row.tippro, dessol: row.dessol, consol: row.consol, prarea: row.prarea, datenv: row.datenv != null ? new Date(row.datenv) : null, datret: row.datret != null ? new Date(row.datret) : null, numprj: row.numprj, datval: row.datval != null ? new Date(row.datval) : null, codfpj: row.codfpj, sispro: row.sispro, despro: row.despro, numero: row.numero != null ? BigInt(row.numero) : null, obrfas: row.obrfas, executor: row.executor, obssit: row.obssit, liqbru: row.liqbru, codccu: row.codccu, ctafin: row.ctafin, clapro: row.clapro, areexe: row.areexe, idcom: row.idcom, codrep: row.codrep, forfat: row.forfat, dscfpg: row.dscfpg, hispro: row.hispro, obspro: row.obspro, preent: row.preent != null ? new Date(row.preent) : null, pripro: row.pripro, stapro: row.stapro, tipven: row.tipven, ordemcns: row.ordemcns, sitmot: row.sitmot, tipprj: row.tipprj, frmprj: row.frmprj, codlev2: row.codlev2, clifat: row.clifat, exipedcli: row.exipedcli, pedcli: row.pedcli, forfatrdv: row.forfatrdv, modpro: row.modpro, forfatlev: row.forfatlev, numped: row.numped, idbpm: row.idbpm, depexe: row.depexe, fathrsdes: row.fathrsdes, ...carimbo(inicio) };
+//
+// HÍBRIDO (11/09/2026, porte do upsert em lote do CaxHub_Atlas): diferente dos jobs de
+// espelho puro, esta tabela gera evento de auditoria por linha ALTERADA (ver
+// audit/registrarEvento.ts) — não dá pra virar 100% lote sem perder a atomicidade
+// upsert+evento (um crash entre o lote e os eventos deixaria proposta gravada sem o evento
+// correspondente). Por isso: pré-busca os existentes de UMA vez (elimina o N+1 de
+// `findUnique` por linha, mesmo achado de rat-item-sync), calcula o diff em memória, e separa
+// em dois caminhos — linhas SEM mudança de campo auditado vão pro upsertEmLote (é a maioria
+// numa sync incremental, "caminho quente" já documentado abaixo); linhas NOVAS ou com
+// alteração continuam upsert+evento na MESMA transação, exatamente como antes, preservando a
+// garantia de atomicidade só onde ela importa.
+export async function processarLinhasProposta(rows: PropostaRow[], inicio: Date = new Date()): Promise<{ msFetch: number; msEscrita: number; lotes: number }> {
+  if (rows.length === 0) return { msFetch: 0, msEscrita: 0, lotes: 0 };
 
-    const existente = await prisma.proposta.findUnique({
-      where: { codemp_codpro: { codemp: row.codemp, codpro: row.codpro } },
-    });
+  const inicioFetch = Date.now();
+  const existentes = await prisma.proposta.findMany({
+    where: { OR: rows.map((r) => ({ codemp: r.codemp, codpro: r.codpro })) },
+  });
+  const msFetch = Date.now() - inicioFetch;
+  const existentePorChave = new Map(existentes.map((e) => [`${e.codemp}-${e.codpro}`, e]));
+
+  const linhasSemMudanca: LinhaUpsert[] = [];
+  const linhasComMudanca: { row: PropostaRow; data: ReturnType<typeof dataTipada>; ehNova: boolean; alteracoes: ReturnType<typeof diffCampos>["alteracoes"] }[] = [];
+
+  for (const row of rows) {
+    const existente = existentePorChave.get(`${row.codemp}-${row.codpro}`) ?? null;
+    const data = dataTipada(row, inicio);
     const ehNova = existente === null;
     const { alteracoes, algumaMudanca } = diffCampos(CAMPOS_AUDITADOS_PROPOSTA, existente, paraDiff(data));
 
+    if (!ehNova && !algumaMudanca) {
+      linhasSemMudanca.push(linhaDe(row));
+    } else {
+      linhasComMudanca.push({ row, data, ehNova, alteracoes });
+    }
+  }
+
+  const inicioEscrita = Date.now();
+  const resultado = await upsertEmLote(linhasSemMudanca, {
+    tabela: "propostas",
+    colunas: COLUNAS,
+    colunasPk: ["codemp", "codpro"],
+    carimbo: inicio,
+    tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+  });
+
+  for (const { row, data, ehNova, alteracoes } of linhasComMudanca) {
     const upsert = prisma.proposta.upsert({
       where: { codemp_codpro: { codemp: row.codemp, codpro: row.codpro } },
       update: data,
       create: data,
     });
-
-    if (!ehNova && !algumaMudanca) {
-      // Caminho quente: maioria das linhas de uma sync incremental não muda campo
-      // monitorado — evita o overhead de uma transação própria por linha.
-      await upsert;
-      continue;
-    }
 
     const correlationId = randomUUID(); // um UUID por linha alterada, não por execução da sync
     const entidadeId = entidadeIdProposta(row.codemp, row.codpro);
@@ -167,6 +274,9 @@ export async function processarLinhasProposta(rows: PropostaRow[], inicio: Date 
 
     await prisma.$transaction(operacoes);
   }
+  const msEscrita = Date.now() - inicioEscrita;
+
+  return { msFetch, msEscrita, lotes: resultado.lotes };
 }
 
 export async function runPropostaSync(): Promise<void> {
@@ -177,8 +287,10 @@ export async function runPropostaSync(): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetchSoap = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "codpro"])) as PropostaRow[];
-    await processarLinhasProposta(rows, inicio);
+    const msFetchSoap = Date.now() - inicioFetchSoap;
+    const { msFetch, msEscrita, lotes } = await processarLinhasProposta(rows, inicio);
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -198,7 +310,10 @@ export async function runPropostaSync(): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${rows.length} linhas em ${((msFetchSoap + msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${((msFetchSoap + msFetch) / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${lotes} lote(s))` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

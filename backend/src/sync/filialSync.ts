@@ -4,7 +4,9 @@ import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
-import { carimbo, executarVarreduraDoJob } from "./varrerRemovidos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "filial-sync";
 export const CRON_EXPR = "10 3 * * *";
@@ -19,23 +21,38 @@ interface FilialRow {
   sigfil: string;
 }
 
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "codfil", cast: "int" },
+  { nome: "nomfil", cast: "text" },
+  { nome: "sigfil", cast: "text" },
+];
+
+function linhaDe(row: FilialRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.codfil}`,
+    valores: [String(row.codemp), String(row.codfil), row.nomfil, row.sigfil],
+  };
+}
+
 export async function runFilialSync(): Promise<void> {
   const inicio = new Date();
   // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
   const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoap(query)) as FilialRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      // `update`/`create` são objetos SEPARADOS aqui — carimbo capturado uma vez fora e
-      // espalhado nos dois literais.
-      const carimboAtual = carimbo(inicio);
-      await prisma.filial.upsert({
-        where: { codemp_codfil: { codemp: row.codemp, codfil: row.codfil } },
-        update: { nomfil: row.nomfil, sigfil: row.sigfil, ...carimboAtual },
-        create: { ...row, ...carimboAtual },
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "filial",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "codfil"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -46,7 +63,7 @@ export async function runFilialSync(): Promise<void> {
       jobName: JOB_NAME,
       tabelaSenior: extrairTabela(QUERY),
       inicio,
-      linhasProcessadas: rows.length,
+      linhasProcessadas: resultado.linhasProcessadas,
     });
 
     await prisma.syncLog.create({
@@ -54,7 +71,10 @@ export async function runFilialSync(): Promise<void> {
         jobName: JOB_NAME,
         query,
         status: "success",
-        message: varredura ? varredura.resumo : undefined,
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,
         varreduraInicio: varredura ? inicio : null,

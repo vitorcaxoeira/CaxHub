@@ -12,6 +12,8 @@ import { AuthenticatedRequest } from "../auth/middleware";
 import { DIMENSOES, dimensaoPorChave, jobsComDimensao, jobsSemDimensao } from "../sync/dimensoesFiltro";
 import { diagnosticarRecorte, marcarOrfaosDoRecorte, suportaMarcarRemovido } from "../sync/recorteRetroativo";
 import { modoConfiguradoDoJob, carregarModosVarreduraAtivos, ModoVarredura } from "../sync/politicaVarredura";
+import { tamanhoLoteConfigurado, carregarTamanhosLoteAtivos } from "../sync/politicaLote";
+import { TAMANHO_LOTE_PADRAO, TETO_PARAMS_PROTOCOLO } from "../sync/upsertEmLote";
 
 // Painel de administração dos jobs de sincronização Senior -> CaxHub: quando cada
 // tabela sincronizou pela última vez, quando roda de novo automaticamente, e uma ação
@@ -175,6 +177,13 @@ syncErpRouter.get("/", async (_req, res) => {
           // de verdade ao mudar de modo).
           varreduraModo: modoConfiguradoDoJob(job.jobName),
           varreduraDisponivel: suportaMarcarRemovido(job) && job.contarRemovidos != null,
+          // Tamanho de lote CONFIGURADO na tela (11/09/2026, porte do CaxHub_Atlas) — `null`
+          // quando não há configuração salva. `tamanhoLoteEfetivo` é o número que de fato vale
+          // (o configurado, ou o default de upsertEmLote.ts) — a tela mostra os dois pra
+          // deixar claro quando o valor exibido é só o default, não uma escolha do admin.
+          usaUpsertEmLote: job.usaUpsertEmLote,
+          tamanhoLoteConfigurado: tamanhoLoteConfigurado(job.jobName) ?? null,
+          tamanhoLoteEfetivo: tamanhoLoteConfigurado(job.jobName) ?? TAMANHO_LOTE_PADRAO,
           // Fase 3/4/6 do plano de filtros — true nos 35 jobs cujo `run()` já lê
           // `filtroDoJob()` (JOBS_COM_FILTRO em registry.ts). A tela usa isso pra mostrar as
           // abas Filtro(Todos)/Filtro(Alterados) só onde elas funcionam de verdade — a
@@ -268,6 +277,68 @@ syncErpRouter.put("/:jobName/varredura", async (req: AuthenticatedRequest, res) 
     res.json({ modo: modoNovo });
   } catch (error) {
     handleError(res, error, "varredura:put");
+  }
+});
+
+// PUT /:jobName/lote — muda o tamanho do lote de upsert DESSA tabela (11/09/2026, porte do
+// CaxHub_Atlas a pedido do Vitor: campo editável na tela em vez de deploy, mesmo padrão de
+// PUT /:jobName/varredura acima). Corpo `{ tamanhoLote: number | null }` — `null` restaura o
+// default de upsertEmLote.ts (apaga a config salva). Não existe "usar lote sim/não" como
+// campo separado: só faz sentido configurar isto em job com `usaUpsertEmLote: true` — nos
+// outros, o upsert ainda é linha a linha, sem opção nenhuma de lote (não é config faltando, é
+// código que ainda não foi escrito).
+syncErpRouter.put("/:jobName/lote", async (req: AuthenticatedRequest, res) => {
+  try {
+    const job = SYNC_JOBS.find((j) => j.jobName === req.params.jobName);
+    if (!job) {
+      res.status(404).json({ error: "Job não encontrado" });
+      return;
+    }
+    if (!job.usaUpsertEmLote) {
+      res.status(400).json({
+        error: `"${job.displayName}" ainda não usa upsert em lote — não é possível configurar o tamanho do lote aqui.`,
+      });
+      return;
+    }
+
+    const bruto = req.body?.tamanhoLote;
+
+    // `null` (ou ausente) restaura o default — apaga a config salva, se houver.
+    if (bruto == null) {
+      await prisma.configuracaoLote.deleteMany({ where: { jobName: job.jobName } });
+      await carregarTamanhosLoteAtivos();
+      res.json({ tamanhoLote: null, tamanhoLoteEfetivo: TAMANHO_LOTE_PADRAO });
+      return;
+    }
+
+    const tamanhoLote = Number(bruto);
+    if (!Number.isInteger(tamanhoLote) || tamanhoLote < 1) {
+      res.status(400).json({ error: `Tamanho de lote inválido — precisa ser um número inteiro de pelo menos 1.` });
+      return;
+    }
+
+    // Teto real desse job especificamente (número de colunas dele contra o teto de
+    // parâmetros do protocolo Postgres, ver upsertEmLote.ts) — sem isso, um valor grande
+    // demais seria aceito aqui e clampado em silêncio dentro de upsertEmLote(), e a tela
+    // mostraria um número que nunca foi o que de fato rodou.
+    const tetoDoJob = Math.floor(TETO_PARAMS_PROTOCOLO / job.colunas.length);
+    if (tamanhoLote > tetoDoJob) {
+      res.status(400).json({
+        error: `"${job.displayName}" tem ${job.colunas.length} coluna(s) — o maior lote possível é ${tetoDoJob} linhas (teto de parâmetros do protocolo do Postgres). Peça um valor até esse limite.`,
+      });
+      return;
+    }
+
+    await prisma.configuracaoLote.upsert({
+      where: { jobName: job.jobName },
+      update: { tamanhoLote, atualizadoPor: req.user?.userId ?? null },
+      create: { jobName: job.jobName, tamanhoLote, atualizadoPor: req.user?.userId ?? null },
+    });
+    await carregarTamanhosLoteAtivos();
+
+    res.json({ tamanhoLote, tamanhoLoteEfetivo: tamanhoLote });
+  } catch (error) {
+    handleError(res, error, "lote:put");
   }
 });
 
