@@ -37,13 +37,29 @@ async function requireAcessoAuditoria(req: AuthenticatedRequest, res: Response, 
 // AtividadeDetalhe.tsx) — mesmo recorte de "visualizar" já usado em atividades.ts/
 // alocacao.ts (podeExecutarAcao). Proposta/proposta_item continuam só pra admin/gestor,
 // mesmo via /entidade/:tipo/:id — "próprias atividades" no pedido original não inclui
-// a proposta inteira.
+// a proposta inteira. RAT (13/09/2026) ganhou regra própria, mais estrita que o atalho de
+// gestor usado pelas demais — ver o ramo dedicado dentro da função.
 async function podeVerEntidade(req: AuthenticatedRequest, entidadeTipo: string, entidadeId: string): Promise<boolean> {
   if (req.user!.role === "admin") return true;
 
   const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
   if (!user) return false;
   const contexto = await resolverContextoConsultor(user.email);
+
+  // RAT tem regra PRÓPRIA, checada ANTES do atalho genérico abaixo (de propósito: RAT é dado
+  // sensível por consultor, mesmo motivo já documentado em ratVisualizacao.ts — "gerencia
+  // QUALQUER departamento" seria mais frouxo que a regra que já vale pra abrir a página da RAT
+  // em si). Mesma condição de podeVerRat (rats.ts/ratVisualizacao.ts): dono, gestor do depexe
+  // ESPECÍFICO da RAT, ou admin (já tratado acima).
+  if (entidadeTipo === "rat") {
+    const ratId = Number(entidadeId);
+    if (!Number.isFinite(ratId)) return false;
+    const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+    if (!rat) return false;
+    if (contexto.consultor?.codfor === rat.codfor) return true;
+    return rat.depexe != null && contexto.departamentosGerenciados.includes(rat.depexe);
+  }
+
   if (contexto.departamentosGerenciados.length > 0) return true;
 
   if (!["atividade", "alocacao", "kanban_card"].includes(entidadeTipo)) return false;

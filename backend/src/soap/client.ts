@@ -698,6 +698,101 @@ export async function manterItemDespesaViaSoap(payload: ManterItemDespesaPayload
   };
 }
 
+// ---------------------------------------------------------------------------
+// Canal de ESCRITA — operação `fecharRAT`, do mesmo serviço. Publicada em 13/09/2026.
+//
+// Fecha uma RAT (USU_TE777RAT) diretamente no Senior — muda a situação dela pra "Fechado"
+// (USU_LSITRAT=1) do lado de lá. Contrato mais simples que os outros três: só `codEmp` +
+// `numRat`, sem lista de itens/despesas (a operação atua sobre o documento inteiro, não sobre
+// linhas dele).
+//
+// AINDA NÃO confirmado contra o `?wsdl`/`?xsd` reais (mesmo cuidado já registrado em
+// `ManterItemDespesa` acima) — o que está garantido pelo publicador (Vitor) é só o semântico de
+// `statusProcesso` (0=Erro, 1=Sucesso); nome do elemento de resposta (`ns2:fecharRATResponse`)
+// e o formato exato de `mensagemProcesso`/`erroExecucao` seguem por hipótese o mesmo padrão das
+// outras 3 operações — confirmar no primeiro envio real (ver prisma/verificarEnvioFechamento.ts)
+// e ajustar aqui se vier diferente.
+// ---------------------------------------------------------------------------
+
+export interface FecharRatPayload {
+  codEmp: number;
+  numRat: number;
+}
+
+// Sem `resultados[]`: a operação responde pela RAT inteira, não item por item.
+export interface FecharRatResposta {
+  /** 1 = sucesso (confirmado com o publicador do serviço). */
+  statusProcesso: number | null;
+  mensagemProcesso: string | null;
+  erroExecucao: string | null;
+}
+
+/** Monta o XML que seria enviado, sem enviar — mesmo uso dos irmãos acima. */
+export function montarEnvelopeFecharRat(payload: FecharRatPayload, user: string, password: string): string {
+  const parametersXml = `<codEmp>${payload.codEmp}</codEmp>` + `<numRat>${payload.numRat}</numRat>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ser:fecharRAT>
+      <user>${escapeXml(user)}</user>
+      <password>${escapeXml(password)}</password>
+      <encryption>0</encryption>
+      <parameters>${parametersXml}</parameters>
+    </ser:fecharRAT>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+}
+
+/**
+ * Fecha uma RAT no Senior via `fecharRAT`.
+ *
+ * Mesmo contrato de responsabilidade dos irmãos: não decide sucesso/fracasso de negócio, só
+ * normaliza a resposta — quem decide é o chamador (sync/outboxSenior.ts).
+ */
+export async function fecharRatViaSoap(payload: FecharRatPayload): Promise<FecharRatResposta> {
+  const soapUrl = process.env.SOAP_URL;
+  const soapUser = process.env.SOAP_USER;
+  const soapPassword = process.env.SOAP_PASSWORD;
+
+  if (!soapUrl || !soapUser || !soapPassword) {
+    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
+  }
+
+  const endpoint = soapUrl.replace(/\?wsdl$/i, "");
+  const envelope = montarEnvelopeFecharRat(payload, soapUser, soapPassword);
+
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "fecharRAT"));
+    });
+
+  const parsed = parser.parse(response.data);
+  // Nome do elemento de resposta — AINDA NÃO confirmado contra uma chamada real, ver comentário
+  // do bloco acima.
+  const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:fecharRATResponse"]?.result;
+
+  if (!result) {
+    throw new Error("Resposta SOAP de fecharRAT em formato inesperado — ajustar parsing em soap/client.ts");
+  }
+
+  const erroExecucao = textoOuNulo(result.erroExecucao);
+  if (erroExecucao) {
+    throw new Error(`Erro no serviço Senior (fecharRAT): ${erroExecucao}`);
+  }
+
+  return {
+    statusProcesso: numeroOuNulo(result.statusProcesso),
+    mensagemProcesso: textoOuNulo(result.mensagemProcesso),
+    erroExecucao,
+  };
+}
+
 const PAGE_SIZE = 10000;
 
 /**

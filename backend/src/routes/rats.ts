@@ -80,6 +80,17 @@ function podeVerRat(role: string, contexto: Contexto, rat: { codfor: number; dep
   return rat.depexe != null && contexto.departamentosGerenciados.includes(rat.depexe);
 }
 
+// Quem pode fechar a RAT: a mesma regra de aprovar (admin ou gestor do depexe específico dela)
+// OU o próprio dono (consultor logado === Rat.codfor) — liberado em 13/09/2026, a pedido do
+// Vitor: um consultor cuja RAT pertence a um departamento que ele não gerencia (comum quando
+// atua em projeto de outro time) ficava sem conseguir fechar a própria RAT. Diferente de
+// "aprovar" (PATCH /:id/aprovar), que continua só gestor/admin — fechar e aprovar têm regras
+// próprias de propósito (ver comentário de podeFechar em GET / mais abaixo).
+function podeFecharRat(role: string, contexto: Contexto, rat: { codfor: number; depexe: number | null }): boolean {
+  if (contexto.consultor?.codfor === rat.codfor) return true;
+  return podeExecutarAcao(role, contexto, "aprovar", { depexe: rat.depexe ?? -1, codfor: rat.codfor });
+}
+
 // Itens (campos mínimos) + status agregado de integração com o Senior de um conjunto de RATs.
 // Extraído (28/08/2026) pra poder rodar em dois momentos diferentes de GET / conforme o filtro
 // de integração está ativo ou não — ver comentário no handler. `select` explícito (não
@@ -350,6 +361,9 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
           totalMinutos,
           podeAprovar:
             r.sitrat === 9 && podeExecutarAcao(role, contexto, "aprovar", { depexe: r.depexe ?? -1, codfor: r.codfor }),
+          // Fechar aceita mais gente que aprovar (dono da RAT também, não só gestor/admin) —
+          // ver podeFecharRat.
+          podeFechar: r.sitrat === 9 && podeFecharRat(role, contexto, r),
           todosComObservacao: itensDaRat.length > 0 && itensDaRat.every((item) => !!item.desati?.trim()),
           integracao,
           integracaoLabel: integracaoErpLabel(integracao),
@@ -706,6 +720,71 @@ async function desvincularRatAusenteNoSenior(
   return true;
 }
 
+// Fase 2 de "Sinc. ERP": reenvia pro Senior todo item de atividade/despesa desta RAT que ainda
+// não está lá — "falha" (pendência com erro, inclui bloqueado — reseta e tenta de novo) ou
+// "pendente" (nunca enfileirado). Item/despesa "enviando" de verdade (em voo, ou recém-
+// enfileirado sem erro ainda) fica de fora: vai fluir sozinho no próximo ciclo da fila, reenviar
+// aqui não ajudaria em nada. Aguardado (não fire-and-forget), escopado só aos ids desta RAT via
+// `apenasIds` (nunca a fila inteira do sistema, ver comentário em processarFilaSincronizacao).
+//
+// Extraído (13/09/2026) de dentro de POST /:id/sincronizar pra ser reaproveitado também pelo
+// fechamento de RAT (regra 2: RAT com integração != Sincronizado precisa disso ANTES de poder
+// fechar) — mesmo espírito de prepararReenvioItem já ter sido extraído antes pelo mesmo motivo.
+async function reenviarPendenciasDaRat(
+  rat: { id: number; codemp: number; numrat: number | null }
+): Promise<{ itensReenviados: number; despesasReenviadas: number }> {
+  const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { rat: true, sessoes: true } });
+  const atividadeIdsDaRat = [...new Set(itensDaRat.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
+  const pendenciasDaRat =
+    atividadeIdsDaRat.length > 0
+      ? await prisma.sincronizacaoPendente.findMany({
+          where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIdsDaRat } },
+          orderBy: { id: "desc" },
+        })
+      : [];
+  const pendenciaPorRatItem = new Map<number, (typeof pendenciasDaRat)[number]>();
+  for (const pendencia of pendenciasDaRat) {
+    const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
+    if (Number.isFinite(ratItemId) && !pendenciaPorRatItem.has(ratItemId)) {
+      pendenciaPorRatItem.set(ratItemId, pendencia);
+    }
+  }
+
+  let itensReenviados = 0;
+  const pendenciaIdsParaProcessar: number[] = [];
+  for (const item of itensDaRat) {
+    if (item.numrat != null) continue; // já sincronizado, nada a reenviar
+    const pendencia = pendenciaPorRatItem.get(item.id);
+    if (pendencia && !pendencia.ultimoErro) continue; // enviando de verdade, deixa fluir sozinho
+    const resultado = await prepararReenvioItem(item, pendencia);
+    if (resultado.ok) {
+      pendenciaIdsParaProcessar.push(resultado.pendenciaId);
+      itensReenviados += 1;
+    }
+  }
+  if (pendenciaIdsParaProcessar.length > 0) {
+    await processarFilaSincronizacao({ apenasIds: pendenciaIdsParaProcessar });
+  }
+
+  // Mesma regra acima, na fila própria de despesa (sync/outboxSeniorDespesa.ts): "bloqueado" é
+  // resetado antes (reprocessarDespesa zera tentativas), "pendente" só precisa entrar no
+  // apenasIds. "enviando"/"enviado" ficam de fora.
+  const pendenciasDespesa =
+    rat.numrat != null
+      ? await prisma.sincronizacaoPendenteDespesa.findMany({
+          where: { despesa: { codemp: rat.codemp, numrat: rat.numrat }, status: { in: ["pendente", "bloqueado"] } },
+        })
+      : [];
+  for (const pendencia of pendenciasDespesa) {
+    if (pendencia.status === "bloqueado") await reprocessarDespesa(pendencia.id);
+  }
+  if (pendenciasDespesa.length > 0) {
+    await processarFilaDespesas({ apenasIds: pendenciasDespesa.map((p) => p.id) });
+  }
+
+  return { itensReenviados, despesasReenviadas: pendenciasDespesa.length };
+}
+
 // POST /:id/sincronizar — "Sinc. ERP": reorganizada (28/08/2026) em duas fases; despesas de
 // viagem entraram na dança em 07/09/2026 (pedido do Vitor: "pode ter havido alteração no ERP
 // que precisa vir pro nosso lado", inclusive despesa — mesmas regras do apontamento).
@@ -775,57 +854,9 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       desvinculados = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
     }
 
-    // Fase 2: recarrega os itens (pós fase 1, já refletindo qualquer desvinculação) + a
-    // pendência mais recente de cada um — mesmo casamento em memória de GET /:id/itens.
-    const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { rat: true, sessoes: true } });
-    const atividadeIdsDaRat = [...new Set(itensDaRat.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
-    const pendenciasDaRat =
-      atividadeIdsDaRat.length > 0
-        ? await prisma.sincronizacaoPendente.findMany({
-            where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIdsDaRat } },
-            orderBy: { id: "desc" },
-          })
-        : [];
-    const pendenciaPorRatItem = new Map<number, (typeof pendenciasDaRat)[number]>();
-    for (const pendencia of pendenciasDaRat) {
-      const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
-      if (Number.isFinite(ratItemId) && !pendenciaPorRatItem.has(ratItemId)) {
-        pendenciaPorRatItem.set(ratItemId, pendencia);
-      }
-    }
-
-    let itensReenviados = 0;
-    const pendenciaIdsParaProcessar: number[] = [];
-    for (const item of itensDaRat) {
-      if (item.numrat != null) continue; // já sincronizado, nada a reenviar
-      const pendencia = pendenciaPorRatItem.get(item.id);
-      if (pendencia && !pendencia.ultimoErro) continue; // enviando de verdade, deixa fluir sozinho
-      const resultado = await prepararReenvioItem(item, pendencia);
-      if (resultado.ok) {
-        pendenciaIdsParaProcessar.push(resultado.pendenciaId);
-        itensReenviados += 1;
-      }
-    }
-    if (pendenciaIdsParaProcessar.length > 0) {
-      await processarFilaSincronizacao({ apenasIds: pendenciaIdsParaProcessar });
-    }
-
-    // Fase 2 (despesa) — mesma regra acima, na fila própria de despesa (sync/
-    // outboxSeniorDespesa.ts): "bloqueado" é resetado antes (reprocessarDespesa zera
-    // tentativas), "pendente" só precisa entrar no apenasIds. "enviando"/"enviado" ficam de
-    // fora.
-    const pendenciasDespesa =
-      rat.numrat != null
-        ? await prisma.sincronizacaoPendenteDespesa.findMany({
-            where: { despesa: { codemp: rat.codemp, numrat: rat.numrat }, status: { in: ["pendente", "bloqueado"] } },
-          })
-        : [];
-    for (const pendencia of pendenciasDespesa) {
-      if (pendencia.status === "bloqueado") await reprocessarDespesa(pendencia.id);
-    }
-    if (pendenciasDespesa.length > 0) {
-      await processarFilaDespesas({ apenasIds: pendenciasDespesa.map((p) => p.id) });
-    }
+    // Fase 2: reenvia itens de atividade/despesa pendentes ou com erro (ver
+    // reenviarPendenciasDaRat acima, extraída pra ser reaproveitada pelo fechamento de RAT).
+    const { itensReenviados, despesasReenviadas } = await reenviarPendenciasDaRat(rat);
 
     // Status agregado pós-tentativa, pra tela montar o aviso final sem precisar de mais uma
     // chamada — reaproveita o mesmo helper de GET / (buscarItensEIntegracao), escopado só a
@@ -839,13 +870,312 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       desvinculados: desvinculados.length,
       seqratsDesvinculados: desvinculados,
       itensReenviados,
-      despesasReenviadas: pendenciasDespesa.length,
+      despesasReenviadas,
       integracao,
       integracaoLabel: integracaoErpLabel(integracao),
       integracaoTone: integracaoErpTone(integracao),
     });
   } catch (error) {
     handleError(res, error, "sincronizar");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Fechamento de RAT — POST /:id/fechar, POST /fechar-lote, GET /:id/fechamento, GET
+// /elegiveis-fechamento. Mesma "ideologia" da confirmação de apontamentos
+// (routes/apontamentos.ts, POST /confirmar[-lote]): enfileira no outbox (assíncrono, com
+// retry) e a tela acompanha por polling — não é uma chamada SOAP síncrona dentro do request.
+// Publicada em 13/09/2026 (porta `fecharRAT` do Senior, ver soap/client.ts).
+//
+// Regras de negócio (definidas com o Vitor):
+//   1. Só RAT com sitrat=9 (Digitado) entra no fechamento.
+//   2. RAT com integração != "sincronizado" precisa reenviar itens/despesas pendentes/com erro
+//      ANTES (reenviarPendenciasDaRat, acima) — só segue pro fechamento se, depois do reenvio,
+//      tudo tiver sucesso.
+//   3. Admin, gestor do departamento da RAT, OU o próprio dono (consultor da RAT) — ver
+//      podeFecharRat. Ampliado em 13/09/2026 (antes só admin/gestor, mesma regra de aprovar;
+//      dono de RAT de outro departamento ficava sem conseguir fechar a própria RAT).
+// ---------------------------------------------------------------------------
+
+type ResultadoPreparoFechamento =
+  | { ok: true; pendenciaId: number }
+  | { ok: false; status: 400 | 403 | 409; motivo: string; integracao?: IntegracaoErpStatus };
+
+// Resolve permissão + regras 1/2 acima e enfileira a pendência `fechar_rat`. Compartilhada
+// entre POST /:id/fechar (uma RAT) e POST /fechar-lote (várias) — mesmo espírito de
+// prepararReenvioItem já ser reaproveitado por /:id/sincronizar e pelo reenvio individual de
+// apontamento.
+async function prepararFechamentoRat(
+  rat: import("@prisma/client").Rat,
+  role: string,
+  contexto: Contexto,
+  req: AuthenticatedRequest
+): Promise<ResultadoPreparoFechamento> {
+  if (!podeFecharRat(role, contexto, rat)) {
+    return { ok: false, status: 403, motivo: "Sem permissão para fechar esta RAT" };
+  }
+  if (rat.sitrat !== 9) {
+    return { ok: false, status: 400, motivo: "Só é possível fechar uma RAT que esteja Digitada" };
+  }
+  if (rat.numrat == null) {
+    return { ok: false, status: 400, motivo: "Esta RAT ainda não tem número do ERP — sincronize antes de fechar" };
+  }
+
+  // Pendência já em voo pra esta RAT — o `ratId` mora dentro do payload JSON (a pendência não
+  // tem coluna própria pra ele, mesmo casamento em memória usado no resto do arquivo). Volume
+  // de "fechar_rat" "enviando" ao mesmo tempo no sistema inteiro é sempre pequeno (a ação não é
+  // disparada em massa fora de "Fechar Todos", e mesmo esse é sequencial), então o scan aqui é
+  // barato.
+  const emVoo = await prisma.sincronizacaoPendente.findMany({
+    where: { tipo: "fechar_rat", status: "enviando" },
+    select: { payload: true },
+  });
+  const jaEmAndamento = emVoo.some((p) => Number((p.payload as { ratId?: number })?.ratId) === rat.id);
+  if (jaEmAndamento) {
+    return { ok: false, status: 409, motivo: "Fechamento já em andamento para esta RAT" };
+  }
+
+  let { integracaoPorRat } = await buscarItensEIntegracao([rat]);
+  let integracao = integracaoPorRat.get(rat.id) ?? "pendente";
+  if (integracao !== "sincronizado") {
+    await reenviarPendenciasDaRat(rat);
+    ({ integracaoPorRat } = await buscarItensEIntegracao([rat]));
+    integracao = integracaoPorRat.get(rat.id) ?? "pendente";
+    if (integracao !== "sincronizado") {
+      return {
+        ok: false,
+        status: 409,
+        motivo:
+          "Há item(ns)/despesa(s) pendente(s) ou com falha no envio ao ERP. Foram reenviados agora, mas ainda " +
+          "não terminaram com sucesso — verifique a sincronização desta RAT e tente fechar de novo.",
+        integracao,
+      };
+    }
+  }
+
+  const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { sessoes: true } });
+  if (itensDaRat.length === 0) {
+    return { ok: false, status: 400, motivo: "RAT sem nenhum item — nada a fechar" };
+  }
+  const atividadeId = itensDaRat.map((i) => i.sessoes[0]?.atividadeId).find((v): v is number => v != null);
+  if (atividadeId == null) {
+    return { ok: false, status: 400, motivo: "RAT sem nenhum item vinculado a uma sessão de execução — nada a fechar" };
+  }
+
+  await criarEventoAuditoria({
+    origem: "tela",
+    usuarioId: req.user!.userId,
+    codemp: rat.codemp,
+    codpro: rat.codpro,
+    entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+    entidadeId: entidadeIdRat(rat.id),
+    entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+    eventoTipo: EVENTOS_AUDITORIA.RAT_FECHAMENTO_SOLICITADO,
+    alteracoes: null,
+    metadata: { numrat: rat.numrat },
+    correlationId: req.correlationId!,
+  });
+
+  // Um item representativo basta: a operação `fecharRAT` atua sobre o documento inteiro
+  // (codEmp+numRat), não item por item — diferente de aprovar_rat, que enfileirava um por
+  // RatItem porque não havia (e ainda não há) canal nenhum publicado pra ele.
+  const pendenciaId = await enfileirar(atividadeId, "fechar_rat", { ratId: rat.id, codemp: rat.codemp, numrat: rat.numrat });
+
+  return { ok: true, pendenciaId };
+}
+
+// POST /:id/fechar — fecha uma única RAT.
+ratsRouter.post("/:id/fechar", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    const rat = await prisma.rat.findUnique({ where: { id } });
+    if (!rat || !podeVerRat(role, contexto, rat)) {
+      res.status(404).json({ error: "RAT não encontrada" });
+      return;
+    }
+
+    const resultado = await prepararFechamentoRat(rat, role, contexto, req);
+    if (!resultado.ok) {
+      res.status(resultado.status).json({ error: resultado.motivo, integracao: resultado.integracao });
+      return;
+    }
+
+    res.json({ ok: true, pendenciaId: resultado.pendenciaId });
+  } catch (error) {
+    handleError(res, error, "fechar");
+  }
+});
+
+// GET /:id/fechamento — status da pendência de fechamento mais recente desta RAT, pro
+// acompanhamento por polling da tela (mesma ideia de GET /apontamentos/envio/:ratItemId).
+ratsRouter.get("/:id/fechamento", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const rat = await prisma.rat.findUnique({ where: { id } });
+    if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+      res.status(404).json({ error: "RAT não encontrada" });
+      return;
+    }
+
+    const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { sessoes: true } });
+    const atividadeIds = [...new Set(itensDaRat.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
+    const pendencia =
+      atividadeIds.length > 0
+        ? await prisma.sincronizacaoPendente.findFirst({
+            where: { tipo: "fechar_rat", atividadeId: { in: atividadeIds } },
+            orderBy: { id: "desc" },
+          })
+        : null;
+
+    res.json({
+      status: pendencia?.status ?? null,
+      erro: pendencia?.ultimoErro ?? null,
+      // Relido fresco: se o job já processou a pendência, sitrat já reflete o write-back.
+      sitrat: rat.sitrat,
+      sitratLabel: sitratLabel(rat.sitrat),
+    });
+  } catch (error) {
+    handleError(res, error, "fechamento");
+  }
+});
+
+// POST /fechar-lote — "Fechar Todos": mesmas regras de POST /:id/fechar, uma RAT por vez.
+// Sequencial (não Promise.all) — mesmo motivo de POST /apontamentos/confirmar-lote.
+ratsRouter.post("/fechar-lote", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    const ratIds: number[] = Array.isArray(req.body?.ratIds)
+      ? req.body.ratIds.map((v: unknown) => Number(v)).filter((v: number) => Number.isFinite(v))
+      : [];
+    if (ratIds.length === 0) {
+      res.status(400).json({ error: "Nenhuma RAT informada" });
+      return;
+    }
+
+    const enfileirados: number[] = [];
+    const falhas: { ratId: number; erro: string }[] = [];
+    for (const ratId of ratIds) {
+      // Cada RAT resolve pro seu próprio resultado — um erro inesperado numa (bug, timeout,
+      // RAT em estado anômalo) não pode abortar o lote inteiro e deixar as RATs seguintes
+      // sem sequer serem tentadas (mesmo espírito de POST /confirmar-lote em
+      // apontamentos.ts: cada item vira falha própria, nunca propaga pro laço). Bug real
+      // encontrado em 13/09/2026: sem este try/catch, a 2ª RAT de um lote de 2 nunca chegava
+      // a ser processada porque uma exceção na 1ª derrubava a requisição inteira antes do
+      // laço continuar.
+      try {
+        const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+        if (!rat || !podeVerRat(role, contexto, rat)) {
+          falhas.push({ ratId, erro: "RAT não encontrada" });
+          continue;
+        }
+        const resultado = await prepararFechamentoRat(rat, role, contexto, req);
+        if (resultado.ok) {
+          enfileirados.push(ratId);
+        } else {
+          falhas.push({ ratId, erro: resultado.motivo });
+        }
+      } catch (erro) {
+        falhas.push({ ratId, erro: erro instanceof Error ? erro.message : String(erro) });
+      }
+    }
+
+    res.json({ enfileirados, falhas });
+  } catch (error) {
+    handleError(res, error, "fechar-lote");
+  }
+});
+
+// GET /elegiveis-fechamento — todas as RATs visíveis com sitrat=9 e permissão de fechar, SEM
+// paginação (mesmo espírito de GET /opcoes-filtro) — é o que alimenta o resumo do "Fechar
+// Todos" sem ficar restrito à página atual de GET /.
+ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    let rats = await ratsVisiveis(role, contexto);
+    rats = rats.filter((r) => r.sitrat === 9 && podeFecharRat(role, contexto, r));
+    if (rats.length === 0) {
+      res.json({ rats: [] });
+      return;
+    }
+
+    const chavesProposta = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
+    const propostas =
+      chavesProposta.length > 0
+        ? await prisma.proposta.findMany({
+            where: {
+              OR: chavesProposta.map((chave) => {
+                const [codemp, codpro] = chave.split("-").map(Number);
+                return { codemp, codpro };
+              }),
+            },
+            include: { cliente: true },
+          })
+        : [];
+    const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
+
+    const codforsUnicos = [...new Set(rats.map((r) => r.codfor))];
+    const consultores =
+      codforsUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } }) : [];
+    const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
+
+    // Só o total de minutos, sem o custo de despesa/pendência de buscarItensEIntegracao — a
+    // integração não faz parte do critério de elegibilidade (regra 1: só sitrat importa aqui).
+    const ratIds = rats.map((r) => r.id);
+    const itens = await prisma.ratItem.findMany({ where: { ratId: { in: ratIds } }, select: { ratId: true, horini: true, horfim: true } });
+    const minutosPorRat = new Map<number, number>();
+    for (const item of itens) {
+      const minutos = item.horini != null && item.horfim != null ? item.horfim - item.horini : 0;
+      minutosPorRat.set(item.ratId, (minutosPorRat.get(item.ratId) ?? 0) + minutos);
+    }
+
+    res.json({
+      rats: rats.map((r) => {
+        const proposta = r.codpro != null ? propostaPorChave.get(`${r.codemp}-${r.codpro}`) : undefined;
+        const consultor = consultorPorCodfor.get(r.codfor);
+        return {
+          id: r.id,
+          numrat: r.numrat,
+          codpro: r.codpro,
+          cliente: proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : null,
+          consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${r.codfor}`,
+          totalMinutos: minutosPorRat.get(r.id) ?? 0,
+        };
+      }),
+    });
+  } catch (error) {
+    handleError(res, error, "elegiveis-fechamento");
   }
 });
 
@@ -1285,6 +1615,23 @@ ratsRouter.post("/:id/despesas", async (req: AuthenticatedRequest, res) => {
         ...validado,
       },
     });
+
+    // DESPESA_CRIADA (13/09/2026) — entra no histórico do CABEÇALHO da RAT (entidadeTipo: rat),
+    // não de uma entidade "despesa" própria — mesma convenção de RAT_ITEM_DESVINCULADO_SENIOR.
+    await criarEventoAuditoria({
+      origem: "tela",
+      usuarioId: req.user!.userId,
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+      eventoTipo: EVENTOS_AUDITORIA.DESPESA_CRIADA,
+      alteracoes: null,
+      metadata: { origemCriacao: "caxhub", despesaId: criada.id, tipdes: criada.tipdes },
+      correlationId: req.correlationId!,
+    });
+
     await enfileirarDespesa(criada.id);
     res.status(201).json({ id: criada.id });
   } catch (error) {

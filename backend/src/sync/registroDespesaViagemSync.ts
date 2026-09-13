@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
@@ -6,6 +7,9 @@ import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 import { carimbo, varrerRemovidos } from "./varrerRemovidos";
+import { criarEventoAuditoria } from "../audit/registrarEvento";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { entidadeIdRat } from "../audit/identidadeEntidade";
 
 export const JOB_NAME = "registros_despesa_viagem-sync";
 export const CRON_EXPR = "20 5 * * *";
@@ -82,6 +86,59 @@ function linhaDe(row: RegistroDespesaViagemRow): LinhaUpsert {
   };
 }
 
+// Detecção LEVE de RDV nova, pra auditoria (DESPESA_CRIADA, 13/09/2026) — mesmo espírito de
+// chavesRatAindaNaoExistentes/auditarRatsCriadas em ratSync.ts: duas metades separadas pelo
+// upsert em lote no meio, porque `id` é autoincrement (só existe depois de gravada).
+async function chavesDespesaAindaNaoExistentes(rows: RegistroDespesaViagemRow[]): Promise<Set<string>> {
+  if (rows.length === 0) return new Set();
+  const existentesAntes = await prisma.registroDespesaViagem.findMany({
+    where: { OR: rows.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrdv: r.seqrdv })) },
+    select: { codemp: true, numrat: true, seqrdv: true },
+  });
+  const chavesExistentesAntes = new Set(existentesAntes.map((r) => `${r.codemp}-${r.numrat}-${r.seqrdv}`));
+  return new Set(
+    rows.map((r) => `${r.codemp}-${r.numrat}-${r.seqrdv}`).filter((chave) => !chavesExistentesAntes.has(chave))
+  );
+}
+
+async function auditarDespesasCriadas(rows: RegistroDespesaViagemRow[], chavesNovas: Set<string>): Promise<void> {
+  const rowsNovas = rows.filter((r) => chavesNovas.has(`${r.codemp}-${r.numrat}-${r.seqrdv}`));
+  if (rowsNovas.length === 0) return;
+
+  const criadas = await prisma.registroDespesaViagem.findMany({
+    where: { OR: rowsNovas.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrdv: r.seqrdv })) },
+    select: { id: true, codemp: true, numrat: true, tipdes: true },
+  });
+  // Despesa não tem FK pra Rat.id — resolve pela chave natural (codemp+numrat), 1 findMany
+  // pro lote inteiro em vez de 1 por linha (mesmo cuidado de N+1 já documentado em ratItemSync).
+  const chavesRat = [...new Set(criadas.map((c) => `${c.codemp}-${c.numrat}`))];
+  const rats =
+    chavesRat.length > 0
+      ? await prisma.rat.findMany({
+          where: { OR: criadas.map((c) => ({ codemp: c.codemp, numrat: c.numrat })) },
+          select: { id: true, codemp: true, codpro: true, numrat: true },
+        })
+      : [];
+  const ratPorChave = new Map(rats.map((r) => [`${r.codemp}-${r.numrat}`, r]));
+
+  for (const despesa of criadas) {
+    const rat = ratPorChave.get(`${despesa.codemp}-${despesa.numrat}`);
+    if (!rat) continue; // RAT ainda não sincronizada localmente — sem RAT, sem entidade pra auditar sob
+    await criarEventoAuditoria({
+      origem: "integracao_senior",
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.numrat}`,
+      eventoTipo: EVENTOS_AUDITORIA.DESPESA_CRIADA,
+      alteracoes: null,
+      metadata: { origemCriacao: "senior", despesaId: despesa.id, tipdes: despesa.tipdes },
+      correlationId: randomUUID(),
+    });
+  }
+}
+
 // Despesa de viagem lançada numa RAT — 15.034 linhas em 13/08/2026 (paginado por segurança,
 // mesmo abaixo do limite de ~30 mil onde o Senior costuma truncar a resposta).
 export async function runRegistroDespesaViagemSync(): Promise<void> {
@@ -92,6 +149,8 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
     const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrdv"])) as RegistroDespesaViagemRow[];
     const msFetch = Date.now() - inicioFetch;
+
+    const chavesNovas = await chavesDespesaAindaNaoExistentes(rows);
 
     // Casa pela chave natural DO SENIOR (@@unique), não pela PK local `id` — mesma lógica
     // de ratItemSync. Despesa criada no CaxHub tem seqrdv nulo, então nunca entra neste
@@ -105,6 +164,8 @@ export async function runRegistroDespesaViagemSync(): Promise<void> {
       carimbo: inicio,
     });
     const msEscrita = Date.now() - inicioEscrita;
+
+    await auditarDespesasCriadas(rows, chavesNovas);
 
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
@@ -157,6 +218,11 @@ export async function runRegistroDespesaViagemSyncPorNumrat(codemp: number, numr
   const inicio = new Date();
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrdv"])) as RegistroDespesaViagemRow[];
 
+  // RAT já é conhecida (escopo desta função é sempre 1 RAT específica, chamada por
+  // POST /rats/:id/sincronizar) — resolvida uma vez só, fora do laço, pra auditar
+  // DESPESA_CRIADA (13/09/2026) sem N+1.
+  const rat = await prisma.rat.findFirst({ where: { codemp, numrat }, select: { id: true, codemp: true, codpro: true, numrat: true } });
+
   // origemCaxHub/enviadoEmSenior de propósito fora do payload — mesma proteção do upsert em
   // lote acima: despesa lançada pelo consultor nunca tem seqrdv, então nunca cai neste upsert.
   // Carimbo aplicado (seguro mesmo num sync parcial — só documenta quando a linha foi vista);
@@ -181,11 +247,31 @@ export async function runRegistroDespesaViagemSyncPorNumrat(codemp: number, numr
       nidpso: row.nidpso ?? null,
       ...carimbo(inicio),
     };
-    await prisma.registroDespesaViagem.upsert({
+    // Existência checada ANTES do upsert (linha a linha, poucas despesas por RAT — sem custo
+    // relevante) pra saber se é criação de verdade, não atualização de uma já conhecida.
+    const existiaAntes = await prisma.registroDespesaViagem.findUnique({
+      where: { codemp_numrat_seqrdv: { codemp: row.codemp, numrat: row.numrat, seqrdv: row.seqrdv } },
+      select: { id: true },
+    });
+    const gravada = await prisma.registroDespesaViagem.upsert({
       where: { codemp_numrat_seqrdv: { codemp: row.codemp, numrat: row.numrat, seqrdv: row.seqrdv } },
       update: data,
       create: data,
     });
+    if (!existiaAntes && rat) {
+      await criarEventoAuditoria({
+        origem: "integracao_senior",
+        codemp: rat.codemp,
+        codpro: rat.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+        entidadeId: entidadeIdRat(rat.id),
+        entidadeRotulo: `RAT ${rat.numrat}`,
+        eventoTipo: EVENTOS_AUDITORIA.DESPESA_CRIADA,
+        alteracoes: null,
+        metadata: { origemCriacao: "senior", despesaId: gravada.id, tipdes: gravada.tipdes },
+        correlationId: randomUUID(),
+      });
+    }
   }
 
   await prisma.syncLog.create({

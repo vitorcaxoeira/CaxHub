@@ -18,7 +18,7 @@ import {
 } from "../soap/client";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
-import { entidadeIdDespesa } from "../audit/identidadeEntidade";
+import { entidadeIdDespesa, entidadeIdRat } from "../audit/identidadeEntidade";
 
 const JOB_NAME = "outbox_senior_despesa-sync";
 
@@ -332,6 +332,11 @@ export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasI
     const despesa = await prisma.registroDespesaViagem.findUnique({ where: { id: item.despesaId } });
     const entidadeId = entidadeIdDespesa(item.despesaId);
     const entidadeRotulo = despesa ? `Despesa — RAT ${despesa.codemp}/${despesa.numrat}` : `Despesa ${item.despesaId}`;
+    // RAT local da despesa (13/09/2026) — despesa não tem FK pra Rat.id, casamento pela chave
+    // natural (codemp+numrat), só pra gravar o evento companheiro sob a RAT (ver abaixo).
+    const rat = despesa
+      ? await prisma.rat.findFirst({ where: { codemp: despesa.codemp, numrat: despesa.numrat }, select: { id: true, codemp: true, codpro: true, numrat: true } })
+      : null;
     const correlationId = randomUUID();
     const payloadResumo = JSON.stringify(item.payload).slice(0, 1000);
     const inicioEnvio = Date.now();
@@ -409,6 +414,25 @@ export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasI
           metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: true, duracaoMs },
           correlationId,
         }),
+        // Companheiro sob a RAT (13/09/2026), mesmo eventoTipo/metadata/correlationId do
+        // genérico acima — só troca a entidade, pra "sincronizou com o ERP" aparecer junto do
+        // histórico da RAT, não só o da Despesa.
+        ...(rat
+          ? [
+              criarEventoAuditoria({
+                origem: "job",
+                codemp: rat.codemp,
+                codpro: rat.codpro,
+                entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+                entidadeId: entidadeIdRat(rat.id),
+                entidadeRotulo: `RAT ${rat.numrat}`,
+                eventoTipo: eventoTipoDoItem,
+                alteracoes: null,
+                metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: true, duracaoMs },
+                correlationId,
+              }),
+            ]
+          : []),
       ]);
       enviados += 1;
     } catch (error) {
@@ -437,6 +461,22 @@ export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasI
           metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: false, erro: message, duracaoMs },
           correlationId,
         }),
+        ...(rat
+          ? [
+              criarEventoAuditoria({
+                origem: "job",
+                codemp: rat.codemp,
+                codpro: rat.codpro,
+                entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+                entidadeId: entidadeIdRat(rat.id),
+                entidadeRotulo: `RAT ${rat.numrat}`,
+                eventoTipo: eventoTipoDoItem,
+                alteracoes: null,
+                metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: false, erro: message, duracaoMs },
+                correlationId,
+              }),
+            ]
+          : []),
       ]);
       falhas += 1;
     }

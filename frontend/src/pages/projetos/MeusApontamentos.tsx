@@ -113,6 +113,21 @@ interface RatRow {
   integracao: IntegracaoErpStatus;
   integracaoLabel: string;
   integracaoTone: Tone;
+  // Elegível pra fechamento (13/09/2026): sitrat=9 + mesma permissão de aprovar (gestor do
+  // depexe ou admin) — ver GET /rats em backend/src/routes/rats.ts. Campo próprio de
+  // podeAprovar (mesma condição hoje, mas ações distintas).
+  podeFechar: boolean;
+}
+
+// RAT elegível pro resumo de "Fechar Todos" — vem de GET /rats/elegiveis-fechamento, SEM
+// paginação (a tabela principal só tem a página atual em `rats`, ver carregarRats).
+interface RatElegivelFechamento {
+  id: number;
+  numrat: number | null;
+  codpro: number | null;
+  cliente: string | null;
+  consultorNome: string;
+  totalMinutos: number;
 }
 
 interface RatItemRow {
@@ -387,6 +402,23 @@ export function MeusApontamentos() {
   const [ratsExpandidas, setRatsExpandidas] = useState<Set<number>>(new Set());
   const [itensPorRat, setItensPorRat] = useState<Record<number, RatItemRow[] | "carregando" | "erro">>({});
   const [sincronizando, setSincronizando] = useState<number | null>(null);
+  // Fechamento de RAT (13/09/2026) — mesma ideologia de Confirmar/Confirmar Todos: individual
+  // por linha (fechando) e em lote com resumo antes de disparar (resumoFechamentoLote).
+  const [fechando, setFechando] = useState<number | null>(null);
+  const [resumoFechamentoLote, setResumoFechamentoLote] = useState<RatElegivelFechamento[] | null>(null);
+  const [carregandoResumoFechamentoLote, setCarregandoResumoFechamentoLote] = useState(false);
+  const [fechandoLote, setFechandoLote] = useState(false);
+  const [resultadoFechamentoLote, setResultadoFechamentoLote] = useState<{
+    // Só "solicitados" (enfileirados no outbox), não "fechados" de verdade — o fechamento em
+    // si só acontece depois, quando o Senior confirmar (ver acompanharFechamento). Nome
+    // escolhido pra não sugerir uma conclusão que ainda não aconteceu.
+    solicitados: number;
+    falhas: { ratId: number; erro: string }[];
+  } | null>(null);
+  // Contador pro botão "Fechar Todos" (pedido do Vitor, 13/09/2026) — quantidade de RATs
+  // elegíveis SEM depender da página/filtro atual da tabela (mesma fonte do modal de resumo:
+  // GET /rats/elegiveis-fechamento). `null` = ainda não carregado.
+  const [totalElegiveisFechamento, setTotalElegiveisFechamento] = useState<number | null>(null);
   // Aba ativa do acordeão por RAT — "atividades" quando ausente. `rdvJaAberto` mantém o
   // DespesasRatPainel montado (só oculto via CSS, não desmontado) depois da 1ª visita à aba
   // RDVs daquela RAT, pra não refazer o GET /despesas a cada troca de aba — mesmo espírito de
@@ -464,6 +496,14 @@ export function MeusApontamentos() {
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar RATs"))
       .finally(() => setLoadingRats(false));
+    // Contador do botão "Fechar Todos" — piggyback em toda vez que a lista de RATs é
+    // recarregada (mesmos gatilhos: mount, filtro, e depois de qualquer ação que muda
+    // sitrat/integração), sem precisar de um efeito próprio. Silencioso em erro — é só um
+    // contador auxiliar, não impede o resto da tela de funcionar.
+    axios
+      .get("/api/rats/elegiveis-fechamento")
+      .then(({ data }) => setTotalElegiveisFechamento(data.rats?.length ?? 0))
+      .catch(() => {});
   }
 
   useEffect(() => {
@@ -883,6 +923,84 @@ export function MeusApontamentos() {
       setErro(err.response?.data?.error ?? "Falha ao sincronizar com o ERP");
     } finally {
       setSincronizando(null);
+    }
+  }
+
+  // Fechamento de RAT roda em segundo plano (outbox), igual o envio de apontamento — este é o
+  // acompanhamento por polling, clone de acompanharEnvio contra GET /rats/:id/fechamento.
+  // Quando termina (sucesso ou falha), recarrega a lista pra linha refletir sitrat/podeFechar
+  // atualizados — o campo que muda (sitrat) já vem pronto em GET /rats, sem precisar patchear
+  // campo por campo como acompanharEnvio faz pro RatItem (que não tem esse atalho).
+  function acompanharFechamento(ratId: number, tentativa = 0) {
+    const timer = window.setTimeout(async () => {
+      let concluido = false;
+      try {
+        const { data } = await axios.get(`/api/rats/${ratId}/fechamento`);
+        concluido = data.status === "enviado" || data.status === "bloqueado" || Boolean(data.erro);
+        if (concluido) {
+          carregarRats();
+          if (data.erro) setErro(`Falha ao fechar a RAT: ${data.erro}`);
+        }
+      } catch {
+        // Falha de rede no acompanhamento é transitória — tenta de novo no próximo tick.
+      }
+
+      if (concluido) return;
+      if (tentativa + 1 < ENVIO_MAX_TENTATIVAS) {
+        acompanharFechamento(ratId, tentativa + 1);
+      }
+      // Estourou o tempo sem desfecho: o cron de 15 min assume; "Sinc. ERP" ou F5 mostra o resultado.
+    }, ENVIO_INTERVALO_MS);
+    timersEnvioRef.current.push(timer);
+  }
+
+  async function fecharRat(rat: RatRow) {
+    setFechando(rat.id);
+    try {
+      await axios.post(`/api/rats/${rat.id}/fechar`);
+      acompanharFechamento(rat.id);
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao fechar a RAT");
+    } finally {
+      setFechando(null);
+    }
+  }
+
+  // "Fechar Todos" — resumo ANTES de disparar, igual "Confirmar Todos". Busca a lista completa
+  // (sem paginação) de GET /rats/elegiveis-fechamento em vez de usar `rats` do estado, que é só
+  // a página atual da tabela (ver carregarRats).
+  async function abrirResumoFechamentoLote() {
+    setCarregandoResumoFechamentoLote(true);
+    setResultadoFechamentoLote(null);
+    try {
+      const { data } = await axios.get("/api/rats/elegiveis-fechamento");
+      setResumoFechamentoLote(data.rats ?? []);
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao carregar as RATs elegíveis para fechamento");
+    } finally {
+      setCarregandoResumoFechamentoLote(false);
+    }
+  }
+
+  async function fecharTodos() {
+    if (!resumoFechamentoLote) return;
+    setFechandoLote(true);
+    try {
+      const ratIds = resumoFechamentoLote.map((r) => r.id);
+      const { data } = await axios.post("/api/rats/fechar-lote", { ratIds });
+      setResultadoFechamentoLote({ solicitados: data.enfileirados?.length ?? 0, falhas: data.falhas ?? [] });
+      for (const ratId of data.enfileirados ?? []) {
+        acompanharFechamento(ratId);
+      }
+      carregarRats();
+      // Mesmo critério de confirmarTodos: só fecha o modal sozinho quando não há falha
+      // parcial, senão o gestor perderia de vista o que travou.
+      if (!data.falhas || data.falhas.length === 0) setResumoFechamentoLote(null);
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao fechar RATs em lote");
+      setResumoFechamentoLote(null);
+    } finally {
+      setFechandoLote(false);
     }
   }
 
@@ -1621,6 +1739,17 @@ export function MeusApontamentos() {
                   labelSufixo="consultores"
                 />
               )}
+              {/* Contador vem de GET /rats/elegiveis-fechamento (carregarRats), não da página/
+                  filtro atual de `rats` — regra 1 (sitrat=9 + permissão) é independente disso.
+                  `null` (ainda não carregado) mostra sem número, nunca "(0)" por engano. */}
+              <button
+                onClick={abrirResumoFechamentoLote}
+                disabled={carregandoResumoFechamentoLote || totalElegiveisFechamento === 0}
+                className="flex items-center gap-2 rounded-md border border-primary/40 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+              >
+                {carregandoResumoFechamentoLote && <Spinner className="h-3.5 w-3.5" />}
+                Fechar Todos{totalElegiveisFechamento != null ? ` (${totalElegiveisFechamento})` : ""}
+              </button>
             </div>
           </div>
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
@@ -1686,7 +1815,16 @@ export function MeusApontamentos() {
                             <td className={`px-2.5 py-3.5 ${expandida ? "border-l border-primary" : ""}`}>
                               <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
                                 <span className="text-muted">{expandida ? "▾" : "▸"}</span>
-                                {rat.id}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    navigate(`/projetos/rat/${rat.id}`);
+                                  }}
+                                  title="Ver detalhes e auditoria desta RAT"
+                                  className="text-primary hover:underline"
+                                >
+                                  {rat.id}
+                                </button>
                               </p>
                             </td>
                             <td className="whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted">{rat.numrat ?? "—"}</td>
@@ -1747,6 +1885,15 @@ export function MeusApontamentos() {
                                   >
                                     {sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
                                   </DropdownMenu.Item>
+                                  {rat.podeFechar && (
+                                    <DropdownMenu.Item
+                                      onSelect={() => fecharRat(rat)}
+                                      disabled={fechando === rat.id}
+                                      title="Reenvia itens/despesas pendentes ou com erro (se houver) e, se tudo sincronizar, fecha a RAT no Senior"
+                                    >
+                                      {fechando === rat.id ? "Fechando..." : "Fechar RAT"}
+                                    </DropdownMenu.Item>
+                                  )}
                                 </DropdownMenu.Content>
                               </DropdownMenu>
                             </td>
@@ -2010,6 +2157,73 @@ export function MeusApontamentos() {
                 >
                   {confirmandoLote && <Spinner className="h-3.5 w-3.5" />}
                   Confirmar {resumoLote.reduce((soma, g) => soma + g.sessaoIds.length, 0)} apontamentos
+                </button>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Resumo do "Fechar Todos" — clone do modal de "Confirmar apontamentos em lote" acima,
+          mesma UX: mostra o que vai ser fechado ANTES de disparar, e falha parcial fica
+          visível no próprio diálogo em vez de fechar sozinho. */}
+      {resumoFechamentoLote && (
+        <Modal
+          open
+          onClose={() => !fechandoLote && setResumoFechamentoLote(null)}
+          fecharPorFora={false}
+          title="Fechar RATs em lote"
+          subtitulo={`${resumoFechamentoLote.length} RAT${resumoFechamentoLote.length === 1 ? "" : "s"}`}
+        >
+          <div className="space-y-4 p-4">
+            {resumoFechamentoLote.length === 0 ? (
+              <p className="text-sm text-muted">Nenhuma RAT Digitada elegível para fechamento agora.</p>
+            ) : (
+              <div className="max-h-64 space-y-1.5 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-3">
+                {resumoFechamentoLote.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="min-w-0 truncate text-foreground">
+                      RAT {r.numrat ?? r.id} · Proposta {r.codpro ?? "—"} · {r.consultorNome}
+                    </span>
+                    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">{formatMinutos(r.totalMinutos)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {resultadoFechamentoLote && resultadoFechamentoLote.falhas.length > 0 && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <p className="mb-1 font-medium">
+                  {resultadoFechamentoLote.solicitados} solicitado{resultadoFechamentoLote.solicitados === 1 ? "" : "s"} (o
+                  fechamento em si acontece em segundo plano),{" "}
+                  {resultadoFechamentoLote.falhas.length} falhou{resultadoFechamentoLote.falhas.length === 1 ? "" : "aram"}:
+                </p>
+                <ul className="list-inside list-disc space-y-0.5">
+                  {resultadoFechamentoLote.falhas.map((f) => (
+                    <li key={f.ratId}>
+                      RAT {f.ratId}: {f.erro}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setResumoFechamentoLote(null)}
+                disabled={fechandoLote}
+                className="rounded-md border border-border px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+              >
+                {resultadoFechamentoLote ? "Fechar" : "Cancelar"}
+              </button>
+              {!resultadoFechamentoLote && resumoFechamentoLote.length > 0 && (
+                <button
+                  onClick={fecharTodos}
+                  disabled={fechandoLote}
+                  className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                >
+                  {fechandoLote && <Spinner className="h-3.5 w-3.5" />}
+                  Fechar {resumoFechamentoLote.length} RATs
                 </button>
               )}
             </div>

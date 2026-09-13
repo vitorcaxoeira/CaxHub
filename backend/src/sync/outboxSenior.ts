@@ -6,6 +6,7 @@ import {
   AlocarAtividadesPayload,
   RegistrarAtividadesPayload,
   alocarAtividadesViaSoap,
+  fecharRatViaSoap,
   formatarDataSenior,
   formatarHoraSenior,
   ideExtAlocacao,
@@ -24,7 +25,7 @@ import {
 } from "../soap/client";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
-import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { entidadeIdAtividade, entidadeIdRat } from "../audit/identidadeEntidade";
 
 const JOB_NAME = "outbox_senior-sync";
 
@@ -187,7 +188,14 @@ interface ResultadoEnvioAlocacaoCriada {
   seqAti: number;
 }
 
-type ResultadoEnvio = ResultadoEnvioApontamento | ResultadoEnvioAlocacaoCriada;
+// RAT fechada com sucesso no Senior — o write-back (sitrat -> 1) acontece na mesma transação
+// que baixa a fila, igual aos outros dois tipos (ver comentário do write-back mais abaixo).
+interface ResultadoEnvioFechamento {
+  tipo: "fechamento_rat";
+  ratId: number;
+}
+
+type ResultadoEnvio = ResultadoEnvioApontamento | ResultadoEnvioAlocacaoCriada | ResultadoEnvioFechamento;
 
 /** Só a identidade devolvida pelo ERP, antes de saber a quem ela pertence localmente. */
 interface IdentidadeSenior {
@@ -510,6 +518,47 @@ async function enviarRemoverAtividade(item: SincronizacaoPendente): Promise<null
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Canal de fechamento — operação `fecharRAT`, publicada em 13/09/2026. Tipo próprio
+// (`fechar_rat`), separado do `aprovar_rat` já existente (que continua sem canal, pendente pra
+// sempre — ver CanalIndisponivelError): fechar uma RAT não depende de ela ter sido "aprovada"
+// primeiro, só de estar Digitada (sitrat=9) e sincronizada com o Senior — regra decidida em
+// routes/rats.ts (prepararFechamentoRat), não aqui.
+// ---------------------------------------------------------------------------
+
+// Relê a RAT do banco (nunca confia no payload congelado — mesmo cuidado de enviarApontamento)
+// e chama fecharRAT. Idempotente: se a RAT já estiver Fechada (por esta mesma pendência numa
+// tentativa anterior cujo write-back não confirmou pro chamador, ou por qualquer outra via),
+// não chama o Senior de novo.
+async function enviarFecharRat(item: SincronizacaoPendente): Promise<ResultadoEnvioFechamento> {
+  const payload = item.payload as { ratId?: number };
+  const ratId = Number(payload?.ratId);
+  if (!Number.isFinite(ratId)) {
+    throw new Error(`Payload sem ratId (pendência ${item.id})`);
+  }
+
+  const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+  if (!rat) throw new Error(`RAT ${ratId} não existe mais — fechamento desfeito antes do envio`);
+
+  if (rat.sitrat === 1) {
+    return { tipo: "fechamento_rat", ratId: rat.id };
+  }
+  if (rat.numrat == null) {
+    throw new Error(`RAT ${rat.id} sem numrat — não dá pra fechar uma RAT nunca confirmada no Senior`);
+  }
+
+  const resposta = await fecharRatViaSoap({ codEmp: rat.codemp, numRat: rat.numrat });
+
+  if (resposta.statusProcesso !== 1) {
+    throw new Error(
+      `Senior recusou o fechamento (statusProcesso=${resposta.statusProcesso}): ` +
+        `${resposta.mensagemProcesso ?? resposta.erroExecucao ?? "sem mensagem"}`
+    );
+  }
+
+  return { tipo: "fechamento_rat", ratId: rat.id };
+}
+
 // Despacha cada mudança pro canal certo. Tipos ainda sem operação publicada esperam sem
 // consumir tentativa (ver CanalIndisponivelError).
 async function enviarParaSenior(item: SincronizacaoPendente): Promise<ResultadoEnvio | null> {
@@ -517,6 +566,7 @@ async function enviarParaSenior(item: SincronizacaoPendente): Promise<ResultadoE
   if (item.tipo === "criar_atividade") return enviarCriarAtividade(item);
   if (item.tipo === "editar_atividade") return enviarEditarAtividade(item);
   if (item.tipo === "remover_atividade") return enviarRemoverAtividade(item);
+  if (item.tipo === "fechar_rat") return enviarFecharRat(item);
 
   throw new CanalIndisponivelError(
     `Ainda não há operação publicada no Senior para "${item.tipo}" — o item fica aguardando na fila`
@@ -633,6 +683,12 @@ export async function processarFilaSincronizacao(
               }),
             ]
           : []),
+        // Fechamento confirmado pelo Senior (statusProcesso=1) — só AQUI, depois da resposta
+        // real, é que sitrat vira 1 (Fechado); nunca otimista na rota que enfileira (pedido
+        // explícito do Vitor: "quando retornar 1 a RAT do nosso lado deve ser alterada").
+        ...(registrado?.tipo === "fechamento_rat"
+          ? [prisma.rat.update({ where: { id: registrado.ratId }, data: { sitrat: 1 } })]
+          : []),
         prisma.sincronizacaoPendente.update({
           where: { id: item.id },
           data: { status: "enviado", processadoEm: new Date(), ultimoErro: null },
@@ -649,6 +705,46 @@ export async function processarFilaSincronizacao(
           metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: true, duracaoMs },
           correlationId,
         }),
+        // Companheiro sob a RAT (13/09/2026), MESMO eventoTipo/metadata/correlationId do
+        // genérico acima — só troca a entidade, pra "sincronizou com o ERP" aparecer junto do
+        // histórico da RAT (aba Auditoria), não só o da Atividade. `ratDestinoId` (não
+        // `registrado.ratId`) porque numa colisão é ele quem realmente fica dono do item.
+        ...(registrado?.tipo === "apontamento" && ratDestinoId != null
+          ? [
+              criarEventoAuditoria({
+                origem: "job",
+                codemp: atividade?.codemp ?? null,
+                codpro: atividade?.codpro ?? null,
+                entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+                entidadeId: entidadeIdRat(ratDestinoId),
+                entidadeRotulo: `RAT ${ratDestinoId}`,
+                eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_ENVIADA_SENIOR,
+                alteracoes: null,
+                metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: true, duracaoMs },
+                correlationId,
+              }),
+            ]
+          : []),
+        // Evento dedicado, em cima do genérico acima — mesmo espírito de
+        // RAT_DESVINCULADA_SENIOR/RAT_ITEM_DESVINCULADO_SENIOR (routes/rats.ts): mudança de
+        // estado da RAT feita pelo processamento assíncrono, não pelo clique que a originou
+        // (esse já grava RAT_FECHAMENTO_SOLICITADO, ver prepararFechamentoRat).
+        ...(registrado?.tipo === "fechamento_rat"
+          ? [
+              criarEventoAuditoria({
+                origem: "job",
+                codemp: atividade?.codemp ?? null,
+                codpro: atividade?.codpro ?? null,
+                entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+                entidadeId: entidadeIdRat(registrado.ratId),
+                entidadeRotulo: `RAT ${registrado.ratId}`,
+                eventoTipo: EVENTOS_AUDITORIA.RAT_FECHADA,
+                alteracoes: { sitrat: { de: 9, para: 1, rotulo: "Situação" } },
+                metadata: null,
+                correlationId,
+              }),
+            ]
+          : []),
       ]);
       enviados += 1;
     } catch (error) {
@@ -691,6 +787,26 @@ export async function processarFilaSincronizacao(
           metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: false, erro: message, duracaoMs },
           correlationId,
         }),
+        // Companheiro sob a RAT, mesmo espírito do ramo de sucesso acima — aqui não há
+        // `registrado` (a chamada falhou antes de devolver algo), então o `ratId` vem do
+        // payload da própria pendência (`criar_apontamento` sempre carrega `ratId`, ver
+        // prepararReenvioItem/montarPayloadApontamento).
+        ...(item.tipo === "criar_apontamento" && Number.isFinite(Number((item.payload as { ratId?: number })?.ratId))
+          ? [
+              criarEventoAuditoria({
+                origem: "job",
+                codemp: atividade?.codemp ?? null,
+                codpro: atividade?.codpro ?? null,
+                entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+                entidadeId: entidadeIdRat(Number((item.payload as { ratId?: number }).ratId)),
+                entidadeRotulo: `RAT ${(item.payload as { ratId?: number }).ratId}`,
+                eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_ENVIADA_SENIOR,
+                alteracoes: null,
+                metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: false, erro: message, duracaoMs },
+                correlationId,
+              }),
+            ]
+          : []),
       ]);
       falhas += 1;
     }

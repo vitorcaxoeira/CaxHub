@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
@@ -6,6 +7,9 @@ import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 import { varrerRemovidos } from "./varrerRemovidos";
+import { criarEventoAuditoria } from "../audit/registrarEvento";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { entidadeIdRat } from "../audit/identidadeEntidade";
 
 export const JOB_NAME = "rat-sync";
 export const CRON_EXPR = "15 4 * * *"; // logo depois de atividades_consultor-sync (0 4 * * *)
@@ -97,14 +101,97 @@ function linhaDe(row: RatRow): LinhaUpsert {
 // `inicio` tem default pra não quebrar runRatSyncPorNumrat abaixo (que não roda varredura —
 // escopo de 1 RAT só marcaria a tabela inteira como suspeita) — o carimbo em si é seguro em
 // qualquer chamada, só documenta quando a linha foi vista.
+// Estado de uma RAT já existente ANTES do upsert — usado tanto pra saber "quem é nova"
+// (ausente deste Map) quanto, pra quem já existe, comparar sitrat antes/depois (ver
+// auditarMudancaSituacao). `id` só é lido AQUI (antes do upsert) porque, pra linha que já
+// existe, o autoincrement já existe há muito — diferente da linha NOVA, cujo id só nasce
+// depois do INSERT (ver auditarRatsCriadas, que por isso relê depois).
+interface RatExistenteAntes {
+  id: number;
+  codemp: number;
+  codpro: number | null;
+  numrat: number | null;
+  sitrat: number | null;
+}
+
+async function ratsExistentesAntes(rows: RatRow[]): Promise<Map<string, RatExistenteAntes>> {
+  if (rows.length === 0) return new Map();
+  const existentes = await prisma.rat.findMany({
+    where: { OR: rows.map((r) => ({ codemp: r.codemp, numprj: r.numprj, codfpj: r.codfpj, numrat: r.numrat })) },
+    select: { id: true, codemp: true, codpro: true, numprj: true, codfpj: true, numrat: true, sitrat: true },
+  });
+  return new Map(existentes.map((r) => [`${r.codemp}-${r.numprj}-${r.codfpj}-${r.numrat}`, r]));
+}
+
+// Detecção LEVE de RAT nova, pra auditoria (RAT_CRIADA, 13/09/2026) — só o suficiente pra saber
+// se uma linha é genuinamente nova, sem portar este arquivo pro padrão híbrido completo de
+// propostaSync.ts (que também audita toda UPDATE com diff de campo — ver auditarMudancaSituacao
+// abaixo pro único campo que hoje tem esse tratamento). Roda DEPOIS do upsert (`id` autoincrement
+// só existe a partir daí) — chamado tanto por runRatSync (cron completo) quanto por
+// runRatSyncPorNumrat ("Sinc. ERP" manual), já que os dois passam por executarUpsert.
+async function auditarRatsCriadas(rows: RatRow[], existentesAntes: Map<string, RatExistenteAntes>): Promise<void> {
+  const rowsNovas = rows.filter((r) => !existentesAntes.has(`${r.codemp}-${r.numprj}-${r.codfpj}-${r.numrat}`));
+  if (rowsNovas.length === 0) return;
+
+  const criadas = await prisma.rat.findMany({
+    where: { OR: rowsNovas.map((r) => ({ codemp: r.codemp, numprj: r.numprj, codfpj: r.codfpj, numrat: r.numrat })) },
+    select: { id: true, codemp: true, codpro: true, numrat: true },
+  });
+  for (const rat of criadas) {
+    await criarEventoAuditoria({
+      origem: "integracao_senior",
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.numrat}`,
+      eventoTipo: EVENTOS_AUDITORIA.RAT_CRIADA,
+      alteracoes: null,
+      metadata: { origemCriacao: "senior" },
+      correlationId: randomUUID(),
+    });
+  }
+}
+
+// Auditoria de mudança de SITUAÇÃO (RAT_SITUACAO_ALTERADA_SENIOR, 13/09/2026) — achado real:
+// mudar `sitrat` direto no Senior (ex.: Fechado -> Digitado de novo) e sincronizar não deixava
+// NENHUM rastro, só RAT_CRIADA (que só cobre linha nova). Escopo deliberadamente estreito a só
+// este campo — não todo campo espelhado da RAT, como PROPOSTA_ALTERADA faz pra Proposta — por
+// ser o único que já mostrou um caso de uso real até agora. Roda DEPOIS do upsert (mesmo timing
+// de auditarRatsCriadas, por consistência, embora aqui o `id` já fosse conhecido antes).
+async function auditarMudancaSituacao(rows: RatRow[], existentesAntes: Map<string, RatExistenteAntes>): Promise<void> {
+  for (const row of rows) {
+    const antes = existentesAntes.get(`${row.codemp}-${row.numprj}-${row.codfpj}-${row.numrat}`);
+    if (!antes) continue; // linha nova — RAT_CRIADA já cobre, sem "situação anterior" pra comparar
+    const situacaoDepois = row.sitrat ?? null;
+    if (antes.sitrat === situacaoDepois) continue; // nada mudou
+
+    await criarEventoAuditoria({
+      origem: "integracao_senior",
+      codemp: antes.codemp,
+      codpro: antes.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(antes.id),
+      entidadeRotulo: `RAT ${row.numrat}`,
+      eventoTipo: EVENTOS_AUDITORIA.RAT_SITUACAO_ALTERADA_SENIOR,
+      alteracoes: { sitrat: { de: antes.sitrat, para: situacaoDepois, rotulo: "Situação" } },
+      metadata: null,
+      correlationId: randomUUID(),
+    });
+  }
+}
+
 async function executarUpsert(query: string, inicio: Date = new Date()): Promise<number> {
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat"])) as RatRow[];
+  const existentesAntes = await ratsExistentesAntes(rows);
   const resultado = await upsertEmLote(rows.map(linhaDe), {
     tabela: "rats",
     colunas: COLUNAS,
     colunasPk: ["codemp", "numprj", "codfpj", "numrat"],
     carimbo: inicio,
   });
+  await auditarRatsCriadas(rows, existentesAntes);
+  await auditarMudancaSituacao(rows, existentesAntes);
   return resultado.linhasProcessadas;
 }
 
