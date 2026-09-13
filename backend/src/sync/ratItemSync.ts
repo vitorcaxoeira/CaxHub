@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
@@ -7,6 +8,9 @@ import { filtroDoJob } from "./filtrosAtivos";
 import { varrerRemovidos } from "./varrerRemovidos";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { tamanhoLoteConfigurado } from "./politicaLote";
+import { criarEventoAuditoria } from "../audit/registrarEvento";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { entidadeIdRat } from "../audit/identidadeEntidade";
 
 export const JOB_NAME = "rat-item-sync";
 export const CRON_EXPR = "30 4 * * *"; // depois de rat-sync (15 4 * * *) — RatItem.ratId depende de Rat já existir
@@ -122,6 +126,49 @@ interface ResultadoExecutarUpsert {
   msEscrita: number;
 }
 
+// Detecção LEVE de RatItem novo, pra auditoria (RAT_ITEM_CRIADO, 13/09/2026) — mesmo espírito de
+// auditarCriacaoDoLote em ratSync.ts: só descobre quem é genuinamente novo (nunca visto antes),
+// sem portar este arquivo pro padrão híbrido completo (que também audita UPDATE com diff). Roda
+// ANTES do upsert em lote; `ratPorChave` já vem resolvido de `executarUpsert`, reaproveitado
+// aqui em vez de recalculado — mesmo cuidado de evitar N+1 que motivou aquele Map existir.
+async function auditarCriacaoDoLote(rows: RatItemRow[], ratPorChave: Map<string, number>): Promise<void> {
+  if (rows.length === 0) return;
+
+  const existentesAntes = await prisma.ratItem.findMany({
+    where: { OR: rows.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrat: r.seqrat })) },
+    select: { codemp: true, numrat: true, seqrat: true },
+  });
+  const chavesExistentesAntes = new Set(existentesAntes.map((r) => `${r.codemp}-${r.numrat}-${r.seqrat}`));
+
+  const novasComRat = rows
+    .filter((r) => !chavesExistentesAntes.has(`${r.codemp}-${r.numrat}-${r.seqrat}`))
+    .map((r) => ({ row: r, ratId: ratPorChave.get(`${r.codemp}-${r.numrat}-${r.codpro ?? "null"}`) }))
+    // Órfão (Rat local ainda não sincronizado) não tem sob quem auditar — mesmo item que a
+    // varredura principal já pula com `puladas++`, será reprocessado numa rodada futura.
+    .filter((x): x is { row: RatItemRow; ratId: number } => x.ratId != null);
+  if (novasComRat.length === 0) return;
+
+  const ratIds = [...new Set(novasComRat.map((x) => x.ratId))];
+  const rats = await prisma.rat.findMany({ where: { id: { in: ratIds } }, select: { id: true, codemp: true, codpro: true, numrat: true } });
+  const ratPorId = new Map(rats.map((r) => [r.id, r]));
+
+  for (const { row, ratId } of novasComRat) {
+    const rat = ratPorId.get(ratId);
+    await criarEventoAuditoria({
+      origem: "integracao_senior",
+      codemp: rat?.codemp ?? row.codemp,
+      codpro: rat?.codpro ?? row.codpro ?? null,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(ratId),
+      entidadeRotulo: `RAT ${rat?.numrat ?? row.numrat}`,
+      eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_CRIADO,
+      alteracoes: null,
+      metadata: { origemCriacao: "senior", seqite: row.seqite ?? null, datati: row.datati ?? null },
+      correlationId: randomUUID(),
+    });
+  }
+}
+
 async function executarUpsert(query: string, inicio: Date = new Date()): Promise<ResultadoExecutarUpsert> {
   const inicioFetch = Date.now();
   const rows = (await runSqlViaSoapPaginated(query, ["codemp", "numrat", "seqrat"])) as RatItemRow[];
@@ -133,6 +180,8 @@ async function executarUpsert(query: string, inicio: Date = new Date()): Promise
   const codemps = [...new Set(rows.map((r) => r.codemp))];
   const rats = codemps.length > 0 ? await prisma.rat.findMany({ where: { codemp: { in: codemps } }, select: { id: true, codemp: true, numrat: true, codpro: true } }) : [];
   const ratPorChave = new Map(rats.map((r) => [`${r.codemp}-${r.numrat}-${r.codpro ?? "null"}`, r.id]));
+
+  await auditarCriacaoDoLote(rows, ratPorChave);
 
   const seqratsVistos: number[] = [];
   const linhas: LinhaUpsert[] = [];

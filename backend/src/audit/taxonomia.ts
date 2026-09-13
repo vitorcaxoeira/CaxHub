@@ -106,10 +106,34 @@ export const EVENTOS_AUDITORIA = {
   USUARIO_AVATAR_ALTERADO: "USUARIO_AVATAR_ALTERADO",
   USUARIO_AVATAR_REMOVIDO: "USUARIO_AVATAR_REMOVIDO",
 
+  // Criação do cabeçalho da RAT e de item de atividade/RDV dentro dela — `metadata.origemCriacao`
+  // ("caxhub" | "senior") diz de onde veio, sem precisar de dois eventos por conceito. CaxHub
+  // nasce no clique (confirmar apontamento / lançar despesa); Senior nasce na sincronização
+  // (job noturno ou "Sinc. ERP" manual), só quando a linha é GENUINAMENTE nova — nunca em
+  // atualização de uma linha já existente. Publicados em 13/09/2026.
+  RAT_CRIADA: "RAT_CRIADA",
+  RAT_ITEM_CRIADO: "RAT_ITEM_CRIADO",
+  DESPESA_CRIADA: "DESPESA_CRIADA",
+
+  // Situação (Rat.sitrat) mudou na sincronização com o Senior, numa RAT que já existia
+  // localmente (achado real 13/09/2026: mudar a situação direto no ERP e sincronizar não
+  // deixava rastro nenhum — só RAT_CRIADA existia, e essa só cobre linha NOVA). Escopo
+  // deliberadamente estreito a só este campo, não todo campo espelhado da RAT (como
+  // PROPOSTA_ALTERADA faz pra Proposta) — é o único que já mostrou caso de uso real até agora.
+  RAT_SITUACAO_ALTERADA_SENIOR: "RAT_SITUACAO_ALTERADA_SENIOR",
+
   // Aprovação de RAT (backend/src/routes/rats.ts) — só muda sitrat dentro do CaxHub. O
   // canal de escrita pro Senior hoje só registra apontamento (`registrarAtividades`, ver
   // soap/client.ts); não há operação de aprovação de RAT, então isso não reflete lá.
   RAT_APROVADA: "RAT_APROVADA",
+
+  // Fechamento de RAT (backend/src/routes/rats.ts, POST /:id/fechar e /fechar-lote) — dois
+  // eventos, com origem diferente. SOLICITADO nasce no clique do usuário (enfileira a
+  // pendência `fechar_rat`, ver prepararFechamentoRat); FECHADA nasce depois, no processamento
+  // assíncrono do outbox (sync/outboxSenior.ts), só quando o Senior confirma de verdade
+  // (statusProcesso=1) — é aí que Rat.sitrat vira 1. Publicada em 13/09/2026.
+  RAT_FECHAMENTO_SOLICITADO: "RAT_FECHAMENTO_SOLICITADO",
+  RAT_FECHADA: "RAT_FECHADA",
 
   // Apontamento que existia no Senior e não voltou mais na consulta (foi apagado lá): o
   // vínculo numrat/seqrat é limpo pra permitir reintegrar. Ver

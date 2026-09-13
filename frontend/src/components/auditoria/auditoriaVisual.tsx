@@ -125,6 +125,24 @@ function contarAlteracoes(evento: EventoAuditoria): number {
   return evento.alteracoes ? Object.keys(evento.alteracoes).length : 0;
 }
 
+// Domínio "USU_LSITRAT" do Senior — espelha backend/src/domain/ratDominio.ts (SITRAT_LABELS).
+// Só pro resumo de RAT_SITUACAO_ALTERADA_SENIOR; `de`/`para` chegam como `unknown` (JSON de
+// `alteracoes`), por isso `Number(valor)` antes de indexar o mapa.
+const SITRAT_LABELS_CURTO: Record<number, string> = {
+  9: "Digitado",
+  8: "Impresso",
+  6: "Aprovado",
+  5: "Cancelado",
+  4: "Faturado",
+  2: "Faturado Parcial",
+  1: "Fechado",
+};
+function sitratLabelCurto(valor: unknown): string {
+  const n = Number(valor);
+  if (valor == null || !Number.isFinite(n)) return "—";
+  return SITRAT_LABELS_CURTO[n] ?? `Situação ${n}`;
+}
+
 export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
   PROPOSTA_CRIADA: {
     tone: "success",
@@ -357,6 +375,27 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeSenior,
     resumo: (e) => `Enviou ${rotuloEntidade(e)} ao Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
   },
+  // Envio de despesa ao Senior (inclusão/edição/exclusão) — mesmo estilo de
+  // ATIVIDADE_ENVIADA_SENIOR acima. Ganharam entrada própria em 13/09/2026 porque passaram a
+  // aparecer também como companheiro sob a RAT (ver outboxSeniorDespesa.ts), não só sob Despesa.
+  DESPESA_ENVIADA_SENIOR: {
+    tone: "primary",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `Enviou ${rotuloEntidade(e)} ao Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
+  },
+  DESPESA_EDITADA_SENIOR: {
+    tone: "primary",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `Editou ${rotuloEntidade(e)} no Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
+  },
+  DESPESA_EXCLUIDA_SENIOR: {
+    tone: "primary",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `Excluiu ${rotuloEntidade(e)} no Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
+  },
   RAT_ITEM_DESVINCULADO_SENIOR: {
     tone: "warning",
     rotuloGrupo: "Integração Senior",
@@ -366,6 +405,71 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
       const quantos = seqrats.length;
       return `${quantos} apontamento(s) apagado(s) no Senior — vínculo removido pra reintegrar (${rotuloEntidade(e)})`;
     },
+  },
+  // Mesmo cabeçalho acima, mas o documento inteiro (não só um item) não voltou mais na
+  // consulta ao Senior — Rat.numrat foi limpo pra permitir reintegrar.
+  RAT_DESVINCULADA_SENIOR: {
+    tone: "warning",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `RAT ${e.alteracoes?.numrat?.de ?? "?"} não existe mais no Senior — vínculo removido (${rotuloEntidade(e)})`,
+  },
+  // Situação (sitrat) mudou direto no Senior, numa RAT que já existia localmente — achado real
+  // 13/09/2026 (mudar pra "Digitado" de novo depois de fechada e sincronizar não deixava
+  // rastro). Rótulos espelham backend/src/domain/ratDominio.ts (SITRAT_LABELS).
+  RAT_SITUACAO_ALTERADA_SENIOR: {
+    tone: "primary",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) =>
+      `Situação alterada no Senior: "${sitratLabelCurto(e.alteracoes?.sitrat?.de)}" → "${sitratLabelCurto(e.alteracoes?.sitrat?.para)}" (${rotuloEntidade(e)})`,
+  },
+  // Criação do cabeçalho/item/despesa — `metadata.origemCriacao` ("caxhub" | "senior") diz de
+  // onde veio, um evento só pros dois casos (13/09/2026).
+  RAT_CRIADA: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeCriacao,
+    resumo: (e) => (e.metadata?.origemCriacao === "senior" ? `RAT importada do Senior — ${rotuloEntidade(e)}` : `RAT criada no CaxHub — ${rotuloEntidade(e)}`),
+  },
+  RAT_ITEM_CRIADO: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeCriacao,
+    resumo: (e) =>
+      e.metadata?.origemCriacao === "senior"
+        ? `Item de atividade importado do Senior — ${rotuloEntidade(e)}`
+        : `Item de atividade incluído no CaxHub — ${rotuloEntidade(e)}`,
+  },
+  DESPESA_CRIADA: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeCriacao,
+    resumo: (e) =>
+      e.metadata?.origemCriacao === "senior"
+        ? `Despesa de viagem importada do Senior — ${rotuloEntidade(e)}`
+        : `Despesa de viagem lançada no CaxHub — ${rotuloEntidade(e)}`,
+  },
+  RAT_APROVADA: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeStatus,
+    resumo: (e) => `Aprovou a RAT — ${rotuloEntidade(e)}`,
+  },
+  // Nasce no clique (origem "tela") — o fechamento em si só se confirma depois, quando o
+  // Senior responder (ver RAT_FECHADA abaixo, origem "job"). Os dois aparecem em momentos
+  // diferentes da linha do tempo, nunca no mesmo grupo/correlationId.
+  RAT_FECHAMENTO_SOLICITADO: {
+    tone: "warning",
+    rotuloGrupo: "RAT",
+    icone: IconeStatus,
+    resumo: (e) => `Solicitou o fechamento da RAT — ${rotuloEntidade(e)}`,
+  },
+  RAT_FECHADA: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeStatus,
+    resumo: (e) => `RAT fechada no Senior — ${rotuloEntidade(e)}`,
   },
 };
 

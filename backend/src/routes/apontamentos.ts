@@ -6,9 +6,10 @@ import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
 import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
 import { calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone } from "../domain/ratDominio";
+import { randomUUID } from "crypto";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
-import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { entidadeIdAtividade, entidadeIdRat } from "../audit/identidadeEntidade";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
@@ -93,23 +94,25 @@ function podeLancarManual(role: string, contexto: { departamentosGerenciados: nu
 // (mesma regra de podeExecutarAcao); se um consultor apontar em itens de departamentos
 // diferentes na mesma proposta (raro), a RAT fica com o depexe do primeiro item, não
 // resolvemos RAT multi-departamento nesta fase.
+// Devolve `criada` além do `Rat` — o chamador (confirmarSessao) usa isso pra saber se precisa
+// gravar RAT_CRIADA (13/09/2026): reaproveitar uma RAT rascunho já existente não é criação.
 async function buscarOuCriarRatRascunho(
   atividade: { codemp: number; codpro: number },
   codfor: number,
   depexe: number,
   dataSessao: Date
-) {
+): Promise<{ rat: Awaited<ReturnType<typeof prisma.rat.create>>; criada: boolean }> {
   const existente = await prisma.rat.findFirst({
     where: { sitrat: 9, codemp: atividade.codemp, codfor, codpro: atividade.codpro },
     orderBy: { id: "desc" },
   });
-  if (existente) return existente;
+  if (existente) return { rat: existente, criada: false };
 
   const proposta = await prisma.proposta.findUnique({
     where: { codemp_codpro: { codemp: atividade.codemp, codpro: atividade.codpro } },
   });
 
-  return prisma.rat.create({
+  const rat = await prisma.rat.create({
     data: {
       codemp: atividade.codemp,
       codfor,
@@ -123,6 +126,7 @@ async function buscarOuCriarRatRascunho(
       origemCaxHub: true,
     },
   });
+  return { rat, criada: true };
 }
 
 // Teto de apontamento = alocado + excedentes autorizados. Vale pro gestor também: pra
@@ -305,8 +309,27 @@ async function confirmarSessao(
     };
   }
 
-  const rat = await buscarOuCriarRatRascunho(atividade, atividade.codfor, item.depexe, inicio);
+  const { rat, criada: ratCriada } = await buscarOuCriarRatRascunho(atividade, atividade.codfor, item.depexe, inicio);
   const ratNovo = rat.origemCaxHub && rat.numrat == null;
+
+  // RAT_CRIADA (13/09/2026) — só quando o rascunho nasceu agora, não quando reaproveitou um
+  // já existente. Sem `req` aqui (confirmarSessao recebe só `ctx`), então `correlationId`
+  // próprio por criação — mesmo espírito dos eventos que o outbox assíncrono já gera.
+  if (ratCriada) {
+    await criarEventoAuditoria({
+      origem: "tela",
+      usuarioId: ctx.user.id,
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+      eventoTipo: EVENTOS_AUDITORIA.RAT_CRIADA,
+      alteracoes: null,
+      metadata: { origemCriacao: "caxhub" },
+      correlationId: randomUUID(),
+    });
+  }
 
   const ratItem = await prisma.ratItem.create({
     data: {
@@ -331,6 +354,22 @@ async function confirmarSessao(
       desati: ajustes.descricao?.trim() || null,
       origemCaxHub: true,
     },
+  });
+
+  // RAT_ITEM_CRIADO (13/09/2026) — mesmo espírito de RAT_CRIADA acima, mas todo item novo
+  // gera o dele (diferente do cabeçalho, que só nasce uma vez por RAT).
+  await criarEventoAuditoria({
+    origem: "tela",
+    usuarioId: ctx.user.id,
+    codemp: rat.codemp,
+    codpro: rat.codpro,
+    entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+    entidadeId: entidadeIdRat(rat.id),
+    entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+    eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_CRIADO,
+    alteracoes: null,
+    metadata: { origemCriacao: "caxhub", ratItemId: ratItem.id, seqite: ratItem.seqite, datati: ratItem.datati },
+    correlationId: randomUUID(),
   });
 
   await prisma.atividadeSessaoExecucao.update({
