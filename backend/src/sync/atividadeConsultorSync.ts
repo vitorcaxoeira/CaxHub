@@ -176,6 +176,34 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
   }
 }
 
+// Sincroniza só as atividades de consultor (AtividadeConsultor) desta proposta — usado pela
+// ação manual "Sync. ERP" em Alocação (ver POST /alocacao/propostas/:codemp/:codpro/
+// sincronizar), mesmo espírito de runRatSyncPorNumrat/runPropostaSyncPorCodpro: consulta
+// filtrada, sem varredura de removidos (escopo de 1 proposta só marcaria a tabela inteira como
+// suspeita — mesmo raciocínio de runRegistroDespesaViagemSyncPorNumrat), erro propaga pro
+// chamador em vez de só logar (é assim que o botão sabe reportar falha). `AND`, não `WHERE`,
+// porque BASE_QUERY já termina em `WHERE USU_SeqIte > 0`.
+export async function runAtividadeConsultorSyncPorCodpro(codemp: number, codpro: number): Promise<number> {
+  const query = `${BASE_QUERY} AND USU_CodEmp = ${codemp} AND USU_CodPro = ${codpro}`;
+  const rows = (await runSqlViaSoapPaginated(query, ["seqati"])) as AtividadeConsultorRow[];
+  const validas = rows.filter((row) => row.seqite !== 0);
+
+  const resultado = await upsertEmLote(validas.map(linhaDe), {
+    tabela: "atividades_consultor",
+    colunas: COLUNAS,
+    colunasPk: ["seqati"],
+    carimbo: new Date(),
+  });
+
+  // Mesma reconciliação da sync completa (linha ~131 acima) — alocação recém-trazida do
+  // Senior nasce sem nó na EAP, rodar colada no import evita a janela em que ela fica
+  // invisível no cronograma.
+  await reconciliarAlocacoesOrfas();
+
+  await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
+  return resultado.linhasProcessadas;
+}
+
 // O agendamento automático sempre roda completo (sem "desde") — o modo incremental
 // só é usado quando disparado manualmente pela tela de administração de sincronização.
 export function scheduleAtividadeConsultorSync(): void {
