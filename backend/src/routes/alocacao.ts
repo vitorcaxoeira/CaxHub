@@ -15,6 +15,7 @@ import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
 import { enfileirar, processarFilaSincronizacao, reprocessar } from "../sync/outboxSenior";
 import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
 import { runPropostaItemSyncPorCodpro } from "../sync/propostaItemSync";
+import { runAtividadeConsultorSyncPorCodpro } from "../sync/atividadeConsultorSync";
 import { TIP_EVE_ALTERAR, TIP_EVE_EXCLUIR, TIP_EVE_INCLUIR } from "../soap/client";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
@@ -765,12 +766,15 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
 });
 
 // POST /propostas/:codemp/:codpro/sincronizar — "Sync. ERP": busca de novo no Senior os
-// dados desta proposta e dos itens dela, sem esperar o job noturno. Dois pontos de entrada
-// hoje: a linha já existente na lista de Alocação (proposta já local), e o campo de "Nº da
-// proposta" (28/08/2026) que aceita um número AVULSO, que o CaxHub pode nunca ter visto.
+// dados desta proposta, dos itens dela e das atividades de consultor (quem está alocado, quantas
+// horas — 14/09/2026, antes só atualizava no job noturno) dela, sem esperar o job noturno. Dois
+// pontos de entrada hoje: a linha já existente na lista de Alocação (proposta já local), e o
+// campo de "Nº da proposta" (28/08/2026) que aceita um número AVULSO, que o CaxHub pode nunca
+// ter visto.
 //
-// `runPropostaSyncPorCodpro`/`runPropostaItemSyncPorCodpro` fazem upsert de verdade — criam
-// a proposta/itens se não existirem — então funcionam pros dois casos sem mudança. O que
+// `runPropostaSyncPorCodpro`/`runPropostaItemSyncPorCodpro`/`runAtividadeConsultorSyncPorCodpro`
+// fazem upsert de verdade — criam a proposta/itens/atividades se não existirem — então
+// funcionam pros dois casos sem mudança. O que
 // muda é a ORDEM da checagem de acesso: só dá pra saber o depexe da proposta DEPOIS de
 // trazê-la do Senior (pra uma proposta nova, não tem nada local pra checar antes). Por isso
 // o guard roda depois do sync agora, não antes — bloqueia a RESPOSTA se a proposta não for
@@ -795,9 +799,14 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req: Authen
 
     let encontrada: boolean;
     let totalItens: number;
+    let totalAtividades: number;
     try {
       encontrada = await runPropostaSyncPorCodpro(codemp, codpro);
       totalItens = await runPropostaItemSyncPorCodpro(codemp, codpro);
+      // Atividades dos consultores (quem está alocado em cada item, quantas horas) desta
+      // proposta — antes só atualizava no job noturno; "Sync. ERP" passou a trazer junto
+      // (14/09/2026, pedido do Vitor), sem precisar esperar o job.
+      totalAtividades = await runAtividadeConsultorSyncPorCodpro(codemp, codpro);
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : String(syncError);
       res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
@@ -814,7 +823,7 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req: Authen
       return;
     }
 
-    res.json({ ok: true, encontrada, totalItens });
+    res.json({ ok: true, encontrada, totalItens, totalAtividades });
   } catch (error) {
     handleError(res, error, "proposta-sincronizar");
   }

@@ -94,7 +94,12 @@ export function Alocacao() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
-  const { sincronizar, estaSincronizando } = useSincronizarErp<{ ok: boolean; encontrada: boolean; totalItens: number }>();
+  const { sincronizar, estaSincronizando } = useSincronizarErp<{
+    ok: boolean;
+    encontrada: boolean;
+    totalItens: number;
+    totalAtividades: number;
+  }>();
   // Filtros ficam sincronizados na URL — assim, ao voltar da tela de detalhe da
   // proposta (via histórico do navegador), a lista reaparece com os mesmos filtros
   // em vez de resetar.
@@ -308,7 +313,10 @@ export function Alocacao() {
     const resultado = await sincronizar("avulso", `/api/alocacao/propostas/1/${codpro}/sincronizar`);
     if (resultado.ok) {
       if (resultado.data.encontrada) {
-        toast.mostrar(`Sincronizado — ${resultado.data.totalItens} item(ns)`, "success");
+        toast.mostrar(
+          `Sincronizado — ${resultado.data.totalItens} item(ns), ${resultado.data.totalAtividades} atividade(s) de consultor`,
+          "success"
+        );
         // Traz a proposta recém-trazida pra tela na hora, sem o usuário precisar procurar.
         setBuscaInput(codpro);
         setCodproDigitado("");
@@ -705,7 +713,7 @@ export function Alocacao() {
                                 if (resultado.ok) {
                                   toast.mostrar(
                                     resultado.data.encontrada
-                                      ? `Sincronizado — ${resultado.data.totalItens} item(ns)`
+                                      ? `Sincronizado — ${resultado.data.totalItens} item(ns), ${resultado.data.totalAtividades} atividade(s) de consultor`
                                       : "Proposta não encontrada mais no Senior",
                                     resultado.data.encontrada ? "success" : "warning"
                                   );
