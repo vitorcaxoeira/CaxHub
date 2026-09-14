@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { upsertEmLote, emLotes, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 import { varrerRemovidos } from "./varrerRemovidos";
@@ -116,10 +116,15 @@ interface RatExistenteAntes {
 
 async function ratsExistentesAntes(rows: RatRow[]): Promise<Map<string, RatExistenteAntes>> {
   if (rows.length === 0) return new Map();
-  const existentes = await prisma.rat.findMany({
-    where: { OR: rows.map((r) => ({ codemp: r.codemp, numprj: r.numprj, codfpj: r.codfpj, numrat: r.numrat })) },
-    select: { id: true, codemp: true, codpro: true, numprj: true, codfpj: true, numrat: true, sitrat: true },
-  });
+  // `emLotes` (14/09/2026): rows pode ter dezenas de milhares de linhas (varredura completa) —
+  // um `findMany` só, com 1 condição OR por linha, derrubou a VPS de produção por falta de
+  // memória (ver comentário de emLotes em upsertEmLote.ts).
+  const existentes = await emLotes(rows, (lote) =>
+    prisma.rat.findMany({
+      where: { OR: lote.map((r) => ({ codemp: r.codemp, numprj: r.numprj, codfpj: r.codfpj, numrat: r.numrat })) },
+      select: { id: true, codemp: true, codpro: true, numprj: true, codfpj: true, numrat: true, sitrat: true },
+    })
+  );
   return new Map(existentes.map((r) => [`${r.codemp}-${r.numprj}-${r.codfpj}-${r.numrat}`, r]));
 }
 
@@ -133,10 +138,12 @@ async function auditarRatsCriadas(rows: RatRow[], existentesAntes: Map<string, R
   const rowsNovas = rows.filter((r) => !existentesAntes.has(`${r.codemp}-${r.numprj}-${r.codfpj}-${r.numrat}`));
   if (rowsNovas.length === 0) return;
 
-  const criadas = await prisma.rat.findMany({
-    where: { OR: rowsNovas.map((r) => ({ codemp: r.codemp, numprj: r.numprj, codfpj: r.codfpj, numrat: r.numrat })) },
-    select: { id: true, codemp: true, codpro: true, numrat: true },
-  });
+  const criadas = await emLotes(rowsNovas, (lote) =>
+    prisma.rat.findMany({
+      where: { OR: lote.map((r) => ({ codemp: r.codemp, numprj: r.numprj, codfpj: r.codfpj, numrat: r.numrat })) },
+      select: { id: true, codemp: true, codpro: true, numrat: true },
+    })
+  );
   for (const rat of criadas) {
     await criarEventoAuditoria({
       origem: "integracao_senior",

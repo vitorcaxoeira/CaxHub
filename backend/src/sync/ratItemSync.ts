@@ -6,7 +6,7 @@ import { prisma } from "../db/prisma";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 import { varrerRemovidos } from "./varrerRemovidos";
-import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { upsertEmLote, emLotes, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { tamanhoLoteConfigurado } from "./politicaLote";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
@@ -134,10 +134,15 @@ interface ResultadoExecutarUpsert {
 async function auditarCriacaoDoLote(rows: RatItemRow[], ratPorChave: Map<string, number>): Promise<void> {
   if (rows.length === 0) return;
 
-  const existentesAntes = await prisma.ratItem.findMany({
-    where: { OR: rows.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrat: r.seqrat })) },
-    select: { codemp: true, numrat: true, seqrat: true },
-  });
+  // `emLotes` (14/09/2026): rows pode ter dezenas de milhares de linhas (varredura completa) —
+  // um `findMany` só, com 1 condição OR por linha, derrubou a VPS de produção por falta de
+  // memória (ver comentário de emLotes em upsertEmLote.ts).
+  const existentesAntes = await emLotes(rows, (lote) =>
+    prisma.ratItem.findMany({
+      where: { OR: lote.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrat: r.seqrat })) },
+      select: { codemp: true, numrat: true, seqrat: true },
+    })
+  );
   const chavesExistentesAntes = new Set(existentesAntes.map((r) => `${r.codemp}-${r.numrat}-${r.seqrat}`));
 
   const novasComRat = rows

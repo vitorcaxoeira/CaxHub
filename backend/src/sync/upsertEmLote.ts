@@ -62,6 +62,33 @@ export const TAMANHO_LOTE_PADRAO = 1000;
 // teto real, não um número arbitrário escolhido por conservadorismo.
 export const TETO_PARAMS_PROTOCOLO = 65535;
 
+// Quebra `itens` em lotes de até `tamanhoLote` e roda `fn` em cada um, sequencialmente,
+// juntando os resultados — mesmo motivo de `upsertEmLote` nunca mandar tudo num INSERT só,
+// mas pro lado da LEITURA: um `findMany({ where: { OR: itens.map(...) } })` com uma condição
+// por item do lote INTEIRO tem o mesmo problema de tamanho que o INSERT tinha (o `OR` gera
+// vários parâmetros por item, então o mesmo teto de 65535 do protocolo vale aqui também — e
+// mesmo bem abaixo dele, montar/enviar/planejar uma cláusula WHERE com dezenas de milhares de
+// condições já é caro de sobra em memória).
+//
+// Achado real (14/09/2026): os syncs de criação de RAT/item/RDV (ratSync.ts/ratItemSync.ts/
+// registroDespesaViagemSync.ts) checavam "essa linha já existe?" num `findMany` só, com um OR
+// por linha do LOTE INTEIRO recebido do Senior (até ~90 mil em rat_itens) — derrubou a VPS de
+// produção por falta de memória (sem swap configurado lá, o SO travou em vez de só ficar
+// lento). `emLotes` é o mesmo tipo de proteção que `upsertEmLote` já dava pra escrita,
+// agora também pra essas leituras de checagem.
+export async function emLotes<T, R>(
+  itens: T[],
+  fn: (lote: T[]) => Promise<R[]>,
+  tamanhoLote: number = TAMANHO_LOTE_PADRAO
+): Promise<R[]> {
+  const resultado: R[] = [];
+  for (let inicio = 0; inicio < itens.length; inicio += tamanhoLote) {
+    const lote = itens.slice(inicio, inicio + tamanhoLote);
+    resultado.push(...(await fn(lote)));
+  }
+  return resultado;
+}
+
 export async function upsertEmLote(linhas: LinhaUpsert[], opcoes: OpcoesUpsertEmLote): Promise<ResultadoUpsertEmLote> {
   if (linhas.length === 0) return { linhasProcessadas: 0, lotes: 0 };
 

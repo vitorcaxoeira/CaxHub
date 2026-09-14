@@ -11,7 +11,7 @@ import { sitproLabel } from "../domain/propostasDominio";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 import { executarVarreduraDoJob } from "./varrerRemovidos";
-import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { upsertEmLote, emLotes, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "propostas-sync";
@@ -175,9 +175,15 @@ export async function processarLinhasProposta(rows: PropostaRow[], inicio: Date 
   if (rows.length === 0) return { msFetch: 0, msEscrita: 0, lotes: 0 };
 
   const inicioFetch = Date.now();
-  const existentes = await prisma.proposta.findMany({
-    where: { OR: rows.map((r) => ({ codemp: r.codemp, codpro: r.codpro })) },
-  });
+  // `emLotes` (14/09/2026): rows é o resultado INTEIRO da varredura (milhares de linhas numa
+  // completa) — um `findMany` só, com 1 condição OR por linha, foi o que derrubou a VPS de
+  // produção num sync irmão deste (ratSync.ts/ratItemSync.ts) por falta de memória; mesmo
+  // padrão preventivamente corrigido aqui (ver comentário de emLotes em upsertEmLote.ts).
+  const existentes = await emLotes(rows, (lote) =>
+    prisma.proposta.findMany({
+      where: { OR: lote.map((r) => ({ codemp: r.codemp, codpro: r.codpro })) },
+    })
+  );
   const msFetch = Date.now() - inicioFetch;
   const existentePorChave = new Map(existentes.map((e) => [`${e.codemp}-${e.codpro}`, e]));
 
