@@ -106,6 +106,10 @@ ratVisualizacaoRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
           duracaoMinutos: item.horini != null && item.horfim != null ? item.horfim - item.horini : null,
           desati: item.desati,
           confirmadoNoSenior: item.numrat != null,
+          // Excluído no Senior (ver desvincularItensAusentesNoSenior em routes/rats.ts) —
+          // numrat/seqrat são preservados como histórico, mesmo raciocínio de
+          // Rat.removidoEmSenior acima.
+          removidoEmSenior: item.removidoEmSenior,
         };
       }),
       despesasViagem: despesasViagem.map((d) => ({

@@ -571,6 +571,11 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           duracaoMinutos: item.horini != null && item.horfim != null ? item.horfim - item.horini : null,
           desati: item.desati,
           confirmadoNoSenior: item.numrat != null,
+          // Excluído no Senior (ver desvincularItensAusentesNoSenior) — item preserva
+          // numrat/seqrat como histórico, então confirmadoNoSenior continua true; a tela
+          // precisa deste campo pra não misturar "confirmado de verdade" com "confirmado, mas
+          // o registro não existe mais lá".
+          removidoEmSenior: item.removidoEmSenior,
           editavel: souDono && item.numrat == null && rat.sitrat === 9,
           // Identidade atribuída pelo Senior — só existe depois do registro.
           numrat: item.numrat,
@@ -712,7 +717,7 @@ async function desvincularItensAusentesNoSenior(
   rat: { id: number; codemp: number; codpro: number | null; numrat: number | null },
   seqratsNoSenior: number[],
   req: AuthenticatedRequest
-): Promise<number[]> {
+): Promise<{ desvinculados: number[]; excluidos: number[] }> {
   const ausentes = await prisma.ratItem.findMany({
     where: {
       ratId: rat.id,
@@ -721,53 +726,100 @@ async function desvincularItensAusentesNoSenior(
       // notIn só entra quando há algo pra excluir da busca.
       seqrat: seqratsNoSenior.length > 0 ? { not: null, notIn: seqratsNoSenior } : { not: null },
     },
-    select: { id: true, seqrat: true },
+    select: { id: true, seqrat: true, origemCaxHub: true },
   });
-  if (ausentes.length === 0) return [];
+  if (ausentes.length === 0) return { desvinculados: [], excluidos: [] };
 
-  const seqrats = ausentes.map((i) => i.seqrat as number);
-  const ids = ausentes.map((i) => i.id);
+  // Mesma ramificação de desvincularRatAusenteNoSenior (cabeçalho, 14/09/2026): item
+  // origemCaxHub=true representa trabalho real feito no CaxHub — desvincula (limpa
+  // numrat/seqrat/datreg) pra permitir reenviar. Item origemCaxHub=false nasceu no Senior via
+  // ratItemSync e nunca teve sessão local — não há nada pra reenviar, o registro foi excluído
+  // de verdade na origem: marca `removidoEmSenior` e PRESERVA numrat/seqrat/datreg como
+  // histórico, permitindo a "ressurreição" automática já existente em varrerRemovidos/
+  // carimbo() se o item um dia voltar a existir lá.
+  const nativosCaxHub = ausentes.filter((i) => i.origemCaxHub);
+  const nativosSenior = ausentes.filter((i) => !i.origemCaxHub);
 
-  await prisma.$transaction([
-    prisma.ratItem.updateMany({
-      where: { id: { in: ids } },
-      // datreg também sai: era a data de registro NO SENIOR, e esse registro não existe mais.
-      data: { numrat: null, seqrat: null, datreg: null },
-    }),
-    criarEventoAuditoria({
-      origem: "tela",
-      usuarioId: req.user!.userId,
-      codemp: rat.codemp,
-      codpro: rat.codpro,
-      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
-      entidadeId: entidadeIdRat(rat.id),
-      entidadeRotulo: `RAT ${rat.numrat}`,
-      eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_DESVINCULADO_SENIOR,
-      alteracoes: null,
-      metadata: { seqratsDesvinculados: seqrats, ratItemIds: ids },
-      correlationId: req.correlationId!,
-    }),
-  ]);
+  const operacoes: Prisma.PrismaPromise<unknown>[] = [];
+
+  if (nativosCaxHub.length > 0) {
+    const idsDesvinculados = nativosCaxHub.map((i) => i.id);
+    const seqratsDesvinculados = nativosCaxHub.map((i) => i.seqrat as number);
+    operacoes.push(
+      prisma.ratItem.updateMany({
+        where: { id: { in: idsDesvinculados } },
+        // datreg também sai: era a data de registro NO SENIOR, e esse registro não existe mais.
+        data: { numrat: null, seqrat: null, datreg: null },
+      }),
+      criarEventoAuditoria({
+        origem: "tela",
+        usuarioId: req.user!.userId,
+        codemp: rat.codemp,
+        codpro: rat.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+        entidadeId: entidadeIdRat(rat.id),
+        entidadeRotulo: `RAT ${rat.numrat}`,
+        eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_DESVINCULADO_SENIOR,
+        alteracoes: null,
+        metadata: { seqratsDesvinculados, ratItemIds: idsDesvinculados },
+        correlationId: req.correlationId!,
+      })
+    );
+  }
+
+  if (nativosSenior.length > 0) {
+    const idsExcluidos = nativosSenior.map((i) => i.id);
+    const seqratsExcluidos = nativosSenior.map((i) => i.seqrat as number);
+    operacoes.push(
+      prisma.ratItem.updateMany({
+        where: { id: { in: idsExcluidos } },
+        data: { removidoEmSenior: new Date() },
+      }),
+      criarEventoAuditoria({
+        origem: "tela",
+        usuarioId: req.user!.userId,
+        codemp: rat.codemp,
+        codpro: rat.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+        entidadeId: entidadeIdRat(rat.id),
+        entidadeRotulo: `RAT ${rat.numrat}`,
+        eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_EXCLUIDO_SENIOR,
+        alteracoes: null,
+        metadata: { seqratsExcluidos, ratItemIds: idsExcluidos },
+        correlationId: req.correlationId!,
+      })
+    );
+  }
+
+  await prisma.$transaction(operacoes);
 
   // A pendência de envio antiga ficou obsoleta: ela diz "enviado", mas o registro que ela
   // criou não existe mais no ERP. Removê-la devolve o apontamento ao estado limpo de
   // "confirmado localmente, nunca enviado" — o que também destrava o Excluir, que recusa
-  // desfazer quando existe pendência em qualquer status diferente de "pendente".
-  const atividadesDosItens = await prisma.atividadeSessaoExecucao.findMany({
-    where: { ratItemId: { in: ids } },
-    select: { atividadeId: true, ratItemId: true },
-  });
-  for (const sessao of atividadesDosItens) {
-    const pendencias = await prisma.sincronizacaoPendente.findMany({
-      where: { tipo: "criar_apontamento", atividadeId: sessao.atividadeId },
+  // desfazer quando existe pendência em qualquer status diferente de "pendente". Só pros itens
+  // DESVINCULADOS (origemCaxHub=true) — item excluído não teve numrat/seqrat limpo, não há
+  // "pendência obsoleta" nele nesse sentido.
+  const idsDesvinculados = nativosCaxHub.map((i) => i.id);
+  if (idsDesvinculados.length > 0) {
+    const atividadesDosItens = await prisma.atividadeSessaoExecucao.findMany({
+      where: { ratItemId: { in: idsDesvinculados } },
+      select: { atividadeId: true, ratItemId: true },
     });
-    const obsoletas = pendencias.filter((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === sessao.ratItemId);
-    if (obsoletas.length > 0) {
-      await prisma.sincronizacaoPendente.deleteMany({ where: { id: { in: obsoletas.map((p) => p.id) } } });
+    for (const sessao of atividadesDosItens) {
+      const pendencias = await prisma.sincronizacaoPendente.findMany({
+        where: { tipo: "criar_apontamento", atividadeId: sessao.atividadeId },
+      });
+      const obsoletas = pendencias.filter((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === sessao.ratItemId);
+      if (obsoletas.length > 0) {
+        await prisma.sincronizacaoPendente.deleteMany({ where: { id: { in: obsoletas.map((p) => p.id) } } });
+      }
     }
   }
 
-  return seqrats;
+  return {
+    desvinculados: nativosCaxHub.map((i) => i.seqrat as number),
+    excluidos: nativosSenior.map((i) => i.seqrat as number),
+  };
 }
 
 // Mesma lógica do desvincularItensAusentesNoSenior acima, mas pro CABEÇALHO: quando a RAT
@@ -949,6 +1001,7 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
 
     let ratDesvinculada = false;
     let desvinculados: number[] = [];
+    let excluidos: number[] = [];
     if (rat.numrat != null) {
       let encontrouCabecalho: boolean;
       let seqratsNoSenior: number[];
@@ -965,7 +1018,9 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       // Ordem não importa entre as duas (mexem em campos/tabelas diferentes) — cabeçalho
       // primeiro só porque é a checagem "mais grave" (RAT inteira sumiu, não só um item).
       ratDesvinculada = await desvincularRatAusenteNoSenior(rat, encontrouCabecalho, req);
-      desvinculados = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
+      const resultadoItens = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
+      desvinculados = resultadoItens.desvinculados;
+      excluidos = resultadoItens.excluidos;
     }
 
     // Fase 2: reenvia itens de atividade/despesa pendentes ou com erro (ver
@@ -983,6 +1038,8 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       ratDesvinculada,
       desvinculados: desvinculados.length,
       seqratsDesvinculados: desvinculados,
+      excluidos: excluidos.length,
+      seqratsExcluidos: excluidos,
       itensReenviados,
       despesasReenviadas,
       integracao,

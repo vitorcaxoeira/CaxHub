@@ -37,6 +37,9 @@ interface ItemDetalhe {
   duracaoMinutos: number | null;
   desati: string | null;
   confirmadoNoSenior: boolean;
+  // Preenchido quando o item foi excluído no Senior (ver desvincularItensAusentesNoSenior no
+  // backend) — numrat/seqrat continuam preenchidos como histórico.
+  removidoEmSenior: string | null;
 }
 
 interface DespesaViagemDetalhe {
@@ -300,10 +303,15 @@ export function RatVisualizacao() {
                         <td className="px-4 py-2.5">
                           <span
                             className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${
-                              item.confirmadoNoSenior ? toneBadge.success : toneBadge.warning
+                              item.removidoEmSenior
+                                ? toneBadge.destructive
+                                : item.confirmadoNoSenior
+                                  ? toneBadge.success
+                                  : toneBadge.warning
                             }`}
+                            title={item.removidoEmSenior ? `Excluído no Senior em ${formatData(item.removidoEmSenior)}` : undefined}
                           >
-                            {item.confirmadoNoSenior ? "Sim" : "Pendente"}
+                            {item.removidoEmSenior ? "Excluído" : item.confirmadoNoSenior ? "Sim" : "Pendente"}
                           </span>
                         </td>
                       </tr>
