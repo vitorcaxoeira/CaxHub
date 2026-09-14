@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { randomUUID } from "crypto";
-import { AtividadeConsultor, Prisma, RatItem, Rat, AtividadeSessaoExecucao, SincronizacaoPendente } from "@prisma/client";
+import { AtividadeConsultor, EstruturaAtividade, Prisma, RatItem, Rat, AtividadeSessaoExecucao, SincronizacaoPendente } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import {
   AlocarAtividadesPayload,
@@ -353,16 +353,23 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
 }
 
 // ---------------------------------------------------------------------------
-// Canal de alocação — operação `alocarAtividades`, publicada em 10/08/2026. Três tipos
-// de mudança, um tipEve cada (I/A/E — aqui os três fazem sentido de verdade, diferente do
-// apontamento: alocação TEM exclusão real no Senior). Ver soap/client.ts pro contrato e
-// pra observação sobre o formato de qtdHor/hrsExc ainda não confirmado contra o serviço.
+// Canal de alocação — operação `alocarAtividades`, publicada em 10/08/2026 (ganhou `desAti`
+// em 14/09/2026). Três tipos de mudança, um tipEve cada (I/A/E — aqui os três fazem sentido de
+// verdade, diferente do apontamento: alocação TEM exclusão real no Senior). Ver soap/client.ts
+// pro contrato completo.
 // ---------------------------------------------------------------------------
+
+/** Espelho local da AtividadeConsultor com o que `montarPayloadAlocacao` precisa da árvore do
+ * Cronograma (nome da atividade, pro `desAti` novo) — null quando a alocação é modo "item". */
+type AlocacaoParaEnvio = AtividadeConsultor & { estruturaAtividade: EstruturaAtividade | null };
 
 // Espelho local da AtividadeConsultor, relido do banco (nunca do payload enfileirado —
 // pode ter mudado entre o enfileiramento e o envio, mesmo espírito de enviarApontamento).
-async function buscarAlocacao(atividadeConsultorId: number) {
-  const alocacao = await prisma.atividadeConsultor.findUnique({ where: { id: atividadeConsultorId } });
+async function buscarAlocacao(atividadeConsultorId: number): Promise<AlocacaoParaEnvio> {
+  const alocacao = await prisma.atividadeConsultor.findUnique({
+    where: { id: atividadeConsultorId },
+    include: { estruturaAtividade: true },
+  });
   if (!alocacao) {
     throw new Error(`AtividadeConsultor ${atividadeConsultorId} não existe mais — removida antes do envio`);
   }
@@ -382,13 +389,17 @@ interface OpcoesPayloadAlocacao {
   incluirSeqAti: boolean;
   /** `qtdHor`/`hrsExc` não fazem sentido ao excluir (nada a informar). */
   incluirHoras: boolean;
+  /** `desAti` (nome da atividade no Cronograma) também não faz sentido ao excluir — mesmo
+   * valor de `incluirHoras` em todo chamador até hoje, mas é um campo à parte (descrição, não
+   * hora) e pode divergir no futuro. */
+  incluirDescricao: boolean;
 }
 
 // Monta o payload de `alocarAtividades` a partir da AtividadeConsultor viva. Isolado à parte
 // pra ser a MESMA função usada no envio real (enviarCriarAtividade/enviarEditarAtividade/
 // enviarRemoverAtividade) e na prévia sem envio (previewEnvioSenior).
 function montarPayloadAlocacao(
-  alocacao: AtividadeConsultor,
+  alocacao: AlocacaoParaEnvio,
   tipEve: string,
   opcoes: OpcoesPayloadAlocacao
 ): AlocarAtividadesPayload {
@@ -408,6 +419,11 @@ function montarPayloadAlocacao(
         ...(opcoes.incluirHoras ? { qtdHor: horasParaQtdHorSenior(alocacao.qtdhor ?? 0) } : {}),
         ...(opcoes.incluirHoras && alocacao.horasExcedentes > 0
           ? { hrsExc: horasParaQtdHorSenior(alocacao.horasExcedentes) }
+          : {}),
+        // Só existe nome quando a alocação está pendurada num nó do Cronograma (modo
+        // "estrutura") — em modo "item" fica ausente, não há o que descrever.
+        ...(opcoes.incluirDescricao && alocacao.estruturaAtividade?.nome
+          ? { desAti: alocacao.estruturaAtividade.nome }
           : {}),
       },
     ],
@@ -437,7 +453,7 @@ async function enviarCriarAtividade(item: SincronizacaoPendente): Promise<Result
 
   const meuIdeExt = ideExtAlocacao(alocacao.id);
   const resposta = await alocarAtividadesViaSoap(
-    montarPayloadAlocacao(alocacao, TIP_EVE_INCLUIR, { incluirSeqAti: false, incluirHoras: true })
+    montarPayloadAlocacao(alocacao, TIP_EVE_INCLUIR, { incluirSeqAti: false, incluirHoras: true, incluirDescricao: true })
   );
 
   const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
@@ -472,7 +488,7 @@ async function enviarEditarAtividade(item: SincronizacaoPendente): Promise<Resul
 
   const meuIdeExt = ideExtAlocacao(alocacao.id);
   const resposta = await alocarAtividadesViaSoap(
-    montarPayloadAlocacao(alocacao, TIP_EVE_ALTERAR, { incluirSeqAti: true, incluirHoras: true })
+    montarPayloadAlocacao(alocacao, TIP_EVE_ALTERAR, { incluirSeqAti: true, incluirHoras: true, incluirDescricao: true })
   );
 
   const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
@@ -509,7 +525,7 @@ async function enviarRemoverAtividade(item: SincronizacaoPendente): Promise<null
 
   const meuIdeExt = ideExtAlocacao(alocacao.id);
   const resposta = await alocarAtividadesViaSoap(
-    montarPayloadAlocacao(alocacao, TIP_EVE_EXCLUIR, { incluirSeqAti: true, incluirHoras: false })
+    montarPayloadAlocacao(alocacao, TIP_EVE_EXCLUIR, { incluirSeqAti: true, incluirHoras: false, incluirDescricao: false })
   );
 
   const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExt) ?? resposta.resultados[0];
@@ -864,13 +880,13 @@ export async function previewEnvioSenior(item: SincronizacaoPendente): Promise<P
     let opcoes: OpcoesPayloadAlocacao;
     if (item.tipo === "criar_atividade") {
       tipEve = TIP_EVE_INCLUIR;
-      opcoes = { incluirSeqAti: false, incluirHoras: true };
+      opcoes = { incluirSeqAti: false, incluirHoras: true, incluirDescricao: true };
     } else if (item.tipo === "editar_atividade") {
       tipEve = TIP_EVE_ALTERAR;
-      opcoes = { incluirSeqAti: true, incluirHoras: true };
+      opcoes = { incluirSeqAti: true, incluirHoras: true, incluirDescricao: true };
     } else {
       tipEve = TIP_EVE_EXCLUIR;
-      opcoes = { incluirSeqAti: true, incluirHoras: false };
+      opcoes = { incluirSeqAti: true, incluirHoras: false, incluirDescricao: false };
     }
 
     const payloadReal = montarPayloadAlocacao(alocacao, tipEve, opcoes);

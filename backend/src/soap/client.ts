@@ -386,10 +386,17 @@ export async function registrarAtividadesViaSoap(payload: RegistrarAtividadesPay
 // valores fazem sentido de verdade: alocação tem exclusão de fato no Senior, diferente de
 // apontamento (registrarAtividades nunca usa "E", o serviço não tem como desfazer aquele).
 //
-// `qtdHor`/`hrsExc` são string no XSD, sem formato declarado — a hipótese usada aqui é o
-// mesmo "HH:MM" de horIni/horFim (ver formatarHoraSenior), ainda NÃO confirmada contra o
-// serviço real. Primeira chamada de verdade (script manual, antes de ligar o cron pra estes
-// tipos) é o que confirma ou corrige isso.
+// `qtdHor`/`hrsExc` são string no XSD, sem formato declarado — o mesmo "HH:MM" de
+// horIni/horFim (ver formatarHoraSenior), confirmado pelo Vitor (14/09/2026) junto com o
+// publicador do serviço.
+//
+// `desAti` (Descrição da atividade) foi publicado junto com `hrsExc` (14/09/2026) — irmão do
+// `desAti` que `registrarAtividades` já manda, mas com outra fonte: lá vem do que o consultor
+// escreveu (RatItem.desati); aqui vem do nome da atividade no Cronograma
+// (EstruturaAtividade.nome, via AtividadeConsultor.estruturaAtividadeId). Só existe alocação em
+// modo "estrutura" — em modo "item" (aloca direto no item da proposta, sem Cronograma) não há
+// nome de atividade pra mandar, então o campo fica ausente (ver montarPayloadAlocacao em
+// sync/outboxSenior.ts). Sem truncamento: o limite real do campo lá ainda não foi confirmado.
 // ---------------------------------------------------------------------------
 
 /** Identificador externo mandado ao Senior pra alocação: o id local de AtividadeConsultor. */
@@ -407,6 +414,9 @@ export interface ItemAlocacaoSenior {
   qtdHor?: string;
   /** Horas excedentes autorizadas (AtividadeConsultor.horasExcedentes) — só quando > 0. */
   hrsExc?: string;
+  /** Nome da atividade no Cronograma (EstruturaAtividade.nome) — ausente ao EXCLUIR e ausente
+   * quando a alocação é modo "item" (sem nó de Cronograma vinculado). */
+  desAti?: string;
 }
 
 export interface AlocarAtividadesPayload {
@@ -442,6 +452,7 @@ export function montarEnvelopeAlocarAtividades(payload: AlocarAtividadesPayload,
     .map(
       (i) =>
         `<itens>` +
+        (i.desAti != null ? `<desAti>${escapeXml(i.desAti)}</desAti>` : "") +
         (i.hrsExc != null ? `<hrsExc>${escapeXml(i.hrsExc)}</hrsExc>` : "") +
         `<ideExt>${escapeXml(i.ideExt)}</ideExt>` +
         (i.qtdHor != null ? `<qtdHor>${escapeXml(i.qtdHor)}</qtdHor>` : "") +

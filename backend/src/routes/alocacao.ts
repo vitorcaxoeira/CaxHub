@@ -1855,12 +1855,15 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
     let status: string | null | undefined;
     let responsavelCodfor: number | null | undefined;
     let observacao: string | null | undefined;
-    // Alocação (AtividadeConsultor) vinculada a este nó — buscada cedo, no bloco de
-    // duracaoHoras abaixo, só quando o responsável NÃO está mudando nesta requisição (é o
-    // caso em que este PATCH escreve o qtdhor dela por cascade, mais abaixo). Guardada aqui
-    // e reaproveitada lá embaixo pra não consultar duas vezes o mesmo registro.
+    // Alocação (AtividadeConsultor) vinculada a este nó — buscada cedo (nome E duracaoHoras
+    // podem precisar dela: nome vira `desAti` no Senior — ver montarPayloadAlocacao em
+    // outboxSenior.ts —, duracaoHoras cascateia pro `qtdhor` dela), só quando o responsável
+    // NÃO está mudando nesta requisição (troca de responsável já cuida da alocação sozinha,
+    // no bloco próprio mais abaixo). Guardada aqui e reaproveitada lá embaixo pra não
+    // consultar duas vezes o mesmo registro.
     let alocacaoVinculada: AtividadeConsultor | null = null;
     let houveMudancaResponsavel = false;
+    let houveMudancaNome = false;
     if (no.tipo === "atividade") {
       if (req.body?.status !== undefined) {
         const statusValidos = ["nao_iniciada", "em_curso", "concluida"];
@@ -1894,6 +1897,16 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
         }
       }
       houveMudancaResponsavel = responsavelCodfor !== undefined && responsavelCodfor !== no.responsavelCodfor;
+      // `nome` vira `desAti` no Senior — mudar só ele (sem duracaoHoras no body) também
+      // precisa da alocação vinculada pra poder reenviar (pedido do Vitor, 14/09/2026: antes
+      // só duracaoHoras/responsável cascateavam pro Senior, nome ficava pra próxima edição que
+      // já disparasse envio — passou a reenviar na hora).
+      houveMudancaNome = nome !== undefined && nome !== no.nome;
+      if (!houveMudancaResponsavel && (houveMudancaNome || req.body?.duracaoHoras !== undefined)) {
+        alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
+          where: { estruturaAtividadeId: id, sitreg: "A" },
+        });
+      }
       if (req.body?.observacao !== undefined) {
         observacao = typeof req.body.observacao === "string" && req.body.observacao.trim() !== "" ? req.body.observacao.trim() : null;
       }
@@ -1926,9 +1939,7 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
           // outra do zero (branch mais abaixo), então o qtdhor dela nunca é escrito por
           // aqui, e não há o que proteger.
           if (!houveMudancaResponsavel && duracaoHoras !== no.duracaoHoras) {
-            alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
-              where: { estruturaAtividadeId: id, sitreg: "A" },
-            });
+            // Já buscada acima (fetch cedo, reaproveitado) — aqui só valida a redução.
             if (alocacaoVinculada && duracaoHoras < (alocacaoVinculada.qtdhor ?? 0)) {
               const { realizado } = await saldoDaAtividade(alocacaoVinculada);
               const minimoPermitido = Math.max(0, realizado - alocacaoVinculada.horasExcedentes);
@@ -2103,21 +2114,26 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
           });
           atividadeConsultorSincronizadaId = novaAlocacao.id;
         }
-      } else if (duracaoHoras != null && duracaoHoras !== no.duracaoHoras) {
-        // alocacaoVinculada já foi buscada acima, na mesma condição (!houveMudancaResponsavel
-        // && duracaoHoras !== no.duracaoHoras) que valida a redução contra o realizado —
-        // reaproveita em vez de buscar de novo.
-        if (alocacaoVinculada && alocacaoVinculada.qtdhor !== duracaoHoras) {
-          await prisma.atividadeConsultor.update({
-            where: { id: alocacaoVinculada.id },
-            data: { qtdhor: duracaoHoras },
-          });
+      } else if (alocacaoVinculada) {
+        // alocacaoVinculada já foi buscada acima (fetch cedo, quando o nome mudou e/ou
+        // duracaoHoras veio no body) — reaproveita em vez de buscar de novo. Reenvia sempre
+        // que a duração de fato mudou OU o nome mudou (nome vira `desAti` no Senior — pedido
+        // do Vitor, 14/09/2026, pra não deixar a descrição desatualizada lá até a próxima
+        // edição de duração/consultor).
+        const duracaoMudou = duracaoHoras != null && duracaoHoras !== no.duracaoHoras && alocacaoVinculada.qtdhor !== duracaoHoras;
+        if (duracaoMudou || houveMudancaNome) {
+          if (duracaoMudou) {
+            await prisma.atividadeConsultor.update({
+              where: { id: alocacaoVinculada.id },
+              data: { qtdhor: duracaoHoras! },
+            });
+          }
           await enfileirar(alocacaoVinculada.id, "editar_atividade", {
             codemp: alocacaoVinculada.codemp,
             codpro: alocacaoVinculada.codpro,
             seqite: alocacaoVinculada.seqite,
             codfor: alocacaoVinculada.codfor,
-            qtdhor: duracaoHoras,
+            qtdhor: duracaoMudou ? duracaoHoras : alocacaoVinculada.qtdhor,
             fasid: alocacaoVinculada.fasid,
             dataPrevistaInicio: alocacaoVinculada.dataPrevistaInicio?.toISOString() ?? null,
             dataPrevistaFim: alocacaoVinculada.dataPrevistaFim?.toISOString() ?? null,
