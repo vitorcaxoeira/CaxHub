@@ -506,10 +506,12 @@ export function MeusApontamentos() {
     // Contador do botão "Fechar Todos" — piggyback em toda vez que a lista de RATs é
     // recarregada (mesmos gatilhos: mount, filtro, e depois de qualquer ação que muda
     // sitrat/integração), sem precisar de um efeito próprio. Silencioso em erro — é só um
-    // contador auxiliar, não impede o resto da tela de funcionar.
+    // contador auxiliar, não impede o resto da tela de funcionar. Endpoint LEVE (só o número,
+    // 14/09/2026, achado real de lentidão) — o resumo completo com cliente/consultor/minutos
+    // só é buscado quando o modal é de fato aberto, em abrirResumoFechamentoLote.
     axios
-      .get("/api/rats/elegiveis-fechamento", { params: filtrosRatsParaQuery() })
-      .then(({ data }) => setTotalElegiveisFechamento(data.rats?.length ?? 0))
+      .get("/api/rats/elegiveis-fechamento/contagem", { params: filtrosRatsParaQuery() })
+      .then(({ data }) => setTotalElegiveisFechamento(data.total ?? 0))
       .catch(() => {});
   }
 
