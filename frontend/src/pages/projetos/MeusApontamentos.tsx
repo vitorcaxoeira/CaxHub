@@ -475,20 +475,25 @@ export function MeusApontamentos() {
     carregarAtividadesManual(codfor);
   }
 
+  // Filtros da tabela de RATs, no formato de query param — usado tanto por GET /rats quanto
+  // por GET /rats/elegiveis-fechamento (14/09/2026: "Fechar Todos" passou a respeitar os MESMOS
+  // filtros aplicados na tela, não só a regra fixa de elegibilidade — sem isso, filtrar por um
+  // consultor mostrava 2 RATs na tabela mas o botão continuava contando/fechando todo mundo).
+  // Sem `page`/`pageSize`: elegiveis-fechamento nunca pagina, de propósito (ver comentário lá).
+  function filtrosRatsParaQuery() {
+    return {
+      codfor: codforsFiltro.length > 0 ? codforsFiltro.join(",") : undefined,
+      sitrat: sitratFiltro.length > 0 ? sitratFiltro.join(",") : undefined,
+      busca: buscaDebounced || undefined,
+      buscaItem: buscaItemDebounced || undefined,
+      integracao: integracaoFiltro.length > 0 ? integracaoFiltro.join(",") : undefined,
+    };
+  }
+
   function carregarRats() {
     setLoadingRats(true);
     axios
-      .get("/api/rats", {
-        params: {
-          codfor: codforsFiltro.length > 0 ? codforsFiltro.join(",") : undefined,
-          sitrat: sitratFiltro.length > 0 ? sitratFiltro.join(",") : undefined,
-          busca: buscaDebounced || undefined,
-          buscaItem: buscaItemDebounced || undefined,
-          integracao: integracaoFiltro.length > 0 ? integracaoFiltro.join(",") : undefined,
-          page: pageRats,
-          pageSize: PAGE_SIZE_RATS,
-        },
-      })
+      .get("/api/rats", { params: { ...filtrosRatsParaQuery(), page: pageRats, pageSize: PAGE_SIZE_RATS } })
       .then(({ data }) => {
         setRats(data.rats);
         setTotalRats(data.total);
@@ -501,7 +506,7 @@ export function MeusApontamentos() {
     // sitrat/integração), sem precisar de um efeito próprio. Silencioso em erro — é só um
     // contador auxiliar, não impede o resto da tela de funcionar.
     axios
-      .get("/api/rats/elegiveis-fechamento")
+      .get("/api/rats/elegiveis-fechamento", { params: filtrosRatsParaQuery() })
       .then(({ data }) => setTotalElegiveisFechamento(data.rats?.length ?? 0))
       .catch(() => {});
   }
@@ -968,12 +973,13 @@ export function MeusApontamentos() {
 
   // "Fechar Todos" — resumo ANTES de disparar, igual "Confirmar Todos". Busca a lista completa
   // (sem paginação) de GET /rats/elegiveis-fechamento em vez de usar `rats` do estado, que é só
-  // a página atual da tabela (ver carregarRats).
+  // a página atual da tabela (ver carregarRats) — mas com os MESMOS filtros da tela
+  // (filtrosRatsParaQuery), senão o resumo incluiria RAT de fora do que está sendo mostrado.
   async function abrirResumoFechamentoLote() {
     setCarregandoResumoFechamentoLote(true);
     setResultadoFechamentoLote(null);
     try {
-      const { data } = await axios.get("/api/rats/elegiveis-fechamento");
+      const { data } = await axios.get("/api/rats/elegiveis-fechamento", { params: filtrosRatsParaQuery() });
       setResumoFechamentoLote(data.rats ?? []);
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao carregar as RATs elegíveis para fechamento");
@@ -1739,8 +1745,10 @@ export function MeusApontamentos() {
                   labelSufixo="consultores"
                 />
               )}
-              {/* Contador vem de GET /rats/elegiveis-fechamento (carregarRats), não da página/
-                  filtro atual de `rats` — regra 1 (sitrat=9 + permissão) é independente disso.
+              {/* Contador vem de GET /rats/elegiveis-fechamento (carregarRats) — não da página
+                  atual de `rats` (que é só 1 página), mas RESPEITA os mesmos filtros da tela
+                  (14/09/2026, ver filtrosRatsParaQuery): filtrar por consultor/busca/situação/
+                  integração aqui muda tanto a tabela quanto o que "Fechar Todos" abrange.
                   `null` (ainda não carregado) mostra sem número, nunca "(0)" por engano. */}
               <button
                 onClick={abrirResumoFechamentoLote}

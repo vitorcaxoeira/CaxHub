@@ -1111,9 +1111,11 @@ ratsRouter.post("/fechar-lote", async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// GET /elegiveis-fechamento — todas as RATs visíveis com sitrat=9 e permissão de fechar, SEM
+// GET /elegiveis-fechamento — todas as RATs visíveis com sitrat=9, permissão de fechar E os
+// MESMOS filtros da tabela (consultor/situação/busca/observação/integração, 14/09/2026), SEM
 // paginação (mesmo espírito de GET /opcoes-filtro) — é o que alimenta o resumo do "Fechar
-// Todos" sem ficar restrito à página atual de GET /.
+// Todos" sem ficar restrito à página atual de GET /, mas ainda assim escopado ao que o usuário
+// filtrou lá.
 ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
@@ -1125,11 +1127,37 @@ ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) =
 
     let rats = await ratsVisiveis(role, contexto);
     rats = rats.filter((r) => r.sitrat === 9 && podeFecharRat(role, contexto, r));
-    if (rats.length === 0) {
-      res.json({ rats: [] });
-      return;
+
+    // Mesmos filtros já aplicados na tabela da tela (14/09/2026, pedido do Vitor) — "Fechar
+    // Todos" precisa respeitar consultor/situação/busca/observação/integração que o usuário já
+    // filtrou em GET /, não só a regra fixa (sitrat=9 + permissão); senão o resumo do lote
+    // mostra e fecha RAT que nem aparece na tabela filtrada. Mesma leitura de query params de
+    // GET / (codfor, sitrat, busca, buscaItem, integracao) — replicada aqui, não extraída pra
+    // função compartilhada, pra não arriscar mexer em GET / (já otimizada e sensível a
+    // regressão de performance, com comentários próprios sobre isso).
+    //
+    // `sitrat` aqui é uma INTERSEÇÃO com a elegibilidade (sempre 9), não uma substituição —
+    // fechar só faz sentido pra Digitado, então filtrar a tela por qualquer outra situação
+    // (sem incluir Digitado) zera o resultado de propósito, em vez de ignorar o filtro.
+    const sitratFiltro = (typeof req.query.sitrat === "string" ? req.query.sitrat : "")
+      .split(",")
+      .map((v) => Number(v.trim()))
+      .filter((v) => Number.isFinite(v) && v !== 0);
+    if (sitratFiltro.length > 0 && !sitratFiltro.includes(9)) {
+      rats = [];
     }
 
+    const codforsFiltro = (typeof req.query.codfor === "string" ? req.query.codfor : "")
+      .split(",")
+      .map((v) => Number(v.trim()))
+      .filter((v) => Number.isFinite(v) && v !== 0);
+    if (codforsFiltro.length > 0) {
+      rats = rats.filter((r) => codforsFiltro.includes(r.codfor));
+    }
+
+    // Proposta/cliente resolvidos aqui — cedo, antes da busca livre precisar deles — e
+    // reaproveitados depois na montagem da resposta (mesmo `propostaPorChave`, sem query
+    // duplicada).
     const chavesProposta = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
     const propostas =
       chavesProposta.length > 0
@@ -1145,13 +1173,54 @@ ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) =
         : [];
     const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
 
+    const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
+    if (busca) {
+      rats = rats.filter((r) => {
+        const proposta = r.codpro != null ? propostaPorChave.get(`${r.codemp}-${r.codpro}`) : undefined;
+        const cliente = proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : "";
+        return (
+          cliente.toLowerCase().includes(busca) ||
+          String(r.codpro ?? "").includes(busca) ||
+          String(r.numrat ?? "").includes(busca)
+        );
+      });
+    }
+
+    const buscaItem = typeof req.query.buscaItem === "string" ? req.query.buscaItem.trim() : "";
+    if (buscaItem) {
+      const ratIdsCandidatos = rats.map((r) => r.id);
+      const itensCorrespondentes =
+        ratIdsCandidatos.length > 0
+          ? await prisma.ratItem.findMany({
+              where: { ratId: { in: ratIdsCandidatos }, desati: { contains: buscaItem, mode: "insensitive" } },
+              select: { ratId: true },
+            })
+          : [];
+      const ratIdsComItem = new Set(itensCorrespondentes.map((i) => i.ratId));
+      rats = rats.filter((r) => ratIdsComItem.has(r.id));
+    }
+
+    const integracaoFiltro = (typeof req.query.integracao === "string" ? req.query.integracao : "")
+      .split(",")
+      .filter((v): v is IntegracaoErpStatus => (["sincronizado", "enviando", "falha", "pendente"] as string[]).includes(v));
+    if (integracaoFiltro.length > 0) {
+      const { integracaoPorRat } = await buscarItensEIntegracao(rats);
+      rats = rats.filter((r) => integracaoFiltro.includes(integracaoPorRat.get(r.id)!));
+    }
+
+    if (rats.length === 0) {
+      res.json({ rats: [] });
+      return;
+    }
+
     const codforsUnicos = [...new Set(rats.map((r) => r.codfor))];
     const consultores =
       codforsUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } }) : [];
     const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
 
-    // Só o total de minutos, sem o custo de despesa/pendência de buscarItensEIntegracao — a
-    // integração não faz parte do critério de elegibilidade (regra 1: só sitrat importa aqui).
+    // Só o total de minutos, sem o custo de despesa/pendência de buscarItensEIntegracao de
+    // novo — quando o filtro de integração está ativo ele já rodou acima; sem filtro, não
+    // precisa dele aqui (não entra na resposta, só no resumo do lote).
     const ratIds = rats.map((r) => r.id);
     const itens = await prisma.ratItem.findMany({ where: { ratId: { in: ratIds } }, select: { ratId: true, horini: true, horfim: true } });
     const minutosPorRat = new Map<number, number>();
