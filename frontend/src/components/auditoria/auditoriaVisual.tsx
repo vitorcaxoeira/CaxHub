@@ -406,6 +406,19 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
       return `${quantos} apontamento(s) apagado(s) no Senior — vínculo removido pra reintegrar (${rotuloEntidade(e)})`;
     },
   },
+  // Mesma lógica do evento acima, mas pra item com origemCaxHub=false (nunca teve sessão
+  // local) — não há o que reintegrar, o registro foi excluído de vez na origem. Mesmo espírito
+  // de RAT_EXCLUIDA_SENIOR (cabeçalho), aplicado ao item. 14/09/2026.
+  RAT_ITEM_EXCLUIDO_SENIOR: {
+    tone: "destructive",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => {
+      const seqrats = Array.isArray(e.metadata?.seqratsExcluidos) ? e.metadata.seqratsExcluidos : [];
+      const quantos = seqrats.length;
+      return `${quantos} item(ns) excluído(s) no Senior — não existem mais na origem (${rotuloEntidade(e)})`;
+    },
+  },
   // Mesmo cabeçalho acima, mas o documento inteiro (não só um item) não voltou mais na
   // consulta ao Senior — Rat.numrat foi limpo pra permitir reintegrar.
   RAT_DESVINCULADA_SENIOR: {

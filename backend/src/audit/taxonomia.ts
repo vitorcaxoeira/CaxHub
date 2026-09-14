@@ -140,6 +140,14 @@ export const EVENTOS_AUDITORIA = {
   // desvincularItensAusentesNoSenior em backend/src/routes/rats.ts.
   RAT_ITEM_DESVINCULADO_SENIOR: "RAT_ITEM_DESVINCULADO_SENIOR",
 
+  // Mesma lógica do evento acima, mas pra item com origemCaxHub=false (nasceu no Senior via
+  // ratItemSync, nunca teve sessão local) — não existe rascunho nenhum pra reintegrar, o
+  // registro foi excluído de verdade na origem: RatItem.removidoEmSenior é marcado e
+  // numrat/seqrat/datreg são PRESERVADOS como histórico. Ver desvincularItensAusentesNoSenior
+  // em backend/src/routes/rats.ts. Pedido do Vitor (14/09/2026), mesmo espírito de
+  // RAT_EXCLUIDA_SENIOR (cabeçalho), aplicado ao item.
+  RAT_ITEM_EXCLUIDO_SENIOR: "RAT_ITEM_EXCLUIDO_SENIOR",
+
   // Mesma lógica do evento acima, mas no CABEÇALHO da RAT: o documento inteiro (não só um
   // item) não voltou mais na consulta ao Senior — Rat.numrat é limpo. Ver
   // desvincularRatAusenteNoSenior em backend/src/routes/rats.ts. 17/08/2026.

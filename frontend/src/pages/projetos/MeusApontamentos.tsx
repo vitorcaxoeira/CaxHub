@@ -145,6 +145,10 @@ interface RatItemRow {
   duracaoMinutos: number | null;
   desati: string | null;
   confirmadoNoSenior: boolean;
+  // Preenchido quando o item foi excluído no Senior (origemCaxHub=false, nunca teve sessão
+  // local — ver desvincularItensAusentesNoSenior no backend). numrat/seqrat continuam
+  // preenchidos como histórico, então não dá pra distinguir isso só por confirmadoNoSenior.
+  removidoEmSenior: string | null;
   editavel: boolean;
   // Motivo da última recusa do Senior. Preenchido = a integração falhou e há o que reenviar.
   envioErro: string | null;
@@ -254,6 +258,21 @@ function AcaoIntegracao({
   onExcluir: () => void;
   onVerErro: () => void;
 }) {
+  // Excluído no Senior (ver desvincularItensAusentesNoSenior no backend) — item nascido lá,
+  // nunca teve sessão local: não existe ação possível (nem Enviar, nem Excluir, nem Reenviar).
+  // Checado ANTES de confirmadoNoSenior de propósito: numrat/seqrat continuam preenchidos como
+  // histórico, então sem essa ordem o item cairia no ramo de baixo como se estivesse tudo bem.
+  if (item.removidoEmSenior) {
+    return (
+      <span
+        className="font-mono text-[11px] text-destructive"
+        title={`Este apontamento não existe mais no Senior — foi excluído lá em ${new Date(item.removidoEmSenior).toLocaleDateString("pt-BR")}. Preservado como histórico, sem nenhuma ação possível.`}
+      >
+        Excluído no Senior
+      </span>
+    );
+  }
+
   if (item.confirmadoNoSenior) {
     return (
       <span
@@ -910,6 +929,15 @@ export function MeusApontamentos() {
         avisos.push(
           `${data.desvinculados} apontamento(s) não existem mais no Senior (sequência ${seqrats}) — ` +
             `o vínculo foi removido e eles podem ser enviados de novo pela ação "Enviar".`
+        );
+      }
+      if (data?.excluidos > 0) {
+        // Item de origem ERP (nunca teve sessão local) que a origem excluiu — diferente do
+        // aviso acima, não há ação de volta nenhuma ("Enviar" não reaparece), é só informativo.
+        const seqrats = (data.seqratsExcluidos ?? []).join(", ");
+        avisos.push(
+          `${data.excluidos} item(ns) desta RAT não existem mais no Senior (sequência ${seqrats}) — ` +
+            `foram marcados como excluídos. Não há nada a fazer: nunca tiveram apontamento local.`
         );
       }
       if (data?.itensReenviados > 0) {
