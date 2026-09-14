@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { sitratLabel, sitratTone } from "../domain/ratDominio";
+import { sitratLabelEfetivo, sitratToneEfetivo } from "../domain/ratDominio";
 import { sitproLabel, sitproTone } from "../domain/propostasDominio";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
 import { simNaoLabel, tipdesLabel, moddesLabel } from "../domain/rdvDominio";
@@ -85,10 +85,13 @@ ratVisualizacaoRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
         consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`,
         datemi: rat.datemi,
         dataApr: rat.dataApr,
-        sitratLabel: sitratLabel(rat.sitrat),
-        sitratTone: sitratTone(rat.sitrat),
+        sitratLabel: sitratLabelEfetivo(rat),
+        sitratTone: sitratToneEfetivo(rat),
         obsrat: rat.obsrat?.trim() || null,
         origemCaxHub: rat.origemCaxHub,
+        // Excluída no Senior (ver desvincularRatAusenteNoSenior em routes/rats.ts) — a tela
+        // mostra uma tarja com a data, mesmo padrão de PedidoVisualizacao.tsx.
+        removidoEmSenior: rat.removidoEmSenior,
       },
       itens: itens.map((item) => {
         const propostaItem =

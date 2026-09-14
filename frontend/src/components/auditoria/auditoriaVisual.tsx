@@ -414,6 +414,15 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeSenior,
     resumo: (e) => `RAT ${e.alteracoes?.numrat?.de ?? "?"} não existe mais no Senior — vínculo removido (${rotuloEntidade(e)})`,
   },
+  // RAT com origemCaxHub=false (nasceu no Senior, nunca teve rascunho local) cujo documento
+  // foi excluído de vez na origem — diferente do evento acima, aqui não há o que reintegrar;
+  // a RAT passa a aparecer com situação "Excluída" na tela. 14/09/2026.
+  RAT_EXCLUIDA_SENIOR: {
+    tone: "destructive",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `RAT excluída no Senior — não existe mais na origem (${rotuloEntidade(e)})`,
+  },
   // Situação (sitrat) mudou direto no Senior, numa RAT que já existia localmente — achado real
   // 13/09/2026 (mudar pra "Digitado" de novo depois de fechada e sincronizar não deixava
   // rastro). Rótulos espelham backend/src/domain/ratDominio.ts (SITRAT_LABELS).

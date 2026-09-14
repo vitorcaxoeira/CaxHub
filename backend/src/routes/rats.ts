@@ -5,6 +5,8 @@ import { resolverContextoConsultor, podeExecutarAcao, codforsDoTime } from "../d
 import {
   sitratLabel,
   sitratTone,
+  sitratLabelEfetivo,
+  sitratToneEfetivo,
   SITRAT_ORDER,
   calcularIntegracaoErp,
   integracaoErpLabel,
@@ -355,15 +357,21 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
           codfor: r.codfor,
           consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${r.codfor}`,
           sitrat: r.sitrat,
-          sitratLabel: sitratLabel(r.sitrat),
-          sitratTone: sitratTone(r.sitrat),
+          sitratLabel: sitratLabelEfetivo(r),
+          sitratTone: sitratToneEfetivo(r),
+          removidoEmSenior: r.removidoEmSenior,
           totalItens: itensDaRat.length,
           totalMinutos,
+          // `removidoEmSenior == null` nas duas: RAT marcada "Excluída" (ver sitratLabelEfetivo)
+          // não tem mais o que aprovar/fechar, mesmo que sitrat ainda esteja congelado em 9
+          // (Digitado) — era a última situação real conhecida antes do documento sumir do Senior.
           podeAprovar:
-            r.sitrat === 9 && podeExecutarAcao(role, contexto, "aprovar", { depexe: r.depexe ?? -1, codfor: r.codfor }),
+            r.sitrat === 9 &&
+            r.removidoEmSenior == null &&
+            podeExecutarAcao(role, contexto, "aprovar", { depexe: r.depexe ?? -1, codfor: r.codfor }),
           // Fechar aceita mais gente que aprovar (dono da RAT também, não só gestor/admin) —
           // ver podeFecharRat.
-          podeFechar: r.sitrat === 9 && podeFecharRat(role, contexto, r),
+          podeFechar: r.sitrat === 9 && r.removidoEmSenior == null && podeFecharRat(role, contexto, r),
           todosComObservacao: itensDaRat.length > 0 && itensDaRat.every((item) => !!item.desati?.trim()),
           integracao,
           integracaoLabel: integracaoErpLabel(integracao),
@@ -539,6 +547,10 @@ ratsRouter.patch("/:id/aprovar", async (req: AuthenticatedRequest, res) => {
       res.status(400).json({ error: "Só é possível aprovar uma RAT que esteja Digitada" });
       return;
     }
+    if (rat.removidoEmSenior != null) {
+      res.status(400).json({ error: "Esta RAT foi excluída no Senior — não é possível aprovar" });
+      return;
+    }
 
     const itens = await prisma.ratItem.findMany({ where: { ratId: id }, include: { sessoes: true } });
     if (itens.length === 0) {
@@ -688,16 +700,47 @@ async function desvincularItensAusentesNoSenior(
 }
 
 // Mesma lógica do desvincularItensAusentesNoSenior acima, mas pro CABEÇALHO: quando a RAT
-// inteira não volta mais na consulta ao Senior (documento apagado/cancelado lá), limpar
-// Rat.numrat pra permitir reintegrar — nunca apagar a linha local, ela é o registro do
-// trabalho que aconteceu de verdade. `encontrouNoSenior` vem de runRatSyncPorNumrat (true =
-// a consulta por numrat trouxe pelo menos 1 linha).
+// inteira não volta mais na consulta ao Senior (documento apagado/cancelado lá). `encontrouNoSenior`
+// vem de runRatSyncPorNumrat (true = a consulta por numrat trouxe pelo menos 1 linha).
+//
+// Dois desfechos, conforme a origem da RAT (14/09/2026, pedido do Vitor — achado real:
+// RAT 1833655 ficava com numrat limpo e sitrat=9/"Digitado" congelado pra sempre, parecendo
+// um rascunho ativo quando na verdade tinha sido excluída no ERP):
+//   - origemCaxHub=true (nasceu no CaxHub, o documento representa trabalho real já feito):
+//     limpa Rat.numrat pra permitir REINTEGRAR — nunca apagar a linha local, comportamento
+//     inalterado desde 17/08/2026.
+//   - origemCaxHub=false (nasceu no Senior via ratSync, nunca teve rascunho local): não há o
+//     que reintegrar, o documento foi excluído de verdade na origem — marca
+//     `Rat.removidoEmSenior` (mesma coluna que a varredura completa usa) e PRESERVA numrat
+//     como histórico, pra permitir a "ressurreição" automática de varrerRemovidos/carimbo()
+//     se a RAT um dia voltar a existir lá. A tela passa a mostrar "Excluída" no lugar da
+//     situação (ver sitratLabelEfetivo em ratDominio.ts) em vez de um rascunho fantasma.
 async function desvincularRatAusenteNoSenior(
-  rat: { id: number; codemp: number; codpro: number | null; numrat: number | null },
+  rat: { id: number; codemp: number; codpro: number | null; numrat: number | null; origemCaxHub: boolean },
   encontrouNoSenior: boolean,
   req: AuthenticatedRequest
 ): Promise<boolean> {
   if (encontrouNoSenior || rat.numrat == null) return false;
+
+  if (!rat.origemCaxHub) {
+    await prisma.$transaction([
+      prisma.rat.update({ where: { id: rat.id }, data: { removidoEmSenior: new Date() } }),
+      criarEventoAuditoria({
+        origem: "tela",
+        usuarioId: req.user!.userId,
+        codemp: rat.codemp,
+        codpro: rat.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+        entidadeId: entidadeIdRat(rat.id),
+        entidadeRotulo: `RAT ${rat.numrat}`,
+        eventoTipo: EVENTOS_AUDITORIA.RAT_EXCLUIDA_SENIOR,
+        alteracoes: null,
+        metadata: null,
+        correlationId: req.correlationId!,
+      }),
+    ]);
+    return true;
+  }
 
   const numratAnterior = rat.numrat;
   await prisma.$transaction([
@@ -917,6 +960,12 @@ async function prepararFechamentoRat(
   if (rat.sitrat !== 9) {
     return { ok: false, status: 400, motivo: "Só é possível fechar uma RAT que esteja Digitada" };
   }
+  // Excluída no Senior (ver desvincularRatAusenteNoSenior): sitrat fica congelado em 9, mas
+  // não há mais documento nenhum pra fechar lá — checagem própria, não dá pra confiar só no
+  // `numrat == null` abaixo porque aqui o numrat é preservado como histórico.
+  if (rat.removidoEmSenior != null) {
+    return { ok: false, status: 400, motivo: "Esta RAT foi excluída no Senior — não é possível fechar" };
+  }
   if (rat.numrat == null) {
     return { ok: false, status: 400, motivo: "Esta RAT ainda não tem número do ERP — sincronize antes de fechar" };
   }
@@ -1099,9 +1148,9 @@ ratsRouter.get("/:id/fechamento", async (req: AuthenticatedRequest, res) => {
       // sitratTone/podeFechar vêm junto (14/09/2026, pedido do Vitor) pra a tela conseguir
       // atualizar a linha da RAT inteira, sem precisar de F5 nem de um GET /rats à parte.
       sitrat: rat.sitrat,
-      sitratLabel: sitratLabel(rat.sitrat),
-      sitratTone: sitratTone(rat.sitrat),
-      podeFechar: rat.sitrat === 9 && podeFecharRat(ctx.role, ctx.contexto, rat),
+      sitratLabel: sitratLabelEfetivo(rat),
+      sitratTone: sitratToneEfetivo(rat),
+      podeFechar: rat.sitrat === 9 && rat.removidoEmSenior == null && podeFecharRat(ctx.role, ctx.contexto, rat),
     });
   } catch (error) {
     handleError(res, error, "fechamento");
@@ -1175,7 +1224,10 @@ ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) =
     const { contexto, role } = ctx;
 
     let rats = await ratsVisiveis(role, contexto);
-    rats = rats.filter((r) => r.sitrat === 9 && podeFecharRat(role, contexto, r));
+    // `removidoEmSenior == null`: RAT excluída no Senior fica com sitrat=9 congelado (última
+    // situação real conhecida antes de sumir), mas não é elegível pra fechar — mesma checagem
+    // de prepararFechamentoRat.
+    rats = rats.filter((r) => r.sitrat === 9 && r.removidoEmSenior == null && podeFecharRat(role, contexto, r));
 
     // Mesmos filtros já aplicados na tabela da tela (14/09/2026, pedido do Vitor) — "Fechar
     // Todos" precisa respeitar consultor/situação/busca/observação/integração que o usuário já
