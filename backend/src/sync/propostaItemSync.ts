@@ -10,7 +10,7 @@ import { entidadeIdPropostaItem } from "../audit/identidadeEntidade";
 import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 import { executarVarreduraDoJob } from "./varrerRemovidos";
-import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { upsertEmLote, emLotes, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "propostas_itens-sync";
@@ -113,9 +113,14 @@ export async function processarLinhasPropostaItem(rows: PropostaItemRow[], inici
   if (rows.length === 0) return { msFetch: 0, msEscrita: 0, lotes: 0 };
 
   const inicioFetch = Date.now();
-  const existentes = await prisma.propostaItem.findMany({
-    where: { OR: rows.map((r) => ({ codemp: r.codemp, codpro: r.codpro, seqite: r.seqite })) },
-  });
+  // `emLotes` (14/09/2026): rows é o resultado INTEIRO da varredura — mesmo padrão que
+  // derrubou a VPS de produção num sync irmão (ratSync.ts/ratItemSync.ts), corrigido
+  // preventivamente aqui também (ver comentário de emLotes em upsertEmLote.ts).
+  const existentes = await emLotes(rows, (lote) =>
+    prisma.propostaItem.findMany({
+      where: { OR: lote.map((r) => ({ codemp: r.codemp, codpro: r.codpro, seqite: r.seqite })) },
+    })
+  );
   const msFetch = Date.now() - inicioFetch;
   const existentePorChave = new Map(existentes.map((e) => [`${e.codemp}-${e.codpro}-${e.seqite}`, e]));
 

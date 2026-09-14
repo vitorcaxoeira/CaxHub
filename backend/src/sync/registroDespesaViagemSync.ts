@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { upsertEmLote, emLotes, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
 import { carimbo, varrerRemovidos } from "./varrerRemovidos";
@@ -91,10 +91,15 @@ function linhaDe(row: RegistroDespesaViagemRow): LinhaUpsert {
 // upsert em lote no meio, porque `id` é autoincrement (só existe depois de gravada).
 async function chavesDespesaAindaNaoExistentes(rows: RegistroDespesaViagemRow[]): Promise<Set<string>> {
   if (rows.length === 0) return new Set();
-  const existentesAntes = await prisma.registroDespesaViagem.findMany({
-    where: { OR: rows.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrdv: r.seqrdv })) },
-    select: { codemp: true, numrat: true, seqrdv: true },
-  });
+  // `emLotes` (14/09/2026): rows pode ter dezenas de milhares de linhas (varredura completa) —
+  // um `findMany` só, com 1 condição OR por linha, derrubou a VPS de produção por falta de
+  // memória (ver comentário de emLotes em upsertEmLote.ts).
+  const existentesAntes = await emLotes(rows, (lote) =>
+    prisma.registroDespesaViagem.findMany({
+      where: { OR: lote.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrdv: r.seqrdv })) },
+      select: { codemp: true, numrat: true, seqrdv: true },
+    })
+  );
   const chavesExistentesAntes = new Set(existentesAntes.map((r) => `${r.codemp}-${r.numrat}-${r.seqrdv}`));
   return new Set(
     rows.map((r) => `${r.codemp}-${r.numrat}-${r.seqrdv}`).filter((chave) => !chavesExistentesAntes.has(chave))
@@ -105,19 +110,24 @@ async function auditarDespesasCriadas(rows: RegistroDespesaViagemRow[], chavesNo
   const rowsNovas = rows.filter((r) => chavesNovas.has(`${r.codemp}-${r.numrat}-${r.seqrdv}`));
   if (rowsNovas.length === 0) return;
 
-  const criadas = await prisma.registroDespesaViagem.findMany({
-    where: { OR: rowsNovas.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrdv: r.seqrdv })) },
-    select: { id: true, codemp: true, numrat: true, tipdes: true },
-  });
-  // Despesa não tem FK pra Rat.id — resolve pela chave natural (codemp+numrat), 1 findMany
-  // pro lote inteiro em vez de 1 por linha (mesmo cuidado de N+1 já documentado em ratItemSync).
+  const criadas = await emLotes(rowsNovas, (lote) =>
+    prisma.registroDespesaViagem.findMany({
+      where: { OR: lote.map((r) => ({ codemp: r.codemp, numrat: r.numrat, seqrdv: r.seqrdv })) },
+      select: { id: true, codemp: true, numrat: true, tipdes: true },
+    })
+  );
+  // Despesa não tem FK pra Rat.id — resolve pela chave natural (codemp+numrat), em lotes (mesmo
+  // cuidado de tamanho do `emLotes` acima — `criadas` normalmente é pequeno, mas nada garante
+  // isso sempre).
   const chavesRat = [...new Set(criadas.map((c) => `${c.codemp}-${c.numrat}`))];
   const rats =
     chavesRat.length > 0
-      ? await prisma.rat.findMany({
-          where: { OR: criadas.map((c) => ({ codemp: c.codemp, numrat: c.numrat })) },
-          select: { id: true, codemp: true, codpro: true, numrat: true },
-        })
+      ? await emLotes(criadas, (lote) =>
+          prisma.rat.findMany({
+            where: { OR: lote.map((c) => ({ codemp: c.codemp, numrat: c.numrat })) },
+            select: { id: true, codemp: true, codpro: true, numrat: true },
+          })
+        )
       : [];
   const ratPorChave = new Map(rats.map((r) => [`${r.codemp}-${r.numrat}`, r]));
 
