@@ -957,9 +957,54 @@ async function prepararFechamentoRat(
   if (itensDaRat.length === 0) {
     return { ok: false, status: 400, motivo: "RAT sem nenhum item — nada a fechar" };
   }
-  const atividadeId = itensDaRat.map((i) => i.sessoes[0]?.atividadeId).find((v): v is number => v != null);
+
+  // Checagem explícita de confirmação no Senior (14/09/2026, pedido do Vitor) — item sem
+  // `seqrat` ou despesa sem `seqrdv` é o critério de negócio de verdade pra "ainda não pode
+  // fechar", não a presença de sessão de execução (ver comentário do fallback de `atividadeId`
+  // logo abaixo). Reforça, de forma explícita, o que `buscarItensEIntegracao` já cobre pra
+  // item via `numrat`/pendência — e fecha um buraco que aquele agregado tem pra despesa: uma
+  // `RegistroDespesaViagem` sem `seqrdv` e SEM nenhuma pendência ativa (órfã) passaria como
+  // "sincronizado" sem estar de fato confirmada no Senior.
+  const itemSemSeqrat = itensDaRat.find((i) => i.seqrat == null);
+  if (itemSemSeqrat) {
+    return {
+      ok: false,
+      status: 409,
+      motivo: `Item ${itemSemSeqrat.id} ainda não tem confirmação do Senior (sem seqrat) — não é possível fechar`,
+    };
+  }
+  const despesasDaRat = await prisma.registroDespesaViagem.findMany({
+    where: { codemp: rat.codemp, numrat: rat.numrat!, excluidaEm: null },
+    select: { id: true, seqrdv: true },
+  });
+  const despesaSemSeqrdv = despesasDaRat.find((d) => d.seqrdv == null);
+  if (despesaSemSeqrdv) {
+    return {
+      ok: false,
+      status: 409,
+      motivo: `Despesa ${despesaSemSeqrdv.id} ainda não tem confirmação do Senior (sem seqrdv) — não é possível fechar`,
+    };
+  }
+
+  // `atividadeId` aqui é só a âncora TÉCNICA que `enfileirar`/`SincronizacaoPendente` exigem
+  // (FK NOT NULL pra AtividadeConsultor) — não é validação de negócio, essa já aconteceu acima
+  // e no bloco de integração. Prioriza um item com sessão de execução (RAT nascida de
+  // apontamento no CaxHub); quando NENHUM item tem (RAT 100% importada do Senior — achado real,
+  // RAT 1769454/proposta 7371/13/09/2026 — nunca passou por um apontamento feito aqui, então
+  // não tem sessão nenhuma, só a alocação em si), cai pro casamento por `seqati`
+  // (RatItem.seqati <-> AtividadeConsultor.seqati, mesmo vínculo por valor que
+  // domain/tetoAtividade.ts já usa) — a alocação existe localmente (sincronizada do Senior por
+  // atividadeConsultorSync.ts) mesmo sem nunca ter existido uma sessão.
+  let atividadeId = itensDaRat.map((i) => i.sessoes[0]?.atividadeId).find((v): v is number => v != null);
   if (atividadeId == null) {
-    return { ok: false, status: 400, motivo: "RAT sem nenhum item vinculado a uma sessão de execução — nada a fechar" };
+    const seqatis = itensDaRat.map((i) => i.seqati).filter((v): v is bigint => v != null);
+    if (seqatis.length > 0) {
+      const alocacao = await prisma.atividadeConsultor.findFirst({ where: { seqati: { in: seqatis } }, select: { id: true } });
+      atividadeId = alocacao?.id;
+    }
+  }
+  if (atividadeId == null) {
+    return { ok: false, status: 400, motivo: "RAT sem nenhum item vinculado a uma atividade — nada a fechar" };
   }
 
   await criarEventoAuditoria({
