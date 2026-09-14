@@ -145,6 +145,15 @@ export const EVENTOS_AUDITORIA = {
   // desvincularRatAusenteNoSenior em backend/src/routes/rats.ts. 17/08/2026.
   RAT_DESVINCULADA_SENIOR: "RAT_DESVINCULADA_SENIOR",
 
+  // RAT com origemCaxHub=false (nasceu no Senior, nunca teve rascunho local) cujo cabeçalho
+  // não voltou mais na consulta ao Senior — diferente de RAT_DESVINCULADA_SENIOR (que limpa
+  // numrat pra permitir REINTEGRAR um rascunho que representa trabalho real feito no CaxHub),
+  // aqui não existe rascunho nenhum pra reintegrar: o documento foi excluído de verdade na
+  // origem, então Rat.removidoEmSenior é marcado (numrat é preservado como histórico) e a
+  // tela passa a mostrar "Excluída" no lugar da situação. Ver desvincularRatAusenteNoSenior
+  // em backend/src/routes/rats.ts. Pedido do Vitor (14/09/2026), achado real: RAT 1833655.
+  RAT_EXCLUIDA_SENIOR: "RAT_EXCLUIDA_SENIOR",
+
   // Correção retroativa de RatItem.seqati="0" (congelado de antes do fix de 17/08/2026 que
   // passou a gravar o valor real vindo de AtividadeConsultor.seqati em confirmarSessao) —
   // script backend/scripts/corrigir-seqati-retroativo.ts, não uma rota de tela. Casamento

@@ -22,6 +22,9 @@ interface RatDetalhe {
   sitratTone: Tone;
   obsrat: string | null;
   origemCaxHub: boolean;
+  // Preenchido quando a RAT foi excluída no Senior (só acontece pra origemCaxHub=false) —
+  // sitratLabel já mostra "Excluída" na badge; este campo só dá a data pra tarja abaixo.
+  removidoEmSenior: string | null;
 }
 
 interface ItemDetalhe {
@@ -148,6 +151,14 @@ export function RatVisualizacao() {
             </p>
             <p className="mt-1 text-sm text-muted">{rat.cliente ?? "—"}</p>
           </div>
+
+          {rat.removidoEmSenior && (
+            <div className="mb-6 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-foreground">
+              <span className="font-semibold">Esta RAT não existe mais no Senior.</span> Ela sumiu da consulta ao
+              ERP em {formatData(rat.removidoEmSenior)} — os dados abaixo são o último retrato que o CaxHub
+              recebeu antes disso.
+            </div>
+          )}
 
           <Tabs
             tabs={[
