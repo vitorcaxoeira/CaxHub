@@ -47,7 +47,7 @@ const statusTone: Record<string, string> = {
   invalido: "bg-muted/15 text-muted",
 };
 
-// As 5 constantes reais usadas em enfileirar(...) pelo backend (routes/alocacao.ts,
+// As 6 constantes reais usadas em enfileirar(...) pelo backend (routes/alocacao.ts,
 // apontamentos.ts, atividades.ts, rats.ts, solicitacoesExcedente.ts) — não existe um catálogo
 // central deles, então mantém aqui igual à lista usada no filtro de Tipo.
 const TIPO_LABEL: Record<string, string> = {
@@ -56,6 +56,7 @@ const TIPO_LABEL: Record<string, string> = {
   editar_atividade: "Editar alocação",
   remover_atividade: "Remover alocação",
   aprovar_rat: "Aprovar RAT",
+  fechar_rat: "Fechar RAT",
 };
 
 const TIPO_OPCOES: MultiSelectOption<string>[] = Object.entries(TIPO_LABEL).map(([value, label]) => ({ value, label }));
@@ -77,6 +78,20 @@ function formatarDataCurta(valor: unknown): string | null {
 function formatarMinutos(valor: unknown): string | null {
   if (typeof valor !== "number" || !Number.isFinite(valor)) return null;
   return `${String(Math.trunc(valor / 60)).padStart(2, "0")}:${String(valor % 60).padStart(2, "0")}`;
+}
+
+// Payload de `fechar_rat` (backend/src/routes/rats.ts, prepararFechamentoRat) é
+// `{ ratId, codemp, numrat }` — id local da RAT e o número dela no Senior, pra linkar direto
+// pra `/projetos/rat/:id` na coluna Detalhes (14/09/2026, pedido do Vitor). Mesmo cuidado de
+// não confiar cego no formato de `payload: Record<string, unknown>` que os outros extratores
+// acima já têm.
+function ratIdDoPayload(payload: Record<string, unknown>): number | null {
+  const v = payload.ratId;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+function numratDoPayload(payload: Record<string, unknown>): number | null {
+  const v = payload.numrat;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 const TIPOS_APONTAMENTO = new Set(["criar_apontamento", "aprovar_rat"]);
@@ -440,6 +455,12 @@ function PainelAtividades() {
               {!loading &&
                 itens.map((item) => {
                   const detalhe = detalheEssencial(item);
+                  // `fechar_rat`: o atividadeId da pendência é só a âncora técnica do outbox
+                  // (um item qualquer da RAT, ver comentário de prepararFechamentoRat em
+                  // routes/rats.ts) — não é informação útil pro admin. O que importa aqui é a
+                  // RAT em si, direto do payload (14/09/2026, pedido do Vitor).
+                  const ratId = item.tipo === "fechar_rat" ? ratIdDoPayload(item.payload) : null;
+                  const numrat = item.tipo === "fechar_rat" ? numratDoPayload(item.payload) : null;
                   return (
                 <tr key={item.id} className="border-t border-border/60 transition hover:bg-surface-2">
                   <td className="whitespace-nowrap px-3 py-3.5 font-mono text-sm tabular-nums text-muted">{item.id}</td>
@@ -450,15 +471,25 @@ function PainelAtividades() {
                   </td>
                   <td className="whitespace-nowrap px-3 py-3.5 text-sm text-muted">{TIPO_LABEL[item.tipo] ?? item.tipo}</td>
                   <td className="px-3 py-3.5 text-[12.5px]">
-                    <p className="whitespace-nowrap font-mono tabular-nums text-muted">
-                      <Link
-                        to={`/projetos/alocacao/${item.codemp}/${item.codpro}/cronograma`}
-                        className="text-primary hover:underline"
-                      >
-                        Ativ. #{item.atividadeId}
-                      </Link>{" "}
-                      · Seq. {item.seqite ?? "—"}
-                    </p>
+                    {ratId != null ? (
+                      <p className="whitespace-nowrap font-mono tabular-nums text-muted">
+                        RAT{" "}
+                        <Link to={`/projetos/rat/${ratId}`} className="text-primary hover:underline">
+                          #{ratId}
+                        </Link>
+                        {numrat != null ? ` · nº ${numrat}` : ""}
+                      </p>
+                    ) : (
+                      <p className="whitespace-nowrap font-mono tabular-nums text-muted">
+                        <Link
+                          to={`/projetos/alocacao/${item.codemp}/${item.codpro}/cronograma`}
+                          className="text-primary hover:underline"
+                        >
+                          Ativ. #{item.atividadeId}
+                        </Link>{" "}
+                        · Seq. {item.seqite ?? "—"}
+                      </p>
+                    )}
                     {detalhe && <p className="mt-0.5 whitespace-nowrap text-foreground">{detalhe}</p>}
                   </td>
                   <td className="whitespace-nowrap px-3 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{item.tentativas}</td>
