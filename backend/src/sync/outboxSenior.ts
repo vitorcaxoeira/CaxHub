@@ -4,6 +4,7 @@ import { AtividadeConsultor, Prisma, RatItem, Rat, AtividadeSessaoExecucao, Sinc
 import { prisma } from "../db/prisma";
 import {
   AlocarAtividadesPayload,
+  FecharRatPayload,
   RegistrarAtividadesPayload,
   alocarAtividadesViaSoap,
   fecharRatViaSoap,
@@ -14,6 +15,7 @@ import {
   ideExtRat,
   mensagemDeRecusa,
   montarEnvelopeAlocarAtividades,
+  montarEnvelopeFecharRat,
   montarEnvelopeRegistrarAtividades,
   registrarAtividadesViaSoap,
   runSqlViaSoap,
@@ -827,7 +829,7 @@ export async function processarFilaSincronizacao(
 }
 
 export interface PreviewEnvioSenior {
-  payload: RegistrarAtividadesPayload | AlocarAtividadesPayload;
+  payload: RegistrarAtividadesPayload | AlocarAtividadesPayload | FecharRatPayload;
   envelopeXml: string;
 }
 
@@ -873,6 +875,19 @@ export async function previewEnvioSenior(item: SincronizacaoPendente): Promise<P
 
     const payloadReal = montarPayloadAlocacao(alocacao, tipEve, opcoes);
     return { payload: payloadReal, envelopeXml: montarEnvelopeAlocarAtividades(payloadReal, "***", "***") };
+  }
+
+  if (item.tipo === "fechar_rat") {
+    const payload = item.payload as { ratId?: number };
+    const ratId = Number(payload?.ratId);
+    if (!Number.isFinite(ratId)) throw new Error(`Payload sem ratId (pendência ${item.id})`);
+
+    const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+    if (!rat) throw new Error(`RAT ${ratId} não existe mais — fechamento desfeito antes do envio`);
+    if (rat.numrat == null) throw new Error(`RAT ${rat.id} sem numrat — não dá pra montar`);
+
+    const payloadReal: FecharRatPayload = { codEmp: rat.codemp, numRat: rat.numrat };
+    return { payload: payloadReal, envelopeXml: montarEnvelopeFecharRat(payloadReal, "***", "***") };
   }
 
   // Mesmo erro que enviarParaSenior lançaria — explica por que não há prévia possível.
