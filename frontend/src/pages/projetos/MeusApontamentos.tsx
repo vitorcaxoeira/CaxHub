@@ -17,6 +17,7 @@ import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { IconeIntegracaoErp } from "../../components/ui/IconeIntegracaoErp";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { useToast } from "../../components/ui/Toast";
 
 // Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
 // apontamento ao Senior fica retido no servidor.
@@ -346,6 +347,7 @@ const ENVIO_MAX_TENTATIVAS = 13;
 
 export function MeusApontamentos() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [sessoes, setSessoes] = useState<SessaoPendente[]>([]);
   // Admin vê as sessões pendentes de todos os consultores; gestor vê as próprias + as do
   // time que gerencia (ver GET /sessoes-pendentes) — é o que liga a coluna Consultor e a
@@ -931,11 +933,24 @@ export function MeusApontamentos() {
     }
   }
 
+  // Patch direto na linha da RAT, sem esperar reload da página (14/09/2026, pedido do Vitor)
+  // — mesmo espírito de atualizarEnvioDoItem pro RatItem, agora pro cabeçalho da RAT. De
+  // propósito NÃO dispara um `carregarRats()` completo depois: se o filtro de Situação
+  // estiver em "Digitado", um reload faria a RAT recém-fechada sumir da tabela sem o usuário
+  // entender por quê — o patch garante que a badge de Situação atualiza na hora, e a RAT só
+  // sai da lista no próximo reload natural (troca de filtro, página, outra ação).
+  function atualizarSituacaoDaRat(
+    ratId: number,
+    dados: { sitrat: number | null; sitratLabel: string; sitratTone: Tone; podeFechar: boolean }
+  ) {
+    setRats((atual) => atual.map((r) => (r.id !== ratId ? r : { ...r, ...dados })));
+  }
+
   // Fechamento de RAT roda em segundo plano (outbox), igual o envio de apontamento — este é o
   // acompanhamento por polling, clone de acompanharEnvio contra GET /rats/:id/fechamento.
-  // Quando termina (sucesso ou falha), recarrega a lista pra linha refletir sitrat/podeFechar
-  // atualizados — o campo que muda (sitrat) já vem pronto em GET /rats, sem precisar patchear
-  // campo por campo como acompanharEnvio faz pro RatItem (que não tem esse atalho).
+  // Erro vai pro toast (mesmo padrão já usado em "Sync. ERP" de Alocacao.tsx, 14/09/2026) —
+  // não mais o banner de erro no topo da página, que ficava distante da linha que o usuário
+  // estava olhando. Sucesso patcheia a linha direto (ver atualizarSituacaoDaRat acima).
   function acompanharFechamento(ratId: number, tentativa = 0) {
     const timer = window.setTimeout(async () => {
       let concluido = false;
@@ -943,8 +958,16 @@ export function MeusApontamentos() {
         const { data } = await axios.get(`/api/rats/${ratId}/fechamento`);
         concluido = data.status === "enviado" || data.status === "bloqueado" || Boolean(data.erro);
         if (concluido) {
-          carregarRats();
-          if (data.erro) setErro(`Falha ao fechar a RAT: ${data.erro}`);
+          if (data.erro) {
+            toast.mostrar(`Falha ao fechar a RAT ${ratId}: ${data.erro}`, "destructive");
+          } else {
+            atualizarSituacaoDaRat(ratId, {
+              sitrat: data.sitrat,
+              sitratLabel: data.sitratLabel,
+              sitratTone: data.sitratTone,
+              podeFechar: data.podeFechar,
+            });
+          }
         }
       } catch {
         // Falha de rede no acompanhamento é transitória — tenta de novo no próximo tick.
@@ -965,7 +988,7 @@ export function MeusApontamentos() {
       await axios.post(`/api/rats/${rat.id}/fechar`);
       acompanharFechamento(rat.id);
     } catch (err: any) {
-      setErro(err.response?.data?.error ?? "Falha ao fechar a RAT");
+      toast.mostrar(err.response?.data?.error ?? "Falha ao fechar a RAT", "destructive");
     } finally {
       setFechando(null);
     }
@@ -982,7 +1005,7 @@ export function MeusApontamentos() {
       const { data } = await axios.get("/api/rats/elegiveis-fechamento", { params: filtrosRatsParaQuery() });
       setResumoFechamentoLote(data.rats ?? []);
     } catch (err: any) {
-      setErro(err.response?.data?.error ?? "Falha ao carregar as RATs elegíveis para fechamento");
+      toast.mostrar(err.response?.data?.error ?? "Falha ao carregar as RATs elegíveis para fechamento", "destructive");
     } finally {
       setCarregandoResumoFechamentoLote(false);
     }
@@ -995,15 +1018,19 @@ export function MeusApontamentos() {
       const ratIds = resumoFechamentoLote.map((r) => r.id);
       const { data } = await axios.post("/api/rats/fechar-lote", { ratIds });
       setResultadoFechamentoLote({ solicitados: data.enfileirados?.length ?? 0, falhas: data.falhas ?? [] });
+      // Cada RAT enfileirada patcheia a própria linha ao terminar (acompanharFechamento) — não
+      // precisa de um carregarRats() aqui pra "refletir o resultado", só pras que falharam já
+      // de cara em prepararFechamentoRat (nunca chegaram a enfileirar, então nunca vão ter
+      // acompanhamento nenhum rodando).
+      if (data.falhas?.length > 0) carregarRats();
       for (const ratId of data.enfileirados ?? []) {
         acompanharFechamento(ratId);
       }
-      carregarRats();
       // Mesmo critério de confirmarTodos: só fecha o modal sozinho quando não há falha
       // parcial, senão o gestor perderia de vista o que travou.
       if (!data.falhas || data.falhas.length === 0) setResumoFechamentoLote(null);
     } catch (err: any) {
-      setErro(err.response?.data?.error ?? "Falha ao fechar RATs em lote");
+      toast.mostrar(err.response?.data?.error ?? "Falha ao fechar RATs em lote", "destructive");
       setResumoFechamentoLote(null);
     } finally {
       setFechandoLote(false);

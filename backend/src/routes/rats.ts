@@ -1096,8 +1096,12 @@ ratsRouter.get("/:id/fechamento", async (req: AuthenticatedRequest, res) => {
       status: pendencia?.status ?? null,
       erro: pendencia?.ultimoErro ?? null,
       // Relido fresco: se o job já processou a pendência, sitrat já reflete o write-back.
+      // sitratTone/podeFechar vêm junto (14/09/2026, pedido do Vitor) pra a tela conseguir
+      // atualizar a linha da RAT inteira, sem precisar de F5 nem de um GET /rats à parte.
       sitrat: rat.sitrat,
       sitratLabel: sitratLabel(rat.sitrat),
+      sitratTone: sitratTone(rat.sitrat),
+      podeFechar: rat.sitrat === 9 && podeFecharRat(ctx.role, ctx.contexto, rat),
     });
   } catch (error) {
     handleError(res, error, "fechamento");
