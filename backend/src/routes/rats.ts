@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, codforsDoTime } from "../domain/contextoProjeto";
@@ -62,18 +63,87 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
 
 type Contexto = Awaited<ReturnType<typeof resolverContextoConsultor>>;
 
+// `select` explícito por chamador (14/09/2026, achado real de lentidão em produção): antes
+// `ratsVisiveis` sempre trazia a entidade `Rat` inteira — pra admin, isso significava as
+// 25 mil linhas de `rats` com TODAS as colunas, 3x por carregamento de tela (GET /,
+// GET /opcoes-filtro, GET /elegiveis-fechamento). Os dois presets abaixo cobrem exatamente
+// os campos lidos hoje em cada consumidor (confirmado por grep contra a resposta de cada
+// endpoint) — GET /opcoes-filtro nem usa `ratsVisiveis` mais, ver codforsVisiveis abaixo.
+const RAT_SELECT_LISTA = {
+  id: true,
+  codemp: true,
+  codfor: true,
+  codpro: true,
+  numprj: true,
+  numrat: true,
+  datemi: true,
+  sitrat: true,
+  depexe: true,
+  removidoEmSenior: true,
+} satisfies Prisma.RatSelect;
+
+const RAT_SELECT_LEVE = {
+  id: true,
+  codemp: true,
+  codfor: true,
+  codpro: true,
+  numrat: true,
+  sitrat: true,
+  depexe: true,
+  removidoEmSenior: true,
+} satisfies Prisma.RatSelect;
+
 // RATs que o usuário pode ver: as próprias (por codfor) + as dos departamentos que
 // gerencia (por Rat.depexe) — admin vê tudo, sem filtro.
-async function ratsVisiveis(role: string, contexto: Contexto) {
+async function ratsVisiveis<S extends Prisma.RatSelect>(role: string, contexto: Contexto, select: S) {
   if (role === "admin") {
-    return prisma.rat.findMany({ orderBy: { id: "desc" } });
+    return prisma.rat.findMany({ orderBy: { id: "desc" }, select });
   }
   const meuCodfor = contexto.consultor?.codfor ?? null;
   const or: Array<Record<string, unknown>> = [];
   if (meuCodfor != null) or.push({ codfor: meuCodfor });
   if (contexto.departamentosGerenciados.length > 0) or.push({ depexe: { in: contexto.departamentosGerenciados } });
   if (or.length === 0) return [];
-  return prisma.rat.findMany({ where: { OR: or }, orderBy: { id: "desc" } });
+  return prisma.rat.findMany({ where: { OR: or }, orderBy: { id: "desc" }, select });
+}
+
+// Só os `codfor` distintos entre as RATs visíveis — usado pelo seletor de consultor em
+// GET /opcoes-filtro, que nunca precisou da entidade Rat inteira. `distinct` resolve no
+// próprio Postgres (via índice/scan único), sem trazer as 25 mil linhas pro Node só pra
+// jogar tudo fora e ficar só com um número por linha.
+async function codforsVisiveis(role: string, contexto: Contexto): Promise<number[]> {
+  if (role === "admin") {
+    const rows = await prisma.rat.findMany({ select: { codfor: true }, distinct: ["codfor"] });
+    return rows.map((r) => r.codfor);
+  }
+  const meuCodfor = contexto.consultor?.codfor ?? null;
+  const or: Array<Record<string, unknown>> = [];
+  if (meuCodfor != null) or.push({ codfor: meuCodfor });
+  if (contexto.departamentosGerenciados.length > 0) or.push({ depexe: { in: contexto.departamentosGerenciados } });
+  if (or.length === 0) return [];
+  const rows = await prisma.rat.findMany({ where: { OR: or }, select: { codfor: true }, distinct: ["codfor"] });
+  return rows.map((r) => r.codfor);
+}
+
+// Proposta+Cliente de um conjunto de RATs, indexado por "codemp-codpro" — extraído (14/09/2026)
+// pra poder rodar em dois momentos diferentes de GET / conforme `busca` está ativa ou não (ver
+// comentário no handler), mesmo espírito de buscarItensEIntegracao já ser reaproveitada em dois
+// pontos. Também reaproveitado por ratsElegiveisFechamentoFiltradas.
+async function buscarPropostasPorChave(rats: { codemp: number; codpro: number | null }[]) {
+  const chaves = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
+  const propostas =
+    chaves.length > 0
+      ? await prisma.proposta.findMany({
+          where: {
+            OR: chaves.map((chave) => {
+              const [codemp, codpro] = chave.split("-").map(Number);
+              return { codemp, codpro };
+            }),
+          },
+          include: { cliente: true },
+        })
+      : [];
+  return new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
 }
 
 function podeVerRat(role: string, contexto: Contexto, rat: { codfor: number; depexe: number | null }): boolean {
@@ -200,7 +270,7 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     }
     const { contexto, role } = ctx;
 
-    let rats = await ratsVisiveis(role, contexto);
+    let rats = await ratsVisiveis(role, contexto, RAT_SELECT_LISTA);
 
     // Lista separada por vírgula ("134,207") — o seletor da tela é multi-seleção. Number("")
     // é 0, não NaN, então sem a guarda de string vazia um filtro ausente viraria [0] e
@@ -225,27 +295,23 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       rats = rats.filter((r) => r.sitrat != null && sitratFiltro.includes(r.sitrat));
     }
 
-    // Join com Proposta/Cliente precisa vir ANTES da paginação — busca por cliente
-    // depende desse dado pra filtrar o conjunto inteiro, não só a página atual.
-    const chavesPropostaTodas = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
-    const propostasTodas =
-      chavesPropostaTodas.length > 0
-        ? await prisma.proposta.findMany({
-            where: {
-              OR: chavesPropostaTodas.map((chave) => {
-                const [codemp, codpro] = chave.split("-").map(Number);
-                return { codemp, codpro };
-              }),
-            },
-            include: { cliente: true },
-          })
-        : [];
-    const propostaPorChave = new Map(propostasTodas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
-
     // Busca livre: cliente (nome), número da proposta (codpro) ou número da RAT no
     // Senior (numrat) — mesmo padrão de busca por substring já usado em
-    // GET /alocacao/propostas.
+    // GET /alocacao/propostas. Lido ANTES do lookup de Proposta/Cliente abaixo — a guarda
+    // condicional depende de saber se `busca` está ativa.
     const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
+
+    // Join com Proposta/Cliente (14/09/2026, achado real de lentidão): só busca pro conjunto
+    // INTEIRO (antes da paginação) quando `busca` está de fato ativa — é o único filtro que
+    // depende de nome de cliente pra decidir quem fica de fora do conjunto (mesmo espírito da
+    // guarda já usada por integracaoFiltro mais abaixo,
+    // [[custo-condicional-ao-filtro-nao-ao-request]]). Sem busca (caso comum), fica pra depois
+    // da paginação, só com a página atual — evita o `OR` com milhares de pares (codemp,codpro)
+    // em toda troca de filtro/página que não precisa dele (medido em produção: ~140ms por
+    // chamada, sobre um conjunto que só cresce com o tempo).
+    let propostaPorChave: Awaited<ReturnType<typeof buscarPropostasPorChave>> = busca
+      ? await buscarPropostasPorChave(rats)
+      : new Map();
     if (busca) {
       rats = rats.filter((r) => {
         const proposta = r.codpro != null ? propostaPorChave.get(`${r.codemp}-${r.codpro}`) : undefined;
@@ -329,6 +395,11 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     if (integracaoFiltro.length === 0) {
       ({ itensPorRat, integracaoPorRat } = await buscarItensEIntegracao(rats));
     }
+    // Mesma lógica acima, pro lookup de Proposta/Cliente: sem `busca` ele ainda não rodou —
+    // resolve agora, só pra página atual (≤100 linhas), em vez do conjunto inteiro.
+    if (!busca) {
+      propostaPorChave = await buscarPropostasPorChave(rats);
+    }
 
     const codforsUnicos = [...new Set(rats.map((r) => r.codfor))];
     const consultores =
@@ -393,7 +464,7 @@ ratsRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
-    const rats = await ratsVisiveis(ctx.role, ctx.contexto);
+    const codforsDasRats = await codforsVisiveis(ctx.role, ctx.contexto);
 
     // Restringe ao time: `Rat.depexe` é o departamento do ITEM que originou o apontamento
     // (ver buscarOuCriarRatRascunho), não o do consultor — então um consultor de fora do
@@ -402,7 +473,7 @@ ratsRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
     // não muda: como gestor do departamento, ele continua vendo o trabalho feito nos itens
     // dele. `null` = admin, sem restrição.
     const doTime = await codforsDoTime(ctx.role, ctx.contexto);
-    const codforsUnicos = [...new Set(rats.map((r) => r.codfor))].filter((codfor) => doTime == null || doTime.has(codfor));
+    const codforsUnicos = codforsDasRats.filter((codfor) => doTime == null || doTime.has(codfor));
     const consultores =
       codforsUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } }) : [];
 
@@ -1209,11 +1280,87 @@ ratsRouter.post("/fechar-lote", async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// GET /elegiveis-fechamento — todas as RATs visíveis com sitrat=9, permissão de fechar E os
-// MESMOS filtros da tabela (consultor/situação/busca/observação/integração, 14/09/2026), SEM
-// paginação (mesmo espírito de GET /opcoes-filtro) — é o que alimenta o resumo do "Fechar
-// Todos" sem ficar restrito à página atual de GET /, mas ainda assim escopado ao que o usuário
-// filtrou lá.
+// Filtra as RATs elegíveis a "Fechar Todos" — sitrat=9 + permissão + os MESMOS filtros já
+// aplicados na tabela da tela (consultor/situação/busca/observação/integração, 14/09/2026),
+// SEM nenhuma etapa que só serve pra exibição (consultor, minutos, proposta/cliente pro
+// rótulo do resumo). Extraído (14/09/2026, achado real de lentidão) pra ser reaproveitado
+// tanto pelo resumo completo (`GET /elegiveis-fechamento`) quanto pelo contador leve
+// (`GET /elegiveis-fechamento/contagem`, chamado a cada troca de filtro/página pelo botão
+// "Fechar Todos (N)") — antes os dois caminhos rodavam o pipeline completo (proposta,
+// consultor, minutos) mesmo quando só o número do botão era necessário.
+//
+// `sitrat` do filtro da tela é uma INTERSEÇÃO com a elegibilidade (sempre 9), não uma
+// substituição — fechar só faz sentido pra Digitado, então filtrar a tela por qualquer outra
+// situação (sem incluir Digitado) zera o resultado de propósito, em vez de ignorar o filtro.
+async function ratsElegiveisFechamentoFiltradas(role: string, contexto: Contexto, query: AuthenticatedRequest["query"]) {
+  let rats = await ratsVisiveis(role, contexto, RAT_SELECT_LEVE);
+  // `removidoEmSenior == null`: RAT excluída no Senior fica com sitrat=9 congelado (última
+  // situação real conhecida antes de sumir), mas não é elegível pra fechar — mesma checagem
+  // de prepararFechamentoRat.
+  rats = rats.filter((r) => r.sitrat === 9 && r.removidoEmSenior == null && podeFecharRat(role, contexto, r));
+
+  const sitratFiltro = (typeof query.sitrat === "string" ? query.sitrat : "")
+    .split(",")
+    .map((v) => Number(v.trim()))
+    .filter((v) => Number.isFinite(v) && v !== 0);
+  if (sitratFiltro.length > 0 && !sitratFiltro.includes(9)) {
+    rats = [];
+  }
+
+  const codforsFiltro = (typeof query.codfor === "string" ? query.codfor : "")
+    .split(",")
+    .map((v) => Number(v.trim()))
+    .filter((v) => Number.isFinite(v) && v !== 0);
+  if (codforsFiltro.length > 0) {
+    rats = rats.filter((r) => codforsFiltro.includes(r.codfor));
+  }
+
+  // Proposta/cliente: o conjunto aqui já é pequeno (interseção com sitrat=9 — hoje só 13 RATs
+  // em produção), então resolver sempre não pesa como em GET / — buscarPropostasPorChave já
+  // tem sua própria guarda interna (não bate no banco se `rats` estiver vazio).
+  const busca = typeof query.busca === "string" ? query.busca.trim().toLowerCase() : "";
+  const propostaPorChave = await buscarPropostasPorChave(rats);
+  if (busca) {
+    rats = rats.filter((r) => {
+      const proposta = r.codpro != null ? propostaPorChave.get(`${r.codemp}-${r.codpro}`) : undefined;
+      const cliente = proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : "";
+      return (
+        cliente.toLowerCase().includes(busca) ||
+        String(r.codpro ?? "").includes(busca) ||
+        String(r.numrat ?? "").includes(busca)
+      );
+    });
+  }
+
+  const buscaItem = typeof query.buscaItem === "string" ? query.buscaItem.trim() : "";
+  if (buscaItem) {
+    const ratIdsCandidatos = rats.map((r) => r.id);
+    const itensCorrespondentes =
+      ratIdsCandidatos.length > 0
+        ? await prisma.ratItem.findMany({
+            where: { ratId: { in: ratIdsCandidatos }, desati: { contains: buscaItem, mode: "insensitive" } },
+            select: { ratId: true },
+          })
+        : [];
+    const ratIdsComItem = new Set(itensCorrespondentes.map((i) => i.ratId));
+    rats = rats.filter((r) => ratIdsComItem.has(r.id));
+  }
+
+  const integracaoFiltro = (typeof query.integracao === "string" ? query.integracao : "")
+    .split(",")
+    .filter((v): v is IntegracaoErpStatus => (["sincronizado", "enviando", "falha", "pendente"] as string[]).includes(v));
+  if (integracaoFiltro.length > 0) {
+    const { integracaoPorRat } = await buscarItensEIntegracao(rats);
+    rats = rats.filter((r) => integracaoFiltro.includes(integracaoPorRat.get(r.id)!));
+  }
+
+  return { rats, propostaPorChave };
+}
+
+// GET /elegiveis-fechamento — resumo completo (com cliente/consultor/minutos) das RATs
+// elegíveis a "Fechar Todos", SEM paginação (mesmo espírito de GET /opcoes-filtro) — chamado
+// só quando o usuário de fato abre o modal (ver abrirResumoFechamentoLote no frontend); o
+// contador do botão usa o endpoint leve abaixo.
 ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
@@ -1223,92 +1370,7 @@ ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) =
     }
     const { contexto, role } = ctx;
 
-    let rats = await ratsVisiveis(role, contexto);
-    // `removidoEmSenior == null`: RAT excluída no Senior fica com sitrat=9 congelado (última
-    // situação real conhecida antes de sumir), mas não é elegível pra fechar — mesma checagem
-    // de prepararFechamentoRat.
-    rats = rats.filter((r) => r.sitrat === 9 && r.removidoEmSenior == null && podeFecharRat(role, contexto, r));
-
-    // Mesmos filtros já aplicados na tabela da tela (14/09/2026, pedido do Vitor) — "Fechar
-    // Todos" precisa respeitar consultor/situação/busca/observação/integração que o usuário já
-    // filtrou em GET /, não só a regra fixa (sitrat=9 + permissão); senão o resumo do lote
-    // mostra e fecha RAT que nem aparece na tabela filtrada. Mesma leitura de query params de
-    // GET / (codfor, sitrat, busca, buscaItem, integracao) — replicada aqui, não extraída pra
-    // função compartilhada, pra não arriscar mexer em GET / (já otimizada e sensível a
-    // regressão de performance, com comentários próprios sobre isso).
-    //
-    // `sitrat` aqui é uma INTERSEÇÃO com a elegibilidade (sempre 9), não uma substituição —
-    // fechar só faz sentido pra Digitado, então filtrar a tela por qualquer outra situação
-    // (sem incluir Digitado) zera o resultado de propósito, em vez de ignorar o filtro.
-    const sitratFiltro = (typeof req.query.sitrat === "string" ? req.query.sitrat : "")
-      .split(",")
-      .map((v) => Number(v.trim()))
-      .filter((v) => Number.isFinite(v) && v !== 0);
-    if (sitratFiltro.length > 0 && !sitratFiltro.includes(9)) {
-      rats = [];
-    }
-
-    const codforsFiltro = (typeof req.query.codfor === "string" ? req.query.codfor : "")
-      .split(",")
-      .map((v) => Number(v.trim()))
-      .filter((v) => Number.isFinite(v) && v !== 0);
-    if (codforsFiltro.length > 0) {
-      rats = rats.filter((r) => codforsFiltro.includes(r.codfor));
-    }
-
-    // Proposta/cliente resolvidos aqui — cedo, antes da busca livre precisar deles — e
-    // reaproveitados depois na montagem da resposta (mesmo `propostaPorChave`, sem query
-    // duplicada).
-    const chavesProposta = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
-    const propostas =
-      chavesProposta.length > 0
-        ? await prisma.proposta.findMany({
-            where: {
-              OR: chavesProposta.map((chave) => {
-                const [codemp, codpro] = chave.split("-").map(Number);
-                return { codemp, codpro };
-              }),
-            },
-            include: { cliente: true },
-          })
-        : [];
-    const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
-
-    const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
-    if (busca) {
-      rats = rats.filter((r) => {
-        const proposta = r.codpro != null ? propostaPorChave.get(`${r.codemp}-${r.codpro}`) : undefined;
-        const cliente = proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : "";
-        return (
-          cliente.toLowerCase().includes(busca) ||
-          String(r.codpro ?? "").includes(busca) ||
-          String(r.numrat ?? "").includes(busca)
-        );
-      });
-    }
-
-    const buscaItem = typeof req.query.buscaItem === "string" ? req.query.buscaItem.trim() : "";
-    if (buscaItem) {
-      const ratIdsCandidatos = rats.map((r) => r.id);
-      const itensCorrespondentes =
-        ratIdsCandidatos.length > 0
-          ? await prisma.ratItem.findMany({
-              where: { ratId: { in: ratIdsCandidatos }, desati: { contains: buscaItem, mode: "insensitive" } },
-              select: { ratId: true },
-            })
-          : [];
-      const ratIdsComItem = new Set(itensCorrespondentes.map((i) => i.ratId));
-      rats = rats.filter((r) => ratIdsComItem.has(r.id));
-    }
-
-    const integracaoFiltro = (typeof req.query.integracao === "string" ? req.query.integracao : "")
-      .split(",")
-      .filter((v): v is IntegracaoErpStatus => (["sincronizado", "enviando", "falha", "pendente"] as string[]).includes(v));
-    if (integracaoFiltro.length > 0) {
-      const { integracaoPorRat } = await buscarItensEIntegracao(rats);
-      rats = rats.filter((r) => integracaoFiltro.includes(integracaoPorRat.get(r.id)!));
-    }
-
+    const { rats, propostaPorChave } = await ratsElegiveisFechamentoFiltradas(role, contexto, req.query);
     if (rats.length === 0) {
       res.json({ rats: [] });
       return;
@@ -1346,6 +1408,25 @@ ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) =
     });
   } catch (error) {
     handleError(res, error, "elegiveis-fechamento");
+  }
+});
+
+// GET /elegiveis-fechamento/contagem — só o número pro botão "Fechar Todos (N)", sem
+// consultor/minutos/proposta moldados pra exibição (14/09/2026, achado real de lentidão): a
+// tela chamava o resumo COMPLETO a cada troca de filtro/página só pra ler `rats.length`,
+// dobrando o custo de varredura por carregamento. Ver comentário de
+// ratsElegiveisFechamentoFiltradas acima.
+ratsRouter.get("/elegiveis-fechamento/contagem", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { rats } = await ratsElegiveisFechamentoFiltradas(ctx.role, ctx.contexto, req.query);
+    res.json({ total: rats.length });
+  } catch (error) {
+    handleError(res, error, "elegiveis-fechamento-contagem");
   }
 });
 

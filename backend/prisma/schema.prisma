@@ -1169,6 +1169,11 @@ model RatItem {
   // A checagem de conflito de horário de um apontamento avulso consulta por data em ~86 mil
   // linhas a cada pedido enviado (ver domain/conflitoApontamento.ts).
   @@index([datati])
+  // FK sem índice de apoio (14/09/2026, achado real na investigação de lentidão de
+  // /projetos/apontamentos): toda busca "itens desta RAT" (buscarItensEIntegracao, GET
+  // /:id/itens, busca por observação, cálculo de minutos em elegiveis-fechamento) fazia
+  // sequential scan nas ~90 mil linhas da tabela pra achar as poucas que casam com `ratId`.
+  @@index([ratId])
   @@map("rat_itens")
 }
 
