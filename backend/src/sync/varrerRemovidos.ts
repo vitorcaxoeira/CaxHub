@@ -90,6 +90,25 @@ export interface OpcoesVarredura<TWhere> {
   teto?: { pct: number; minimo: number };
   /** Linhas que ESTE run deixou de processar por motivo técnico (ex.: FK não resolvida). */
   puladas?: number;
+  /**
+   * Trata `vistoEmSync IS NULL` como candidato também, não só `< inicio`. Default `false` —
+   * preserva a imunidade estrutural que `NULL` dá de propósito a registro de tabela de MÃO
+   * DUPLA nascido no CaxHub e ainda sem confirmação do Senior (AtividadeConsultor/Rat/
+   * RatItem/RegistroDespesaViagem — essas SEMPRE chamam varrerRemovidos() direto, nunca
+   * ligam esta opção).
+   *
+   * Ligada só por `executarVarreduraDoJob()` (16/09/2026) porque esse wrapper é usado
+   * exclusivamente por tabela de ESPELHO PURO (nunca nasce no CaxHub) — ali `NULL` não
+   * significa "ainda não confirmado", significa "nunca foi visto por nenhuma sync desde que
+   * o carimbo existe" (registro que já tinha sumido do Senior antes da coluna existir, ou
+   * ficou pra trás por qualquer falha antiga) — bug real achado na Proposta 8659 (6 dos 7
+   * itens locais tinham `vistoEmSync` nulo pra sempre, então NUNCA seriam varridos, mesmo
+   * com a política em "marcar" e a sync rodando todo dia — ver segundo cérebro). Auditado
+   * em produção antes de ligar: só 3 tabelas de espelho puro tinham alguma linha nula
+   * (propostas_itens: 6, fases_proposta: 1, movimentos_receber: 1) — bem abaixo do teto de
+   * segurança, e as 4 de mão dupla ficam de fora por não passarem por este wrapper.
+   */
+  incluirNuncaCarimbados?: boolean;
 }
 
 // Proporcional, sem piso absoluto: em tabela grande dá uma folga pequena pra escrita
@@ -180,7 +199,12 @@ export async function varrerRemovidos<TWhere extends object>(
   }
 
   const totalEscopo = await delegate.count({ where: escopoCom({ removidoEmSenior: null }) });
-  const whereCandidatos = escopoCom({ vistoEmSync: { lt: opcoes.inicio }, removidoEmSenior: null });
+  // `vistoEmSync: null` só entra na condição quando `incluirNuncaCarimbados` está ligado —
+  // ver comentário do campo em OpcoesVarredura. Fora disso, comportamento idêntico a antes.
+  const condicaoCarimbo = opcoes.incluirNuncaCarimbados
+    ? { OR: [{ vistoEmSync: { lt: opcoes.inicio } }, { vistoEmSync: null }] }
+    : { vistoEmSync: { lt: opcoes.inicio } };
+  const whereCandidatos = escopoCom({ ...condicaoCarimbo, removidoEmSenior: null });
   const candidatos = await delegate.count({ where: whereCandidatos });
 
   // GUARDA 2 (secundária): teto do que se pode esconder de uma vez. Exclusão em massa
@@ -251,7 +275,11 @@ export interface OpcoesVarreduraDoJob {
 // NÃO serve para tabela de mão dupla (AtividadeConsultor, Rat, RatItem,
 // RegistroDespesaViagem): essas continuam chamando varrerRemovidos() direto, com escopo que
 // exclui registro nascido no CaxHub e ainda não confirmado no Senior — ver comentário de cada
-// uma em schema.prisma.
+// uma em schema.prisma. É exatamente por isso, e só por isso, que `incluirNuncaCarimbados` é
+// ligado incondicionalmente aqui (16/09/2026) — toda tabela que passa por este wrapper é
+// espelho puro, nunca nasce no CaxHub, então `vistoEmSync` nulo aqui só pode significar
+// "nunca visto desde que o carimbo existe", nunca "ainda não confirmado" — ver comentário do
+// campo em OpcoesVarredura pro bug real que motivou isso (Proposta 8659).
 export async function executarVarreduraDoJob<TWhere extends object>(
   delegate: DelegateEspelho<TWhere>,
   opcoes: OpcoesVarreduraDoJob
@@ -270,5 +298,6 @@ export async function executarVarreduraDoJob<TWhere extends object>(
     linhasProcessadas: opcoes.linhasProcessadas,
     escopo: (filtroTodos.escopoLocal ?? {}) as TWhere,
     queryContagemOrigem: montarQuerySenior(`SELECT COUNT(*) AS total FROM ${opcoes.tabelaSenior}`, filtroTodos.predicadosSql),
+    incluirNuncaCarimbados: true,
   });
 }
