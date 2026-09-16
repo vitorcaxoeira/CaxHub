@@ -583,9 +583,12 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
 
     // "Horas realizadas" por consultor — mesmo cálculo de horasRealizadasDaAlocacao mais
     // abaixo neste arquivo (árvore do cronograma) e de horasRealizadasDaAtividade em
-    // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
-    // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão), somado por
-    // TODAS as alocações do consultor nesta proposta (pode ter mais de um item).
+    // atividades.ts: sessões de execução ainda não confirmadas (nem excluídas — ver
+    // excluidaEm no schema) + RatItem já confirmados/sincronizados, exceto o de uma RAT
+    // cancelada (nunca as duas fontes ao mesmo tempo pra mesma sessão), somado por TODAS as
+    // alocações do consultor nesta proposta (pode ter mais de um item). Corrigido em
+    // 16/09/2026: as duas exclusões (sessão excluída, RAT cancelada) já valiam na árvore do
+    // cronograma há tempos, mas essa cópia aqui tinha ficado pra trás.
     // `> 0n`, não só `!= null`: seqati=0 não é um seqAti real (AtividadeConsultor.seqati é
     // @unique, então só pode existir 1 linha zerada no sistema inteiro, mas essa 1 linha já
     // basta pra "roubar" a soma de TODO RatItem de seqati=0 do banco pra si — casos reais
@@ -594,7 +597,12 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
     const ratItemsComHoras =
       seqatisValidos.length > 0
         ? await prisma.ratItem.findMany({
-            where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
+            where: {
+              seqati: { in: seqatisValidos },
+              horini: { not: null },
+              horfim: { not: null },
+              rat: { sitrat: { not: SITRAT_CANCELADO } },
+            },
             select: { seqati: true, horini: true, horfim: true },
           })
         : [];
@@ -606,7 +614,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
     const sessoesNaoConfirmadas =
       alocacoes.length > 0
         ? await prisma.atividadeSessaoExecucao.findMany({
-            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null } },
+            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null }, excluidaEm: null },
             select: { atividadeId: true, inicio: true, fim: true },
           })
         : [];
@@ -1380,9 +1388,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     }
 
     // "Horas realizadas" por alocação — mesmo cálculo de carregarAtividadesVisiveis em
-    // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
-    // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão), EXCETO o de uma
-    // RAT cancelada (sitrat=5) — RAT cancelada não é trabalho realizado.
+    // atividades.ts: sessões de execução ainda não confirmadas (nem excluídas — ver
+    // excluidaEm no schema) + RatItem já confirmados/sincronizados (nunca as duas fontes ao
+    // mesmo tempo pra mesma sessão), EXCETO o de uma RAT cancelada (sitrat=5) — RAT
+    // cancelada não é trabalho realizado.
     // `> 0n`, não só `!= null`: ver comentário equivalente na rota /consultores, mais acima
     // neste arquivo — seqati=0 não é um seqAti real, e sem essa guarda uma única alocação
     // zerada rouba pra si a soma de todo RatItem de seqati=0 do banco inteiro.
@@ -1407,7 +1416,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     const sessoesNaoConfirmadas =
       alocacoes.length > 0
         ? await prisma.atividadeSessaoExecucao.findMany({
-            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null } },
+            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null }, excluidaEm: null },
             select: { atividadeId: true, inicio: true, fim: true },
           })
         : [];
