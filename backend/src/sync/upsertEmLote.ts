@@ -58,9 +58,16 @@ export interface ResultadoUpsertEmLote {
 // aceito e depois clampado em silêncio aqui dentro, e a tela mostraria um número que nunca foi
 // o que de fato rodou.
 export const TAMANHO_LOTE_PADRAO = 1000;
-// Bind carrega a contagem de parâmetros do statement num Int16 do protocolo — 65535 é o
-// teto real, não um número arbitrário escolhido por conservadorismo.
-export const TETO_PARAMS_PROTOCOLO = 65535;
+// Bind carrega a contagem de parâmetros do statement num Int16 do protocolo estendido do
+// Postgres — e é um Int16 COM SINAL (-32768..32767), não sem sinal: o teto real é 32767, não
+// 65535 (erro corrigido em 16/09/2026 — o valor errado deixava passar lote grande demais pra
+// tabela larga, ex. Proposta com 54 colunas × 1000 linhas = 54000 parâmetros, e o
+// $executeRawUnsafe estourava com "too many bind variables... expected maximum of 32767,
+// received 54001" — exatamente o número que o Postgres reporta no erro, confirmando o teto
+// certo. Derrubou propostas-sync todo dia por pelo menos 4 dias seguidos (13 a 16/09), o que
+// em cadeia quebrava propostas_itens-sync (item de proposta nunca sincronizada vira violação
+// de FK) — ver segundo cérebro pra história completa.
+export const TETO_PARAMS_PROTOCOLO = 32767;
 
 // Quebra `itens` em lotes de até `tamanhoLote` e roda `fn` em cada um, sequencialmente,
 // juntando os resultados — mesmo motivo de `upsertEmLote` nunca mandar tudo num INSERT só,
