@@ -221,7 +221,19 @@ async function confirmarSessao(
     return { status: 400, body: { error: "Item de proposta correspondente não encontrado" } };
   }
   if (!podeExecutarAcao(role, contexto, "lancarApontamento", { depexe: item.depexe, codfor: atividade.codfor })) {
-    return { status: 403, body: { error: "Sem permissão para lançar apontamento nesta atividade" } };
+    // Gestor do CONSULTOR que executou a sessão também pode lançar/confirmar, mesmo quando
+    // o item pertence a um departamento que ele não gerencia — mesmo critério que já decide
+    // o que aparece em GET /sessoes-pendentes (codforsDoTime, populada pelo departamento do
+    // CONSULTOR, não do item), pra não mostrar uma sessão que o botão Confirmar depois
+    // recusa. Achado real (17/09/2026): Jacson gerencia o departamento 6 (time do Vinicius)
+    // e via a sessão 1354 na lista, mas não conseguia confirmar porque o ITEM da proposta
+    // estava classificado no departamento 9 (Consultoria HCM) — outro departamento, que ele
+    // não gerencia. Calculado só aqui, como fallback (nunca no caminho feliz, que já
+    // resolveu via item.depexe acima), pra não pagar a consulta extra à toa.
+    const souGestorDoConsultor = (await codforsDoTime(role, contexto))?.has(atividade.codfor) ?? false;
+    if (!souGestorDoConsultor) {
+      return { status: 403, body: { error: "Sem permissão para lançar apontamento nesta atividade" } };
+    }
   }
   // Bloqueio de apontamento (proposta ou atividade) — ver domain/bloqueioApontamento.ts.
   // Só barra sessão RECÉM-CRIADA (/manual, gestor lançando tempo novo na hora): o horário já
