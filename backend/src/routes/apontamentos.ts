@@ -483,8 +483,11 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
         .map((a) => {
           const item = itemPorChave.get(`${a.codemp}-${a.codpro}-${a.seqite}`);
           // `depexe` do item é o que governa a permissão (não o departamento do consultor)
-          // — mesma origem usada por confirmarSessao.
-          if (item?.depexe == null) return null;
+          // — mesma origem usada por confirmarSessao. Item sumido do Senior (ver
+          // varrerRemovidos.ts) some do seletor — não oferece lançar apontamento NOVO em
+          // cima de item já removido (a alocação em si continua existindo/visível em
+          // outro lugar, só este seletor de "novo lançamento" some com a opção).
+          if (item?.depexe == null || item.removidoEmSenior != null) return null;
           if (!podeExecutarAcao(role, contexto, "lancarApontamento", { depexe: item.depexe, codfor })) return null;
           const proposta = propostaPorChave.get(`${a.codemp}-${a.codpro}`);
           return {

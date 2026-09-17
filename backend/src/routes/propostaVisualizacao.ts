@@ -66,7 +66,9 @@ propostaVisualizacaoRouter.get("/:codemp/:codpro", async (req, res) => {
       proposta.codccu != null
         ? prisma.centroCusto.findUnique({ where: { codemp_codccu: { codemp, codccu: proposta.codccu } } })
         : null,
-      prisma.propostaItem.findMany({ where: { codemp, codpro }, orderBy: { seqite: "asc" } }),
+      // `removidoEmSenior: null` — item sumido do Senior não entra na lista nem na soma de
+      // horas/valor abaixo (mesmo padrão de routes/pedidos.ts).
+      prisma.propostaItem.findMany({ where: { codemp, codpro, removidoEmSenior: null }, orderBy: { seqite: "asc" } }),
     ]);
 
     const itensResp = itens.map((item) => {

@@ -568,8 +568,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
 
     // Todos os itens da proposta, sem recorte de departamento: o resumo por consultor do
     // accordion tem que bater com o Alocado da linha, que agora é o da proposta inteira.
+    // `removidoEmSenior: null` — item sumido do Senior não entra na soma (mesmo padrão de
+    // routes/pedidos.ts).
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro },
+      where: { codemp, codpro, removidoEmSenior: null },
       select: { codemp: true, codpro: true, seqite: true },
     });
     if (itens.length === 0) {
@@ -702,8 +704,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
       res.status(403).json({ error: "Sem acesso a esta proposta" });
       return;
     }
+    // `removidoEmSenior: null` — item sumido do Senior não aparece na aba (mesmo padrão de
+    // routes/pedidos.ts).
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro },
+      where: { codemp, codpro, removidoEmSenior: null },
       orderBy: { seqite: "asc" },
     });
     if (itens.length === 0) {
@@ -869,6 +873,11 @@ alocacaoRouter.get("/itens/:codemp/:codpro/:seqite/departamentos-alocaveis", asy
       res.status(404).json({ error: "Item de proposta não encontrado" });
       return;
     }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não oferece departamento pra alocar.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível alocar consultor nele" });
+      return;
+    }
 
     const depexes = await departamentosAlocaveisNoItem(role, contexto, item.depexe);
     res.json({
@@ -909,6 +918,11 @@ alocacaoRouter.get("/consultores-elegiveis", async (req: AuthenticatedRequest, r
     const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
     if (!item) {
       res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não lista consultor elegível.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível alocar consultor nele" });
       return;
     }
     const alocaveis = await departamentosAlocaveisNoItem(role, contexto, item.depexe);
@@ -1224,6 +1238,8 @@ async function validarSaldo(
 
   const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
   if (!item) return { ok: false, erro: "Item de proposta não encontrado" };
+  // Item sumido do Senior (ver varrerRemovidos.ts) não recebe alocação nova.
+  if (item.removidoEmSenior != null) return { ok: false, erro: "Este item foi removido do Senior — não é possível alocar horas nele" };
   if (item.qtdhor == null) return { ok: false, erro: "Item sem horas definidas na proposta" };
 
   const existentes = await prisma.atividadeConsultor.findMany({
@@ -1253,7 +1269,10 @@ async function validarSomaEstrutura(
   duracaoNova: number
 ): Promise<{ ok: true } | { ok: false; erro: string }> {
   const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
-  if (!item || item.qtdhor == null) return { ok: false, erro: "Item sem horas definidas na proposta" };
+  if (!item) return { ok: false, erro: "Item de proposta não encontrado" };
+  // Item sumido do Senior (ver varrerRemovidos.ts) não recebe atividade nova na EAP.
+  if (item.removidoEmSenior != null) return { ok: false, erro: "Este item foi removido do Senior — não é possível alocar horas nele" };
+  if (item.qtdhor == null) return { ok: false, erro: "Item sem horas definidas na proposta" };
 
   const folhas = await prisma.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, tipo: "atividade" } });
   const somaAtual = folhas
@@ -1304,8 +1323,13 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
       res.status(403).json({ error: "Sem acesso a esta proposta" });
       return;
     }
+    // `removidoEmSenior: null` — item que sumiu do Senior (ver varrerRemovidos.ts) some
+    // do Cronograma inteiro, subárvore (EstruturaAtividade/AtividadeConsultor) incluída,
+    // já que `seqites` abaixo é a base de tudo que a tela monta. Mesmo padrão de
+    // `routes/pedidos.ts` (registro removido não alimenta lista/soma) — bug real achado
+    // 16-17/09/2026 na Proposta 8659 (itens já excluídos continuavam na árvore).
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro },
+      where: { codemp, codpro, removidoEmSenior: null },
       orderBy: { seqite: "asc" },
     });
     if (itens.length === 0) {
@@ -1699,6 +1723,11 @@ alocacaoRouter.post("/estrutura", async (req: AuthenticatedRequest, res) => {
       res.status(404).json({ error: "Item de proposta não encontrado" });
       return;
     }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não recebe nó novo na EAP.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível criar atividade nele" });
+      return;
+    }
 
     if (!podeMexerNoItem(role, contexto, "criar", item.depexe, await depexeDaProposta(codemp, codpro))) {
       res.status(403).json({ error: "Sem permissão para editar a estrutura deste departamento" });
@@ -1796,6 +1825,12 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
       });
       if (!item || item.depexe == null) {
         res.status(404).json({ error: "Item de proposta não encontrado" });
+        return;
+      }
+      // Item sumido do Senior (ver varrerRemovidos.ts) não recebe mudança na EAP — mesma
+      // trava de POST /estrutura, aqui pro caminho de editar (duração, responsável, etc.).
+      if (item.removidoEmSenior != null) {
+        res.status(400).json({ error: "Este item foi removido do Senior — não é possível editar a atividade" });
         return;
       }
       if (!podeMexerNoItem(role, contexto, "editar", item.depexe, await depexeDaProposta(no.codemp, no.codpro))) {
@@ -2403,6 +2438,11 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
       res.status(404).json({ error: "Item de proposta não encontrado" });
       return;
     }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não recebe alocação nova.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível alocar consultor nele" });
+      return;
+    }
 
     const proposta = await prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
     if (!proposta || proposta.sitpro == null || !SITPRO_ALOCAVEL.includes(proposta.sitpro)) {
@@ -2595,6 +2635,11 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
       res.status(400).json({ error: "Item sem departamento de execução definido" });
       return;
     }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não recebe alocação em lote nova.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível alocar consultores nele" });
+      return;
+    }
 
     const proposta = await prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
     if (!proposta || proposta.sitpro == null || !SITPRO_ALOCAVEL.includes(proposta.sitpro)) {
@@ -2685,7 +2730,13 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
         // consultor (senão o 1º consultor "reservaria" saldo que o 2º acabaria vendo como
         // livre, mesmo os dois cabendo juntos ou os dois estourando juntos).
         const itemAtual = await tx.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
-        if (!itemAtual || itemAtual.qtdhor == null) throw new SaldoDivergenteError("Item sem horas definidas na proposta");
+        if (!itemAtual) throw new SaldoDivergenteError("Item de proposta não encontrado");
+        // Revalida de novo aqui dentro (não só no início da rota): o item pode ter sido
+        // removido do Senior no intervalo entre o usuário abrir o modal e confirmar o lote.
+        if (itemAtual.removidoEmSenior != null) {
+          throw new SaldoDivergenteError("Este item foi removido do Senior — não é possível alocar consultores nele");
+        }
+        if (itemAtual.qtdhor == null) throw new SaldoDivergenteError("Item sem horas definidas na proposta");
         const folhasAtuais = await tx.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, tipo: "atividade" } });
         const somaAtual = folhasAtuais.reduce((soma, n) => soma + (n.duracaoHoras ?? 0), 0);
         if (somaAtual + somaLote > itemAtual.qtdhor) {
