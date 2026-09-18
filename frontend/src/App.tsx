@@ -32,6 +32,9 @@ import { RelatorioDespesasRat } from "./pages/projetos/RelatorioDespesasRat";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
+import { SincronizacaoKyria } from "./pages/admin/SincronizacaoKyria";
+import { MapeamentoKyria } from "./pages/admin/MapeamentoKyria";
+import { DadosKyria } from "./pages/admin/DadosKyria";
 import { DepartamentoGrupoContabil } from "./pages/admin/DepartamentoGrupoContabil";
 import { ListarPedidos } from "./pages/mercado/ListarPedidos";
 import { PedidoVisualizacao } from "./pages/mercado/PedidoVisualizacao";
@@ -99,6 +102,9 @@ export default function App() {
                 <Route path="/admin/usuarios" element={<Usuarios />} />
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
+                <Route path="/admin/sincronizacao-kyria" element={<SincronizacaoKyria />} />
+                <Route path="/admin/mapeamento-kyria" element={<MapeamentoKyria />} />
+                <Route path="/admin/sincronizacao-kyria/dados/:jobName" element={<DadosKyria />} />
                 <Route path="/admin/departamento-grupo-contabil" element={<DepartamentoGrupoContabil />} />
                 <Route path="/mercado/pedidos" element={<ListarPedidos />} />
                 <Route path="/mercado/pedido/:codemp/:codfil/:numped" element={<PedidoVisualizacao />} />

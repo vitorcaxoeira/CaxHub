@@ -23,6 +23,12 @@ import { notificacoesRouter } from "./routes/notificacoes";
 import { usersRouter } from "./routes/users";
 import { sincronizacaoRouter } from "./routes/sincronizacao";
 import { syncErpRouter } from "./routes/syncErp";
+import { syncKyriaRouter } from "./routes/syncKyria";
+import { syncKyriaMappingRouter } from "./routes/syncKyriaMapping";
+import { syncKyriaDadosRouter } from "./routes/syncKyriaDados";
+import { scheduleKyriaTeamsSync } from "./kyria/teamsSync";
+import { scheduleKyriaMembersSync } from "./kyria/membersSync";
+import { scheduleKyriaCustomersSync } from "./kyria/customersSync";
 import { alocacaoRouter } from "./routes/alocacao";
 import { solicitacoesExcedenteRouter } from "./routes/solicitacoesExcedente";
 import { solicitacoesApontamentoRouter } from "./routes/solicitacoesApontamento";
@@ -138,6 +144,13 @@ app.use("/notificacoes", notificacoesRouter);
 app.use("/users", usersRouter);
 app.use("/sincronizacao", sincronizacaoRouter);
 app.use("/sync-erp", syncErpRouter);
+// Montado ANTES de "/sync-kyria" de propósito: como "/sync-kyria" é prefixo de
+// "/sync-kyria/mapping", o Express dá a primeira chance ao mount registrado primeiro — se fosse
+// ao contrário, toda requisição pra /sync-kyria/mapping/* passaria (sem bater rota nenhuma) por
+// dentro do syncKyriaRouter antes de cair aqui, um fallthrough correto mas frágil de manter.
+app.use("/sync-kyria/mapping", syncKyriaMappingRouter);
+app.use("/sync-kyria/dados", syncKyriaDadosRouter);
+app.use("/sync-kyria", syncKyriaRouter);
 app.use("/alocacao", alocacaoRouter);
 app.use("/solicitacoes-excedente", solicitacoesExcedenteRouter);
 app.use("/solicitacoes-apontamento", solicitacoesApontamentoRouter);
@@ -239,6 +252,10 @@ async function iniciar() {
     // (15 em 15s — cadência bem mais curta, ver o comentário no arquivo).
     agendarParadaAutomatica();
     agendarParadaPorFechamento();
+    // Kyria — segunda origem de dados, ao lado do Senior (ver src/kyria/).
+    scheduleKyriaTeamsSync();
+    scheduleKyriaMembersSync();
+    scheduleKyriaCustomersSync();
   });
 }
 

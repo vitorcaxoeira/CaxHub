@@ -16,9 +16,24 @@ interface NavLeaf {
   souConsultor?: boolean;
 }
 
+// Sub-menu dentro de um grupo (ex.: "Integração Kyria" dentro de "Administração") — mesmo
+// mecanismo de collapse dos grupos de topo, só que aninhado mais um nível. Existe pra quando um
+// item começa a acumular mais de uma tela relacionada (Kyria: só "Sincronização" hoje, mais
+// telas entram aqui conforme novos endpoints forem implementados).
+interface NavSubgroup {
+  label: string;
+  children: NavLeaf[];
+}
+
+type NavGroupItem = NavLeaf | NavSubgroup;
+
+function isSubgroup(item: NavGroupItem): item is NavSubgroup {
+  return "children" in item;
+}
+
 interface NavGroup {
   label: string;
-  items: NavLeaf[];
+  items: NavGroupItem[];
   // Papéis que podem ver este grupo — mantido em sincronia com o `RequireRole` das
   // mesmas rotas em `App.tsx` e com o `requireRole(...)` do router correspondente no
   // backend. "*" = qualquer papel autenticado. Ao criar um menu novo, sempre
@@ -88,6 +103,13 @@ const groups: NavGroup[] = [
       { to: "/admin/usuarios", label: "Usuários" },
       { to: "/admin/sincronizacao", label: "Exportados para o Senior" },
       { to: "/admin/sincronizacao-erp", label: "Importados do Senior" },
+      {
+        label: "Integração Kyria",
+        children: [
+          { to: "/admin/sincronizacao-kyria", label: "Sincronização" },
+          { to: "/admin/mapeamento-kyria", label: "Mapeamento de Campos" },
+        ],
+      },
       { to: "/admin/departamento-grupo-contabil", label: "Departamento x Grupo Contábil" },
     ],
     roles: ["admin"],
@@ -168,15 +190,25 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     };
   }, [user]);
 
+  // `gestorOuAdmin` e `souConsultor` combinam como OU quando um item declara os dois (ex.: Meta
+  // diária): item sem nenhuma das duas flags é sempre visível.
+  function leafVisivel(item: NavLeaf): boolean {
+    return (
+      (!item.gestorOuAdmin && !item.souConsultor) ||
+      !!(item.gestorOuAdmin && ehGestorOuAdmin) ||
+      !!(item.souConsultor && souConsultor)
+    );
+  }
+
   const visibleGroups = groups
     .filter((group) => user && (group.roles === "*" || group.roles.includes(user.role)))
     .map((group) => ({
       ...group,
-      // `gestorOuAdmin` e `souConsultor` combinam como OU quando um item declara os dois
-      // (ex.: Meta diária): item sem nenhuma das duas flags é sempre visível.
-      items: group.items.filter(
-        (item) => (!item.gestorOuAdmin && !item.souConsultor) || (item.gestorOuAdmin && ehGestorOuAdmin) || (item.souConsultor && souConsultor)
-      ),
+      items: group.items
+        .map((item) => (isSubgroup(item) ? { ...item, children: item.children.filter(leafVisivel) } : item))
+        // Sub-menu sem nenhum filho visível some inteiro (mesmo espírito do filtro de grupo
+        // vazio logo abaixo, um nível mais fundo).
+        .filter((item) => (isSubgroup(item) ? item.children.length > 0 : leafVisivel(item))),
     }))
     // Grupo com `roles: "*"` mas cujo único item (ou todos) é `gestorOuAdmin: true` (ex.:
     // Contábil) fica sem NENHUM item pra quem não é gestor nem admin — sem este filtro, o
@@ -231,11 +263,40 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
                   gestorOuAdmin — chegar aqui com `group.items` vazio não acontece mais. */}
               {isOpen && (
                 <div className="mt-1 space-y-1 border-l border-border pl-3">
-                  {group.items.map((item) => (
-                    <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate}>
-                      {item.label}
-                    </NavLink>
-                  ))}
+                  {group.items.map((item) => {
+                    if (!isSubgroup(item)) {
+                      return (
+                        <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate}>
+                          {item.label}
+                        </NavLink>
+                      );
+                    }
+                    // Mesmo mecanismo de collapse dos grupos de topo (openGroups/toggleGroup),
+                    // só reaproveitado um nível mais fundo — labels de grupo e sub-menu não
+                    // colidem hoje, não precisa de chave composta.
+                    const subOpen = openGroups.has(item.label);
+                    return (
+                      <div key={item.label}>
+                        <button
+                          onClick={() => toggleGroup(item.label)}
+                          aria-expanded={subOpen}
+                          className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm font-medium text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <span>{item.label}</span>
+                          <ChevronIcon open={subOpen} />
+                        </button>
+                        {subOpen && (
+                          <div className="mt-1 space-y-1 border-l border-border pl-3">
+                            {item.children.map((child) => (
+                              <NavLink key={child.to} to={child.to} className={linkClass} onClick={onNavigate}>
+                                {child.label}
+                              </NavLink>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

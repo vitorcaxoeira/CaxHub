@@ -1944,6 +1944,197 @@ model ConfiguracaoLote {
   @@map("configuracoes_lote")
 }
 
+// Domínio fechado declarado pelo próprio contrato do Kyria (`enum: [active, inactive]` no
+// OpenAPI, em todo catálogo) — vale a pena travar em tipo de banco, ao contrário de `key`/
+// `name`/`description`/`id`, que são texto livre de verdade (o Kyria não garante formato nem
+// tamanho pra essas strings, só que `id`/`parentTeamId` são opacas). Reaproveitado pelos
+// próximos catálogos Kyria (customers, projects, labels, ...) — todos compartilham esse mesmo
+// domínio de status.
+enum KyriaStatus {
+  active
+  inactive
+}
+
+// Espelho local do Kyria (API REST, ver src/kyria/client.ts) — segunda origem de dados do
+// CaxHub ao lado do Senior, pra compor a visão de rentabilidade. `id` é a string opaca do
+// Convex (não numérica, diferente das PKs inteiras dos espelhos do Senior). Sem
+// `removidoEmSenior`/varredura: o Kyria já expõe o estado do registro via `status`
+// (active/inactive) — não "desaparece" da API como uma linha excluída no Senior, então o
+// mecanismo de detecção de exclusão (sync/varrerRemovidos.ts) não se aplica aqui.
+model KyriaTeam {
+  id             String      @id
+  key            String
+  name           String
+  description    String?
+  appearance     Json?
+  parentTeamId   String?     @map("parent_team_id")
+  status         KyriaStatus
+  sincronizadoEm DateTime    @updatedAt @map("sincronizado_em")
+
+  @@map("kyria_teams")
+}
+
+// Domínio de `role` em GET /members, declarado no OpenAPI do Kyria — mesmo espírito de
+// KyriaStatus (domínio fechado, vale travar em tipo de banco). Só usado por KyriaMember hoje.
+enum KyriaMemberRole {
+  attendant
+  manager
+  requester
+  participant
+  admin
+  service_manager
+  customer_request_manager
+}
+
+// Espelho local do Kyria — GET /members (ver src/kyria/client.ts, src/kyria/membersSync.ts).
+// Campos e tipos vieram do mapeamento registrado pela tela Administração > Integração Kyria >
+// Mapeamento de Campos (recurso `/members`, registrado pelo Vitor em 18/09/2026) — ver
+// KyriaResourceMapping/KyriaFieldMapping. Uma correção em cima do que foi registrado: `codusu`
+// estava marcado como BigInt no registro, mas o campo que ele documenta apontar
+// (Consultor.codusu) é `Int` — usado `Int` aqui pra bater com o alvo real do relacionamento.
+model KyriaMember {
+  id     String          @id
+  name   String
+  email  String
+  status KyriaStatus
+  role   KyriaMemberRole
+  // Campo interno (não vem da API) — documentado no mapeamento como referência a
+  // Consultor.codusu, mas SEM FK Prisma de verdade: Consultor tem chave composta
+  // (codemp+codusu), e o mapeamento registrado só rastreia codusu isolado, sem codemp. Nunca
+  // populado pelo sync automático (não existe regra de casamento definida — ex.: por e-mail)
+  // — fica null até alguém decidir como resolver o vínculo e escrever esse código.
+  codusu Int?
+  sincronizadoEm DateTime @updatedAt @map("sincronizado_em")
+
+  @@map("kyria_members")
+}
+
+// Espelho local do Kyria — GET /customers (ver src/kyria/client.ts, src/kyria/customersSync.ts).
+// Campos e tipos vieram do mapeamento registrado pela tela Administração > Integração Kyria >
+// Mapeamento de Campos (recurso `/customers`, registrado pelo Vitor em 18/09/2026) — ver
+// KyriaResourceMapping/KyriaFieldMapping. Primeiro model Kyria a aplicar de verdade o `tamanho`
+// registrado (@db.VarChar) — em KyriaTeam/KyriaMember isso tinha ficado só metadado, sem virar
+// coluna de verdade; aqui vale a pena porque os valores fazem sentido (id/slug/name curtos,
+// domainUrl mais largo pra caber URL de verdade).
+model KyriaCustomer {
+  id        String      @id @db.VarChar(64)
+  name      String      @db.VarChar(255)
+  slug      String      @db.VarChar(100)
+  status    KyriaStatus
+  domainUrl String?     @map("domain_url") @db.VarChar(500)
+  createdAt DateTime    @map("created_at")
+  updatedAt DateTime    @map("updated_at")
+  // Campo interno (não vem da API) — documentado no mapeamento como referência a Cliente.codcli.
+  // SEM FK Prisma de verdade, mesmo podendo (Cliente tem PK simples, diferente do caso
+  // Consultor/codusu) — mesmo motivo: manter o model Cliente, que é do Senior, sem precisar
+  // saber nada de Kyria. Nunca populado pelo sync automático — fica null até alguém vincular
+  // manualmente pela tela "Ver dados".
+  codcli Int?
+  sincronizadoEm DateTime @updatedAt @map("sincronizado_em")
+
+  @@map("kyria_customers")
+}
+
+// Tipos selecionáveis ao registrar um campo (ver KyriaFieldMapping) — subconjunto fechado dos
+// tipos escalares reais do Prisma (nunca string livre): garante que tudo que fica registrado é
+// algo que um `model` do schema.prisma pode literalmente declarar. `Decimal` acrescentado a
+// pedido do Vitor (18/09/2026) — usa `KyriaFieldMapping.precisao`/`escala` quando escolhido
+// (mesmo par `@db.Decimal(precisao, escala)` que `soap/typeMapping.ts` já usa pro Senior).
+enum KyriaTipoCampo {
+  String
+  Int
+  BigInt
+  Float
+  Decimal
+  Boolean
+  DateTime
+  Json
+}
+
+// Recurso Kyria registrado pro workflow de mapeamento de campos (Administração > Integração
+// Kyria > Mapeamento de Campos, 18/09/2026, pedido do Vitor). Registrar aqui NÃO cria/altera
+// tabela nenhuma — é uma especificação que o desenvolvedor usa depois pra escrever o model
+// Prisma + migração de verdade, à mão, revisada (mesma disciplina de sempre, ver o comentário
+// grande sobre `KyriaTeam.status` no histórico de migrations). `resourcePath` é a chave de
+// negócio (ex.: "/teams") — sem relação obrigatória com `KyriaSyncJobDescriptor.jobName` (ver
+// kyria/registry.ts), porque dá pra registrar um recurso bem antes dele virar um job de sync.
+model KyriaResourceMapping {
+  id            Int      @id @default(autoincrement())
+  resourcePath  String   @unique @map("resource_path")
+  displayName   String   @map("display_name")
+  // JSON cru do registro de amostra usado na última pré-visualização — auditoria ("foi isso
+  // que o admin viu ao decidir"), não consumido por nenhum código além da tela de detalhe.
+  amostraBruta  Json?    @map("amostra_bruta")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+  atualizadoPor Int?     @map("atualizado_por")
+
+  campos KyriaFieldMapping[]
+
+  @@map("kyria_resource_mappings")
+}
+
+// Um campo dentro de um recurso registrado. Re-registrar o recurso (POST .../register de novo)
+// SUBSTITUI o conjunto inteiro de campos — sem edição parcial, é sempre "registrei de novo com
+// o que vejo agora" (ver routes/syncKyriaMapping.ts).
+model KyriaFieldMapping {
+  id         Int                  @id @default(autoincrement())
+  resourceId Int                  @map("resource_id")
+  resource   KyriaResourceMapping @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  // Nome do campo como veio na resposta real do Kyria. Campo aninhado (objeto/array) entra
+  // como UMA linha (ex.: "appearance"), sem flatten automático — mesmo tratamento que
+  // `KyriaTeam.appearance` já recebe hoje (Json inteiro). NULL = campo INTERNO — não existe na
+  // API, só do nosso lado (ex.: FK pra outra tabela do CaxHub), registrado pela tela sem passar
+  // por preview nenhum (18/09/2026, pedido do Vitor).
+  nomeOrigem    String?        @map("nome_origem")
+  ordem         Int
+  manter        Boolean        @default(true)
+  tipoEscolhido KyriaTipoCampo @map("tipo_escolhido")
+  // Sempre snake_case minúsculo, normalizado a partir do nome de origem (camelCase) tanto no
+  // frontend quanto no backend (ver paraSnakeCase em routes/syncKyriaMapping.ts) — vira o nome
+  // da coluna Postgres de verdade na migração, mesma convenção já usada em toda tabela
+  // CaxHub-nativa deste schema (`parent_team_id`, `sincronizado_em`, ...).
+  nomeInterno   String         @map("nome_interno")
+  nullable      Boolean        @default(true)
+  // Tamanho de `String` (`@db.VarChar(tamanho)`) — null = TEXT sem limite. Só faz sentido
+  // quando tipoEscolhido = String; ignorado (mas não apagado) se o admin trocar de tipo depois.
+  tamanho  Int?
+  // Precisão/escala de `Decimal` (`@db.Decimal(precisao, escala)`, mesmo par que
+  // soap/typeMapping.ts já usa pro Senior) — só fazem sentido quando tipoEscolhido = Decimal.
+  precisao Int?
+  escala   Int?
+
+  // Documentação de relacionamento (opcional, vale pra QUALQUER campo — interno ou vindo da
+  // API, ex.: um "customerId" já mapeado também pode apontar pro Cliente.id local) — "este
+  // campo é pensado como FK pra Modelo.campo" no schema real que eu escrevo depois. NÃO gera
+  // FK/constraint nenhuma aqui, é só texto. `relacionamentoModelo` é o nome do MODEL Prisma
+  // (ex.: "Proposta"), não da tabela (@@map) — é o que entra num `@relation` de verdade. Os
+  // dois são opcionais EM CONJUNTO: um sem o outro é especificação incompleta, validado no
+  // backend (ver GET /internal-models e POST /register em routes/syncKyriaMapping.ts).
+  relacionamentoModelo String? @map("relacionamento_modelo")
+  relacionamentoCampo  String? @map("relacionamento_campo")
+  // Campo ESCALAR do mesmo relacionamentoModelo a mostrar como rótulo legível na tela "Ver
+  // dados" (ex.: Consultor.nomfor) — opcional, só faz sentido quando relacionamentoModelo/Campo
+  // já estão preenchidos (não validado como "os três juntos ou nenhum": um relacionamento sem
+  // descrição é válido, só não ganha rótulo). 18/09/2026, pedido do Vitor.
+  relacionamentoCampoDescricao String? @map("relacionamento_campo_descricao")
+
+  // Referência, só leitura — o que a amostra e o OpenAPI sugeriam, pro admin decidir em cima.
+  // Tudo NULL num campo interno (não há amostra da API pra inferir nada).
+  tipoInferidoAmostra String?  @map("tipo_inferido_amostra")
+  valorExemplo        String?  @map("valor_exemplo")
+  tipoOpenApi         String?  @map("tipo_openapi")
+  nullableOpenApi     Boolean? @map("nullable_openapi")
+  enumOpenApi         Json?    @map("enum_openapi")
+
+  criadoEm     DateTime @default(now()) @map("criado_em")
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@map("kyria_field_mappings")
+  @@index([resourceId])
+}
+
 // Espelho local da tabela E075PRO do Senior ERP (Cadastros - Produtos).
 model Produto {
   codemp Int

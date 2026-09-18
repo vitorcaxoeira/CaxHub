@@ -30,7 +30,9 @@ interface MultiSelectColumnFilterProps {
   onChange: (selecionados: string[]) => void;
 }
 
-function normalizar(texto: string): string {
+// Exportada: DadosKyria.tsx reaproveita pra normalizar a mesma forma numa busca de texto
+// client-side (mesmo critério "sem acento, sem maiúscula" nos dois lugares).
+export function normalizar(texto: string): string {
   return texto.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 }
 
