@@ -79,3 +79,14 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
+
+/* O ícone que abre o calendário/relógio dos inputs nativos é preto por padrão e some no fundo
+   escuro. Só o ícone é invertido (não `color-scheme: dark`, que mexeria também em scrollbars e
+   demais controles nativos do app inteiro). */
+.dark input[type="date"]::-webkit-calendar-picker-indicator,
+.dark input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+.dark input[type="month"]::-webkit-calendar-picker-indicator,
+.dark input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  cursor: pointer;
+}

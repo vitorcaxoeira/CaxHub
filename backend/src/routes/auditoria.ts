@@ -2,6 +2,7 @@ import { NextFunction, Response, Router } from "express";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { podeExecutarAcao, resolverContextoConsultor } from "../domain/contextoProjeto";
+import { sitproLabel } from "../domain/propostasDominio";
 import { Prisma } from "@prisma/client";
 
 const INCLUDE_USUARIO = { usuario: { select: { nome: true, fotoUrl: true } } } as const;
@@ -273,6 +274,52 @@ auditoriaRouter.get("/export", requireAcessoAuditoria, async (req: Authenticated
     res.send(`﻿${csv}`); // BOM: Excel no Windows abre UTF-8 corretamente com acentos
   } catch (error) {
     handleError(res, error, "export");
+  }
+});
+
+// Typeahead de proposta da tela de Auditoria. Não reaproveita GET /alocacao/propostas: aquele
+// só lista propostas Aprovada/Em Execução com item e dentro dos departamentos de quem pergunta,
+// e a auditoria de uma proposta existe em qualquer situação (ex.: a 8890 está "Enviada p/
+// Cliente" e tem histórico, mas nunca aparecia na sugestão). Os eventos já são visíveis a quem
+// passa por requireAcessoAuditoria sem recorte de departamento, então buscar todas as propostas
+// aqui não amplia o que a pessoa já enxerga.
+auditoriaRouter.get("/propostas", requireAcessoAuditoria, async (req: AuthenticatedRequest, res) => {
+  try {
+    const busca = typeof req.query.busca === "string" ? req.query.busca.trim() : "";
+    if (busca.length < 2) {
+      res.json({ rows: [] });
+      return;
+    }
+
+    const filtros: Prisma.PropostaWhereInput[] = [{ cliente: { nomcli: { contains: busca, mode: "insensitive" } } }];
+    // Código digitado vale como PREFIXO ("889" acha 8890): faixas [n·10^k, (n+1)·10^k) pra
+    // k = 0..3 — k=0 é o código exato. Int não aceita `contains`, e as faixas dispensam raw SQL.
+    // Até 6 dígitos: n·1000 precisa caber no Int de 32 bits do Postgres.
+    if (/^\d{1,6}$/.test(busca)) {
+      const n = Number(busca);
+      for (let k = 0; k <= 3; k++) {
+        const passo = 10 ** k;
+        filtros.push({ codpro: { gte: n * passo, lt: (n + 1) * passo } });
+      }
+    }
+
+    const propostas = await prisma.proposta.findMany({
+      where: { OR: filtros },
+      orderBy: { codpro: "desc" },
+      take: 8,
+      select: { codemp: true, codpro: true, sitpro: true, cliente: { select: { nomcli: true } } },
+    });
+
+    res.json({
+      rows: propostas.map((p) => ({
+        codemp: p.codemp,
+        codpro: p.codpro,
+        cliente: p.cliente.nomcli,
+        sitproLabel: sitproLabel(p.sitpro),
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "propostas");
   }
 });
 

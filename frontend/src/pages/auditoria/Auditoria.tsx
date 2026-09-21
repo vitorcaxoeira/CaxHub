@@ -18,6 +18,7 @@ interface PropostaOpcao {
   codemp: number;
   codpro: number;
   cliente: string;
+  sitproLabel?: string;
 }
 
 const ORIGENS_OPCOES: MultiSelectOption<string>[] = [
@@ -51,6 +52,19 @@ function seteDiasAtras(): string {
   return data.toISOString();
 }
 
+// Data só vale pro filtro quando está completa e plausível. Enquanto o usuário digita o ano, o
+// <input type="date"> já entrega "0002-09-27", "0020-09-27"... — se isso virasse filtro, a lista
+// zerava no meio da digitação. O estado guarda o texto cru do input (pra ele não ser reescrito
+// e dar pra terminar de digitar); só a versão válida é usada nas consultas e na URL.
+function dataValida(texto: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(texto) && Number(texto.slice(0, 4)) >= 2000;
+}
+
+// Links antigos guardavam o ISO completo em ?de=/?ate=; aceita os dois formatos.
+function dataDaUrl(valor: string | null): string {
+  return valor ? valor.slice(0, 10) : "";
+}
+
 export function Auditoria() {
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -59,16 +73,22 @@ export function Auditoria() {
   const [propostaSelecionada, setPropostaSelecionada] = useState<PropostaOpcao | null>(
     codempParam && codproParam ? { codemp: Number(codempParam), codpro: Number(codproParam), cliente: "" } : null
   );
-  const [de, setDe] = useState(searchParams.get("de") ?? "");
-  const [ate, setAte] = useState(searchParams.get("ate") ?? "");
+  const [de, setDe] = useState(dataDaUrl(searchParams.get("de")));
+  const [ate, setAte] = useState(dataDaUrl(searchParams.get("ate")));
   const [grupos, setGrupos] = useState<string[]>(searchParams.get("grupos")?.split(",").filter(Boolean) ?? []);
   const [origens, setOrigens] = useState<string[]>(searchParams.get("origens")?.split(",").filter(Boolean) ?? []);
 
-  // Sem proposta selecionada e sem período explícito na URL, restringe aos últimos 7
-  // dias por padrão — evita puxar a trilha inteira do sistema de uma vez.
-  const usandoPeriodoPadrao = !propostaSelecionada && !searchParams.get("de");
-  const deEfetivo = usandoPeriodoPadrao ? seteDiasAtras() : de || null;
-  const ateEfetivo = usandoPeriodoPadrao ? null : ate || null;
+  const deValida = dataValida(de);
+  const ateValida = dataValida(ate);
+
+  // Sem proposta selecionada e sem nenhum período válido, restringe aos últimos 7 dias por
+  // padrão — evita puxar a trilha inteira do sistema de uma vez. Conta também "Até" sozinho:
+  // antes ele era descartado em silêncio quando não havia "De".
+  const usandoPeriodoPadrao = !propostaSelecionada && !deValida && !ateValida;
+  // Datas em fuso LOCAL (início do dia / fim do dia) e só então ISO/UTC — o "Até" antes era
+  // exibido via slice do ISO em UTC e avançava um dia (escolhe 27, o input mostrava 28).
+  const deEfetivo = usandoPeriodoPadrao ? seteDiasAtras() : deValida ? new Date(`${de}T00:00:00`).toISOString() : null;
+  const ateEfetivo = ateValida ? new Date(`${ate}T23:59:59.999`).toISOString() : null;
 
   const [buscaProposta, setBuscaProposta] = useState("");
   const [sugestoes, setSugestoes] = useState<PropostaOpcao[]>([]);
@@ -88,8 +108,8 @@ export function Auditoria() {
       params.set("codemp", String(propostaSelecionada.codemp));
       params.set("codpro", String(propostaSelecionada.codpro));
     }
-    if (de) params.set("de", de);
-    if (ate) params.set("ate", ate);
+    if (deValida) params.set("de", de);
+    if (ateValida) params.set("ate", ate);
     if (grupos.length > 0) params.set("grupos", grupos.join(","));
     if (origens.length > 0) params.set("origens", origens.join(","));
     setSearchParams(params, { replace: true });
@@ -157,11 +177,14 @@ export function Auditoria() {
   useEffect(() => {
     persistirFiltrosNaUrl();
     carregar(null);
+    // Só as datas VÁLIDAS entram nas dependências: digitar o ano ("0002", "0020"...) não deve
+    // disparar consulta nem regravar a URL a cada tecla.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [propostaSelecionada, de, ate, grupos, origens]);
+  }, [propostaSelecionada, deValida ? de : "", ateValida ? ate : "", grupos, origens]);
 
-  // Busca de proposta (typeahead) — reaproveita GET /api/alocacao/propostas (mesmo
-  // recorte de RBAC de admin/gestor da própria tela de Auditoria).
+  // Busca de proposta (typeahead) — rota própria da Auditoria, com o mesmo RBAC da tela. Não usa
+  // /alocacao/propostas: aquele só lista Aprovada/Em Execução, e a auditoria existe pra qualquer
+  // situação de proposta.
   useEffect(() => {
     if (buscaProposta.trim().length < 2) {
       setSugestoes([]);
@@ -169,8 +192,10 @@ export function Auditoria() {
     }
     const timeout = setTimeout(() => {
       axios
-        .get("/api/alocacao/propostas", { params: { busca: buscaProposta, page: 1, pageSize: 8 } })
-        .then(({ data }) => setSugestoes(data.rows.map((r: any) => ({ codemp: r.codemp, codpro: r.codpro, cliente: r.cliente }))))
+        .get("/api/auditoria/propostas", { params: { busca: buscaProposta } })
+        .then(({ data }) =>
+          setSugestoes(data.rows.map((r: any) => ({ codemp: r.codemp, codpro: r.codpro, cliente: r.cliente, sitproLabel: r.sitproLabel })))
+        )
         .catch(() => setSugestoes([]));
     }, 300);
     return () => clearTimeout(timeout);
@@ -272,6 +297,7 @@ export function Auditoria() {
                     className="block w-full px-3 py-2 text-left text-sm text-foreground hover:bg-surface-2"
                   >
                     Proposta {s.codpro} — {s.cliente}
+                    {s.sitproLabel && <span className="ml-2 text-[11px] text-muted">{s.sitproLabel}</span>}
                   </button>
                 ))}
               </div>
@@ -287,15 +313,15 @@ export function Auditoria() {
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
           type="date"
-          value={de ? de.slice(0, 10) : ""}
-          onChange={(e) => setDe(e.target.value ? new Date(e.target.value).toISOString() : "")}
+          value={de}
+          onChange={(e) => setDe(e.target.value)}
           className={selectClass}
           aria-label="Data inicial"
         />
         <input
           type="date"
-          value={ate ? ate.slice(0, 10) : ""}
-          onChange={(e) => setAte(e.target.value ? new Date(`${e.target.value}T23:59:59`).toISOString() : "")}
+          value={ate}
+          onChange={(e) => setAte(e.target.value)}
           className={selectClass}
           aria-label="Data final"
         />
