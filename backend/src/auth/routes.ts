@@ -30,6 +30,11 @@ authRouter.post("/login", async (req, res) => {
     return;
   }
 
+  if (user.status === "inativo") {
+    res.status(403).json({ error: "Usuário inativo — procure um administrador" });
+    return;
+  }
+
   if (user.status !== "ativo" || !user.passwordHash) {
     res.status(403).json({ error: "Convite pendente — aceite o convite antes de entrar" });
     return;

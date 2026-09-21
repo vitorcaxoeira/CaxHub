@@ -17,7 +17,7 @@ model User {
   role         Role     @relation(fields: [roleId], references: [id])
   createdAt    DateTime @default(now())
 
-  /// "pendente" (convite ainda não aceito, sem senha) | "ativo"
+  /// "pendente" (convite ainda não aceito, sem senha) | "ativo" | "inativo" (bloqueado por um admin — sem login, sessão derrubada, histórico preservado)
   status          String    @default("ativo")
   inviteToken     String?   @unique
   inviteExpiresAt DateTime?

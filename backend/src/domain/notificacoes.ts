@@ -57,7 +57,7 @@ export async function notificarGestoresDoDepartamento(
   if (emails.length === 0) return;
 
   const usuarios = await prisma.user.findMany({
-    where: { email: { in: emails, mode: "insensitive" } },
+    where: { email: { in: emails, mode: "insensitive" }, status: { not: "inativo" } },
   });
 
   for (const usuario of usuarios) {
@@ -91,8 +91,10 @@ export async function notificarAprovadoresConfiguracaoProposta(
   const emails = consultores.map((c) => c.email).filter((e): e is string => !!e);
 
   const [gestoresUsuarios, admins] = await Promise.all([
-    emails.length > 0 ? prisma.user.findMany({ where: { email: { in: emails, mode: "insensitive" } } }) : Promise.resolve([]),
-    prisma.user.findMany({ where: { role: { name: "admin" } } }),
+    emails.length > 0
+      ? prisma.user.findMany({ where: { email: { in: emails, mode: "insensitive" }, status: { not: "inativo" } } })
+      : Promise.resolve([]),
+    prisma.user.findMany({ where: { role: { name: "admin" }, status: { not: "inativo" } } }),
   ]);
 
   // Um admin que também seja gestor de um desses departamentos apareceria duas vezes.

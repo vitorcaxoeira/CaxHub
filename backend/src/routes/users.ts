@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { signToken } from "../auth/jwt";
+import { invalidarStatusUsuario } from "../auth/statusUsuario";
 import { prisma } from "../db/prisma";
 import { papelSugeridoPorTipusurat } from "../domain/usuariosDominio";
 import { parseIntListParam } from "../lib/queryParams";
@@ -16,7 +17,7 @@ const CONVITE_VALIDADE_DIAS = 7;
 
 // Situações possíveis de User.status (ver model no schema.prisma) — mesmo estilo de
 // STATUS_VALIDOS em routes/sincronizacao.ts.
-const STATUS_VALIDOS = ["ativo", "pendente"] as const;
+const STATUS_VALIDOS = ["ativo", "pendente", "inativo"] as const;
 
 function toPublicUser(user: {
   id: number;
@@ -60,7 +61,7 @@ usersRouter.get("/roles", async (_req, res) => {
 usersRouter.get("/indicadores", async (_req, res) => {
   try {
     const grupos = await prisma.user.groupBy({ by: ["status"], _count: true });
-    const totais: Record<string, number> = { ativo: 0, pendente: 0 };
+    const totais: Record<string, number> = { ativo: 0, pendente: 0, inativo: 0 };
     for (const g of grupos) {
       if (g.status in totais) totais[g.status] = g._count;
     }
@@ -184,6 +185,82 @@ usersRouter.post("/:id/convites/reenviar", async (req, res) => {
     res.json({ inviteLink: `/aceitar-convite?token=${inviteToken}` });
   } catch (error) {
     handleError(res, error, "convites-reenviar");
+  }
+});
+
+// ---------- Inativar / reativar ----------
+// Inativar bloqueia login E derruba a sessão já aberta (requireAuth consulta o status, ver
+// auth/statusUsuario.ts) sem apagar nada — o histórico (auditoria, atividades, RATs) continua
+// ligado ao usuário, o que a exclusão não garante. Só "ativo" pode ser inativado: convite
+// pendente se cancela (excluir), e um inativo sempre já teve senha, então reativar volta direto
+// pra "ativo".
+usersRouter.post("/:id/inativar", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    if (id === req.user!.userId) {
+      res.status(400).json({ error: "Você não pode inativar seu próprio usuário" });
+      return;
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id }, include: { role: true } });
+    if (!existing) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (existing.status === "inativo") {
+      res.status(400).json({ error: "Esse usuário já está inativo" });
+      return;
+    }
+    if (existing.status !== "ativo") {
+      res.status(400).json({ error: "Convite pendente não pode ser inativado — cancele o convite" });
+      return;
+    }
+
+    if (existing.role.name === "admin") {
+      const outrosAdminsAtivos = await prisma.user.count({
+        where: { role: { name: "admin" }, status: "ativo", id: { not: id } },
+      });
+      if (outrosAdminsAtivos === 0) {
+        res.status(400).json({ error: "Não é possível inativar o único administrador ativo restante" });
+        return;
+      }
+    }
+
+    const user = await prisma.user.update({ where: { id }, data: { status: "inativo" }, include: { role: true } });
+    invalidarStatusUsuario(id);
+    res.json({ user: toPublicUser(user) });
+  } catch (error) {
+    handleError(res, error, "inativar");
+  }
+});
+
+usersRouter.post("/:id/reativar", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (existing.status !== "inativo") {
+      res.status(400).json({ error: "Só é possível reativar um usuário inativo" });
+      return;
+    }
+
+    const user = await prisma.user.update({ where: { id }, data: { status: "ativo" }, include: { role: true } });
+    invalidarStatusUsuario(id);
+    res.json({ user: toPublicUser(user) });
+  } catch (error) {
+    handleError(res, error, "reativar");
   }
 });
 
@@ -350,7 +427,9 @@ usersRouter.put("/:id", async (req, res) => {
     if (existing.role.name === "admin" && roleIdNum !== undefined) {
       const novoRole = await prisma.role.findUnique({ where: { id: roleIdNum } });
       if (novoRole?.name !== "admin") {
-        const outrosAdmins = await prisma.user.count({ where: { role: { name: "admin" }, id: { not: id } } });
+        // Só admin ATIVO conta: com o outro admin inativo, tirar o papel deste deixaria o sistema
+        // sem ninguém que consiga entrar.
+        const outrosAdmins = await prisma.user.count({ where: { role: { name: "admin" }, status: "ativo", id: { not: id } } });
         if (outrosAdmins === 0) {
           res.status(400).json({ error: "Não é possível remover o papel de administrador do único admin restante" });
           return;
@@ -408,7 +487,7 @@ usersRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
     }
 
     if (existing.role.name === "admin") {
-      const outrosAdmins = await prisma.user.count({ where: { role: { name: "admin" }, id: { not: id } } });
+      const outrosAdmins = await prisma.user.count({ where: { role: { name: "admin" }, status: "ativo", id: { not: id } } });
       if (outrosAdmins === 0) {
         res.status(400).json({ error: "Não é possível excluir o único administrador restante" });
         return;

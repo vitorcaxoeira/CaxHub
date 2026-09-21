@@ -40,7 +40,10 @@ const CONVITE_VAZIO: ConviteFormState = { email: "", nome: "", roleId: "" };
 const statusTone: Record<string, string> = {
   ativo: "bg-success/15 text-success",
   pendente: "bg-warning/15 text-warning",
+  inativo: "bg-muted/15 text-muted",
 };
+
+const statusRotulo: Record<string, string> = { ativo: "Ativo", pendente: "Pendente", inativo: "Inativo" };
 
 export function Usuarios() {
   const { user: usuarioLogado } = useAuth();
@@ -77,7 +80,7 @@ export function Usuarios() {
   // Totais por situação da base INTEIRA (não reagem a statusFiltro/roleFiltro/buscaDebounced)
   // — mesma regra de GET /sincronizacao/indicadores: o KPI mostra sempre o todo, só a lista
   // abaixo reage aos filtros.
-  const [indicadores, setIndicadores] = useState({ ativo: 0, pendente: 0 });
+  const [indicadores, setIndicadores] = useState({ ativo: 0, pendente: 0, inativo: 0 });
   const [loadingIndicadores, setLoadingIndicadores] = useState(true);
 
   function carregar() {
@@ -205,6 +208,34 @@ export function Usuarios() {
     }
   }
 
+  // Inativar/reativar mudam a contagem por situação — mesma razão de carregarIndicadores() em
+  // excluir(). Inativar derruba a sessão da pessoa na hora e bloqueia novo login, sem apagar nada.
+  async function inativar(usuario: Usuario) {
+    if (
+      !window.confirm(
+        `Inativar "${usuario.nome}"? A pessoa perde o acesso imediatamente (inclusive se estiver logada agora). Você pode reativar depois.`
+      )
+    )
+      return;
+    try {
+      await axios.post(`/api/users/${usuario.id}/inativar`);
+      carregar();
+      carregarIndicadores();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao inativar usuário");
+    }
+  }
+
+  async function reativar(usuario: Usuario) {
+    try {
+      await axios.post(`/api/users/${usuario.id}/reativar`);
+      carregar();
+      carregarIndicadores();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao reativar usuário");
+    }
+  }
+
   function abrirConvidar() {
     setConviteForm({ ...CONVITE_VAZIO, roleId: roles[0] ? String(roles[0].id) : "" });
     setErroConvite(null);
@@ -318,8 +349,8 @@ export function Usuarios() {
       </div>
 
       {loadingIndicadores ? (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {Array.from({ length: 2 }).map((_, i) => (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-border bg-surface p-5">
               <Skeleton className="mb-2 h-3.5 w-20" />
               <Skeleton className="h-7 w-12" />
@@ -327,7 +358,7 @@ export function Usuarios() {
           ))}
         </div>
       ) : (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {/* Clicáveis: filtram a lista abaixo por situação (mesmo espírito do KPI de
               SincronizacaoSenior.tsx) — o total de cada cartão nunca muda com o clique, só o
               da base inteira. */}
@@ -348,6 +379,15 @@ export function Usuarios() {
           >
             <p className="mb-2 text-[11.5px] text-muted">Convites pendentes</p>
             <span className="block font-mono text-2xl font-semibold tabular-nums text-warning">{indicadores.pendente}</span>
+          </button>
+          <button
+            onClick={() => alternarStatusFiltro("inativo")}
+            className={`rounded-lg border p-5 text-left transition ${
+              statusFiltro === "inativo" ? "border-muted ring-2 ring-muted/40" : "border-border hover:bg-surface-2"
+            } ${statusFiltro && statusFiltro !== "inativo" ? "opacity-40" : ""}`}
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Inativos</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-muted">{indicadores.inativo}</span>
           </button>
         </div>
       )}
@@ -441,13 +481,28 @@ export function Usuarios() {
                         statusTone[usuario.status] ?? statusTone.ativo
                       }`}
                     >
-                      {usuario.status === "pendente" ? "Pendente" : "Ativo"}
+                      {statusRotulo[usuario.status] ?? "Ativo"}
                     </span>
                   </td>
                   <td className="px-5 py-3.5 text-right">
                     {usuario.status === "pendente" && (
                       <button onClick={() => reenviarConvite(usuario)} className="mr-3 text-sm text-primary hover:underline">
                         Copiar link
+                      </button>
+                    )}
+                    {usuario.status === "ativo" && (
+                      <button
+                        onClick={() => inativar(usuario)}
+                        disabled={usuario.id === usuarioLogado?.id}
+                        title={usuario.id === usuarioLogado?.id ? "Você não pode inativar seu próprio usuário" : undefined}
+                        className="mr-3 text-sm text-warning hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Inativar
+                      </button>
+                    )}
+                    {usuario.status === "inativo" && (
+                      <button onClick={() => reativar(usuario)} className="mr-3 text-sm text-success hover:underline">
+                        Reativar
                       </button>
                     )}
                     {usuario.roleName === "system" && (
