@@ -529,9 +529,10 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
 //
 // Confirmar já é liberado pro gestor sobre sessão do time (podeExecutarAcao, chamado dentro de
 // confirmarSessao) — o problema que isto resolve é só a LISTAGEM nunca mostrar essa sessão pra
-// ele confirmar. Ações "só o dono" (editar descrição/pedir ajuste/excluir) continuam exigindo
-// `codfor` exato nos respectivos endpoints, sem extensão nenhuma — a tela já esconde esses
-// botões via `souDono`, calculado abaixo.
+// ele confirmar. Ações "só o dono" (editar descrição/pedir ajuste) continuam exigindo `codfor`
+// exato nos respectivos endpoints, sem extensão nenhuma — a tela já esconde esses botões via
+// `souDono`, calculado abaixo. Excluir é a exceção: admin também pode, sobre qualquer sessão
+// (ver `podeExcluir` abaixo e DELETE /:id).
 apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
@@ -677,6 +678,10 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           // o servidor vai recusar. Consultor comum: sempre true (a lista já é só dele).
           // Gestor/admin: true só na própria sessão, false nas do time.
           souDono: !mostrarConsultor || s.atividade.codfor === meuCodfor,
+          // Exclusão também libera pro admin sobre sessão de qualquer consultor (DELETE
+          // /:id abaixo aceita isso) — diferente de editar descrição/pedir ajuste, que
+          // continuam "só o dono" mesmo pro admin.
+          podeExcluir: role === "admin" || !mostrarConsultor || s.atividade.codfor === meuCodfor,
           // Mesma previsão de erro acima, agora pro bloqueio de apontamento — confirmar essa
           // sessão vai recusar 409 (ver confirmarSessao).
           bloqueadoApontamentoEfetivo: resolverBloqueioComConfig(
@@ -1118,8 +1123,15 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       return;
     }
     const ctx = await contextoDoUsuario(req);
-    const codfor = ctx?.contexto.consultor?.codfor;
-    if (!codfor) {
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const codfor = ctx.contexto.consultor?.codfor;
+    // Admin pode excluir sessão de qualquer consultor (mesmo espírito de podeExecutarAcao
+    // em Confirmar) — os demais continuam restritos à própria (codfor exato), como antes.
+    const souAdmin = ctx.role === "admin";
+    if (!souAdmin && !codfor) {
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
@@ -1128,7 +1140,7 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       where: { id: sessaoId },
       include: { atividade: true, ratItem: true },
     });
-    if (!sessao || sessao.atividade.codfor !== codfor) {
+    if (!sessao || (!souAdmin && sessao.atividade.codfor !== codfor)) {
       res.status(404).json({ error: "Apontamento não encontrado" });
       return;
     }

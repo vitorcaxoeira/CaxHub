@@ -55,6 +55,9 @@ interface SessaoPendente {
   // Editar descrição, pedir ajuste e excluir são "só o dono" nos respectivos endpoints —
   // controla quais ações do menu "⋯" a tela oferece (Confirmar não depende disto).
   souDono: boolean;
+  // Exclusão também libera pro admin sobre sessão de qualquer consultor — diferente de
+  // editar descrição/pedir ajuste, que continuam "só o dono" (ver souDono acima).
+  podeExcluir: boolean;
   ajustePendente: AjustePendente | null;
   // Previsão de "vai dar erro ao confirmar" (ver GET /sessoes-pendentes) — as duas causas
   // que hoje só o clique em "Confirmar" descobre: status de sincronização da alocação por
@@ -1451,26 +1454,29 @@ export function MeusApontamentos() {
                 {confirmando === s.id ? "Confirmando..." : "Confirmar"}
               </DropdownMenu.Item>
               {s.souDono && (
-                <>
-                  <DropdownMenu.Item
-                    onSelect={() =>
-                      abrirPedidoAjuste(
-                        s.id,
-                        `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
-                        s.inicio,
-                        s.fim,
-                        s.ajustePendente
-                      )
-                    }
-                    disabled={s.bloqueadoApontamentoEfetivo && !s.ajustePendente}
-                    title={s.bloqueadoApontamentoEfetivo && !s.ajustePendente ? MOTIVO_BLOQUEIO_APONTAMENTO : undefined}
-                  >
-                    {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item onSelect={() => excluirSessao(s.id)} disabled={excluindoSessao === s.id} destructive>
-                    {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
-                  </DropdownMenu.Item>
-                </>
+                <DropdownMenu.Item
+                  onSelect={() =>
+                    abrirPedidoAjuste(
+                      s.id,
+                      `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
+                      s.inicio,
+                      s.fim,
+                      s.ajustePendente
+                    )
+                  }
+                  disabled={s.bloqueadoApontamentoEfetivo && !s.ajustePendente}
+                  title={s.bloqueadoApontamentoEfetivo && !s.ajustePendente ? MOTIVO_BLOQUEIO_APONTAMENTO : undefined}
+                >
+                  {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
+                </DropdownMenu.Item>
+              )}
+              {/* Diferente de "Pedir ajuste" acima (só o dono), Excluir aqui também libera
+                  pro admin sobre sessão de qualquer consultor — backend confere de novo em
+                  DELETE /:id, isto só evita oferecer um botão que ele recusaria. */}
+              {s.podeExcluir && (
+                <DropdownMenu.Item onSelect={() => excluirSessao(s.id)} disabled={excluindoSessao === s.id} destructive>
+                  {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
+                </DropdownMenu.Item>
               )}
             </DropdownMenu.Content>
           </DropdownMenu>
