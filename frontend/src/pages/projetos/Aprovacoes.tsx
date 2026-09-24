@@ -1,6 +1,6 @@
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "../../components/ui/Toast";
 import { toneBadge } from "../../components/ui/badges";
 import {
@@ -117,6 +117,15 @@ const FILTROS: { valor: string; rotulo: string }[] = [
   { valor: "reprovada", rotulo: "Reprovadas" },
   { valor: "", rotulo: "Todas" },
 ];
+
+const ABAS_VALIDAS: Aba[] = ["excedentes", "apontamentos", "ajustes", "config-proposta"];
+
+// Ref da linha destacada (vinda de uma notificação, `?atividade=`). Função de módulo, e não
+// inline, pra ter identidade estável: o React só chama de novo quando a linha monta, então
+// digitar no formulário de decisão não fica rolando a tela de volta.
+function rolarAteLinha(el: HTMLDivElement | null) {
+  el?.scrollIntoView({ block: "center" });
+}
 
 const TOM_STATUS: Record<string, string> = {
   pendente: "bg-warning/15 text-warning",
@@ -277,10 +286,12 @@ function CabecalhoLinha({
 
 function ListaExcedentes({
   status,
+  destacarAtividadeId,
   onVerAtividade,
   onMudou,
 }: {
   status: string;
+  destacarAtividadeId: number | null;
   onVerAtividade: (id: number) => void;
   onMudou: () => void;
 }) {
@@ -445,7 +456,11 @@ function ListaExcedentes({
       ) : (
         <div className="space-y-2">
           {solicitacoesFiltradas.map((s) => (
-            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+            <div
+              key={s.id}
+              ref={s.atividadeId === destacarAtividadeId ? rolarAteLinha : undefined}
+              className={`rounded-md border bg-surface px-3.5 py-3 ${s.atividadeId === destacarAtividadeId ? "border-primary ring-2 ring-primary/40" : "border-border"}`}
+            >
               <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
 
               <p className="mt-1.5 font-mono text-[12px] text-muted">
@@ -538,10 +553,12 @@ function ListaExcedentes({
 
 function ListaApontamentos({
   status,
+  destacarAtividadeId,
   onVerAtividade,
   onMudou,
 }: {
   status: string;
+  destacarAtividadeId: number | null;
   onVerAtividade: (id: number) => void;
   onMudou: () => void;
 }) {
@@ -721,7 +738,11 @@ function ListaApontamentos({
       ) : (
         <div className="space-y-2">
           {solicitacoesFiltradas.map((s) => (
-            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+            <div
+              key={s.id}
+              ref={s.atividadeId === destacarAtividadeId ? rolarAteLinha : undefined}
+              className={`rounded-md border bg-surface px-3.5 py-3 ${s.atividadeId === destacarAtividadeId ? "border-primary ring-2 ring-primary/40" : "border-border"}`}
+            >
               <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
 
               <p className="mt-1.5 font-mono text-[12px] text-muted">
@@ -838,10 +859,12 @@ function ListaApontamentos({
 
 function ListaAjustes({
   status,
+  destacarAtividadeId,
   onVerAtividade,
   onMudou,
 }: {
   status: string;
+  destacarAtividadeId: number | null;
   onVerAtividade: (id: number) => void;
   onMudou: () => void;
 }) {
@@ -1009,7 +1032,11 @@ function ListaAjustes({
       ) : (
         <div className="space-y-2">
           {solicitacoesFiltradas.map((s) => (
-            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+            <div
+              key={s.id}
+              ref={s.atividadeId === destacarAtividadeId ? rolarAteLinha : undefined}
+              className={`rounded-md border bg-surface px-3.5 py-3 ${s.atividadeId === destacarAtividadeId ? "border-primary ring-2 ring-primary/40" : "border-border"}`}
+            >
               <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
 
               <p className="mt-1.5 font-mono text-[12px] text-muted">
@@ -1344,8 +1371,20 @@ function ListaConfigProposta({ status, onMudou }: { status: string; onMudou: () 
 // `podeDecidir` por linha diz de qual lado a pessoa está naquele pedido.
 export function Aprovacoes() {
   const toast = useToast();
+  // A notificação chega com ?aba=&status=&atividade= (ver NotificacoesSino). O efeito abaixo
+  // reaplica quando a URL muda com a tela já aberta — clicar numa segunda notificação.
+  const [searchParams] = useSearchParams();
   const [aba, setAba] = useState<Aba>("excedentes");
   const [status, setStatus] = useState("pendente");
+  const [destacarAtividadeId, setDestacarAtividadeId] = useState<number | null>(null);
+  useEffect(() => {
+    const abaDaUrl = searchParams.get("aba") as Aba | null;
+    if (abaDaUrl && ABAS_VALIDAS.includes(abaDaUrl)) setAba(abaDaUrl);
+    const statusDaUrl = searchParams.get("status");
+    if (statusDaUrl !== null && FILTROS.some((f) => f.valor === statusDaUrl)) setStatus(statusDaUrl);
+    const atividade = Number(searchParams.get("atividade"));
+    setDestacarAtividadeId(Number.isFinite(atividade) && atividade > 0 ? atividade : null);
+  }, [searchParams]);
   const [atividadeAberta, setAtividadeAberta] = useState<AtividadeDetalheDados | null>(null);
   // Força as listas a recarregar quando o drawer mexe no excedente da atividade.
   const [versao, setVersao] = useState(0);
@@ -1417,13 +1456,13 @@ export function Aprovacoes() {
       </div>
 
       {aba === "excedentes" && (
-        <ListaExcedentes key={`exc-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
+        <ListaExcedentes key={`exc-${versao}`} status={status} destacarAtividadeId={destacarAtividadeId} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
       )}
       {aba === "apontamentos" && (
-        <ListaApontamentos key={`apo-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
+        <ListaApontamentos key={`apo-${versao}`} status={status} destacarAtividadeId={destacarAtividadeId} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
       )}
       {aba === "ajustes" && (
-        <ListaAjustes key={`aju-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
+        <ListaAjustes key={`aju-${versao}`} status={status} destacarAtividadeId={destacarAtividadeId} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
       )}
       {aba === "config-proposta" && (
         <ListaConfigProposta key={`cfg-${versao}`} status={status} onMudou={() => setVersao((v) => v + 1)} />

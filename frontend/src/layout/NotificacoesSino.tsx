@@ -8,8 +8,45 @@ interface Notificacao {
   mensagem: string;
   lida: boolean;
   criadoEm: string;
-  // Só as notificações de Solicitação de Viagem levam a algum lugar (a solicitação).
   solicitacaoViagemId?: number | null;
+  atividadeId?: number | null;
+}
+
+// Para onde o clique leva. Roteia por `tipo` (e não por uma URL gravada no banco) pra que
+// notificações antigas também naveguem. Os pedidos de aprovação vão pra aba certa de
+// Aprovações com a linha da atividade destacada; o que é só da atividade abre o painel dela.
+function destinoDaNotificacao(n: Notificacao): string | null {
+  if (n.solicitacaoViagemId) return `/solicitacoes/${n.solicitacaoViagemId}`;
+
+  const aprovacoes = (aba: string, status: string) => {
+    const params = new URLSearchParams({ aba, status });
+    if (n.atividadeId) params.set("atividade", String(n.atividadeId));
+    return `/projetos/aprovacoes?${params}`;
+  };
+
+  switch (n.tipo) {
+    case "excedente_solicitado":
+      return aprovacoes("excedentes", "pendente");
+    case "excedente_decidido":
+      return aprovacoes("excedentes", "");
+    case "apontamento_solicitado":
+      return aprovacoes("apontamentos", "pendente");
+    // Aprovado, o consultor ainda precisa confirmar em Meus Apontamentos — é lá que ele age.
+    case "apontamento_decidido":
+      return "/projetos/apontamentos";
+    case "ajuste_solicitado":
+      return aprovacoes("ajustes", "pendente");
+    case "ajuste_decidido":
+      return aprovacoes("ajustes", "");
+    case "config_proposta_solicitada":
+      return aprovacoes("config-proposta", "pendente");
+    case "config_proposta_decidida":
+      return aprovacoes("config-proposta", "");
+  }
+
+  // atividade_movida, novo_comentario, horas_excedentes e qualquer tipo futuro com atividade.
+  if (n.atividadeId) return `/projetos/atividades?atividade=${n.atividadeId}`;
+  return null;
 }
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
@@ -94,9 +131,10 @@ export function NotificacoesSino() {
                 key={n.id}
                 onClick={() => {
                   if (!n.lida) marcarLida(n.id);
-                  if (n.solicitacaoViagemId) {
+                  const destino = destinoDaNotificacao(n);
+                  if (destino) {
                     setOpen(false);
-                    navigate(`/solicitacoes/${n.solicitacaoViagemId}`);
+                    navigate(destino);
                   }
                 }}
                 className={`block w-full border-b border-border/60 px-3 py-2 text-left text-sm transition hover:bg-surface-2 ${

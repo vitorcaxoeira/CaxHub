@@ -28,6 +28,15 @@ interface DetalheSelecionado extends DetalheInfo {
   id: number;
 }
 
+// Linha devolvida por GET /atividades/:id/detalhe — a mesma de GET /atividades, com os
+// bloqueios já resolvidos ("mais restritivo vence") sob o sufixo Efetivo.
+type AtividadeDetalheRow = Omit<DetalheInfo, "titulo" | "bloqueadoApontamento" | "bloqueadoExcedente"> & {
+  id: number;
+  numprj: number | null;
+  bloqueadoApontamentoEfetivo: boolean;
+  bloqueadoExcedenteEfetivo: boolean;
+};
+
 // Pedido de observação ao sair de "Em Andamento" (mover o card ou clicar Parar) — abre
 // o ModalObservacaoAtividade antes de chamar a API de verdade, ver
 // moverAtividade/pararAtividade abaixo.
@@ -100,6 +109,37 @@ export function Atividades() {
   const [processando, setProcessando] = useState<Set<number>>(new Set());
   const [pedidoObservacao, setPedidoObservacao] = useState<PedidoObservacao | null>(null);
   const toast = useToast();
+
+  // ?atividade=:id (link de notificação, ver NotificacoesSino) abre o painel direto, sem
+  // depender de a atividade estar na página/filtro atual. Mesma rota e mesmo mapeamento que
+  // Aprovações usa pro "Ver atividade". Reage à URL pra funcionar com a tela já aberta.
+  const atividadeParam = searchParams.get("atividade");
+  useEffect(() => {
+    const id = Number(atividadeParam);
+    if (!atividadeParam || !Number.isFinite(id)) return;
+    axios
+      .get<{ atividade: AtividadeDetalheRow }>(`/api/atividades/${id}/detalhe`)
+      .then(({ data: { atividade: a } }) =>
+        setDetalhe({
+          ...a,
+          titulo: `Proposta ${a.codpro} · Projeto ${a.numprj ?? "—"}`,
+          bloqueadoApontamento: a.bloqueadoApontamentoEfetivo,
+          bloqueadoExcedente: a.bloqueadoExcedenteEfetivo,
+        })
+      )
+      .catch((err) => toast.mostrar(err.response?.data?.error ?? "Não foi possível abrir esta atividade", "destructive"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atividadeParam]);
+
+  function fecharDetalhe() {
+    setDetalhe(null);
+    // Tira o ?atividade= pra um F5 não reabrir o painel; os filtros ficam.
+    if (searchParams.has("atividade")) {
+      const params = new URLSearchParams(searchParams);
+      params.delete("atividade");
+      setSearchParams(params, { replace: true });
+    }
+  }
 
   function atualizarFiltros(patch: FiltrosPatch) {
     const mudouFiltro =
@@ -609,7 +649,7 @@ export function Atividades() {
           bloqueadoExcedente={detalhe.bloqueadoExcedente}
           // Mudar o excedente muda o teto do card, então a lista/quadro recarrega.
           onExcedenteAlterado={carregar}
-          onClose={() => setDetalhe(null)}
+          onClose={fecharDetalhe}
         />
       )}
 
