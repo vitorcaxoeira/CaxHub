@@ -1671,8 +1671,9 @@ ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
           desrdv: d.desrdv,
           tipdes: d.tipdes,
           tipdesLabel: tipdesLabel(d.tipdes),
-          moddes: d.moddes,
-          moddesLabel: d.moddes != null ? moddesLabel(d.moddes) : null,
+          // moddes só com espaço (o Senior grava assim a despesa avulsa) conta como ausente.
+          moddes: d.moddes?.trim() ? d.moddes : null,
+          moddesLabel: d.moddes?.trim() ? moddesLabel(d.moddes) : null,
           qtdrdv: d.qtdrdv,
           // Decimal do Prisma serializa como STRING em JSON (decimal.js por baixo) — sem o
           // Number(), a soma no frontend (totalLancado) concatena string em vez de somar

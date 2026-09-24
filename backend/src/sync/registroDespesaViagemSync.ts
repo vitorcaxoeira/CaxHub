@@ -73,7 +73,8 @@ function linhaDe(row: RegistroDespesaViagemRow): LinhaUpsert {
       row.datemi ? String(row.datemi).slice(0, 10) : null,
       row.desrdv != null ? row.desrdv : null,
       row.tipdes != null ? String(row.tipdes) : null,
-      row.moddes != null ? row.moddes : null,
+      // ' ' (espaço) = despesa avulsa no Senior; grava NULL pro espelho não carregar o lixo.
+      row.moddes?.trim() ? row.moddes : null,
       row.qtdrdv != null ? String(row.qtdrdv) : null,
       row.vlrunt != null ? row.vlrunt.toFixed(2) : null,
       row.vlrtot != null ? row.vlrtot.toFixed(2) : null,
@@ -246,7 +247,7 @@ export async function runRegistroDespesaViagemSyncPorNumrat(codemp: number, numr
       datemi: row.datemi ? new Date(row.datemi) : null,
       desrdv: row.desrdv ?? null,
       tipdes: row.tipdes ?? null,
-      moddes: row.moddes ?? null,
+      moddes: row.moddes?.trim() ? row.moddes : null,
       qtdrdv: row.qtdrdv ?? null,
       vlrunt: row.vlrunt ?? null,
       vlrtot: row.vlrtot ?? null,

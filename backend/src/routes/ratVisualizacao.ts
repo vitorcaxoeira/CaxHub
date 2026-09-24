@@ -117,7 +117,7 @@ ratVisualizacaoRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
         datemi: d.datemi,
         desrdv: d.desrdv?.trim() || null,
         tipdesLabel: tipdesLabel(d.tipdes),
-        moddesLabel: d.moddes != null ? moddesLabel(d.moddes) : null,
+        moddesLabel: d.moddes?.trim() ? moddesLabel(d.moddes) : null,
         qtdrdv: d.qtdrdv,
         vlrunt: d.vlrunt,
         vlrtot: d.vlrtot,

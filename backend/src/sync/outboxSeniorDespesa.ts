@@ -121,7 +121,7 @@ export function montarPayloadDespesa(despesa: DespesaPronta, tipEve: string, opc
     datRdv: formatarDataSenior(despesa.datemi),
     desRdv: despesa.desrdv,
     tipDes: despesa.tipdes,
-    ...(despesa.moddes != null ? { modDes: despesa.moddes } : {}),
+    ...(despesa.moddes?.trim() ? { modDes: despesa.moddes } : {}),
     qtdRdv: despesa.qtdrdv,
     vlrUni: despesa.vlrunt,
     fatRdv: despesa.fatrdv,

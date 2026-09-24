@@ -37,7 +37,10 @@ const fieldErrorClass = "mt-1 text-xs text-destructive";
 // modal mesmo". Sem fetch próprio — recebe tudo já carregado (rotas/opções) e a despesa a
 // editar (se houver) como props, do mesmo GET /:id/despesas que DespesasRatPainel já fez.
 export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade, despesaEmEdicao, onFechar, onSalvo }: ModalLancarDespesaProps) {
-  const editandoDeslocamento = despesaEmEdicao?.moddes != null;
+  // Deslocamento é o TIPO 7 (TIPDES_DESLOCAMENTO_ROTA, backend/src/domain/rdvDominio.ts), não a
+  // presença de `moddes`: o Senior grava despesa avulsa com moddes = ' ' (espaço, não NULL) e
+  // rotid = 0 — ~200 linhas em produção. `moddes != null` abria todas na aba de rota.
+  const editandoDeslocamento = despesaEmEdicao?.tipdes === 7;
 
   const [erro, setErro] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState<string | null>(null);
@@ -67,7 +70,7 @@ export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade,
 
   // Formulário "Deslocamento por rota" — nasce preenchido quando despesaEmEdicao é deslocamento.
   const [rotaId, setRotaId] = useState<number | "">(editandoDeslocamento ? despesaEmEdicao!.rotid ?? "" : "");
-  const [moddes, setModdes] = useState<string>(editandoDeslocamento ? despesaEmEdicao!.moddes! : "");
+  const [moddes, setModdes] = useState<string>(editandoDeslocamento ? despesaEmEdicao!.moddes ?? "" : "");
   const [descDeslocamento, setDescDeslocamento] = useState(editandoDeslocamento ? despesaEmEdicao!.desrdv ?? "" : "");
   const [dataDeslocamento, setDataDeslocamento] = useState(
     editandoDeslocamento && despesaEmEdicao!.datemi ? despesaEmEdicao!.datemi!.slice(0, 10) : hojeInput()
