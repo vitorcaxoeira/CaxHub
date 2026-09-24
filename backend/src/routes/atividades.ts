@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import net from "net";
 import multer from "multer";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
@@ -1080,7 +1081,21 @@ const OPCOES_PRORROGACAO_MIN = [15, 30, 45, 60, 75, 90, 105, 120];
 // Evidência do gatilho, pra dar pra provar depois por que uma sessão parou por "página
 // fechada" (o `pagehide` não diz se foi fechar, F5, navegar ou voltar). O corpo é OPCIONAL —
 // abas antigas ainda abertas mandam sem — e cada campo é validado/limitado: é entrada do
-// navegador. Sem IP de propósito: o escritório inteiro sai pelo mesmo NAT.
+// navegador.
+//
+// IP: o CaxHub é acessado de qualquer lugar, então o IP do cliente é evidência que importa.
+// Vem de `x-real-ip`, que o nginx do frontend (deploy/nginx.conf) define como $remote_addr —
+// ele SOBRESCREVE o que o cliente mandar, e a porta 3001 do backend não é exposta ao host,
+// então o valor não é forjável de fora. `req.ip` seria o do container do nginx. Se um dia
+// entrar um proxy/CDN na frente do nginx (Cloudflare, Traefik), o $remote_addr passa a ser o
+// dele e aqui passa a ser preciso ler o X-Forwarded-For (ou usar o módulo real_ip do nginx).
+function ipDoCliente(req: AuthenticatedRequest): string | null {
+  const cabecalho = req.headers["x-real-ip"];
+  const candidato = (Array.isArray(cabecalho) ? cabecalho[0] : cabecalho) ?? req.socket.remoteAddress ?? "";
+  // Só aceita IP de verdade (v4 ou v6), no máximo 45 caracteres — é entrada de cabeçalho.
+  return candidato.length <= 45 && net.isIP(candidato) !== 0 ? candidato : null;
+}
+
 function detalheDoAvisoDeFechamento(req: AuthenticatedRequest): Prisma.InputJsonObject {
   const corpo = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
   return {
@@ -1088,6 +1103,7 @@ function detalheDoAvisoDeFechamento(req: AuthenticatedRequest): Prisma.InputJson
     visibilityState: corpo.visibilityState === "visible" || corpo.visibilityState === "hidden" ? corpo.visibilityState : null,
     rota: typeof corpo.rota === "string" ? corpo.rota.slice(0, 200) : null,
     userAgent: String(req.headers["user-agent"] ?? "").slice(0, 300) || null,
+    ip: ipDoCliente(req),
   };
 }
 

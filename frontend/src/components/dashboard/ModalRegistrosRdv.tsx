@@ -15,7 +15,13 @@ const thDireita = `${th} text-right`;
 // pagar em aberto (vencidos / este mês / próximos meses).
 export type SelecaoRdv =
   | { tipo: "rdv"; titulo: string; grupo: GrupoRdv<ItemRdvEmRat> }
-  | { tipo: "titulos"; titulo: string; grupo: GrupoRdv<ItemTituloRdv> };
+  | { tipo: "titulos"; titulo: string; grupo: GrupoRdv<ItemTituloRdv> }
+  // Total a receber: o RDV em RAT (segue o período) + todos os títulos em aberto, cada um com a
+  // faixa de vencimento de onde veio, pra dar pra ler o total inteiro numa janela só.
+  | { tipo: "total"; titulo: string; rdv: GrupoRdv<ItemRdvEmRat>; titulos: GrupoRdv<ItemTituloComFaixa>; total: number };
+
+export type FaixaTitulo = "Vencido" | "No mês" | "Próximos meses";
+export type ItemTituloComFaixa = ItemTituloRdv & { faixa: FaixaTitulo };
 
 function Cabecalho({ quantidade, rotulo, total }: { quantidade: number; rotulo: string; total: number }) {
   return (
@@ -29,10 +35,10 @@ function Cabecalho({ quantidade, rotulo, total }: { quantidade: number; rotulo: 
   );
 }
 
-function TabelaRdv({ grupo }: { grupo: GrupoRdv<ItemRdvEmRat> }) {
+function TabelaRdv({ grupo, semCabecalho = false }: { grupo: GrupoRdv<ItemRdvEmRat>; semCabecalho?: boolean }) {
   return (
     <>
-      <Cabecalho quantidade={grupo.itens.length} rotulo="despesa" total={grupo.total} />
+      {!semCabecalho && <Cabecalho quantidade={grupo.itens.length} rotulo="despesa" total={grupo.total} />}
       <div className="overflow-x-auto rounded-md border border-border/60">
         <table className="w-full border-collapse text-left">
           <thead>
@@ -69,10 +75,18 @@ function TabelaRdv({ grupo }: { grupo: GrupoRdv<ItemRdvEmRat> }) {
   );
 }
 
-function TabelaTitulos({ grupo }: { grupo: GrupoRdv<ItemTituloRdv> }) {
+function TabelaTitulos({
+  grupo,
+  comFaixa = false,
+  semCabecalho = false,
+}: {
+  grupo: GrupoRdv<ItemTituloRdv | ItemTituloComFaixa>;
+  comFaixa?: boolean;
+  semCabecalho?: boolean;
+}) {
   return (
     <>
-      <Cabecalho quantidade={grupo.itens.length} rotulo="título" total={grupo.total} />
+      {!semCabecalho && <Cabecalho quantidade={grupo.itens.length} rotulo="título" total={grupo.total} />}
       <div className="overflow-x-auto rounded-md border border-border/60">
         <table className="w-full border-collapse text-left">
           <thead>
@@ -81,6 +95,7 @@ function TabelaTitulos({ grupo }: { grupo: GrupoRdv<ItemTituloRdv> }) {
               <th className={th}>Filial</th>
               <th className={th}>Emissão</th>
               <th className={th}>Vencimento</th>
+              {comFaixa && <th className={th}>Faixa</th>}
               <th className={th}>Observação</th>
               <th className={thDireita}>Valor original</th>
               <th className={thDireita}>Em aberto</th>
@@ -93,6 +108,11 @@ function TabelaTitulos({ grupo }: { grupo: GrupoRdv<ItemTituloRdv> }) {
                 <td className="px-3 py-2 font-mono text-xs text-muted">{t.codfil}</td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{formatarData(t.datemi)}</td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{formatarData(t.vctpro)}</td>
+                {comFaixa && (
+                  <td className={`whitespace-nowrap px-3 py-2 text-xs ${"faixa" in t && t.faixa === "Vencido" ? "text-destructive" : "text-muted"}`}>
+                    {"faixa" in t ? t.faixa : "—"}
+                  </td>
+                )}
                 <td className="max-w-[280px] truncate px-3 py-2 text-xs text-muted" title={t.obstcp ?? undefined}>
                   {t.obstcp ?? "—"}
                 </td>
@@ -107,10 +127,43 @@ function TabelaTitulos({ grupo }: { grupo: GrupoRdv<ItemTituloRdv> }) {
   );
 }
 
+function TabelaRdvTotal({ selecao }: { selecao: Extract<SelecaoRdv, { tipo: "total" }> }) {
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[12.5px] text-muted">RDV em RAT + títulos a pagar em aberto</p>
+        <p className="font-mono text-base font-semibold tabular-nums text-primary">Total: {moeda.format(selecao.total)}</p>
+      </div>
+      {selecao.rdv.itens.length > 0 && (
+        <section>
+          <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">
+            RDV em RATs Digitadas e Fechadas · {moeda.format(selecao.rdv.total)}
+          </p>
+          <TabelaRdv grupo={selecao.rdv} semCabecalho />
+        </section>
+      )}
+      {selecao.titulos.itens.length > 0 && (
+        <section>
+          <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">
+            Títulos a pagar em aberto · {moeda.format(selecao.titulos.total)}
+          </p>
+          <TabelaTitulos grupo={selecao.titulos} comFaixa semCabecalho />
+        </section>
+      )}
+    </div>
+  );
+}
+
 export function ModalRegistrosRdv({ selecao, subtitulo, onClose }: { selecao: SelecaoRdv; subtitulo?: string; onClose: () => void }) {
   return (
     <Modal open onClose={onClose} title={selecao.titulo} subtitulo={subtitulo} className="max-w-4xl">
-      {selecao.tipo === "rdv" ? <TabelaRdv grupo={selecao.grupo} /> : <TabelaTitulos grupo={selecao.grupo} />}
+      {selecao.tipo === "rdv" ? (
+        <TabelaRdv grupo={selecao.grupo} />
+      ) : selecao.tipo === "titulos" ? (
+        <TabelaTitulos grupo={selecao.grupo} />
+      ) : (
+        <TabelaRdvTotal selecao={selecao} />
+      )}
     </Modal>
   );
 }

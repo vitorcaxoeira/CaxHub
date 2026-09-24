@@ -3,27 +3,42 @@ import { useRdvConsultor, type GrupoRdv } from "../../hooks/useRdvConsultor";
 import type { FiltroDashboard } from "../../hooks/useDashboardConsultor";
 import { Skeleton } from "../ui/Skeleton";
 import { BotaoVisibilidade } from "./BotaoVisibilidade";
-import { ModalRegistrosRdv, type SelecaoRdv } from "./ModalRegistrosRdv";
+import { ModalRegistrosRdv, type ItemTituloComFaixa, type SelecaoRdv } from "./ModalRegistrosRdv";
 
 const moeda = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
 // Valor clicável: abre o modal com os registros que o compõem. Zero não vira link, porque não
 // haveria nada pra listar.
-function ValorRdv({ label, grupo, cor, onAbrir }: { label: string; grupo: GrupoRdv<unknown>; cor: string; onAbrir: () => void }) {
+function ValorRdv({
+  label,
+  grupo,
+  cor,
+  onAbrir,
+  destaque = false,
+  dica = "Ver os registros que compõem este valor",
+}: {
+  label: string;
+  grupo: GrupoRdv<unknown>;
+  cor: string;
+  onAbrir: () => void;
+  destaque?: boolean;
+  dica?: string;
+}) {
+  const tamanho = destaque ? "text-xl" : "text-lg";
   return (
-    <div>
+    <div className={destaque ? "sm:border-l sm:border-border sm:pl-4" : undefined}>
       <p className="text-[11px] text-muted">{label}</p>
       {grupo.itens.length > 0 ? (
         <button
           type="button"
           onClick={onAbrir}
-          title="Ver os registros que compõem este valor"
-          className={`font-mono text-lg font-semibold underline-offset-4 hover:underline focus-visible:underline focus-visible:outline-none ${cor}`}
+          title={dica}
+          className={`font-mono ${tamanho} font-semibold underline-offset-4 hover:underline focus-visible:underline focus-visible:outline-none ${cor}`}
         >
           {moeda.format(grupo.total)}
         </button>
       ) : (
-        <p className={`font-mono text-lg font-semibold ${cor}`}>{moeda.format(0)}</p>
+        <p className={`font-mono ${tamanho} font-semibold ${cor}`}>{moeda.format(0)}</p>
       )}
     </div>
   );
@@ -40,6 +55,21 @@ export function CardRdv({ filtro, rotuloPeriodo }: { filtro: FiltroDashboard; ro
 
   const temVencidos = (rdv?.titulos.vencidos.itens.length ?? 0) > 0;
 
+  // Total a receber = RDV em RAT (segue o filtro de período da página) + TODOS os títulos em
+  // aberto (não seguem o filtro: dependem de hoje). Somado em centavos, como o backend faz.
+  const centavos = (v: number) => Math.round(v * 100);
+  const totalTitulos = rdv
+    ? (centavos(rdv.titulos.vencidos.total) + centavos(rdv.titulos.esteMes.total) + centavos(rdv.titulos.proximosMeses.total)) / 100
+    : 0;
+  const totalReceber = rdv ? (centavos(rdv.rdvEmRat.total) + centavos(totalTitulos)) / 100 : 0;
+  const titulosComFaixa: ItemTituloComFaixa[] = rdv
+    ? [
+        ...rdv.titulos.vencidos.itens.map((t) => ({ ...t, faixa: "Vencido" as const })),
+        ...rdv.titulos.esteMes.itens.map((t) => ({ ...t, faixa: "No mês" as const })),
+        ...rdv.titulos.proximosMeses.itens.map((t) => ({ ...t, faixa: "Próximos meses" as const })),
+      ].sort((a, b) => (a.vctpro < b.vctpro ? -1 : a.vctpro > b.vctpro ? 1 : 0))
+    : [];
+
   return (
     <section className="rounded-lg border border-border bg-surface p-5">
       <div className="flex items-center justify-between">
@@ -55,7 +85,7 @@ export function CardRdv({ filtro, rotuloPeriodo }: { filtro: FiltroDashboard; ro
       ) : !visivel ? (
         <p className="mt-3 text-sm text-muted">Valores ocultos — clique no ícone pra mostrar.</p>
       ) : (
-        <div className={`mt-3 grid grid-cols-2 gap-4 ${temVencidos ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
+        <div className={`mt-3 grid grid-cols-2 gap-4 ${temVencidos ? "sm:grid-cols-5" : "sm:grid-cols-4"}`}>
           <ValorRdv
             label="Em RAT (Digitada/Fechada)"
             grupo={rdv.rdvEmRat}
@@ -82,13 +112,35 @@ export function CardRdv({ filtro, rotuloPeriodo }: { filtro: FiltroDashboard; ro
             cor="text-foreground"
             onAbrir={() => setSelecao({ tipo: "titulos", titulo: "Títulos de RDV a receber nos próximos meses", grupo: rdv.titulos.proximosMeses })}
           />
+          <ValorRdv
+            label="Total a receber"
+            grupo={{ total: totalReceber, itens: [...rdv.rdvEmRat.itens, ...titulosComFaixa] }}
+            cor="text-primary"
+            destaque
+            dica="Soma do RDV em RAT (segue o período filtrado) com todos os títulos em aberto (de hoje em diante) — clique para ver os registros"
+            onAbrir={() =>
+              setSelecao({
+                tipo: "total",
+                titulo: "Total a receber das RDVs",
+                rdv: rdv.rdvEmRat,
+                titulos: { total: totalTitulos, itens: titulosComFaixa },
+                total: totalReceber,
+              })
+            }
+          />
         </div>
       )}
       {selecao && (
         <ModalRegistrosRdv
           selecao={selecao}
           // Só o RDV em RAT respeita o filtro de período; os títulos são sempre relativos a hoje.
-          subtitulo={selecao.tipo === "rdv" ? rotuloPeriodo : "Títulos a pagar em aberto no Senior"}
+          subtitulo={
+            selecao.tipo === "rdv"
+              ? rotuloPeriodo
+              : selecao.tipo === "total"
+                ? `RDV em RAT: ${rotuloPeriodo} · títulos em aberto: de hoje em diante`
+                : "Títulos a pagar em aberto no Senior"
+          }
           onClose={() => setSelecao(null)}
         />
       )}
