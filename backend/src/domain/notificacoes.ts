@@ -1,13 +1,15 @@
 import { prisma } from "../db/prisma";
 import { DEPEXE_COMERCIAL, DEPEXE_DIRETORIA } from "./propostasDominio";
+import { PAPEIS_MODULO_VIAGEM } from "./solicitacoesViagem";
 
 export async function criarNotificacao(
   userId: number,
   tipo: string,
   mensagem: string,
-  atividadeId?: number
+  atividadeId?: number,
+  solicitacaoViagemId?: number
 ): Promise<void> {
-  await prisma.notificacao.create({ data: { userId, tipo, mensagem, atividadeId } });
+  await prisma.notificacao.create({ data: { userId, tipo, mensagem, atividadeId, solicitacaoViagemId } });
 }
 
 // Notifica quem executa a atividade. O caminho é `codfor` -> Consultor.email -> User,
@@ -102,5 +104,46 @@ export async function notificarAprovadoresConfiguracaoProposta(
   for (const userId of idsUnicos) {
     if (userId === excluirUserId) continue;
     await criarNotificacao(userId, "config_proposta_solicitada", mensagem);
+  }
+}
+
+// ---------- Solicitações de Viagem ----------
+
+async function usuariosPorPapel(papeis: string[]) {
+  return prisma.user.findMany({ where: { role: { name: { in: papeis } }, status: { not: "inativo" } } });
+}
+
+// Atendimento (administrativo + admin): quem cota e reserva.
+export async function notificarAtendimentoViagem(tipo: string, mensagem: string, solicitacaoId: number, excluirUserId?: number): Promise<void> {
+  for (const u of await usuariosPorPapel([...PAPEIS_MODULO_VIAGEM])) {
+    if (u.id === excluirUserId) continue;
+    await criarNotificacao(u.id, tipo, mensagem, undefined, solicitacaoId);
+  }
+}
+
+// Quem aprova: gestores do departamento do snapshot (departamento do solicitante) + admins.
+// Sem gestor cadastrado, os admins ficam sozinhos — é o fallback da regra de aprovação.
+export async function notificarAprovadoresViagem(
+  aprovacao: { codemp: number | null; depexe: number | null },
+  mensagem: string,
+  solicitacaoId: number,
+  excluirUserId?: number
+): Promise<void> {
+  const ids = new Set<number>((await usuariosPorPapel([...PAPEIS_MODULO_VIAGEM])).map((u) => u.id));
+  if (aprovacao.codemp != null && aprovacao.depexe != null) {
+    const gestores = await prisma.departamentoGestor.findMany({ where: { codemp: aprovacao.codemp, depexe: aprovacao.depexe } });
+    const consultores =
+      gestores.length > 0
+        ? await prisma.consultor.findMany({ where: { codemp: aprovacao.codemp, codusu: { in: gestores.map((g) => Number(g.usuges)) } } })
+        : [];
+    const emails = consultores.map((c) => c.email).filter((e): e is string => !!e);
+    if (emails.length > 0) {
+      const usuarios = await prisma.user.findMany({ where: { email: { in: emails, mode: "insensitive" }, status: { not: "inativo" }, role: { name: { in: [...PAPEIS_MODULO_VIAGEM] } } } });
+      for (const u of usuarios) ids.add(u.id);
+    }
+  }
+  for (const id of ids) {
+    if (id === excluirUserId) continue;
+    await criarNotificacao(id, "viagem_aguardando_aprovacao", mensagem, undefined, solicitacaoId);
   }
 }

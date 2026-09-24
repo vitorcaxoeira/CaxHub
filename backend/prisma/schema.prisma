@@ -48,6 +48,12 @@ model User {
   ajustesDecididos        SolicitacaoAjusteApontamento[] @relation("ajusteDecisor")
   configPropostaSolicitadas SolicitacaoConfiguracaoProposta[] @relation("configPropostaSolicitante")
   configPropostaDecididas   SolicitacaoConfiguracaoProposta[] @relation("configPropostaDecisor")
+  viagensSolicitadas        SolicitacaoViagem[]               @relation("viagemSolicitante")
+  viagensAtendidas          SolicitacaoViagem[]               @relation("viagemAtendimento")
+  viagensAprovadas          SolicitacaoViagem[]               @relation("viagemAprovador")
+  viagensViajante           SolicitacaoViagemViajante[]
+  viagensCotacoes           SolicitacaoViagemCotacao[]
+  viagensAnexos             SolicitacaoViagemAnexo[]
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -85,12 +91,12 @@ model RolePermission {
 
 // Registra cada execução do job de sincronização SOAP -> Postgres.
 model SyncLog {
-  id      Int      @id @default(autoincrement())
-  jobName String
-  query   String
-  status  String
-  message String?
-  runAt   DateTime @default(now())
+  id                  Int       @id @default(autoincrement())
+  jobName             String
+  query               String
+  status              String
+  message             String?
+  runAt               DateTime  @default(now())
   // Resultado da varredura de removidos (sync/varrerRemovidos.ts) desta execução, em
   // forma estruturada — o `message` acima continua tendo o resumo legível. Existe porque
   // em modo "simular" nada é gravado em removidoEmSenior, e sem isso o painel não teria
@@ -115,16 +121,16 @@ model SyncLog {
 
 // Espelho local da tabela E070EMP do Senior ERP (empresas cadastradas).
 model Empresa {
-  codemp  Int      @id
-  nomemp  String
-  sigemp  String   @db.VarChar(30)
+  codemp           Int       @id
+  nomemp           String
+  sigemp           String    @db.VarChar(30)
   // Colunas de controle de exclusão — ver comentário completo em Pedido (mesmo par de
   // campos, mesma engine, mesmo raciocínio). Padronizado pra todas as tabelas espelho do
   // Senior a partir de 10/09/2026 (antes só Pedido/Lançamento Contábil/Rateio de Lançamento
   // tinham).
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  filiais Filial[]
+  filiais          Filial[]
 
   // Modelo de plano de contas/centro de custo que esta empresa usa no Senior (ver SQL de
   // Contábil/Orçamento, 11/08/2026) — codmpc pro lado de conta, codmpu pro lado de centro de
@@ -138,10 +144,10 @@ model Empresa {
 
 // Espelho local da tabela E070FIL do Senior ERP (filiais de cada empresa).
 model Filial {
-  codemp Int
-  codfil Int
-  nomfil String
-  sigfil String
+  codemp           Int
+  codfil           Int
+  nomfil           String
+  sigfil           String
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -154,47 +160,48 @@ model Filial {
 
 // Espelho local da tabela E085CLI do Senior ERP (clientes cadastrados).
 model Cliente {
-  codcli Int    @id
-  nomcli String
-  apecli String
-  sencli String
-  tipcli String
-  tipmer String
-  tipemc Int
-  codram String
-  insest String
-  cgccpf BigInt
-  endcli String
-  cplend String
-  cepcli Int
-  baicli String
-  cidcli String
-  sigufs String
-  codpai String
+  codcli           Int       @id
+  nomcli           String
+  apecli           String
+  sencli           String
+  tipcli           String
+  tipmer           String
+  tipemc           Int
+  codram           String
+  insest           String
+  cgccpf           BigInt
+  endcli           String
+  cplend           String
+  cepcli           Int
+  baicli           String
+  cidcli           String
+  sigufs           String
+  codpai           String
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
-  titulosReceber   TituloReceber[]
-  propostas        Proposta[]
-  notasFiscaisVenda NotaFiscalVenda[]
+  titulosReceber     TituloReceber[]
+  propostas          Proposta[]
+  notasFiscaisVenda  NotaFiscalVenda[]
+  solicitacoesViagem SolicitacaoViagem[]
 
   @@map("clientes")
 }
 
 // Espelho local da tabela E002TPT do Senior ERP (Tabelas - Tipos de Título).
 model TipoTitulo {
-  codtpt String  @id @db.VarChar(3)
-  destpt String  @db.VarChar(40)
-  abrtpt String  @db.VarChar(5)
+  codtpt           String    @id @db.VarChar(3)
+  destpt           String    @db.VarChar(40)
+  abrtpt           String    @db.VarChar(5)
   /// Domínio "LSomTit": D=Soma Duplicatas, O=Soma Outros Títulos, C=Soma Créditos/Pgto. Indevidos
-  recsom String  @db.VarChar(1)
+  recsom           String    @db.VarChar(1)
   /// Domínio "LSomTit": D=Soma Duplicatas, O=Soma Outros Títulos, C=Soma Créditos/Pgto. Indevidos
-  pagsom String  @db.VarChar(1)
+  pagsom           String    @db.VarChar(1)
   /// Domínio "LAplGrp": A=Ambos, R=Contas a Receber, P=Contas a Pagar
-  apltpt String? @db.VarChar(1)
+  apltpt           String?   @db.VarChar(1)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sittpt String? @db.VarChar(1)
+  sittpt           String?   @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -206,19 +213,19 @@ model TipoTitulo {
 
 // Espelho local da tabela E301TCR do Senior ERP (C. Receber - Títulos - Dados Gerais).
 model TituloReceber {
-  codemp Int
-  codfil Int
-  numtit String   @db.VarChar(15)
-  codtpt String   @db.VarChar(3)
-  codcli Int
+  codemp           Int
+  codfil           Int
+  numtit           String    @db.VarChar(15)
+  codtpt           String    @db.VarChar(3)
+  codcli           Int
   /// Domínio "LSitTit": AO=Aberto ao Órgão de Proteção ao Crédito, AN=Aberto Negociação, AA=Aberto Advogado, AB=Aberto Normal, AC=Aberto Cartório, AE=Aberto Encontro de Contas, AI=Aberto Impostos, AJ=Aberto Retorno Jurídico, AP=Aberto Protestado, AR=Aberto Representante, AS=Aberto Suspenso, AV=Aberto Gestão de Pessoas, AX=Aberto Externo, CA=Cancelado, CE=Aberto CE (Preparação Cobrança Escritural), CO=Aberto Cobrança, LQ=Liquidado Normal, LC=Liquidado Cartório, LI=Liquidado Impostos, LM=Liquidado Compensado, LO=Liquidado Cobrança, LP=Liquidado Protestado, LS=Liquidado Substituído, LV=Liquidado Gestão de Pessoas, LX=Liquidado Externo, PE=Aberto PE (Pagamento Eletrônico)
-  sittit String   @db.VarChar(2)
-  datemi DateTime @db.Date
-  vctori DateTime @db.Date
-  vctpro DateTime @db.Date
-  vlrori Decimal  @db.Decimal(15, 2)
-  vlrabe Decimal? @db.Decimal(15, 2)
-  codpor String?  @db.VarChar(4)
+  sittit           String    @db.VarChar(2)
+  datemi           DateTime  @db.Date
+  vctori           DateTime  @db.Date
+  vctpro           DateTime  @db.Date
+  vlrori           Decimal   @db.Decimal(15, 2)
+  vlrabe           Decimal?  @db.Decimal(15, 2)
+  codpor           String?   @db.VarChar(4)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -234,25 +241,25 @@ model TituloReceber {
 
 // Espelho local da tabela E301MCR do Senior ERP (C. Receber - Títulos - Movimentos).
 model MovimentoTituloReceber {
-  codemp Int
-  codfil Int
-  numtit String    @db.VarChar(15)
-  codtpt String    @db.VarChar(3)
-  seqmov Int
-  codtns String    @db.VarChar(5)
-  datmov DateTime  @db.Date
-  datpgt DateTime? @db.Date
-  codfpg Int?
-  vlrmov Decimal   @db.Decimal(15, 2)
-  vlrliq Decimal?  @db.Decimal(15, 2)
-  vlrjrs Decimal?  @db.Decimal(15, 2)
-  vlrmul Decimal?  @db.Decimal(15, 2)
-  vlrdsc Decimal?  @db.Decimal(15, 2)
-  diaatr Int?
-  codpor String?   @db.VarChar(4)
-  codcrt String?   @db.VarChar(2)
-  codccu String?   @db.VarChar(9)
-  numcco String?   @db.VarChar(14)
+  codemp           Int
+  codfil           Int
+  numtit           String    @db.VarChar(15)
+  codtpt           String    @db.VarChar(3)
+  seqmov           Int
+  codtns           String    @db.VarChar(5)
+  datmov           DateTime  @db.Date
+  datpgt           DateTime? @db.Date
+  codfpg           Int?
+  vlrmov           Decimal   @db.Decimal(15, 2)
+  vlrliq           Decimal?  @db.Decimal(15, 2)
+  vlrjrs           Decimal?  @db.Decimal(15, 2)
+  vlrmul           Decimal?  @db.Decimal(15, 2)
+  vlrdsc           Decimal?  @db.Decimal(15, 2)
+  diaatr           Int?
+  codpor           String?   @db.VarChar(4)
+  codcrt           String?   @db.VarChar(2)
+  codccu           String?   @db.VarChar(9)
+  numcco           String?   @db.VarChar(14)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -266,16 +273,16 @@ model MovimentoTituloReceber {
 
 // Espelho local da tabela E090REP do Senior ERP (Cadastros - Representantes).
 model Representante {
-  codrep Int     @id
-  nomrep String  @db.VarChar(100)
-  aperep String  @db.VarChar(50)
+  codrep           Int       @id
+  nomrep           String    @db.VarChar(100)
+  aperep           String    @db.VarChar(50)
   /// Domínio "LJurFis": J=Pessoa Jurídica, F=Pessoa Física
-  tiprep String  @db.VarChar(1)
-  cgccpf BigInt?
+  tiprep           String    @db.VarChar(1)
+  cgccpf           BigInt?
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitrep String  @db.VarChar(1)
-  cidrep String? @db.VarChar(60)
-  sigufs String? @db.VarChar(2)
+  sitrep           String    @db.VarChar(1)
+  cidrep           String?   @db.VarChar(60)
+  sigufs           String?   @db.VarChar(2)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -285,26 +292,26 @@ model Representante {
 
 // Espelho local da tabela E044CCU do Senior ERP (Cadastros - Centros de Custos).
 model CentroCusto {
-  codemp Int
-  codccu String  @db.VarChar(9)
-  desccu String  @db.VarChar(80)
-  abrccu String  @db.VarChar(20)
+  codemp           Int
+  codccu           String    @db.VarChar(9)
+  desccu           String    @db.VarChar(80)
+  abrccu           String    @db.VarChar(20)
   /// Domínio "LTipCtc": 1=Produtivo/Operacional Indireto, 2=Produtivo/Operacional Direto, 3=Administrativo, 4=Comercial, 5=Financeiro
-  tipccu Int
-  ccupai String? @db.VarChar(9)
+  tipccu           Int
+  ccupai           String?   @db.VarChar(9)
   /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
-  anasin String? @db.VarChar(1)
+  anasin           String?   @db.VarChar(1)
   // Classificação hierárquica do centro de custo — mesmo papel que PlanoContabil.clacta
   // tem pro plano de contas (substring pra montar os níveis pai). Adicionada em 11/08/2026,
   // mas ficou fora da query do centroCustoSync até 13/08 — por isso esteve 0/228 preenchida.
-  claccu String? @db.VarChar(30)
+  claccu           String?   @db.VarChar(30)
   // Nível e máscara nativos do Senior (E044CCU.NivCcu / MskCcu) — equivalentes de
   // PlanoContabil.nivcta/mskgcc. A máscara do modelo de CC daqui é "1.22.333" (larguras
   // acumuladas 1,3,6), conferida contra os 228 centros de custo reais: todos casam.
   // Diferente do plano de contas, o pai aqui NÃO precisa ser derivado — `ccupai` acima é
   // nativo e já vem preenchido pelo sync.
-  nivccu Int?
-  mskccu String? @db.VarChar(40)
+  nivccu           Int?
+  mskccu           String?   @db.VarChar(40)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -315,21 +322,21 @@ model CentroCusto {
 
 // Espelho local da tabela E600MCC do Senior ERP (Tesouraria - Movimento - Movimentações das Contas).
 model MovimentoConta {
-  codemp Int
-  numcco String   @db.VarChar(14)
-  datmov DateTime @db.Date
-  seqmov Int
-  codfil Int?
-  vlrmov Decimal  @db.Decimal(15, 2)
-  debcre String   @db.VarChar(1)
-  hismov String?  @db.VarChar(100)
+  codemp           Int
+  numcco           String    @db.VarChar(14)
+  datmov           DateTime  @db.Date
+  seqmov           Int
+  codfil           Int?
+  vlrmov           Decimal   @db.Decimal(15, 2)
+  debcre           String    @db.VarChar(1)
+  hismov           String?   @db.VarChar(100)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitmcc String?  @db.VarChar(1)
-  filmcr Int?
-  nummcr String?  @db.VarChar(15)
-  tptmcr String?  @db.VarChar(3)
-  seqmcr Int?
-  codpor String?  @db.VarChar(4)
+  sitmcc           String?   @db.VarChar(1)
+  filmcr           Int?
+  nummcr           String?   @db.VarChar(15)
+  tptmcr           String?   @db.VarChar(3)
+  seqmcr           Int?
+  codpor           String?   @db.VarChar(4)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -340,18 +347,18 @@ model MovimentoConta {
 
 // Espelho local da tabela E091PLF do Senior ERP (Tabelas - Plano Financeiro - Contas).
 model NaturezaFinanceira {
-  codemp Int
-  ctafin Int
-  descta String @db.VarChar(80)
-  abrcta String @db.VarChar(20)
+  codemp           Int
+  ctafin           Int
+  descta           String    @db.VarChar(80)
+  abrcta           String    @db.VarChar(20)
   /// Domínio "LGruCta": A=Ativo (Contábil - Devedora), P=Passivo (Contábil - Credora), D=Despesas (Contábil - Devedora), R=Receitas (Contábil - Credora), X=Ambas (Contábil - Desp./Rec.), M=Receitas Financeiras, N=Despesas Financeiras, U=Conta Auxiliar, L=Patrimônio Líquido, V=Custo de Venda, C=Custo de Produção, S=Custo de Ordem Dedutora, E=Custo de Ordem Credora, O=Outros, T=Contas de Compensação
-  defgru String @db.VarChar(1)
+  defgru           String    @db.VarChar(1)
   /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
-  anasin String @db.VarChar(1)
+  anasin           String    @db.VarChar(1)
   /// Domínio "LNatCtb": D=Devedora, C=Credora
-  natfin String @db.VarChar(1)
+  natfin           String    @db.VarChar(1)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitfin String @db.VarChar(1)
+  sitfin           String    @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -362,13 +369,13 @@ model NaturezaFinanceira {
 
 // Espelho local da tabela E039POR do Senior ERP (Cadastros - Portadores).
 model Portador {
-  codemp Int
-  codpor String  @db.VarChar(4)
-  despor String  @db.VarChar(30)
-  abrpor String  @db.VarChar(10)
-  codban String? @db.VarChar(3)
-  codage String? @db.VarChar(7)
-  numcco String? @db.VarChar(14)
+  codemp           Int
+  codpor           String    @db.VarChar(4)
+  despor           String    @db.VarChar(30)
+  abrpor           String    @db.VarChar(10)
+  codban           String?   @db.VarChar(3)
+  codage           String?   @db.VarChar(7)
+  numcco           String?   @db.VarChar(14)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -381,11 +388,11 @@ model Portador {
 
 // Espelho local da tabela E031MOE do Senior ERP (Tabelas - Moedas).
 model Moeda {
-  codmoe String @id @db.VarChar(3)
-  desmoe String @db.VarChar(30)
-  sigmoe String @db.VarChar(5)
+  codmoe           String    @id @db.VarChar(3)
+  desmoe           String    @db.VarChar(30)
+  sigmoe           String    @db.VarChar(5)
   /// Domínio "LTipMoe": V=Valor, D=Índice, P=Percentual, E=Especial, H=Hora
-  tipmoe String @db.VarChar(1)
+  tipmoe           String    @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -395,11 +402,11 @@ model Moeda {
 
 // Espelho local da tabela E001TNS do Senior ERP (Tabelas - Transações).
 model Transacao {
-  codemp Int
-  codtns String  @db.VarChar(5)
-  destns String  @db.VarChar(60)
+  codemp           Int
+  codtns           String    @db.VarChar(5)
+  destns           String    @db.VarChar(60)
   /// Domínio "LTipBai": PG=Pagamento, DV=Devolução, AB=Abatimento, CA=Cancelamento, CR=Baixa Crédito, CP=Compensação, LP=Lucros e Perdas, SU=Substituição, NA=NÃO É BAIXA
-  rectpb String? @db.VarChar(2)
+  rectpb           String?   @db.VarChar(2)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -412,82 +419,82 @@ model Transacao {
 
 // Espelho local da tabela USU_TE077PRO do Senior ERP (Propostas de Consultoria/Upgrade).
 model Proposta {
-  codemp    Int
-  codpro    Int
-  codcli    Int
-  qtdhor    Int?
-  datpro    DateTime? @db.Date
-  usuger    Int?
+  codemp           Int
+  codpro           Int
+  codcli           Int
+  qtdhor           Int?
+  datpro           DateTime? @db.Date
+  usuger           Int?
   /// Domínio "USU_ForAte": P=Presencial, R=Remoto
-  forate    String?   @db.VarChar(1)
+  forate           String?   @db.VarChar(1)
   /// Domínio "USU_SitPro": 1=Abertura, 2=Comercial, 3=Enviada p/ Cliente, 4=Aprovada, 5=Rejeitada, 6=Cancelada, 7=Em Execução, 8=Executada, 9=Levantamento Interno
-  sitpro    Int?
-  horpro    Int?
+  sitpro           Int?
+  horpro           Int?
   /// Domínio "USU_TipPro": 1=Projeto Novo, 2=Mólulo Adicional, 3=Serviços, 4=Desenvolvimento, 5=Terceiros
-  tippro    Int?
-  dessol    String?   @db.VarChar(200)
-  consol    String?   @db.VarChar(400)
-  prarea    String?   @db.VarChar(100)
-  datenv    DateTime? @db.Date
-  datret    DateTime? @db.Date
-  numprj    Int
-  datval    DateTime? @db.Date
-  codfpj    Int
+  tippro           Int?
+  dessol           String?   @db.VarChar(200)
+  consol           String?   @db.VarChar(400)
+  prarea           String?   @db.VarChar(100)
+  datenv           DateTime? @db.Date
+  datret           DateTime? @db.Date
+  numprj           Int
+  datval           DateTime? @db.Date
+  codfpj           Int
   /// Domínio "USU_TipProd": 1=Gestão Empresarial | ERP, 2=Gestão de Pessoas | HCM, 3=Gestão de Acesso e Segurança, 4=Implantação, 9=Outros, 5=SoelX
-  sispro    Int?
-  despro    String?   @db.VarChar(100)
-  numero    BigInt?
+  sispro           Int?
+  despro           String?   @db.VarChar(100)
+  numero           BigInt?
   /// Domínio "LSimNao": S=Sim, N=Não
-  obrfas    String?   @db.VarChar(1)
+  obrfas           String?   @db.VarChar(1)
   /// Domínio "USU_LProExecut": 0=Ambos, 1=Suporte, 2=Consultoria, 3=Dev. SoelX
-  executor  Int?
-  obssit    String?   @db.VarChar(200)
+  executor         Int?
+  obssit           String?   @db.VarChar(200)
   /// Domínio "LSimNao": S=Sim, N=Não
-  liqbru    String?   @db.VarChar(1)
-  codccu    String?   @db.VarChar(9)
-  ctafin    Int?
+  liqbru           String?   @db.VarChar(1)
+  codccu           String?   @db.VarChar(9)
+  ctafin           Int?
   /// Domínio "USU_ClaPro": 1=Projetos Grandes > 300H, 2=Projetos Médios 100h a 299H, 3=Projetos Pequenos 25H a 99H, 4=Projetos Rápidos até 24H
-  clapro    Int?
+  clapro           Int?
   /// Domínio "USU_AreExu": 1=Consultoria ERP, 2=Consultoria HCM, 3=Suporte ERP, 4=Suporte HCM, 5=Fábrica Software
-  areexe    Int?
-  idcom     Int
-  codrep    Int
+  areexe           Int?
+  idcom            Int
+  codrep           Int
   /// Domínio "USU_TRatForFat": 00=Mediante RAT, 01=Finalização, 02=Antecipado, 03=Sem Faturamento, 04=Misto (Parte Antecipada e com RAT), 05=Faturamento Via Contrato, 06=Antecipado Saldo Finalização
-  forfat    Int?
-  dscfpg    String?   @db.VarChar(200)
-  hispro    String?   @db.VarChar(999)
-  obspro    String?   @db.VarChar(999)
-  preent    DateTime? @db.Date
+  forfat           Int?
+  dscfpg           String?   @db.VarChar(200)
+  hispro           String?   @db.VarChar(999)
+  obspro           String?   @db.VarChar(999)
+  preent           DateTime? @db.Date
   /// Domínio "USU_PriPro": 1=Alta, 2=Media, 3=Baixa
-  pripro    Int?
+  pripro           Int?
   /// Domínio "USU_StaPro": 1=Novo, 2=Agendado, 3=Iniciada, 4=Em Homologação, 5=Parado, 6=Comercial
-  stapro    Int?
+  stapro           Int?
   /// Domínio "USU_TipVen": 1=Venda Serviços Cliente Novo, 2=Venda Consultiva Serviços Base, 3=Venda Serviços Reativa Base Clientes, 4=Outros Tipos de Propostas
-  tipven    Int?
-  ordemcns  Int?
+  tipven           Int?
+  ordemcns         Int?
   /// Domínio "USU_SitMot": 1=Atividades Proposta dentro do previsto, 2=Atividades Proposta Estouradas, 3=Atividades Proposta Horas Consumidas sem Saldo, 4=Propostas ADM e Comercial, 5=Proposta de Levantamento Comercial, 6=Proposta Estourada Projeto Aberto
-  sitmot    Int?
+  sitmot           Int?
   /// Domínio "USU_LTipPrj": 01=Serviço, 02=Comercial, 03=Administrativo, 04=Levantamento
-  tipprj    Int?
+  tipprj           Int?
   /// Domínio "USU_LFrmPrj": 01=Fechado, 02=Aberto
-  frmprj    Int?
-  codlev2   Int?
-  clifat    Int?
+  frmprj           Int?
+  codlev2          Int?
+  clifat           Int?
   /// Domínio "LSimNao": S=Sim, N=Não
-  exipedcli String?   @db.VarChar(1)
-  pedcli    String?   @db.VarChar(40)
+  exipedcli        String?   @db.VarChar(1)
+  pedcli           String?   @db.VarChar(40)
   /// Domínio "USU_TRatForFat": 00=Mediante RAT, 01=Finalização, 02=Antecipado, 03=Sem Faturamento, 04=Misto (Parte Antecipada e com RAT), 05=Faturamento Via Contrato, 06=Antecipado Saldo Finalização
-  forfatrdv Int?
+  forfatrdv        Int?
   /// Domínio "USU_ModPro": 0=Serviço, 1=Levantamento, 2=DRM
-  modpro    Int?
+  modpro           Int?
   /// Domínio "USU_TRatForFat": 00=Mediante RAT, 01=Finalização, 02=Antecipado, 03=Sem Faturamento, 04=Misto (Parte Antecipada e com RAT), 05=Faturamento Via Contrato, 06=Antecipado Saldo Finalização
-  forfatlev Int?
-  numped    Int
-  idbpm     Int?
+  forfatlev        Int?
+  numped           Int
+  idbpm            Int?
   /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
-  depexe    Int?
+  depexe           Int?
   /// Domínio "LSimNao": S=Sim, N=Não
-  fathrsdes String?   @db.VarChar(1)
+  fathrsdes        String?   @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -507,31 +514,31 @@ model Proposta {
 
 // Espelho local da tabela USU_TE077ITE do Senior ERP (Itens de Serviço da Proposta).
 model PropostaItem {
-  codemp Int
-  codpro Int
-  seqite Int
-  numprj Int
-  codser String   @db.VarChar(14)
-  qtdhor Int?
-  valhor Decimal? @db.Decimal(11, 2)
-  despro String?  @db.VarChar(2000)
-  entpro String?  @db.VarChar(2000)
-  codfpj Int
+  codemp           Int
+  codpro           Int
+  seqite           Int
+  numprj           Int
+  codser           String    @db.VarChar(14)
+  qtdhor           Int?
+  valhor           Decimal?  @db.Decimal(11, 2)
+  despro           String?   @db.VarChar(2000)
+  entpro           String?   @db.VarChar(2000)
+  codfpj           Int
   /// Domínio "USU_LFatSer": S=Faturamento Normal, N=Sem Faturamento, A=Faturamento Antecipado, C=Atividades Comercial, H=Atividade Suporte, I=Investimento
-  fatser String?  @db.VarChar(1)
+  fatser           String?   @db.VarChar(1)
   /// Domínio "USU_SitMot": 1=Atividades Proposta dentro do previsto, 2=Atividades Proposta Estouradas, 3=Atividades Proposta Horas Consumidas sem Saldo, 4=Propostas ADM e Comercial, 5=Proposta de Levantamento Comercial, 6=Proposta Estourada Projeto Aberto
-  sitmot Int?
+  sitmot           Int?
   /// Domínio "USU_TRatForFat": 00=Mediante RAT, 01=Finalização, 02=Antecipado, 03=Sem Faturamento, 04=Misto (Parte Antecipada e com RAT), 05=Faturamento Via Contrato, 06=Antecipado Saldo Finalização
-  forfat Int?
+  forfat           Int?
   /// Domínio "USU_LTipPrj": 01=Serviço, 02=Comercial, 03=Administrativo, 04=Levantamento
-  tipprj Int?
+  tipprj           Int?
   /// Domínio "USU_LFrmPrj": 01=Fechado, 02=Aberto
-  frmprj Int?
+  frmprj           Int?
   /// Domínio "USU_LSitPrz": 0=Não Iniciado, 1=Prazo Estourado, 2=Dentro do Prazo
-  sitprz Int?
-  atvpso BigInt?
+  sitprz           Int?
+  atvpso           BigInt?
   /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
-  depexe Int?
+  depexe           Int?
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -546,21 +553,21 @@ model PropostaItem {
 // Espelho local da view USU_VBI00Cons do Senior ERP (consultores/usuários internos
 // vinculados a fornecedor — usada para resolver USU_UsuGer em nome real).
 model Consultor {
-  codemp    Int
-  codusu    Int
-  codfor    Int?
-  nomfor    String? @db.VarChar(100)
+  codemp           Int
+  codusu           Int
+  codfor           Int?
+  nomfor           String?   @db.VarChar(100)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitfor    String? @db.VarChar(1)
-  nomcom    String? @db.VarChar(127)
-  conhab    Int?
+  sitfor           String?   @db.VarChar(1)
+  nomcom           String?   @db.VarChar(127)
+  conhab           Int?
   /// Domínio "USU_TipUsuRat": 1=Adm. Pleno, 2=Comercial, 3=Consultor de Serviços,
   /// 4=Gerente de Serviços, 5=Consultor Suporte, 6=Gerente Suporte, 7=Gerente Comercial,
   /// 8=Gerente Dev. SoelX, 9=Desenvolvedor SoelX (0 = não classificado, fora do domínio oficial)
-  tipusurat Int?
-  depexe    Int?
-  depexedes String? @db.VarChar(250)
-  email     String? @db.VarChar(200)
+  tipusurat        Int?
+  depexe           Int?
+  depexedes        String?   @db.VarChar(250)
+  email            String?   @db.VarChar(200)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -611,12 +618,12 @@ model ContratoConsultor {
 
 // Espelho local da tabela E600CCO do Senior ERP (Tesouraria - Conta - Cadastro).
 model ContaCorrente {
-  codemp Int
-  numcco String @db.VarChar(14)
-  descco String @db.VarChar(30)
-  abrcco String @db.VarChar(10)
+  codemp           Int
+  numcco           String    @db.VarChar(14)
+  descco           String    @db.VarChar(30)
+  abrcco           String    @db.VarChar(10)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitcco String @db.VarChar(1)
+  sitcco           String    @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -628,9 +635,9 @@ model ContaCorrente {
 // Espelho local da tabela USU_TDEPEXECFG do Senior ERP (Config. do departamento executor).
 model DepartamentoGestor {
   /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
-  depexe Int
-  codemp Int
-  usuges BigInt
+  depexe           Int
+  codemp           Int
+  usuges           BigInt
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -642,14 +649,14 @@ model DepartamentoGestor {
 // Espelho local da tabela USU_TDEPEXETIM do Senior ERP (Time de consultores do Departamento).
 model DepartamentoTime {
   /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
-  depexe Int
-  codemp Int
-  codusu BigInt
-  usuger BigInt?
-  datger DateTime? @db.Date
-  horger Int?
+  depexe           Int
+  codemp           Int
+  codusu           BigInt
+  usuger           BigInt?
+  datger           DateTime? @db.Date
+  horger           Int?
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitreg String    @db.VarChar(1)
+  sitreg           String    @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -687,8 +694,8 @@ model DepartamentoGrupoContabil {
 // quem não trabalha no dia deixa os quatro nulos. Consultor SEM jornada cadastrada não
 // sofre parada por expediente — só pelo teto de horas.
 model JornadaConsultor {
-  codemp Int
-  codfor Int
+  codemp    Int
+  codfor    Int
   /// 0=domingo, 1=segunda ... 6=sábado (mesma numeração de Date.getUTCDay).
   diaSemana Int
 
@@ -697,9 +704,9 @@ model JornadaConsultor {
   tardeInicio Int?
   tardeFim    Int?
 
-  atualizadoEm DateTime @updatedAt
+  atualizadoEm  DateTime @updatedAt
   atualizadoPor Int?
-  usuario      User?    @relation(fields: [atualizadoPor], references: [id], onDelete: SetNull)
+  usuario       User?    @relation(fields: [atualizadoPor], references: [id], onDelete: SetNull)
 
   @@id([codemp, codfor, diaSemana])
   @@map("jornada_consultor")
@@ -718,11 +725,11 @@ model AtividadeConsultor {
   id     Int     @id @default(autoincrement())
   seqati BigInt? @unique
 
-  codemp Int
-  codpro Int
-  seqite Int
-  codfor Int
-  qtdhor Int?
+  codemp           Int
+  codpro           Int
+  seqite           Int
+  codfor           Int
+  qtdhor           Int?
   // Colunas de controle de exclusão — ver comentário em Pedido. MÃO DUPLA: o escopo da
   // varredura aqui precisa ser `{ seqati: { not: null } }` — nunca a tabela toda —, senão
   // toda alocação criada no CaxHub e ainda sem `seqati` confirmado pelo Senior seria
@@ -741,7 +748,7 @@ model AtividadeConsultor {
   /// editar `qtdhor` e perder o registro de que o planejado era 20h. O teto de apontamento
   /// passa a ser `qtdhor + horasExcedentes`; a distribuição do item continua conferida só
   /// contra `qtdhor`, então o excedente aparece como estouro real no cronograma.
-  horasExcedentes Int @default(0)
+  horasExcedentes  Int       @default(0)
 
   /// Bloqueio por alocação — gestor trava UM consultor numa atividade sem mexer na proposta
   /// inteira. Combinado por OR com PropostaModoAlocacao.bloqueiaApontamento (qualquer um
@@ -802,14 +809,14 @@ model AtividadeConsultor {
 // item em pedaços mais finos — não substitui o item como unidade de negócio. Só existe
 // pra propostas em modo "estrutura" (ver PropostaModoAlocacao).
 model EstruturaAtividade {
-  id       Int  @id @default(autoincrement())
-  codemp   Int
-  codpro   Int
+  id     Int  @id @default(autoincrement())
+  codemp Int
+  codpro Int
   // Null só em tipo="pasta": é uma "pasta raiz" da proposta inteira (não pertence a
   // nenhum item específico), usada só pra agrupar itens de PropostaItem entre si — ver
   // PropostaItemPosicao. Toda pasta/atividade "normal" (ligada a um item) mantém seqite
   // preenchido, como sempre foi.
-  seqite   Int?
+  seqite Int?
 
   parentId Int?
   parent   EstruturaAtividade?  @relation("EstruturaFilhos", fields: [parentId], references: [id])
@@ -845,7 +852,7 @@ model EstruturaAtividade {
   criadoEm  DateTime @default(now())
   criadoPor Int? // codusu de quem criou
 
-  alocacoes AtividadeConsultor[]
+  alocacoes         AtividadeConsultor[]
   itensPosicionados PropostaItemPosicao[]
 
   @@index([codemp, codpro, seqite])
@@ -875,8 +882,8 @@ model PropostaItemPosicao {
 // proposta na Alocação, e travado assim que existir a primeira alocação (ver
 // backend/src/routes/alocacao.ts). Dado 100% CaxHub, sem equivalente no Senior.
 model PropostaModoAlocacao {
-  codemp Int
-  codpro Int
+  codemp      Int
+  codpro      Int
   /// "item" | "estrutura"
   modo        String   @db.VarChar(10)
   definidoEm  DateTime @default(now())
@@ -1166,7 +1173,7 @@ model RatItem {
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
-  sessoes      AtividadeSessaoExecucao[]
+  sessoes AtividadeSessaoExecucao[]
 
   @@unique([codemp, numrat, seqrat])
   @@index([seqati])
@@ -1332,19 +1339,19 @@ model SolicitacaoApontamento {
 // Sem FK pra Proposta: a chave lá é composta (codemp,codpro) e PropostaModoAlocacao já convive
 // assim. Pedido e decisão em colunas separadas, mesmo padrão das outras 3 solicitações.
 model SolicitacaoConfiguracaoProposta {
-  id     Int @id @default(autoincrement())
-  codemp Int
-  codpro Int
+  id              Int      @id @default(autoincrement())
+  codemp          Int
+  codpro          Int
   /// "bloqueiaExcedenteEstrutura" | "bloqueiaApontamento" | "bloqueiaExcedente"
-  campo String @db.VarChar(40)
+  campo           String   @db.VarChar(40)
   /// Valor no instante do pedido. O que vale de verdade sai sempre de PropostaModoAlocacao na
   /// hora de decidir — isto é papelada, pra frase "de X para Y" continuar legível depois.
   valorAtual      Boolean
   valorSolicitado Boolean
   /// Imutável, e obrigatório: é o que o aprovador lê pra decidir.
-  motivo        String   @db.VarChar(1000)
-  solicitanteId Int?
-  criadoEm      DateTime @default(now())
+  motivo          String   @db.VarChar(1000)
+  solicitanteId   Int?
+  criadoEm        DateTime @default(now())
 
   /// pendente | aprovada | reprovada
   status            String    @default("pendente") @db.VarChar(20)
@@ -1400,26 +1407,29 @@ model AtividadeAnexo {
 // resposta a uma ação) ou por automação (ex.: mudança de status numa coluna marcada
 // com `notificarGestor`, ver QuadroColuna).
 model Notificacao {
-  id          Int      @id @default(autoincrement())
-  userId      Int
-  tipo        String   @db.VarChar(40)
-  mensagem    String   @db.VarChar(500)
-  atividadeId Int?
-  lida        Boolean  @default(false)
-  criadoEm    DateTime @default(now())
+  id                  Int      @id @default(autoincrement())
+  userId              Int
+  tipo                String   @db.VarChar(40)
+  mensagem            String   @db.VarChar(500)
+  atividadeId         Int?
+  /// Notificação de Solicitação de Viagem (módulo Gestão de Solicitações).
+  solicitacaoViagemId Int?
+  lida                Boolean  @default(false)
+  criadoEm            DateTime @default(now())
 
   // Cascade aqui (diferente de comentário/histórico) porque uma notificação sem
   // destinatário não tem propósito nenhum — não é registro de auditoria.
-  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  atividade AtividadeConsultor? @relation(fields: [atividadeId], references: [id], onDelete: SetNull)
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  atividade         AtividadeConsultor? @relation(fields: [atividadeId], references: [id], onDelete: SetNull)
+  solicitacaoViagem SolicitacaoViagem?  @relation(fields: [solicitacaoViagemId], references: [id], onDelete: SetNull)
 
   @@map("notificacoes")
 }
 
 // Espelho local da tabela USU_TFASESPRO do Senior ERP (Fases de acompanhamento das propostas).
 model FaseProposta {
-  fasid  Int    @id
-  fasdes String @db.VarChar(50)
+  fasid            Int       @id
+  fasdes           String    @db.VarChar(50)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -1485,7 +1495,7 @@ model AuditEvento {
   // { campo: { de, para } } — sempre a forma bruta dos valores antes/depois.
   alteracoes Json?
   // Dados adicionais não capturados por "antes/depois" (ex.: rótulos humanos de status).
-  metadata Json?
+  metadata   Json?
 
   correlationId String @db.Uuid
 
@@ -1497,37 +1507,37 @@ model AuditEvento {
 
 // Espelho local da tabela E120PED do Senior ERP (Vendas - Pedidos - Dados Gerais).
 model Pedido {
-  codemp Int
-  codfil Int
-  numped Int
+  codemp           Int
+  codfil           Int
+  numped           Int
   /// Domínio "LTipPed": 1=Normal, 2=Automático, 3=Rascunho, 4=Orçamento, 5=Previsão, 6=Pronta Entrega, 7=Aproveitamento Pedido Pronta Entrega, 8=Assistência Técnica, 9=Reposição
-  tipped Int?
+  tipped           Int?
   /// Domínio "LPrcPed": 1=Digitado - Normal, 2=Via Internet, 3=Via Importação, 4=Via Automação, 5=Digitado - Distribuição, 6=Via Processos Automáticos - Ordem de Compra, 7=Via Processos Automáticos - Gerais, 8=Via Contrato de Licitação, 9=Via Integração Varejo (Lojas), 10=Via devolução com quantidade excedente
-  prcped Int?
-  tnspro String? @db.VarChar(5)
-  tnsser String? @db.VarChar(5)
-  datemi DateTime @db.Date
+  prcped           Int?
+  tnspro           String?   @db.VarChar(5)
+  tnsser           String?   @db.VarChar(5)
+  datemi           DateTime  @db.Date
   // Minutos desde meia-noite (dicionário do Senior reporta como "hora", mas o dado real
   // que volta pelo SOAP é inteiro — mesmo formato de RatItem.horini/horfim). Pra
   // formatar: Math.trunc(v/60) + ":" + v%60.
-  horemi Int?
-  datprv DateTime? @db.Date
-  obsped String? @db.VarChar(999)
+  horemi           Int?
+  datprv           DateTime? @db.Date
+  obsped           String?   @db.VarChar(999)
   // Valor líquido do pedido — primeiro campo monetário real disponível entre
   // Pedido/Rat/Proposta (nenhum dos três tinha até agora).
-  vlrliq Decimal? @db.Decimal(15, 2)
+  vlrliq           Decimal?  @db.Decimal(15, 2)
   // Observação do motivo da situação do pedido (contextual a sitped).
-  obsmot String? @db.VarChar(250)
-  codcli Int
-  pedcli String? @db.VarChar(20)
-  codcpg String @db.VarChar(6)
-  codfpg Int?
+  obsmot           String?   @db.VarChar(250)
+  codcli           Int
+  pedcli           String?   @db.VarChar(20)
+  codcpg           String    @db.VarChar(6)
+  codfpg           Int?
   /// Domínio "LSitPed": 1=Aberto Total, 2=Aberto Parcial, 3=Suspenso, 4=Liquidado, 5=Cancelado, 6=Aguardando Integração WMS, 7=Em Transmissão, 8=Preparação Análise ou NF, 9=Não Fechado
-  sitped Int
+  sitped           Int
   // Vínculo com a RAT gerada a partir deste pedido — campo customizado no Senior
   // (USU_NUMRAT). Casamento por valor em código, não FK rígida (mesmo padrão de
   // Rat.codfor/RatItem.seqati) — nenhuma feature usa esse vínculo ainda.
-  numrat BigInt?
+  numrat           BigInt?
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura de removidos (backend/src/sync/varrerRemovidos.ts)
   // compara com `lt` estrito, e `NULL < x` é NULL em SQL — linha nunca carimbada é imune
@@ -1537,86 +1547,86 @@ model Pedido {
   // NULL = viva. Volta a NULL sozinho se a linha reaparecer, porque todo upsert do sync
   // grava NULL aqui. Nunca há DELETE físico: ver comentário em varrerRemovidos.ts.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, codfil, numped])
 
+  @@id([codemp, codfil, numped])
   @@map("pedidos")
 }
 
 // Espelho local da tabela E066FPG do Senior ERP (Tabelas - Formas de Pagamento ).
 model FormaPagamento {
-  codemp Int
-  codfpg Int
-  desfpg String @db.VarChar(30)
-  abrfpg String @db.VarChar(10)
+  codemp           Int
+  codfpg           Int
+  desfpg           String    @db.VarChar(30)
+  abrfpg           String    @db.VarChar(10)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitfpg String @db.VarChar(1)
+  sitfpg           String    @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, codfpg])
 
+  @@id([codemp, codfpg])
   @@map("formas_pagamento")
 }
 
 // Espelho local da tabela E028CPG do Senior ERP (Tabelas - Condição de Pagamento).
 model CondicaoPagamento {
-  codemp Int
-  codcpg String @db.VarChar(6)
-  descpg String @db.VarChar(50)
-  abrcpg String @db.VarChar(10)
+  codemp           Int
+  codcpg           String    @db.VarChar(6)
+  descpg           String    @db.VarChar(50)
+  abrcpg           String    @db.VarChar(10)
   /// Domínio "LAplCpg": V=Vendas, C=Compras, A=Ambos
-  aplcpg String @db.VarChar(1)
+  aplcpg           String    @db.VarChar(1)
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitcpg String @db.VarChar(1)
+  sitcpg           String    @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, codcpg])
 
+  @@id([codemp, codcpg])
   @@map("condicoes_pagamento")
 }
 
 // Espelho local da tabela E045PLA do Senior ERP (Tabelas - Plano Contábil - Contas).
 model PlanoContabil {
-  codemp Int
-  ctared Int
-  descta String @db.VarChar(250)
-  clacta String @db.VarChar(30)
+  codemp           Int
+  ctared           Int
+  descta           String    @db.VarChar(250)
+  clacta           String    @db.VarChar(30)
   /// Domínio "LGruCta": A=Ativo (Contábil - Devedora), P=Passivo (Contábil - Credora), D=Despesas (Contábil - Devedora), R=Receitas (Contábil - Credora), X=Ambas (Contábil - Desp./Rec.), M=Receitas Financeiras, N=Despesas Financeiras, U=Conta Auxiliar, L=Patrimônio Líquido, V=Custo de Venda, C=Custo de Produção, S=Custo de Ordem Dedutora, E=Custo de Ordem Credora, O=Outros, T=Contas de Compensação
-  defgru String @db.VarChar(1)
+  defgru           String    @db.VarChar(1)
   /// Domínio "LNatCtb": D=Devedora, C=Credora
-  natcta String @db.VarChar(1)
+  natcta           String    @db.VarChar(1)
   /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
-  anasin String @db.VarChar(1)
+  anasin           String    @db.VarChar(1)
   // "Conta Paralela" — agrupamento gerencial que hoje coincide com departamento (ADM, CERP,
   // CHCM, COM, DEV, SERP, SHCM; vazio = sem grupo, geralmente conta patrimonial). Confirmado
   // no dicionário (E045PLA.DesPar, VARCHAR(80) nullable) e validado batendo exato contra o
   // relatório de origem, célula a célula, em 12/08/2026 — ver contabilDominio.ts pro mapa
   // grupo -> depexe (ainda não usado em RBAC, é o gancho pra "gestor só vê seu depto").
-  despar String? @db.VarChar(80)
+  despar           String?   @db.VarChar(80)
   // NÍVEL DA CONTA NA HIERARQUIA (E045PLA.NivCta) — 1..15. O Senior já entrega isto pronto:
   // não é preciso deduzir do comprimento de `clacta`. Conferido contra a derivação por
   // máscara em 12/08/2026: 547 de 547 contas idênticas, zero divergência.
-  nivcta Int?
+  nivcta           Int?
   // Máscara do grupo a que a conta pertence (E045PLA.MskGcc) — ex. "1.22.33.44.5555.66666",
   // que significa larguras acumuladas 1,3,5,7,11,16. É o que torna a hierarquia portátil
   // entre planos de contas diferentes (CaxHub_Hedel): as larguras passam a vir do dado, em
   // vez de constante no código. Varia por modelo E por grupo de contas — o modelo 188 do
   // Senior, por exemplo, usa "1.22.33.44.55" no Ativo/Passivo e "1.22.33.44.55.66" no
   // grupo X. Ver domain/hierarquiaPlano.ts.
-  mskgcc String? @db.VarChar(40)
+  mskgcc           String?   @db.VarChar(40)
   // Grupo de contas do modelo de plano (E045PLA.GruCta) — o `codgcc` que casa com
   // E043MMP.CodGcc, onde vive a máscara por grupo.
-  gructa Int?
+  gructa           Int?
   /// Domínio "LSitCta": A=Ativa, I=Inativa
   // Deliberadamente NÃO filtrado nas visões contábeis: as 4 contas inativas de hoje têm
   // movimento até set/2025, e excluí-las mudaria números de anos fechados sem ninguém pedir.
-  sitcta String? @db.VarChar(1)
+  sitcta           String?   @db.VarChar(1)
   // Conta-pai na hierarquia — DERIVADO no fim do sync (o Senior não tem "CtaPai" em
   // E045PLA, só em E044CCU.CcuPai). É a conta de `nivcta - 1` cujo `clacta` é prefixo deste,
   // com o comprimento do prefixo vindo de `mskgcc`. Sem FK formal, mesma escolha de
   // CentroCusto.ccupai. NULL = raiz (nivcta 1).
-  paiCtared Int? @map("pai_ctared")
+  paiCtared        Int?      @map("pai_ctared")
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -1625,8 +1635,8 @@ model PlanoContabil {
   // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
   // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, ctared])
 
+  @@id([codemp, ctared])
   @@map("plano_contabil")
 }
 
@@ -1643,17 +1653,17 @@ model HistoricoPadrao {
   // "CodHpd" sozinho): E046HPD é catálogo GLOBAL, não por empresa, diferente da maioria das
   // tabelas espelhadas aqui. `SELECT CodEmp FROM E046HPD` dá erro de coluna inexistente no
   // Senior — não repetir esse campo por hábito de copiar o padrão de outras tabelas.
-  codhpd Int @id
-  tithpd String? @db.VarChar(80)
+  codhpd           Int       @id
+  tithpd           String?   @db.VarChar(80)
   // TEMPLATE do histórico — placeholders são `*NUM` (numérico) e `*ALF` (alfanumérico),
   // substituídos POSICIONALMENTE pelos parâmetros de LancamentoContabil.cpllct, na ordem em
   // que aparecem no texto (a distinção NUM/ALF é só validação de entrada no Senior, não muda
   // a substituição). Ex.: "Vlr. Ref. Compra conf. NF *NUM de *ALF".
-  deshpd String @db.VarChar(80)
+  deshpd           String    @db.VarChar(80)
   /// Domínio "LTipHpd"
-  tiphpd String @db.VarChar(1)
+  tiphpd           String    @db.VarChar(1)
   /// Domínio "LSimNao"
-  intagr String? @db.VarChar(1)
+  intagr           String?   @db.VarChar(1)
   // Colunas de controle de exclusão — ver comentário em Pedido. Catálogo GLOBAL (sem
   // codemp) — escopo da varredura é `{}` (tabela toda), igual a qualquer outra sem partição.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
@@ -1664,14 +1674,14 @@ model HistoricoPadrao {
 
 // Espelho local da tabela E640LCT do Senior ERP (Contábil - Lançamento - Lançamentos Contábeis).
 model LancamentoContabil {
-  codemp Int
-  numlct BigInt
+  codemp           Int
+  numlct           BigInt
   /// Domínio "LSitLot": 1=A Contabilizar, 2=Contabilizado, 3=Excluído, 4=Desativado
-  sitlct Int
+  sitlct           Int
   /// Domínio "LOriLct": MAN=Manual, VEN=Mercado - NF de Saída, VEF=Mercado - Faturas, EST=Estoques - Movimentos, REC=C. Receber - Movimentos, AFR=C. Receber - Ajuste Financeiro, RAM=C. Receber - Ajuste Valor de Mercado, ARV=C. Receber - Variação Cambial, CPR=Suprimentos - NF de Entrada, COF=Suprimentos - Faturas, PAG=C. Pagar - Movimentos, COM=C. Pagar - Comissões, AFP=C. Pagar - Ajuste Financeiro, PAM=C. Pagar - Ajuste Valor de Mercado, APV=C. Pagar - Variação Cambial, TES=Tesouraria - Movimentos, PRD=Produção, PAT=Patrimônio, IVE=Tributos - Vendas, ICO=Tributos - Compras, IVZ=Tributos - Redução Z, IOD=Tributos - Outros Documentos, IMP=Tributos - Apuração/Cálculo, RPA=Tributos - Recibo de Pagamento Autônomo, UIV=Tributos - Unidade Imobiliária Vendida, IVR=Tributos - Unidade Imobiliária Vendida - Valores Recebidos, IVO=Tributos - Unidade Imobiliária Vendida - Custo Orçado, IVI=Tributos - Unidade Imobiliária Vendida - Custo Incorrido, PRJ=Projetos - Lançamentos Manuais, CTC=Cota Capital - Movimentos, VRB=Vetorh - Rubi, REG=Regente
-  orilct String @db.VarChar(3)
-  cpllct String? @db.VarChar(250)
-  numlot Int?
+  orilct           String    @db.VarChar(3)
+  cpllct           String?   @db.VarChar(250)
+  numlot           Int?
   // Código do histórico padrão (E640LCT.CodHpd) — chave de junção com HistoricoPadrao. É o
   // que de fato monta o texto legível do "Complemento Hist." mostrado no Senior: `cpllct` é
   // só a lista de parâmetros ("607543","Senior Sistemas S.A."), o texto final vem de
@@ -1679,7 +1689,7 @@ model LancamentoContabil {
   // parâmetros, na ordem em que aparecem — ver domain/historicoPadrao.ts. NÃO é 1:1 com
   // `orilct`: o mesmo orilct (ex. CPR) usa códigos de histórico diferentes conforme a rotina
   // exata que gerou o lançamento, cada um com seu próprio número de parâmetros.
-  codhpd Int?
+  codhpd           Int?
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -1688,23 +1698,23 @@ model LancamentoContabil {
   // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
   // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, numlct])
 
+  @@id([codemp, numlct])
   @@map("lancamentos_contabeis")
 }
 
 // Espelho local da tabela E640RAT do Senior ERP (Contábil - Lançamento - Rateios).
 model RateioLancamento {
-  codemp Int
-  numlct BigInt
-  ctared Int
-  codccu String @db.VarChar(9)
+  codemp           Int
+  numlct           BigInt
+  ctared           Int
+  codccu           String    @db.VarChar(9)
   /// Domínio "LDebCre": D=Débito, C=Crédito
-  debcre String? @db.VarChar(1)
-  datlct DateTime @db.Date
-  vlrrat Decimal @db.Decimal(17, 2)
+  debcre           String?   @db.VarChar(1)
+  datlct           DateTime  @db.Date
+  vlrrat           Decimal   @db.Decimal(17, 2)
   /// Domínio "LSitLot": 1=A Contabilizar, 2=Contabilizado, 3=Excluído, 4=Desativado
-  sitrat Int
+  sitrat           Int
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -1713,24 +1723,24 @@ model RateioLancamento {
   // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
   // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
   @@id([codemp, numlct, ctared, codccu])
   // A PK começa por numlct, inútil pra agregação por período — sem este índice, o
   // Resultado Analítico (agrupa por codemp+sitrat+mês, casando por ctared) faz seq scan
   // nas 300k+ linhas da tabela a cada consulta.
   @@index([codemp, sitrat, datlct, ctared])
-
   @@map("rateios_lancamento")
 }
 
 // Espelho local da tabela E650RTO do Senior ERP (Contábil - Saldo - Mensal e Orçamento por Centro de Custos (PC)).
 model OrcamentoContabil {
-  codemp Int
-  codfil Int
-  mesano DateTime @db.Date
-  ctared Int
-  codccu String @db.VarChar(9)
-  ctafin Int
-  vlrrat Decimal @db.Decimal(17, 2)
+  codemp           Int
+  codfil           Int
+  mesano           DateTime  @db.Date
+  ctared           Int
+  codccu           String    @db.VarChar(9)
+  ctafin           Int
+  vlrrat           Decimal   @db.Decimal(17, 2)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -1739,8 +1749,8 @@ model OrcamentoContabil {
   // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
   // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, codfil, mesano, ctared, codccu, ctafin])
 
+  @@id([codemp, codfil, mesano, ctared, codccu, ctafin])
   @@map("orcamentos_contabeis")
 }
 
@@ -1756,7 +1766,7 @@ model OrcamentoContabil {
 // com ele nulo, porque gerar um MAX+1 local colidiria com uma despesa lançada no ERP no
 // intervalo, e o upsert do próximo sync sobrescreveria em silêncio o lançamento do consultor.
 model RegistroDespesaViagem {
-  id     Int @id @default(autoincrement())
+  id     Int       @id @default(autoincrement())
   codemp Int
   numrat Int
   // Nulo até o Senior confirmar (só linha que veio de lá tem número).
@@ -1767,14 +1777,14 @@ model RegistroDespesaViagem {
   /// vazio). 7 valores vistos (1..7); não dá pra rotular com confiança pela descrição livre.
   tipdes Int?
   /// Domínio "USU_LRdvTipDes" (mesmo domínio de PercursoViagem.modtra) — idem, sem tradução.
-  moddes String? @db.VarChar(1)
+  moddes String?   @db.VarChar(1)
   qtdrdv Int?
-  vlrunt Decimal? @db.Decimal(9, 2)
-  vlrtot Decimal? @db.Decimal(9, 2)
+  vlrunt Decimal?  @db.Decimal(9, 2)
+  vlrtot Decimal?  @db.Decimal(9, 2)
   /// Domínio "LSimNao": S=Sim, N=Não — fatura o cliente por esta despesa.
-  fatrdv String? @db.VarChar(1)
+  fatrdv String?   @db.VarChar(1)
   /// Domínio "LSimNao": S=Sim, N=Não — reembolsa o consultor por esta despesa.
-  reerdv String? @db.VarChar(1)
+  reerdv String?   @db.VarChar(1)
   // Rota pré-cadastrada vinculada (RotaViagem.id) — na prática quase sempre vazia (90 de
   // 15.034 linhas em 13/08/2026); a maioria das despesas não usa o catálogo de rotas.
   rotid  Int?
@@ -1819,18 +1829,18 @@ model RegistroDespesaViagem {
 // mas em tabela própria: RegistroDespesaViagem não tem relação com AtividadeConsultor, que é a
 // FK obrigatória de SincronizacaoPendente. Ver sync/outboxSeniorDespesa.ts.
 model SincronizacaoPendenteDespesa {
-  id        Int                   @id @default(autoincrement())
-  despesaId Int
-  despesa   RegistroDespesaViagem @relation(fields: [despesaId], references: [id])
+  id           Int                   @id @default(autoincrement())
+  despesaId    Int
+  despesa      RegistroDespesaViagem @relation(fields: [despesaId], references: [id])
   // enviar_despesa (tipEve=I, default/legado) | editar_despesa (tipEve=A, exige seqrdv) |
   // excluir_despesa (tipEve=E, exige seqrdv) — ver sync/outboxSeniorDespesa.ts.
-  tipo      String                @default("enviar_despesa") @db.VarChar(40)
-  payload   Json
+  tipo         String                @default("enviar_despesa") @db.VarChar(40)
+  payload      Json
   // pendente | enviando | enviado | bloqueado — mesmo significado de SincronizacaoPendente.status.
-  status       String    @default("pendente") @db.VarChar(20)
-  tentativas   Int       @default(0)
+  status       String                @default("pendente") @db.VarChar(20)
+  tentativas   Int                   @default(0)
   ultimoErro   String?
-  criadoEm     DateTime  @default(now())
+  criadoEm     DateTime              @default(now())
   processadoEm DateTime?
 
   @@map("sincronizacao_pendente_despesa")
@@ -1839,16 +1849,16 @@ model SincronizacaoPendenteDespesa {
 // Espelho local da tabela USU_TRDVROTAS do Senior ERP (Tabela de Rotas) — rota de viagem
 // pré-cadastrada por cliente, composta por percursos (ver RotaPercurso).
 model RotaViagem {
-  id     Int     @id
-  codcli Int?
-  desrot String? @db.VarChar(250)
-  kmtrot Decimal? @db.Decimal(10, 2)
-  horrot Int?
+  id               Int       @id
+  codcli           Int?
+  desrot           String?   @db.VarChar(250)
+  kmtrot           Decimal?  @db.Decimal(10, 2)
+  horrot           Int?
   /// Domínio "LSitReg": A=Ativo, I=Inativo
-  sitreg String?  @db.VarChar(1)
-  idagp  Int?
-  tolhrs Decimal? @db.Decimal(7, 2)
-  tolkm  Decimal? @db.Decimal(7, 2)
+  sitreg           String?   @db.VarChar(1)
+  idagp            Int?
+  tolhrs           Decimal?  @db.Decimal(7, 2)
+  tolkm            Decimal?  @db.Decimal(7, 2)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -1859,16 +1869,16 @@ model RotaViagem {
 // Espelho local da tabela USU_TRDVPER do Senior ERP (Tabela de Percursos) — trecho reutilizável
 // (origem/destino) que compõe uma ou mais rotas via RotaPercurso.
 model PercursoViagem {
-  id     Int     @id
-  perori String? @db.VarChar(100)
-  perdes String? @db.VarChar(100)
-  desper String? @db.VarChar(250)
-  kmtper Decimal? @db.Decimal(10, 2)
-  horper Int?
+  id               Int       @id
+  perori           String?   @db.VarChar(100)
+  perdes           String?   @db.VarChar(100)
+  desper           String?   @db.VarChar(250)
+  kmtper           Decimal?  @db.Decimal(10, 2)
+  horper           Int?
   /// Domínio "USU_LRdvTipDes" (mesmo domínio de RegistroDespesaViagem.moddes) — modalidade do
   /// transporte; sem tradução no dicionário desta instalação.
-  modtra String? @db.VarChar(1)
-  horpag Int?
+  modtra           String?   @db.VarChar(1)
+  horpag           Int?
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -1881,10 +1891,10 @@ model PercursoViagem {
 // da rota (o dicionário do Senior nomeia os dois campos "Id. da Rota", mas são coisas diferentes —
 // confirmado com dado real: `id` sobe 1,2,3,8,9... enquanto `rotid` repete 1,1,1,5,5,5...).
 model RotaPercurso {
-  id     Int @id
-  rotid  Int
-  perid  Int
-  ordseq Int
+  id               Int       @id
+  rotid            Int
+  perid            Int
+  ordseq           Int
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -1997,18 +2007,18 @@ enum KyriaMemberRole {
 // estava marcado como BigInt no registro, mas o campo que ele documenta apontar
 // (Consultor.codusu) é `Int` — usado `Int` aqui pra bater com o alvo real do relacionamento.
 model KyriaMember {
-  id     String          @id
-  name   String
-  email  String
-  status KyriaStatus
-  role   KyriaMemberRole
+  id             String          @id
+  name           String
+  email          String
+  status         KyriaStatus
+  role           KyriaMemberRole
   // Campo interno (não vem da API) — documentado no mapeamento como referência a
   // Consultor.codusu, mas SEM FK Prisma de verdade: Consultor tem chave composta
   // (codemp+codusu), e o mapeamento registrado só rastreia codusu isolado, sem codemp. Nunca
   // populado pelo sync automático (não existe regra de casamento definida — ex.: por e-mail)
   // — fica null até alguém decidir como resolver o vínculo e escrever esse código.
-  codusu Int?
-  sincronizadoEm DateTime @updatedAt @map("sincronizado_em")
+  codusu         Int?
+  sincronizadoEm DateTime        @updatedAt @map("sincronizado_em")
 
   @@map("kyria_members")
 }
@@ -2021,20 +2031,20 @@ model KyriaMember {
 // coluna de verdade; aqui vale a pena porque os valores fazem sentido (id/slug/name curtos,
 // domainUrl mais largo pra caber URL de verdade).
 model KyriaCustomer {
-  id        String      @id @db.VarChar(64)
-  name      String      @db.VarChar(255)
-  slug      String      @db.VarChar(100)
-  status    KyriaStatus
-  domainUrl String?     @map("domain_url") @db.VarChar(500)
-  createdAt DateTime    @map("created_at")
-  updatedAt DateTime    @map("updated_at")
+  id             String      @id @db.VarChar(64)
+  name           String      @db.VarChar(255)
+  slug           String      @db.VarChar(100)
+  status         KyriaStatus
+  domainUrl      String?     @map("domain_url") @db.VarChar(500)
+  createdAt      DateTime    @map("created_at")
+  updatedAt      DateTime    @map("updated_at")
   // Campo interno (não vem da API) — documentado no mapeamento como referência a Cliente.codcli.
   // SEM FK Prisma de verdade, mesmo podendo (Cliente tem PK simples, diferente do caso
   // Consultor/codusu) — mesmo motivo: manter o model Cliente, que é do Senior, sem precisar
   // saber nada de Kyria. Nunca populado pelo sync automático — fica null até alguém vincular
   // manualmente pela tela "Ver dados".
-  codcli Int?
-  sincronizadoEm DateTime @updatedAt @map("sincronizado_em")
+  codcli         Int?
+  sincronizadoEm DateTime    @updatedAt @map("sincronizado_em")
 
   @@map("kyria_customers")
 }
@@ -2086,11 +2096,13 @@ model KyriaFieldMapping {
   resourceId Int                  @map("resource_id")
   resource   KyriaResourceMapping @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
-  // Nome do campo como veio na resposta real do Kyria. Campo aninhado (objeto/array) entra
-  // como UMA linha (ex.: "appearance"), sem flatten automático — mesmo tratamento que
-  // `KyriaTeam.appearance` já recebe hoje (Json inteiro). NULL = campo INTERNO — não existe na
-  // API, só do nosso lado (ex.: FK pra outra tabela do CaxHub), registrado pela tela sem passar
-  // por preview nenhum (18/09/2026, pedido do Vitor).
+  // Nome do campo como veio na resposta real do Kyria — para campo achatado de um objeto
+  // aninhado (ex.: "group.id" dentro de "group"), usa notação de ponto (22/09/2026, pedido do
+  // Vitor em cima do mapeamento de /reports/hours: um objeto raso vira campos próprios, não um
+  // Json opaco só). Só o que continuar aninhado 2+ níveis, ou array, ainda entra como UMA linha
+  // Json inteira (ex.: `KyriaTeam.appearance`). NULL = campo INTERNO — não existe na API, só do
+  // nosso lado (ex.: FK pra outra tabela do CaxHub), registrado pela tela sem passar por
+  // preview nenhum (18/09/2026, pedido do Vitor).
   nomeOrigem    String?        @map("nome_origem")
   ordem         Int
   manter        Boolean        @default(true)
@@ -2103,11 +2115,11 @@ model KyriaFieldMapping {
   nullable      Boolean        @default(true)
   // Tamanho de `String` (`@db.VarChar(tamanho)`) — null = TEXT sem limite. Só faz sentido
   // quando tipoEscolhido = String; ignorado (mas não apagado) se o admin trocar de tipo depois.
-  tamanho  Int?
+  tamanho       Int?
   // Precisão/escala de `Decimal` (`@db.Decimal(precisao, escala)`, mesmo par que
   // soap/typeMapping.ts já usa pro Senior) — só fazem sentido quando tipoEscolhido = Decimal.
-  precisao Int?
-  escala   Int?
+  precisao      Int?
+  escala        Int?
 
   // Documentação de relacionamento (opcional, vale pra QUALQUER campo — interno ou vindo da
   // API, ex.: um "customerId" já mapeado também pode apontar pro Cliente.id local) — "este
@@ -2116,8 +2128,8 @@ model KyriaFieldMapping {
   // (ex.: "Proposta"), não da tabela (@@map) — é o que entra num `@relation` de verdade. Os
   // dois são opcionais EM CONJUNTO: um sem o outro é especificação incompleta, validado no
   // backend (ver GET /internal-models e POST /register em routes/syncKyriaMapping.ts).
-  relacionamentoModelo String? @map("relacionamento_modelo")
-  relacionamentoCampo  String? @map("relacionamento_campo")
+  relacionamentoModelo         String? @map("relacionamento_modelo")
+  relacionamentoCampo          String? @map("relacionamento_campo")
   // Campo ESCALAR do mesmo relacionamentoModelo a mostrar como rótulo legível na tela "Ver
   // dados" (ex.: Consultor.nomfor) — opcional, só faz sentido quando relacionamentoModelo/Campo
   // já estão preenchidos (não validado como "os três juntos ou nenhum": um relacionamento sem
@@ -2135,24 +2147,24 @@ model KyriaFieldMapping {
   criadoEm     DateTime @default(now()) @map("criado_em")
   atualizadoEm DateTime @updatedAt @map("atualizado_em")
 
-  @@map("kyria_field_mappings")
   @@index([resourceId])
+  @@map("kyria_field_mappings")
 }
 
 // Espelho local da tabela E075PRO do Senior ERP (Cadastros - Produtos).
 model Produto {
-  codemp Int
-  codpro String @db.VarChar(14)
-  despro String @db.VarChar(100)
-  cplpro String? @db.VarChar(50)
-  desnfv String? @db.VarChar(99)
-  codfam String @db.VarChar(6)
-  unimed String @db.VarChar(3)
-  unime2 String? @db.VarChar(3)
-  unime3 String? @db.VarChar(3)
+  codemp           Int
+  codpro           String    @db.VarChar(14)
+  despro           String    @db.VarChar(100)
+  cplpro           String?   @db.VarChar(50)
+  desnfv           String?   @db.VarChar(99)
+  codfam           String    @db.VarChar(6)
+  unimed           String    @db.VarChar(3)
+  unime2           String?   @db.VarChar(3)
+  unime3           String?   @db.VarChar(3)
   /// Domínio "LTipPro": P=Produzido, C=Comprado, M=Montagem, D=Passagem Direta, S=Serviço
-  tippro String @db.VarChar(1)
-  codori String @db.VarChar(3)
+  tippro           String    @db.VarChar(1)
+  codori           String    @db.VarChar(3)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -2167,31 +2179,30 @@ model Produto {
   derivacoes DerivacaoProduto[]
 
   @@id([codemp, codpro])
-
   @@map("produtos")
 }
 
 // Espelho local da tabela E075DER do Senior ERP (Cadastros - Produtos - Derivações).
 model DerivacaoProduto {
-  codemp Int
-  codpro String @db.VarChar(14)
-  codder String @db.VarChar(7)
-  desder String? @db.VarChar(50)
-  descpl String? @db.VarChar(90)
-  codbar String? @db.VarChar(30)
+  codemp           Int
+  codpro           String    @db.VarChar(14)
+  codder           String    @db.VarChar(7)
+  desder           String?   @db.VarChar(50)
+  descpl           String?   @db.VarChar(90)
+  codbar           String?   @db.VarChar(30)
   /// Domínio "LTipCnv": *=Multiplicar, /=Dividir, R=Regra
-  tipcn2 String? @db.VarChar(1)
-  vlrcn2 Decimal? @db.Decimal(13, 6)
+  tipcn2           String?   @db.VarChar(1)
+  vlrcn2           Decimal?  @db.Decimal(13, 6)
   /// Domínio "LTipCnv": *=Multiplicar, /=Dividir, R=Regra
-  tipcn3 String? @db.VarChar(1)
-  vlrcn3 Decimal? @db.Decimal(13, 6)
-  pesbru Decimal? @db.Decimal(11, 5)
-  pesliq Decimal? @db.Decimal(11, 5)
-  tolpes Decimal? @db.Decimal(5, 3)
-  volder Decimal? @db.Decimal(11, 5)
-  codemb Int?
-  qtdemb Decimal? @db.Decimal(12, 5)
-  codref String? @db.VarChar(40)
+  tipcn3           String?   @db.VarChar(1)
+  vlrcn3           Decimal?  @db.Decimal(13, 6)
+  pesbru           Decimal?  @db.Decimal(11, 5)
+  pesliq           Decimal?  @db.Decimal(11, 5)
+  tolpes           Decimal?  @db.Decimal(5, 3)
+  volder           Decimal?  @db.Decimal(11, 5)
+  codemb           Int?
+  qtdemb           Decimal?  @db.Decimal(12, 5)
+  codref           String?   @db.VarChar(40)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -2204,15 +2215,14 @@ model DerivacaoProduto {
   produto Produto @relation(fields: [codemp, codpro], references: [codemp, codpro])
 
   @@id([codemp, codpro, codder])
-
   @@map("derivacoes_produto")
 }
 
 // Espelho local da tabela E080SER do Senior ERP (Cadastros - Serviços).
 model Servico {
-  codemp Int
-  codser String @db.VarChar(14)
-  desser String @db.VarChar(70)
+  codemp           Int
+  codser           String    @db.VarChar(14)
+  desser           String    @db.VarChar(70)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -2221,40 +2231,40 @@ model Servico {
   // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
   // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, codser])
 
+  @@id([codemp, codser])
   @@map("servicos")
 }
 
 // Espelho local da tabela E140NFV do Senior ERP (Vendas - Notas Fiscais de Saída - Dados Gerais).
 model NotaFiscalVenda {
-  codemp Int
-  codfil Int
-  codsnf String @db.VarChar(3)
-  numnfv Int
+  codemp           Int
+  codfil           Int
+  codsnf           String    @db.VarChar(3)
+  numnfv           Int
   // Campos abaixo acrescentados a pedido do Vitor (24/08/2026, mesma sessão) — ordem seguindo
   // fldord do dicionário do Senior (r996fld).
   /// Domínio "LTipNfs": 01=NF Saída, 02=NF Devolução, 03=NF Remessa (Industrialização), 04=NF Remessa (Outros), 05=NF Retorno (Industrialização), 06=NF Retorno (Outros), 09=NF Acerto, 10=NF Carga (Distribuição)
-  tipnfs Int?
-  codedc String? @db.VarChar(3)
-  tnspro String? @db.VarChar(5)
-  tnsser String? @db.VarChar(5)
-  noppro String? @db.VarChar(5)
-  nopser String? @db.VarChar(5)
-  datemi DateTime @db.Date
-  codcli Int
+  tipnfs           Int?
+  codedc           String?   @db.VarChar(3)
+  tnspro           String?   @db.VarChar(5)
+  tnsser           String?   @db.VarChar(5)
+  noppro           String?   @db.VarChar(5)
+  nopser           String?   @db.VarChar(5)
+  datemi           DateTime  @db.Date
+  codcli           Int
   // codrep/codcpg/sitnfv são NOT NULL no dicionário do Senior (cannul=0) — backfill das
   // 21.955 linhas já feito e conferido (0 nulos), travados como NOT NULL (24/08/2026).
-  codrep Int
-  codcpg String @db.VarChar(6)
-  codfpg Int?
-  codmoe String? @db.VarChar(3)
-  codtra Int?
-  vlrfre Decimal? @db.Decimal(15, 2)
+  codrep           Int
+  codcpg           String    @db.VarChar(6)
+  codfpg           Int?
+  codmoe           String?   @db.VarChar(3)
+  codtra           Int?
+  vlrfre           Decimal?  @db.Decimal(15, 2)
   /// Domínio "LCifFob": C=Por conta do emitente (PAGO), F=Por conta do destinatário (A PAGAR), T=Por conta de terceiros, X=Sem frete
-  ciffob String? @db.VarChar(1)
+  ciffob           String?   @db.VarChar(1)
   /// Domínio "LSitNfs": 1=Digitada, 2=Fechada, 3=Cancelada, 4=Documento Fiscal Emitido (saída), 5=Aguardando Fechamento (pós-saída), 6=Aguardando Integração WMS, 7=Digitada Integração, 8=Agrupada
-  sitnfv String @db.VarChar(1)
+  sitnfv           String    @db.VarChar(1)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -2266,45 +2276,44 @@ model NotaFiscalVenda {
 
   // FK formalizada depois de checar órfãos com dado real (0 órfãos em 21.955 linhas,
   // 24/08/2026) — ver ~/.claude/plans/jaunty-crafting-neumann.md.
-  cliente        Cliente               @relation(fields: [codcli], references: [codcli])
-  itensServico   ItemServicoNfVenda[]
-  itensProduto   ItemProdutoNfVenda[]
+  cliente      Cliente              @relation(fields: [codcli], references: [codcli])
+  itensServico ItemServicoNfVenda[]
+  itensProduto ItemProdutoNfVenda[]
 
   @@id([codemp, codfil, codsnf, numnfv])
-
   @@map("notas_fiscais_venda")
 }
 
 // Espelho local da tabela E140ISV do Senior ERP (Vendas - Notas Fiscais de Saída - Itens de Serviços).
 model ItemServicoNfVenda {
-  codemp Int
-  codfil Int
-  codsnf String @db.VarChar(3)
-  numnfv Int
-  seqisv Int
+  codemp           Int
+  codfil           Int
+  codsnf           String    @db.VarChar(3)
+  numnfv           Int
+  seqisv           Int
   // Campos abaixo acrescentados a pedido do Vitor (24/08/2026, mesma sessão) — "complemente",
   // aditivo: codser/vlrbru (já existentes) preservados, mesmo o pedido não os tendo relistado.
   // Ordem seguindo fldord do dicionário do Senior.
-  tnsser String? @db.VarChar(5)
-  nopser String? @db.VarChar(5)
-  filped Int?
-  numped Int?
-  seqisp Int?
-  filctr Int?
-  numctr Int?
-  datcpt DateTime? @db.Date
-  seqcvs Int?
-  codser String? @db.VarChar(14)
-  cplisv String? @db.VarChar(250)
-  qtdfat Decimal? @db.Decimal(14, 5)
-  qtddev Decimal? @db.Decimal(14, 5)
+  tnsser           String?   @db.VarChar(5)
+  nopser           String?   @db.VarChar(5)
+  filped           Int?
+  numped           Int?
+  seqisp           Int?
+  filctr           Int?
+  numctr           Int?
+  datcpt           DateTime? @db.Date
+  seqcvs           Int?
+  codser           String?   @db.VarChar(14)
+  cplisv           String?   @db.VarChar(250)
+  qtdfat           Decimal?  @db.Decimal(14, 5)
+  qtddev           Decimal?  @db.Decimal(14, 5)
   // unimed é NOT NULL no dicionário (cannul=0) — backfill das 105.410 linhas já feito e
   // conferido (0 nulos), travado como NOT NULL (24/08/2026, mesmo padrão de
   // notas_fiscais_venda.codrep/codcpg/sitnfv).
-  unimed String @db.VarChar(3)
-  codtpr String? @db.VarChar(4)
-  preuni Decimal? @db.Decimal(21, 10)
-  vlrbru Decimal? @db.Decimal(15, 2)
+  unimed           String    @db.VarChar(3)
+  codtpr           String?   @db.VarChar(4)
+  preuni           Decimal?  @db.Decimal(21, 10)
+  vlrbru           Decimal?  @db.Decimal(15, 2)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -2318,47 +2327,46 @@ model ItemServicoNfVenda {
   notaFiscalVenda NotaFiscalVenda @relation(fields: [codemp, codfil, codsnf, numnfv], references: [codemp, codfil, codsnf, numnfv])
 
   @@id([codemp, codfil, codsnf, numnfv, seqisv])
-
   @@map("itens_servico_nfv")
 }
 
 // Espelho local da tabela E140IPV do Senior ERP (Vendas - Notas Fiscais de Saída - Itens de Produtos).
 model ItemProdutoNfVenda {
-  codemp Int
-  codfil Int
-  codsnf String @db.VarChar(3)
-  numnfv Int
-  seqipv Int
+  codemp           Int
+  codfil           Int
+  codsnf           String    @db.VarChar(3)
+  numnfv           Int
+  seqipv           Int
   // Campos abaixo acrescentados a pedido do Vitor (24/08/2026, mesma sessão) — "complemente",
   // aditivo: codpro/cplipv/vlrbru (já existentes) preservados. Ordem seguindo fldord do
   // dicionário do Senior.
-  tnspro String? @db.VarChar(5)
-  noppro String? @db.VarChar(5)
-  filped Int?
-  numped Int?
-  seqipd Int?
-  filctr Int?
-  numctr Int?
-  datcpt DateTime? @db.Date
-  seqcvp Int?
-  codpro String? @db.VarChar(14)
-  codder String? @db.VarChar(7)
-  cplipv String? @db.VarChar(250)
-  qtdfat Decimal? @db.Decimal(14, 5)
-  qtddev Decimal? @db.Decimal(14, 5)
+  tnspro           String?   @db.VarChar(5)
+  noppro           String?   @db.VarChar(5)
+  filped           Int?
+  numped           Int?
+  seqipd           Int?
+  filctr           Int?
+  numctr           Int?
+  datcpt           DateTime? @db.Date
+  seqcvp           Int?
+  codpro           String?   @db.VarChar(14)
+  codder           String?   @db.VarChar(7)
+  cplipv           String?   @db.VarChar(250)
+  qtdfat           Decimal?  @db.Decimal(14, 5)
+  qtddev           Decimal?  @db.Decimal(14, 5)
   // unimed é NOT NULL no dicionário (cannul=0) — backfill das 146 linhas já feito e
   // conferido (0 nulos), travado como NOT NULL (24/08/2026, mesmo padrão de sempre).
-  unimed String @db.VarChar(3)
-  uniemi String? @db.VarChar(3)
-  codtpr String? @db.VarChar(4)
-  preuni Decimal? @db.Decimal(21, 10)
-  prebas Decimal? @db.Decimal(21, 10)
-  perdsc Decimal? @db.Decimal(5, 2)
-  perofe Decimal? @db.Decimal(10, 5)
-  univen String? @db.VarChar(3)
-  qtdven Decimal? @db.Decimal(14, 5)
-  preven Decimal? @db.Decimal(21, 10)
-  vlrbru Decimal? @db.Decimal(15, 2)
+  unimed           String    @db.VarChar(3)
+  uniemi           String?   @db.VarChar(3)
+  codtpr           String?   @db.VarChar(4)
+  preuni           Decimal?  @db.Decimal(21, 10)
+  prebas           Decimal?  @db.Decimal(21, 10)
+  perdsc           Decimal?  @db.Decimal(5, 2)
+  perofe           Decimal?  @db.Decimal(10, 5)
+  univen           String?   @db.VarChar(3)
+  qtdven           Decimal?  @db.Decimal(14, 5)
+  preven           Decimal?  @db.Decimal(21, 10)
+  vlrbru           Decimal?  @db.Decimal(15, 2)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -2372,36 +2380,35 @@ model ItemProdutoNfVenda {
   notaFiscalVenda NotaFiscalVenda @relation(fields: [codemp, codfil, codsnf, numnfv], references: [codemp, codfil, codsnf, numnfv])
 
   @@id([codemp, codfil, codsnf, numnfv, seqipv])
-
   @@map("itens_produto_nfv")
 }
 
 // Espelho local da tabela E140RAT do Senior ERP (Vendas - Notas Fiscais de Saída - Rateios).
 model RateioNfVenda {
-  codemp Int
-  codfil Int
-  codsnf String @db.VarChar(3)
-  numnfv Int
-  seqrat Int
+  codemp           Int
+  codfil           Int
+  codsnf           String    @db.VarChar(3)
+  numnfv           Int
+  seqrat           Int
   // Campos abaixo acrescentados a pedido do Vitor (24/08/2026, mesma sessão) — ordem seguindo
   // fldord do dicionário do Senior (r996fld), CriRat/SomSub (domínio) e UsuGer/DatGer/HorGer/
   // TipOri (auditoria/metadado, DatGer já usado à parte em CAMPO_DATA) ficaram de fora, mesma
   // exclusão que o Vitor já tinha feito ao listar os campos.
-  datbas DateTime? @db.Date
-  tnspro String?   @db.VarChar(5)
-  tnsser String?   @db.VarChar(5)
-  seqipv Int?
-  seqisv Int?
-  numprj Int?
-  codfpj Int?
-  ctafin Int?
-  ctared Int?
-  percta Decimal? @db.Decimal(7, 4)
-  vlrcta Decimal? @db.Decimal(15, 2)
-  codccu String?  @db.VarChar(9)
-  perrat Decimal? @db.Decimal(7, 4)
-  vlrrat Decimal? @db.Decimal(15, 2)
-  obsrat String?  @db.VarChar(120)
+  datbas           DateTime? @db.Date
+  tnspro           String?   @db.VarChar(5)
+  tnsser           String?   @db.VarChar(5)
+  seqipv           Int?
+  seqisv           Int?
+  numprj           Int?
+  codfpj           Int?
+  ctafin           Int?
+  ctared           Int?
+  percta           Decimal?  @db.Decimal(7, 4)
+  vlrcta           Decimal?  @db.Decimal(15, 2)
+  codccu           String?   @db.VarChar(9)
+  perrat           Decimal?  @db.Decimal(7, 4)
+  vlrrat           Decimal?  @db.Decimal(15, 2)
+  obsrat           String?   @db.VarChar(120)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -2410,18 +2417,18 @@ model RateioNfVenda {
   // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
   // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, codfil, codsnf, numnfv, seqrat])
 
+  @@id([codemp, codfil, codsnf, numnfv, seqrat])
   @@map("rateios_nfv")
 }
 
 // Espelho local da tabela USU_TMETAANUAL do Senior ERP (Meta da Empresa/Filial por Ano).
 model MetaAnual {
-  codemp Int
-  codfil Int
-  anomet Int
-  vlrmet Decimal @db.Decimal(10, 2)
-  percre Decimal @db.Decimal(6, 2)
+  codemp           Int
+  codfil           Int
+  anomet           Int
+  vlrmet           Decimal   @db.Decimal(10, 2)
+  percre           Decimal   @db.Decimal(6, 2)
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -2430,9 +2437,177 @@ model MetaAnual {
   // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
   // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
-  @@id([codemp, codfil, anomet])
 
+  @@id([codemp, codfil, anomet])
   @@map("metas_anuais")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Módulo Gestão de Solicitações — Solicitações de Viagem (hospedagem, passagem aérea e
+// aluguel de carro). Dado 100% do CaxHub, sem integração com o Senior. Sem FK para Proposta
+// (PK composta): guarda codemp+codpro soltos, como as demais solicitações.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SolicitacaoViagem {
+  id                       Int       @id @default(autoincrement())
+  solicitanteId            Int?
+  /// projeto | comercial | interna | treinamento | outro — define se cliente/proposta são obrigatórios.
+  finalidade               String    @db.VarChar(20)
+  motivo                   String    @db.VarChar(1000)
+  codcli                   Int?
+  codemp                   Int?
+  codpro                   Int?
+  qtdPessoas               Int       @default(1)
+  dataInicio               DateTime  @db.Date
+  dataFim                  DateTime  @db.Date
+  cidadesDestino           String    @db.VarChar(500)
+  roteiroObservacao        String?   @db.Text
+  observacoes              String?   @db.Text
+  precisaHospedagem        Boolean   @default(false)
+  precisaAereo             Boolean   @default(false)
+  precisaCarro             Boolean   @default(false)
+  /// solicitada | em_cotacao | aguardando_aprovacao | aprovada | reprovada | reservada | finalizada | cancelada
+  status                   String    @default("solicitada") @db.VarChar(30)
+  responsavelAtendimentoId Int?
+  // Snapshot do departamento cujo gestor aprova (Consultor.codemp/depexe do solicitante na criação).
+  aprovacaoCodemp          Int?
+  aprovacaoDepexe          Int?
+  valorAprovado            Decimal?  @db.Decimal(12, 2)
+  aprovadoPorId            Int?
+  aprovadoEm               DateTime?
+  observacaoDecisao        String?   @db.VarChar(1000)
+  motivoCancelamento       String?   @db.VarChar(1000)
+  criadoEm                 DateTime  @default(now())
+  atualizadoEm             DateTime  @updatedAt
+
+  solicitante User?    @relation("viagemSolicitante", fields: [solicitanteId], references: [id], onDelete: SetNull)
+  atendimento User?    @relation("viagemAtendimento", fields: [responsavelAtendimentoId], references: [id], onDelete: SetNull)
+  aprovador   User?    @relation("viagemAprovador", fields: [aprovadoPorId], references: [id], onDelete: SetNull)
+  cliente     Cliente? @relation(fields: [codcli], references: [codcli], onDelete: SetNull)
+
+  viajantes    SolicitacaoViagemViajante[]
+  itens        SolicitacaoViagemItem[]
+  cotacoes     SolicitacaoViagemCotacao[]
+  anexos       SolicitacaoViagemAnexo[]
+  notificacoes Notificacao[]
+
+  @@index([status])
+  @@index([solicitanteId])
+  @@index([codemp, codpro])
+  @@index([codcli])
+  @@map("solicitacoes_viagem")
+}
+
+model SolicitacaoViagemViajante {
+  id            Int    @id @default(autoincrement())
+  solicitacaoId Int
+  userId        Int?
+  nome          String @db.VarChar(150)
+  /// Só dígitos (11), ou vazio quando não informado (opcional). Nunca vai para auditoria/diff.
+  cpf           String @db.VarChar(11)
+
+  solicitacao SolicitacaoViagem               @relation(fields: [solicitacaoId], references: [id], onDelete: Cascade)
+  user        User?                           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  itens       SolicitacaoViagemItemViajante[]
+
+  @@index([solicitacaoId])
+  @@map("solicitacoes_viagem_viajantes")
+}
+
+model SolicitacaoViagemItem {
+  id            Int    @id @default(autoincrement())
+  solicitacaoId Int
+  /// hospedagem | aereo | carro
+  tipo          String @db.VarChar(15)
+  ordem         Int    @default(0)
+
+  // Campos por tipo (todos anuláveis): dataInicio/dataFim = check-in/out, ida/volta, retirada/devolução.
+  cidade               String?   @db.VarChar(150)
+  origem               String?   @db.VarChar(150)
+  destino              String?   @db.VarChar(150)
+  dataInicio           DateTime? @db.Date
+  dataFim              DateTime? @db.Date
+  horaInicio           String?   @db.VarChar(5)
+  horaFim              String?   @db.VarChar(5)
+  tipoAcomodacao       String?   @db.VarChar(15)
+  hotelPreferencia     String?   @db.VarChar(200)
+  necessidades         String?   @db.VarChar(500)
+  flexibilidadeHorario String?   @db.VarChar(200)
+  bagagem              String?   @db.VarChar(200)
+  companhiaPreferencia String?   @db.VarChar(100)
+  localRetirada        String?   @db.VarChar(200)
+  localDevolucao       String?   @db.VarChar(200)
+  categoriaVeiculo     String?   @db.VarChar(100)
+  observacoes          String?   @db.VarChar(1000)
+
+  // Reserva (preenchida pelo atendimento).
+  fornecedor     String?   @db.VarChar(150)
+  localizador    String?   @db.VarChar(100)
+  valorReservado Decimal?  @db.Decimal(12, 2)
+  reservadoEm    DateTime?
+
+  solicitacao SolicitacaoViagem               @relation(fields: [solicitacaoId], references: [id], onDelete: Cascade)
+  viajantes   SolicitacaoViagemItemViajante[]
+  cotacoes    SolicitacaoViagemCotacao[]
+  anexos      SolicitacaoViagemAnexo[]
+
+  @@index([solicitacaoId])
+  @@map("solicitacoes_viagem_itens")
+}
+
+model SolicitacaoViagemItemViajante {
+  itemId     Int
+  viajanteId Int
+
+  item     SolicitacaoViagemItem     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  viajante SolicitacaoViagemViajante @relation(fields: [viajanteId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, viajanteId])
+  @@map("solicitacoes_viagem_itens_viajantes")
+}
+
+model SolicitacaoViagemCotacao {
+  id            Int       @id @default(autoincrement())
+  solicitacaoId Int
+  itemId        Int?
+  fornecedor    String    @db.VarChar(150)
+  descricao     String?   @db.VarChar(500)
+  valor         Decimal   @db.Decimal(12, 2)
+  validadeAte   DateTime? @db.Date
+  selecionada   Boolean   @default(false)
+  criadoPorId   Int?
+  criadoEm      DateTime  @default(now())
+
+  solicitacao SolicitacaoViagem        @relation(fields: [solicitacaoId], references: [id], onDelete: Cascade)
+  item        SolicitacaoViagemItem?   @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  criadoPor   User?                    @relation(fields: [criadoPorId], references: [id], onDelete: SetNull)
+  anexos      SolicitacaoViagemAnexo[]
+
+  @@index([solicitacaoId])
+  @@map("solicitacoes_viagem_cotacoes")
+}
+
+model SolicitacaoViagemAnexo {
+  id             Int      @id @default(autoincrement())
+  solicitacaoId  Int
+  itemId         Int?
+  cotacaoId      Int?
+  userId         Int?
+  /// cotacao | comprovante | voucher | outro
+  categoria      String   @default("outro") @db.VarChar(15)
+  nomeArquivo    String   @db.VarChar(255)
+  caminhoArquivo String   @db.VarChar(500)
+  tamanhoBytes   Int
+  mimeType       String   @db.VarChar(100)
+  criadoEm       DateTime @default(now())
+
+  solicitacao SolicitacaoViagem         @relation(fields: [solicitacaoId], references: [id], onDelete: Cascade)
+  item        SolicitacaoViagemItem?    @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  cotacao     SolicitacaoViagemCotacao? @relation(fields: [cotacaoId], references: [id], onDelete: SetNull)
+  user        User?                     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([solicitacaoId])
+  @@map("solicitacoes_viagem_anexos")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

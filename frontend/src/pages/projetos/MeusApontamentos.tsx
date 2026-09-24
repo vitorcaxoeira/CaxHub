@@ -589,9 +589,11 @@ export function MeusApontamentos() {
   // Apontamentos com reenvio disparado agora — mantém o spinner na linha entre o clique e
   // a primeira resposta do acompanhamento.
   const [reenviando, setReenviando] = useState<Set<number>>(new Set());
-  // Resultado informativo do "Sinc. ERP" (ex.: itens desvinculados). Separado de `erro`
-  // porque não é falha — é o sync tendo encontrado divergência e resolvido.
-  const [avisoSinc, setAvisoSinc] = useState<string | null>(null);
+  // Resultado informativo do "Sinc. ERP" (ex.: itens desvinculados), por RAT. Separado de
+  // `erro` porque não é falha — é o sync tendo encontrado divergência e resolvido. Vira
+  // tooltip no badge de integração da RAT (não banner no topo da tela) pra não competir com
+  // outras RATs sincronizadas na sequência.
+  const [avisoSincPorRat, setAvisoSincPorRat] = useState<Record<number, string>>({});
   // Atividade aberta no painel de detalhe (o mesmo do card do quadro), em modo leitura.
   const [detalheAtividade, setDetalheAtividade] = useState<AtividadeDetalheDados | null>(null);
   // Item da RAT com a observação em edição. Guarda o ratId junto porque depois de salvar é
@@ -907,7 +909,10 @@ export function MeusApontamentos() {
 
   async function sincronizarErp(rat: RatRow) {
     setSincronizando(rat.id);
-    setAvisoSinc(null);
+    setAvisoSincPorRat((a) => {
+      const { [rat.id]: _remove, ...resto } = a;
+      return resto;
+    });
     try {
       const { data } = await axios.post(`/api/rats/${rat.id}/sincronizar`);
       carregarRats();
@@ -957,10 +962,14 @@ export function MeusApontamentos() {
         avisos.push(`${data.despesasReenviadas} despesa(s) pendente(s)/com erro foram reenviadas ao Senior.`);
       }
       if (avisos.length > 0) {
-        setAvisoSinc(avisos.join(" "));
+        setAvisoSincPorRat((a) => ({ ...a, [rat.id]: avisos.join(" ") }));
       }
     } catch (err: any) {
-      setErro(err.response?.data?.error ?? "Falha ao sincronizar com o ERP");
+      // Mesmo padrão do toast de erro de "Fechar" (acompanharFechamento acima) — não mais o
+      // banner de erro no topo da página, que ficava distante da linha que o usuário estava
+      // olhando e sem dizer de qual RAT era o erro quando mais de uma é sincronizada em
+      // sequência.
+      toast.mostrar(`Falha ao sincronizar a RAT ${rat.id}: ${err.response?.data?.error ?? "Falha ao sincronizar com o ERP"}`, "destructive");
     } finally {
       setSincronizando(null);
     }
@@ -1516,14 +1525,6 @@ export function MeusApontamentos() {
         </p>
       )}
 
-      {avisoSinc && (
-        <div className="mb-4 flex items-start justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-sm text-foreground">
-          <span>{avisoSinc}</span>
-          <button onClick={() => setAvisoSinc(null)} className="flex-none text-[11px] text-muted hover:text-foreground">
-            fechar
-          </button>
-        </div>
-      )}
 
       <div className="space-y-8">
         <section>
@@ -1927,7 +1928,15 @@ export function MeusApontamentos() {
                               </span>
                             </td>
                             <td className="px-2.5 py-3.5">
-                              <span className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.integracaoTone]}`}>
+                              {/* Resultado do último "Sinc. ERP" (itens desvinculados, reenviados etc.) vira
+                                  tooltip aqui em vez de banner no topo da tela — um banner fixo continuava
+                                  mostrando a última RAT sincronizada mesmo depois de sincronizar outra. */}
+                              <span
+                                className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.integracaoTone]} ${
+                                  avisoSincPorRat[rat.id] ? "cursor-help underline decoration-dotted" : ""
+                                }`}
+                                title={avisoSincPorRat[rat.id]}
+                              >
                                 {rat.integracaoLabel}
                               </span>
                             </td>

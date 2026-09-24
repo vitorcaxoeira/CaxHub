@@ -25,6 +25,9 @@ import { Aprovacoes } from "./pages/projetos/Aprovacoes";
 import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
 import { Auditoria } from "./pages/auditoria/Auditoria";
+import { SolicitacoesViagem } from "./pages/solicitacoes/SolicitacoesViagem";
+import { SolicitacaoViagemForm } from "./pages/solicitacoes/SolicitacaoViagemForm";
+import { SolicitacaoViagemDetalhe } from "./pages/solicitacoes/SolicitacaoViagemDetalhe";
 import { AlocacaoPropostaDetalhe } from "./pages/projetos/AlocacaoPropostaDetalhe";
 import { CronogramaProposta } from "./pages/projetos/CronogramaProposta";
 import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
@@ -96,6 +99,17 @@ export default function App() {
                   Aprovações/Jornadas/Auditoria acima. Reaberto em 28/08/2026 (tinha sido
                   movido pra dentro do bloco admin-only abaixo em 26/08/2026, commit 3398f74,
                   enquanto o mapeamento Departamento x Grupo Contábil era configurado). */}
+              {/* Gestão de Solicitações (viagens): só admin por enquanto (24/09/2026, pedido do Vitor).
+                  Em sincronia com o menu (Sidebar) e o requireRole do router no backend
+                  (PAPEIS_MODULO_VIAGEM). Ao abrir pra outros papéis, ampliar as três camadas. */}
+              <Route element={<RequireRole roles={["admin"]} />}>
+                <Route path="/solicitacoes/minhas" element={<SolicitacoesViagem escopo="minhas" />} />
+                <Route path="/solicitacoes/nova" element={<SolicitacaoViagemForm />} />
+                <Route path="/solicitacoes/aprovacoes" element={<SolicitacoesViagem escopo="aprovacao" />} />
+                <Route path="/solicitacoes/atendimento" element={<SolicitacoesViagem escopo="atendimento" />} />
+                <Route path="/solicitacoes/:id" element={<SolicitacaoViagemDetalhe />} />
+                <Route path="/solicitacoes/:id/editar" element={<SolicitacaoViagemForm />} />
+              </Route>
               <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
               {/* Gestão 5S: acesso pelo cadastro de participantes do módulo (Require5S), não pelo
                   papel do usuário. Nova avaliação só coordenador/avaliador; cadastros só coordenador —

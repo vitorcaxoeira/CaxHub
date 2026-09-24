@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 interface Notificacao {
   id: number;
@@ -7,6 +8,8 @@ interface Notificacao {
   mensagem: string;
   lida: boolean;
   criadoEm: string;
+  // Só as notificações de Solicitação de Viagem levam a algum lugar (a solicitação).
+  solicitacaoViagemId?: number | null;
 }
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
@@ -16,6 +19,7 @@ const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short",
 const INTERVALO_POLLING_MS = 45000;
 
 export function NotificacoesSino() {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [notificacoes, setNotificacoes] = useState<Notificacao[]>([]);
   const [naoLidas, setNaoLidas] = useState(0);
@@ -88,7 +92,13 @@ export function NotificacoesSino() {
             {notificacoes.map((n) => (
               <button
                 key={n.id}
-                onClick={() => !n.lida && marcarLida(n.id)}
+                onClick={() => {
+                  if (!n.lida) marcarLida(n.id);
+                  if (n.solicitacaoViagemId) {
+                    setOpen(false);
+                    navigate(`/solicitacoes/${n.solicitacaoViagemId}`);
+                  }
+                }}
                 className={`block w-full border-b border-border/60 px-3 py-2 text-left text-sm transition hover:bg-surface-2 ${
                   n.lida ? "text-muted" : "text-foreground"
                 }`}

@@ -1,6 +1,6 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 interface NavLeaf {
@@ -14,9 +14,15 @@ interface NavLeaf {
   // expressar com `roles`). Hoje só a Meta diária usa isto — acesso liberado ao consultor
   // comum, mas restrito ao próprio registro dele no backend (ver routes/jornadas.ts).
   souConsultor?: boolean;
+  // Restringe ESTE item a papéis específicos dentro de um grupo aberto a todos (ex.: Atendimento
+  // de viagens). Mantido em sincronia com o RequireRole em App.tsx e o backend.
+  roles?: string[];
   // Módulo Gestão 5S: o acesso vem do cadastro de participantes do 5S (GET /5s/meu-acesso),
   // não do papel do usuário. O item só aparece pra quem tem um destes papéis no 5S.
   papel5s?: Array<"coordenador" | "avaliador" | "lider">;
+  // Destaca só na rota exata. Necessário quando o caminho do item é prefixo de outro item do
+  // menu (ex.: "/5s" e "/5s/observacoes") — sem isso o NavLink acende os dois ao mesmo tempo.
+  end?: boolean;
 }
 
 // Sub-menu dentro de um grupo (ex.: "Integração Kyria" dentro de "Administração") — mesmo
@@ -69,11 +75,26 @@ const groups: NavGroup[] = [
     roles: "*",
   },
   {
+    label: "Gestão de Solicitações",
+    items: [
+      { to: "/solicitacoes/nova", label: "Nova Solicitação" },
+      { to: "/solicitacoes/minhas", label: "Minhas Solicitações" },
+      // Atendimento cota e reserva: só administrativo e admin (o backend recusa o resto).
+      { to: "/solicitacoes/atendimento", label: "Atendimento", roles: ["admin", "administrativo"] },
+      // Sem `roles`: quem aprova é o gestor do departamento do solicitante (dinâmico, via
+      // DepartamentoGestor) — mesmo caso de Alocação. Admin também entra por gestorOuAdmin.
+      { to: "/solicitacoes/aprovacoes", label: "Aprovações", gestorOuAdmin: true },
+    ],
+    // Só admin por enquanto (pedido do Vitor, 24/09/2026) — em sincronia com o RequireRole em
+    // App.tsx e o requireRole do router no backend (PAPEIS_MODULO_VIAGEM).
+    roles: ["admin"],
+  },
+  {
     label: "Gestão 5S",
     // Sem `roles`: quem acessa é quem está cadastrado como participante do 5S (papel5s). Mantido
     // em sincronia com <Require5S> em App.tsx e com o acesso da API /5s no backend.
     items: [
-      { to: "/5s", label: "Resultados", papel5s: TODOS_5S },
+      { to: "/5s", label: "Resultados", papel5s: TODOS_5S, end: true },
       { to: "/5s/nova", label: "Nova Avaliação", papel5s: ["coordenador", "avaliador"] },
       { to: "/5s/avaliacoes", label: "Avaliações", papel5s: TODOS_5S },
       { to: "/5s/observacoes", label: "Observações da Equipe", papel5s: TODOS_5S },
@@ -159,6 +180,23 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+// Grupo (e sub-menu) que contém a rota atual — o item cujo caminho casa com o endereço (igual
+// ou prefixo seguido de "/"), preferindo o mais longo. Rota sem item no menu (ex.: detalhe de
+// uma solicitação) não abre nada.
+function gruposDaRota(pathname: string): string[] {
+  let melhor: { tamanho: number; labels: string[] } | null = null;
+  const casa = (to: string) => pathname === to || (to !== "/" && pathname.startsWith(`${to}/`));
+  for (const group of groups) {
+    for (const item of group.items) {
+      const folhas = isSubgroup(item) ? item.children.map((c) => ({ to: c.to, labels: [group.label, item.label] })) : [{ to: item.to, labels: [group.label] }];
+      for (const f of folhas) {
+        if (casa(f.to) && (!melhor || f.to.length > melhor.tamanho)) melhor = { tamanho: f.to.length, labels: f.labels };
+      }
+    }
+  }
+  return melhor?.labels ?? [];
+}
+
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `block rounded-md px-3 py-2 text-sm font-medium transition ${
     isActive ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground"
@@ -176,7 +214,15 @@ interface SidebarProps {
 
 export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) {
   const { user } = useAuth();
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Financeiro a Receber"]));
+  const { pathname } = useLocation();
+  // Abre o grupo da página atual (no carregamento e a cada navegação), sem fechar os que a
+  // pessoa abriu na mão. Antes começava sempre com "Financeiro a Receber" aberto, fixo.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(gruposDaRota(pathname)));
+  useEffect(() => {
+    const abrir = gruposDaRota(pathname);
+    if (abrir.length === 0) return;
+    setOpenGroups((prev) => (abrir.every((l) => prev.has(l)) ? prev : new Set([...prev, ...abrir])));
+  }, [pathname]);
   const [ehGestorOuAdmin, setEhGestorOuAdmin] = useState(false);
   // Tem Consultor próprio (Consultor.email == o dele) — dinâmico, igual ehGestorOuAdmin,
   // mas admin não precisa disto pra ver nada (já entra por ehGestorOuAdmin).
@@ -232,6 +278,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   // `gestorOuAdmin` e `souConsultor` combinam como OU quando um item declara os dois (ex.: Meta
   // diária): item sem nenhuma das duas flags é sempre visível.
   function leafVisivel(item: NavLeaf): boolean {
+    if (item.roles && !(user && item.roles.includes(user.role))) return false;
     if (item.papel5s) return !!papel5s && (item.papel5s as string[]).includes(papel5s);
     return (
       (!item.gestorOuAdmin && !item.souConsultor) ||
@@ -306,7 +353,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
                   {group.items.map((item) => {
                     if (!isSubgroup(item)) {
                       return (
-                        <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate}>
+                        <NavLink key={item.to} to={item.to} end={item.end} className={linkClass} onClick={onNavigate}>
                           {item.label}
                         </NavLink>
                       );
@@ -328,7 +375,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
                         {subOpen && (
                           <div className="mt-1 space-y-1 border-l border-border pl-3">
                             {item.children.map((child) => (
-                              <NavLink key={child.to} to={child.to} className={linkClass} onClick={onNavigate}>
+                              <NavLink key={child.to} to={child.to} end={child.end} className={linkClass} onClick={onNavigate}>
                                 {child.label}
                               </NavLink>
                             ))}

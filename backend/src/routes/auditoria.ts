@@ -1,10 +1,11 @@
 import { NextFunction, Response, Router } from "express";
+import { podeVerViagem } from "../domain/solicitacoesViagem";
+import { podeVerArea } from "../domain/gestao5s";
+import { carregarAcesso5S } from "../domain/gestao5sAcesso";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { podeExecutarAcao, resolverContextoConsultor } from "../domain/contextoProjeto";
 import { sitproLabel } from "../domain/propostasDominio";
-import { podeVerArea } from "../domain/gestao5s";
-import { carregarAcesso5S } from "../domain/gestao5sAcesso";
 import { Prisma } from "@prisma/client";
 
 const INCLUDE_USUARIO = { usuario: { select: { nome: true, fotoUrl: true } } } as const;
@@ -61,6 +62,20 @@ async function podeVerEntidade(req: AuthenticatedRequest, entidadeTipo: string, 
     if (!rat) return false;
     if (contexto.consultor?.codfor === rat.codfor) return true;
     return rat.depexe != null && contexto.departamentosGerenciados.includes(rat.depexe);
+  }
+
+  // Solicitação de Viagem: quem pode ver a solicitação vê o histórico dela (solicitante,
+  // atendimento e o gestor do departamento gravado no snapshot) — sem isto o solicitante e o
+  // administrativo, que não são gestores, receberiam 403 no próprio histórico.
+  if (entidadeTipo === "solicitacao_viagem") {
+    const viagemId = Number(entidadeId);
+    if (!Number.isInteger(viagemId)) return false;
+    const viagem = await prisma.solicitacaoViagem.findUnique({
+      where: { id: viagemId },
+      select: { solicitanteId: true, aprovacaoCodemp: true, aprovacaoDepexe: true },
+    });
+    if (!viagem) return false;
+    return podeVerViagem({ userId: user.id, role: req.user!.role, contexto }, viagem);
   }
 
   // Avaliação 5S: quem enxerga a área da avaliação enxerga o histórico dela (regra do módulo,
