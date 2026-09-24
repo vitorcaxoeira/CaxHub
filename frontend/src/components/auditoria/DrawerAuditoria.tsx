@@ -187,12 +187,43 @@ function MetadataEvento({ eventoTipo, metadata }: { eventoTipo: string; metadata
   if (entradas.length === 0) return null;
   return (
     <div className="mt-3 space-y-1 rounded-md bg-surface-2 p-2.5 text-[12px]">
-      {entradas.map(([chave, valor]) => (
+      {entradas.map(([chave, valor]) =>
+        typeof valor === "object" ? (
+          <ValorObjeto key={chave} chave={chave} valor={valor as object} />
+        ) : (
         <p key={chave}>
           <span className="text-muted">{chave}: </span>
           <span className="text-foreground">{formatarValorCampo(valor, chave)}</span>
         </p>
-      ))}
+        )
+      )}
     </div>
+  );
+}
+
+// Metadata pode trazer objetos (ex.: `gatilho` da parada por página fechada). Expande inline.
+function ValorObjeto({ chave, valor }: { chave: string; valor: object }) {
+  const campos = Object.entries(valor).filter(([, v]) => v !== null && v !== undefined && v !== "");
+  return (
+    <details>
+      <summary className="cursor-pointer text-muted">
+        {chave} <span className="text-foreground">▸ ver detalhes ({campos.length} {campos.length === 1 ? "campo" : "campos"})</span>
+      </summary>
+      <div className="mt-1 space-y-1 border-l border-border pl-2.5">
+        {campos.map(([k, v]) =>
+          typeof v === "object" ? (
+            <div key={k}>
+              <span className="text-muted">{k}:</span>
+              <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground">{JSON.stringify(v, null, 2)}</pre>
+            </div>
+          ) : (
+            <p key={k} className="break-all">
+              <span className="text-muted">{k}: </span>
+              <span className="text-foreground">{formatarValorCampo(v, k)}</span>
+            </p>
+          )
+        )}
+      </div>
+    </details>
   );
 }
