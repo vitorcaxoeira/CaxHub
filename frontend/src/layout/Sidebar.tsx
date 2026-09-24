@@ -14,6 +14,9 @@ interface NavLeaf {
   // expressar com `roles`). Hoje só a Meta diária usa isto — acesso liberado ao consultor
   // comum, mas restrito ao próprio registro dele no backend (ver routes/jornadas.ts).
   souConsultor?: boolean;
+  // Módulo Gestão 5S: o acesso vem do cadastro de participantes do 5S (GET /5s/meu-acesso),
+  // não do papel do usuário. O item só aparece pra quem tem um destes papéis no 5S.
+  papel5s?: Array<"coordenador" | "avaliador" | "lider">;
 }
 
 // Sub-menu dentro de um grupo (ex.: "Integração Kyria" dentro de "Administração") — mesmo
@@ -43,6 +46,8 @@ interface NavGroup {
 
 const topLevel: NavLeaf[] = [{ to: "/", label: "Início" }];
 
+const TODOS_5S: NavLeaf["papel5s"] = ["coordenador", "avaliador", "lider"];
+
 const groups: NavGroup[] = [
   {
     label: "Comercial",
@@ -60,6 +65,26 @@ const groups: NavGroup[] = [
       { to: "/projetos/alocacao", label: "Alocação", gestorOuAdmin: true },
       { to: "/projetos/jornadas", label: "Meta diária", gestorOuAdmin: true, souConsultor: true },
       { to: "/projetos/auditoria", label: "Auditoria", gestorOuAdmin: true },
+    ],
+    roles: "*",
+  },
+  {
+    label: "Gestão 5S",
+    // Sem `roles`: quem acessa é quem está cadastrado como participante do 5S (papel5s). Mantido
+    // em sincronia com <Require5S> em App.tsx e com o acesso da API /5s no backend.
+    items: [
+      { to: "/5s", label: "Resultados", papel5s: TODOS_5S },
+      { to: "/5s/nova", label: "Nova Avaliação", papel5s: ["coordenador", "avaliador"] },
+      { to: "/5s/avaliacoes", label: "Avaliações", papel5s: TODOS_5S },
+      { to: "/5s/observacoes", label: "Observações da Equipe", papel5s: TODOS_5S },
+      {
+        label: "Cadastros 5S",
+        children: [
+          { to: "/5s/cadastros/areas", label: "Áreas e Ambientes", papel5s: ["coordenador"] },
+          { to: "/5s/cadastros/perguntas", label: "Perguntas", papel5s: ["coordenador"] },
+          { to: "/5s/cadastros/participantes", label: "Participantes", papel5s: ["coordenador"] },
+        ],
+      },
     ],
     roles: "*",
   },
@@ -156,6 +181,20 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   // Tem Consultor próprio (Consultor.email == o dele) — dinâmico, igual ehGestorOuAdmin,
   // mas admin não precisa disto pra ver nada (já entra por ehGestorOuAdmin).
   const [souConsultor, setSouConsultor] = useState(false);
+  // Papel no módulo 5S (null = não é participante). Mesma guarda de efeito superado do /meu-perfil.
+  const [papel5s, setPapel5s] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelado = false;
+    axios
+      .get<{ papel: string | null }>("/api/5s/meu-acesso")
+      .then(({ data }) => !cancelado && setPapel5s(data.papel))
+      .catch(() => !cancelado && setPapel5s(null));
+    return () => {
+      cancelado = true;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -193,6 +232,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   // `gestorOuAdmin` e `souConsultor` combinam como OU quando um item declara os dois (ex.: Meta
   // diária): item sem nenhuma das duas flags é sempre visível.
   function leafVisivel(item: NavLeaf): boolean {
+    if (item.papel5s) return !!papel5s && (item.papel5s as string[]).includes(papel5s);
     return (
       (!item.gestorOuAdmin && !item.souConsultor) ||
       !!(item.gestorOuAdmin && ehGestorOuAdmin) ||

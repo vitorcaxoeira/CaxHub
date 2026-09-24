@@ -10,6 +10,7 @@ export const ENTIDADES_AUDITORIA = {
   USUARIO: "usuario",
   RAT: "rat",
   DESPESA: "despesa",
+  AVALIACAO_5S: "avaliacao_5s",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -102,6 +103,16 @@ export const EVENTOS_AUDITORIA = {
   // Autoatendimento de perfil (backend/src/routes/perfil.ts) — nunca carrega dado
   // sensível em `alteracoes`/`metadata` (nem hash, nem senha em texto puro).
   USUARIO_PERFIL_ALTERADO: "USUARIO_PERFIL_ALTERADO",
+
+  // Módulo Gestão 5S — entidade própria (AVALIACAO_5S). Só as avaliações são auditadas;
+  // os cadastros (áreas, perguntas, participantes) não geram evento.
+  AVALIACAO_5S_CRIADA: "AVALIACAO_5S_CRIADA",
+  AVALIACAO_5S_NOTA_ALTERADA: "AVALIACAO_5S_NOTA_ALTERADA",
+  AVALIACAO_5S_FINALIZADA: "AVALIACAO_5S_FINALIZADA",
+  AVALIACAO_5S_REABERTA: "AVALIACAO_5S_REABERTA",
+  AVALIACAO_5S_EXCLUIDA: "AVALIACAO_5S_EXCLUIDA",
+  AVALIACAO_5S_IMAGEM_ADICIONADA: "AVALIACAO_5S_IMAGEM_ADICIONADA",
+  AVALIACAO_5S_IMAGEM_REMOVIDA: "AVALIACAO_5S_IMAGEM_REMOVIDA",
   USUARIO_SENHA_ALTERADA: "USUARIO_SENHA_ALTERADA",
   USUARIO_AVATAR_ALTERADO: "USUARIO_AVATAR_ALTERADO",
   USUARIO_AVATAR_REMOVIDO: "USUARIO_AVATAR_REMOVIDO",

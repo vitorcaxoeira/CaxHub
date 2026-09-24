@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
+import { Require5S } from "./auth/Require5S";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
@@ -36,6 +37,14 @@ import { SincronizacaoKyria } from "./pages/admin/SincronizacaoKyria";
 import { MapeamentoKyria } from "./pages/admin/MapeamentoKyria";
 import { DadosKyria } from "./pages/admin/DadosKyria";
 import { DepartamentoGrupoContabil } from "./pages/admin/DepartamentoGrupoContabil";
+import { Dashboard5S } from "./pages/gestao5s/Dashboard5S";
+import { NovaAvaliacao5S } from "./pages/gestao5s/NovaAvaliacao5S";
+import { Avaliacoes5S } from "./pages/gestao5s/Avaliacoes5S";
+import { Avaliacao5S } from "./pages/gestao5s/Avaliacao5S";
+import { ObservacoesEquipe5S } from "./pages/gestao5s/ObservacoesEquipe5S";
+import { Areas5S } from "./pages/gestao5s/admin/Areas5S";
+import { Perguntas5S } from "./pages/gestao5s/admin/Perguntas5S";
+import { Participantes5S } from "./pages/gestao5s/admin/Participantes5S";
 import { ListarPedidos } from "./pages/mercado/ListarPedidos";
 import { PedidoVisualizacao } from "./pages/mercado/PedidoVisualizacao";
 import { AnaliseFaturamento } from "./pages/mercado/AnaliseFaturamento";
@@ -88,6 +97,23 @@ export default function App() {
                   movido pra dentro do bloco admin-only abaixo em 26/08/2026, commit 3398f74,
                   enquanto o mapeamento Departamento x Grupo Contábil era configurado). */}
               <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
+              {/* Gestão 5S: acesso pelo cadastro de participantes do módulo (Require5S), não pelo
+                  papel do usuário. Nova avaliação só coordenador/avaliador; cadastros só coordenador —
+                  o backend (/5s) recusa o resto com 403. */}
+              <Route element={<Require5S />}>
+                <Route path="/5s" element={<Dashboard5S />} />
+                <Route path="/5s/avaliacoes" element={<Avaliacoes5S />} />
+                <Route path="/5s/avaliacoes/:id" element={<Avaliacao5S />} />
+                <Route path="/5s/observacoes" element={<ObservacoesEquipe5S />} />
+              </Route>
+              <Route element={<Require5S papeis={["coordenador", "avaliador"]} />}>
+                <Route path="/5s/nova" element={<NovaAvaliacao5S />} />
+              </Route>
+              <Route element={<Require5S papeis={["coordenador"]} />}>
+                <Route path="/5s/cadastros/areas" element={<Areas5S />} />
+                <Route path="/5s/cadastros/perguntas" element={<Perguntas5S />} />
+                <Route path="/5s/cadastros/participantes" element={<Participantes5S />} />
+              </Route>
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
               </Route>
