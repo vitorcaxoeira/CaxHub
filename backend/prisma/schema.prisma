@@ -34,6 +34,10 @@ model User {
   anexosAtividade        AtividadeAnexo[]
   notificacoes           Notificacao[]
   auditEventos           AuditEvento[]
+  participante5s         Participante5S?
+  avaliacoes5s           Avaliacao5S[]
+  observacoes5s          Observacao5S[]
+  imagens5s              Imagem5S[]
   jornadasDefinidas      JornadaConsultor[]
   excedentesSolicitados  SolicitacaoHorasExcedentes[] @relation("excedenteSolicitante")
   excedentesDecididos    SolicitacaoHorasExcedentes[] @relation("excedenteDecisor")
@@ -2429,4 +2433,189 @@ model MetaAnual {
   @@id([codemp, codfil, anomet])
 
   @@map("metas_anuais")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Módulo Gestão 5S — auditorias mensais de setores e ambientes comuns. Dado 100% do CaxHub.
+// Acesso por cadastro próprio (Participante5S), independente do papel do usuário.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Area5S {
+  id               Int      @id @default(autoincrement())
+  nome             String   @db.VarChar(120)
+  /// setor | comum
+  tipo             String   @db.VarChar(10)
+  /// Ambiente comum pode ficar vinculado a um setor (o líder desse setor passa a ver o ambiente).
+  setorVinculadoId Int?
+  ativo            Boolean  @default(true)
+  ordem            Int      @default(0)
+  criadoEm         DateTime @default(now())
+  atualizadoEm     DateTime @updatedAt
+
+  setorVinculado Area5S?              @relation("areaVinculo", fields: [setorVinculadoId], references: [id], onDelete: SetNull)
+  ambientes      Area5S[]             @relation("areaVinculo")
+  perguntas      Pergunta5S[]
+  avaliacoes     Avaliacao5S[]
+  lideres        Participante5SArea[]
+  observacoes    Observacao5S[]
+
+  @@index([tipo])
+  @@map("areas_5s")
+}
+
+model Pergunta5S {
+  id           Int      @id @default(autoincrement())
+  /// setor | comum — a que tipo de área a pergunta se aplica.
+  tipoArea     String   @db.VarChar(10)
+  /// Null = vale para todas as áreas do tipo; preenchido = só para aquela área.
+  areaId       Int?
+  /// seiri | seiton | seiso | seiketsu | shitsuke
+  senso        String   @db.VarChar(12)
+  texto        String   @db.VarChar(600)
+  ordem        Int      @default(0)
+  ativo        Boolean  @default(true)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  area      Area5S?               @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  respostas Avaliacao5SResposta[]
+
+  @@index([tipoArea, senso])
+  @@index([areaId])
+  @@map("perguntas_5s")
+}
+
+model Participante5S {
+  id       Int      @id @default(autoincrement())
+  userId   Int      @unique
+  /// coordenador | avaliador | lider
+  papel    String   @db.VarChar(15)
+  ativo    Boolean  @default(true)
+  criadoEm DateTime @default(now())
+
+  user  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areas Participante5SArea[]
+
+  @@map("participantes_5s")
+}
+
+model Participante5SArea {
+  participanteId Int
+  areaId         Int
+
+  participante Participante5S @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+  area         Area5S         @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  @@id([participanteId, areaId])
+  @@map("participantes_5s_areas")
+}
+
+model Avaliacao5S {
+  id           Int       @id @default(autoincrement())
+  titulo       String    @db.VarChar(200)
+  areaId       Int
+  avaliadorId  Int?
+  data         DateTime  @db.Date
+  /// em_andamento | finalizada
+  status       String    @default("em_andamento") @db.VarChar(15)
+  // Cache dos percentuais (0–100, null = sem resposta aplicável), recalculado a cada gravação.
+  percGeral    Decimal?  @db.Decimal(5, 2)
+  percSeiri    Decimal?  @db.Decimal(5, 2)
+  percSeiton   Decimal?  @db.Decimal(5, 2)
+  percSeiso    Decimal?  @db.Decimal(5, 2)
+  percSeiketsu Decimal?  @db.Decimal(5, 2)
+  percShitsuke Decimal?  @db.Decimal(5, 2)
+  finalizadaEm DateTime?
+  criadoEm     DateTime  @default(now())
+  atualizadoEm DateTime  @updatedAt
+
+  area        Area5S                @relation(fields: [areaId], references: [id])
+  avaliador   User?                 @relation(fields: [avaliadorId], references: [id], onDelete: SetNull)
+  respostas   Avaliacao5SResposta[]
+  sensos      Avaliacao5SSenso[]
+  observacoes Observacao5S[]
+
+  @@index([areaId, data])
+  @@index([status])
+  @@map("avaliacoes_5s")
+}
+
+model Avaliacao5SResposta {
+  id             Int     @id @default(autoincrement())
+  avaliacaoId    Int
+  perguntaId     Int?
+  // Snapshot da pergunta: editar o formulário depois não altera o histórico.
+  senso          String  @db.VarChar(12)
+  perguntaTexto  String  @db.VarChar(600)
+  ordem          Int     @default(0)
+  /// 1–5, ou null quando ainda sem resposta / não se aplica.
+  nota           Int?
+  naoSeAplica    Boolean @default(false)
+  inconsistencia String? @db.Text
+  complemento    String? @db.Text
+
+  avaliacao Avaliacao5S @relation(fields: [avaliacaoId], references: [id], onDelete: Cascade)
+  pergunta  Pergunta5S? @relation(fields: [perguntaId], references: [id], onDelete: SetNull)
+  imagens   Imagem5S[]
+
+  @@unique([avaliacaoId, perguntaId])
+  @@index([avaliacaoId])
+  @@map("avaliacoes_5s_respostas")
+}
+
+model Avaliacao5SSenso {
+  id            Int     @id @default(autoincrement())
+  avaliacaoId   Int
+  senso         String  @db.VarChar(12)
+  observacoes   String? @db.Text
+  melhorias     String? @db.Text
+  pontosAtencao String? @db.Text
+  informacoes   String? @db.Text
+
+  avaliacao Avaliacao5S @relation(fields: [avaliacaoId], references: [id], onDelete: Cascade)
+  imagens   Imagem5S[]
+
+  @@unique([avaliacaoId, senso])
+  @@map("avaliacoes_5s_sensos")
+}
+
+model Observacao5S {
+  id           Int      @id @default(autoincrement())
+  areaId       Int
+  autorId      Int?
+  dataOcorrido DateTime @db.Date
+  texto        String   @db.Text
+  avaliacaoId  Int?
+  criadoEm     DateTime @default(now())
+
+  area      Area5S       @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  autor     User?        @relation(fields: [autorId], references: [id], onDelete: SetNull)
+  avaliacao Avaliacao5S? @relation(fields: [avaliacaoId], references: [id], onDelete: SetNull)
+  imagens   Imagem5S[]
+
+  @@index([areaId, dataOcorrido])
+  @@map("observacoes_equipe_5s")
+}
+
+model Imagem5S {
+  id               Int      @id @default(autoincrement())
+  respostaId       Int?
+  avaliacaoSensoId Int?
+  observacaoId     Int?
+  userId           Int?
+  nomeArquivo      String   @db.VarChar(255)
+  caminhoArquivo   String   @db.VarChar(500)
+  tamanhoBytes     Int
+  mimeType         String   @db.VarChar(100)
+  criadoEm         DateTime @default(now())
+
+  resposta       Avaliacao5SResposta? @relation(fields: [respostaId], references: [id], onDelete: Cascade)
+  avaliacaoSenso Avaliacao5SSenso?    @relation(fields: [avaliacaoSensoId], references: [id], onDelete: Cascade)
+  observacao     Observacao5S?        @relation(fields: [observacaoId], references: [id], onDelete: Cascade)
+  user           User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([respostaId])
+  @@index([avaliacaoSensoId])
+  @@index([observacaoId])
+  @@map("imagens_5s")
 }

@@ -144,6 +144,48 @@ function sitratLabelCurto(valor: unknown): string {
 }
 
 export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
+  AVALIACAO_5S_CRIADA: {
+    tone: "success",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeCriacao,
+    resumo: (e) => `Iniciou a ${rotuloEntidade(e)}`,
+  },
+  AVALIACAO_5S_NOTA_ALTERADA: {
+    tone: "neutral",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou a resposta "${e.metadata?.pergunta ?? "—"}" (${contarAlteracoes(e)} campo(s))`,
+  },
+  AVALIACAO_5S_FINALIZADA: {
+    tone: "success",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeStatus,
+    resumo: (e) => `Finalizou a ${rotuloEntidade(e)}`,
+  },
+  AVALIACAO_5S_REABERTA: {
+    tone: "warning",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeStatus,
+    resumo: (e) => `Reabriu a ${rotuloEntidade(e)} para edição`,
+  },
+  AVALIACAO_5S_EXCLUIDA: {
+    tone: "destructive",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeRemocao,
+    resumo: (e) => `Excluiu a ${rotuloEntidade(e)}`,
+  },
+  AVALIACAO_5S_IMAGEM_ADICIONADA: {
+    tone: "neutral",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeCriacao,
+    resumo: () => "Adicionou uma foto",
+  },
+  AVALIACAO_5S_IMAGEM_REMOVIDA: {
+    tone: "neutral",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeRemocao,
+    resumo: (e) => `Removeu a foto ${e.metadata?.nomeArquivo ?? ""}`,
+  },
   PROPOSTA_CRIADA: {
     tone: "success",
     rotuloGrupo: "Proposta",

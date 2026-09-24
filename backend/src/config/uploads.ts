@@ -10,7 +10,11 @@ export const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 // projeto continua só acessível via rota autenticada (res.download), de propósito.
 export const AVATARS_DIR = path.join(UPLOADS_DIR, "avatars");
 
+// Fotos da Gestão 5S (avaliações, observações da equipe) — só via rota autenticada.
+export const CINCO_S_DIR = path.join(UPLOADS_DIR, "gestao-5s");
+
 export function garantirDiretorioUploads(): void {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
   fs.mkdirSync(AVATARS_DIR, { recursive: true });
+  fs.mkdirSync(CINCO_S_DIR, { recursive: true });
 }
