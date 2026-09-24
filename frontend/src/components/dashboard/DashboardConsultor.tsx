@@ -8,6 +8,7 @@ import { SerieTemporalBarra, SeriePonto } from "../ui/SerieTemporalBarra";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { Skeleton } from "../ui/Skeleton";
 import { CardValorHora } from "./CardValorHora";
+import { CardRdv } from "./CardRdv";
 
 const dateFormatterCurto = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
 const dateFormatterLongo = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "long", timeZone: "UTC" });
@@ -225,6 +226,8 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
           )}
         </section>
       </div>
+
+      <CardRdv filtro={{ anos, meses, codfor }} rotuloPeriodo={rotuloPeriodo} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">

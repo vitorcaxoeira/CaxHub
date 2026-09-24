@@ -49,6 +49,10 @@ import { scheduleMovimentoTituloReceberSync } from "./sync/movimentoTituloRecebe
 import { scheduleRepresentanteSync } from "./sync/representanteSync";
 import { scheduleCentroCustoSync } from "./sync/centroCustoSync";
 import { scheduleMovimentoContaSync } from "./sync/movimentoContaSync";
+import { scheduleFornecedorSync } from "./sync/fornecedorSync";
+import { scheduleTituloPagarSync } from "./sync/tituloPagarSync";
+import { scheduleMovimentoTituloPagarSync } from "./sync/movimentoTituloPagarSync";
+import { scheduleRateioTituloPagarSync } from "./sync/rateioTituloPagarSync";
 import { scheduleNaturezaFinanceiraSync } from "./sync/naturezaFinanceiraSync";
 import { schedulePortadorSync } from "./sync/portadorSync";
 import { scheduleMoedaSync } from "./sync/moedaSync";
@@ -211,8 +215,12 @@ async function iniciar() {
     scheduleTituloReceberSync();
     scheduleMovimentoTituloReceberSync();
     scheduleRepresentanteSync();
+    scheduleFornecedorSync();
     scheduleCentroCustoSync();
     scheduleMovimentoContaSync();
+    scheduleTituloPagarSync();
+    scheduleMovimentoTituloPagarSync();
+    scheduleRateioTituloPagarSync();
     scheduleNaturezaFinanceiraSync();
     scheduleMoedaSync();
     scheduleContaCorrenteSync();

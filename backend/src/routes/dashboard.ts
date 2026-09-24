@@ -4,7 +4,7 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel } from "../domain/propostasDominio";
 import { resolverContextoConsultor, ContextoConsultor, codforsDoTime, consultoresFiltraveis } from "../domain/contextoProjeto";
-import { diasDoPeriodo, horasRealizadasNoPeriodo, metaDoPeriodo, valorHoraVigente } from "../domain/resumoConsultor";
+import { diasDoPeriodo, horasRealizadasNoPeriodo, metaDoPeriodo, rdvDoConsultor, valorHoraVigente } from "../domain/resumoConsultor";
 import { parseIntListParam } from "../lib/queryParams";
 
 export const dashboardRouter = Router();
@@ -118,6 +118,23 @@ async function resolverConsultorAlvo(
   return { alvo };
 }
 
+// Período por `anos`/`meses` (ver comentário de /meu-resumo). Compartilhado entre /meu-resumo
+// e /meu-rdv: o card de RDV fica na mesma tela e tem que ler o filtro do mesmo jeito.
+// Combinações em ordem cronológica (todo mês do ano mais antigo, depois o próximo ano) —
+// mesma ordem de "colunas" em routes/contabil.ts, só que aqui os meses são somados num
+// painel só, não comparados lado a lado numa tabela.
+function periodoDaQuery(
+  req: AuthenticatedRequest,
+  hoje: Date
+): { anos: number[]; meses: number[]; combos: { ano: number; mes: number }[] } | null {
+  const anos = [...new Set(parseIntListParam(req.query.anos) ?? [hoje.getUTCFullYear()])].sort((a, b) => a - b);
+  const meses = [
+    ...new Set((parseIntListParam(req.query.meses) ?? [hoje.getUTCMonth() + 1]).filter((m) => m >= 1 && m <= 12)),
+  ].sort((a, b) => a - b);
+  if (anos.length === 0 || meses.length === 0) return null;
+  return { anos, meses, combos: anos.flatMap((ano) => meses.map((mes) => ({ ano, mes }))) };
+}
+
 function inicioDoDiaUtc(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
@@ -201,18 +218,12 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
     const { codemp, codfor } = alvo;
 
     const hoje = new Date();
-    const anos = [...new Set(parseIntListParam(req.query.anos) ?? [hoje.getUTCFullYear()])].sort((a, b) => a - b);
-    const meses = [
-      ...new Set((parseIntListParam(req.query.meses) ?? [hoje.getUTCMonth() + 1]).filter((m) => m >= 1 && m <= 12)),
-    ].sort((a, b) => a - b);
-    if (anos.length === 0 || meses.length === 0) {
+    const periodo = periodoDaQuery(req, hoje);
+    if (!periodo) {
       res.status(400).json({ error: "Período inválido" });
       return;
     }
-    // Combinações em ordem cronológica (todo mês do ano mais antigo, depois o próximo ano) —
-    // mesma ordem de "colunas" em routes/contabil.ts, só que aqui os meses são somados num
-    // painel só, não comparados lado a lado numa tabela.
-    const combos = anos.flatMap((ano) => meses.map((mes) => ({ ano, mes })));
+    const { anos, meses, combos } = periodo;
     const hojeUtc = inicioDoDiaUtc(hoje);
 
     // Um combo nunca se sobrepõe a outro (meses diferentes), então concatenar/somar os
@@ -317,5 +328,43 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
     });
   } catch (error) {
     handleError(res, error, "meu-resumo");
+  }
+});
+
+// Card "RDV · Despesas de viagem" da Home (23/09/2026): RDV de RATs Digitada/Fechada no
+// período filtrado + títulos a pagar de reembolso em aberto (E501TCP, codtpt='10'), por faixa
+// de vencimento. Rota separada de /meu-resumo pra não pesar o painel principal nem acoplar a
+// falha de uma à outra; as listas vêm junto (são pequenas) pro modal abrir sem nova chamada.
+dashboardRouter.get("/meu-rdv", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const contexto = await resolverContextoConsultor(user.email);
+
+    const resolvido = await resolverConsultorAlvo(req, contexto);
+    if ("negado" in resolvido) {
+      res.status(403).json({ error: "Sem permissão para ver o painel deste consultor" });
+      return;
+    }
+    const alvo = resolvido.alvo;
+    if (!alvo || alvo.codfor == null) {
+      res.json({ semConsultor: true });
+      return;
+    }
+
+    const hoje = new Date();
+    const periodo = periodoDaQuery(req, hoje);
+    if (!periodo) {
+      res.status(400).json({ error: "Período inválido" });
+      return;
+    }
+    const periodos = periodo.combos.map(({ ano, mes }) => ({ de: new Date(Date.UTC(ano, mes - 1, 1)), ate: new Date(Date.UTC(ano, mes, 0)) }));
+
+    res.json(await rdvDoConsultor(alvo.codemp, alvo.codfor, periodos, hoje));
+  } catch (error) {
+    handleError(res, error, "meu-rdv");
   }
 });

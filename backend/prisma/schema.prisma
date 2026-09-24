@@ -412,6 +412,7 @@ model Transacao {
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   movimentos MovimentoTituloReceber[]
+  movimentosPagar MovimentoTituloPagar[]
 
   @@id([codemp, codtns])
   @@map("transacoes")
@@ -2793,4 +2794,160 @@ model Imagem5S {
   @@index([avaliacaoSensoId])
   @@index([observacaoId])
   @@map("imagens_5s")
+}
+
+// Espelho local da tabela E095FOR do Senior ERP (Cadastros - Fornecedores).
+//
+// Recorte de 16 dos 150 campos da tabela real — identidade, endereço e situação, no
+// mesmo espírito de Cliente/Representante. Fora ficam ~130 campos fiscais de baixíssimo
+// uso (regime tributário, PIS/Cofins, DIRF, CBS/IBS, WMS, ANP...) e os 2 campos USU_
+// (USU_ReeDesp, USU_GrpFor), que não entram por definição de recorte do projeto — só
+// tabela padrão. Sem FK: nenhum outro model referencia CodFor hoje.
+model Fornecedor {
+  codfor           Int       @id
+  nomfor           String    @db.VarChar(100)
+  apefor           String    @db.VarChar(50)
+  /// Domínio "LJurFis": J=Pessoa Jurídica, F=Pessoa Física
+  tipfor           String    @db.VarChar(1)
+  /// Domínio "LTipMe2": I=Interno (Nacional), E=Externo (Exterior), P=Prospect.
+  tipmer           String    @db.VarChar(1)
+  codram           String?   @db.VarChar(5)
+  insest           String?   @db.VarChar(25)
+  cgccpf           BigInt?
+  endfor           String?   @db.VarChar(100)
+  cplend           String?   @db.VarChar(200)
+  cepfor           Int?
+  baifor           String?   @db.VarChar(75)
+  cidfor           String?   @db.VarChar(60)
+  sigufs           String?   @db.VarChar(2)
+  codpai           String?   @db.VarChar(4)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitfor           String    @db.VarChar(1)
+  // Colunas de controle de exclusão — só schema por enquanto, ver comentário em Empresa.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  titulosPagar        TituloPagar[]
+
+  @@map("fornecedores")
+}
+
+// Espelho local da tabela E501TCP do Senior ERP (C. Pagar - Títulos - Dados Gerais).
+// Espelho de TituloReceber, do outro lado do fluxo — acrescentada em 16/09/2026 pro DRE
+// (o Atlas não tinha nenhuma tabela de Contas a Pagar até aqui). Recorte enxuto (a tabela
+// real tem ~180 colunas, quase todas cálculo de retenção/imposto) — identidade, datas,
+// valor, situação, e o eixo ctafin/ctared/codccu/codtns pedido explicitamente.
+model TituloPagar {
+  codemp           Int
+  codfil           Int
+  numtit           String    @db.VarChar(15)
+  codtpt           String    @db.VarChar(3)
+  codfor           Int
+  codtns           String    @db.VarChar(5)
+  /// Domínio "LSitTit": mesmo domínio de TituloReceber.sittit
+  sittit           String    @db.VarChar(2)
+  datemi           DateTime  @db.Date
+  datent           DateTime  @db.Date
+  vctori           DateTime  @db.Date
+  vctpro           DateTime  @db.Date
+  vlrori           Decimal   @db.Decimal(15, 2)
+  vlrabe           Decimal?  @db.Decimal(15, 2)
+  codfpg           Int?
+  codpor           String    @db.VarChar(4)
+  codmoe           String?   @db.VarChar(3)
+  ctafin           Int?
+  ctared           Int?
+  codccu           String?   @db.VarChar(9)
+  numprj           Int?
+  codfpj           Int?
+  obstcp           String?   @db.VarChar(250)
+  // Colunas de controle de exclusão — só schema por enquanto, ver comentário em Empresa.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  fornecedor Fornecedor             @relation(fields: [codfor], references: [codfor])
+  movimentos MovimentoTituloPagar[]
+  rateios    RateioTituloPagar[]
+
+  @@id([codemp, codfil, numtit, codtpt, codfor])
+  @@index([codfor, sittit])
+  @@map("titulos_pagar")
+}
+
+// Espelho local da tabela E501MCP do Senior ERP (C. Pagar - Títulos - Movimentos).
+model MovimentoTituloPagar {
+  codemp           Int
+  codfil           Int
+  numtit           String    @db.VarChar(15)
+  codtpt           String    @db.VarChar(3)
+  codfor           Int
+  seqmov           Int
+  codtns           String    @db.VarChar(5)
+  datmov           DateTime  @db.Date
+  datpgt           DateTime? @db.Date
+  vlrmov           Decimal   @db.Decimal(15, 2)
+  vlrliq           Decimal?  @db.Decimal(15, 2)
+  diaatr           Int?
+  codpor           String?   @db.VarChar(4)
+  codcrt           String?   @db.VarChar(2)
+  ctafin           Int?
+  ctared           Int?
+  codccu           String?   @db.VarChar(9)
+  // Vínculo com o movimento de tesouraria que esta baixa gerou (E600MCC) — confirmado no
+  // dicionário em 16/09/2026, do lado oposto ao par filmcr/nummcr/tptmcr/seqmcr que
+  // MovimentoConta já tem pro C. Receber (E600MCC não tem o equivalente pro Pagar).
+  numcco           String?   @db.VarChar(14)
+  datcco           DateTime? @db.Date
+  seqcco           Int?
+  // Movimento do C. Receber relacionado (encontro de contas) — casamento por valor.
+  seqmcr           Int?
+  /// Domínio "LSimNao": S=Sim, N=Não — indicativo se o movimento foi lançado no plano financeiro
+  lctfin           String    @db.VarChar(1)
+  // Colunas de controle de exclusão — só schema por enquanto, ver comentário em Empresa.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  tituloPagar TituloPagar @relation(fields: [codemp, codfil, numtit, codtpt, codfor], references: [codemp, codfil, numtit, codtpt, codfor])
+  transacao   Transacao   @relation(fields: [codemp, codtns], references: [codemp, codtns])
+
+  @@id([codemp, codfil, numtit, codtpt, codfor, seqmov])
+  @@map("movimentos_pagar")
+}
+
+// Espelho local da tabela E501RAT do Senior ERP (C. Pagar - Títulos - Rateios dos
+// Movimentos) — linha de FATO da DRE do lado Pagar, espelho de RateioTituloReceber.
+model RateioTituloPagar {
+  codemp           Int
+  codfil           Int
+  numtit           String    @db.VarChar(15)
+  codtpt           String    @db.VarChar(3)
+  codfor           Int
+  seqmov           Int
+  seqrat           Int
+  datbas           DateTime? @db.Date
+  codtns           String?   @db.VarChar(5)
+  mesano           DateTime? @db.Date
+  /// Domínio "LCriRat": mesmo domínio de RateioTituloReceber.crirat
+  crirat           Int
+  /// Domínio "LSomSub": mesmo domínio de RateioTituloReceber.somsub
+  somsub           Int
+  numprj           Int?
+  codfpj           Int?
+  ctafin           Int?
+  ctared           Int?
+  percta           Decimal?  @db.Decimal(11, 4)
+  vlrcta           Decimal?  @db.Decimal(15, 2)
+  codccu           String?   @db.VarChar(9)
+  perrat           Decimal?  @db.Decimal(11, 4)
+  vlrrat           Decimal?  @db.Decimal(15, 2)
+  obsrat           String?   @db.VarChar(120)
+  // Colunas de controle de exclusão — só schema por enquanto, ver comentário em Empresa.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  tituloPagar TituloPagar @relation(fields: [codemp, codfil, numtit, codtpt, codfor], references: [codemp, codfil, numtit, codtpt, codfor])
+
+  @@id([codemp, codfil, numtit, codtpt, codfor, seqmov, seqrat])
+  @@index([codemp, ctafin, datbas])
+  @@map("rateios_pagar")
 }

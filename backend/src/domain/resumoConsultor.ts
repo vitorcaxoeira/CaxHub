@@ -1,5 +1,6 @@
 import { prisma } from "../db/prisma";
-import { SITRAT_CANCELADO } from "./ratDominio";
+import { SITRAT_CANCELADO, sitratLabel } from "./ratDominio";
+import { tipdesLabel } from "./rdvDominio";
 
 // Agregações do dashboard inicial do consultor (Home) — separadas da rota (routes/
 // dashboard.ts) porque a conta de "horas realizadas num período" é a mesma definição usada
@@ -161,4 +162,157 @@ export async function valorHoraVigente(codemp: number, codfor: number): Promise<
   const contrato = contratos[0];
   if (!contrato || contrato.vlrhor == null) return null;
   return { vlrhor: Number(contrato.vlrhor), numctr: contrato.numctr };
+}
+
+// ---------- RDV do consultor (card "RDV · Despesas de viagem" da Home, 23/09/2026) ----------
+//
+// O dinheiro de despesa de viagem passa por duas etapas até o consultor receber:
+//   1. Enquanto a RAT está Digitada (9) ou Fechada (1), o RDV só existe na USU_TE777RDV.
+//   2. Quando a RAT é aprovada, o Senior gera um título a pagar (E501TCP, codtpt='10') pro
+//      fornecedor do consultor. Aberto (sittit='AB') = ainda a receber.
+// A RAT aprovada sai do passo 1 e o título entra no passo 2, então as duas somas não contam
+// o mesmo dinheiro duas vezes.
+const SITRAT_RDV_PENDENTE = [9, 1];
+
+// Tipo de título (E501TCP.codtpt) do reembolso de RDV. O espelho titulos_pagar traz a E501TCP
+// inteira (Contas a Pagar no padrão do Atlas), então é ESTA constante que recorta o que é RDV
+// — nunca confie em "a tabela só tem RDV". Fornecedor é global no Senior, então não há filtro
+// por empresa: o codfor do consultor já identifica de quem é o título.
+export const CODTPT_RDV = "10";
+
+export interface ItemRdvEmRat {
+  id: number;
+  numrat: number;
+  sitrat: number | null;
+  sitratLabel: string;
+  datemiRat: string | null;
+  datemi: string | null;
+  desrdv: string | null;
+  tipdesLabel: string;
+  qtdrdv: number | null;
+  vlrunt: number;
+  vlrtot: number;
+}
+
+export interface ItemTituloRdv {
+  codemp: number;
+  codfil: number;
+  numtit: string;
+  datemi: string;
+  vctpro: string;
+  vlrori: number;
+  vlrabe: number;
+  obstcp: string | null;
+}
+
+export interface GrupoRdv<T> {
+  total: number;
+  itens: T[];
+}
+
+export interface RdvConsultor {
+  rdvEmRat: GrupoRdv<ItemRdvEmRat>;
+  titulos: {
+    vencidos: GrupoRdv<ItemTituloRdv>;
+    esteMes: GrupoRdv<ItemTituloRdv>;
+    proximosMeses: GrupoRdv<ItemTituloRdv>;
+  };
+}
+
+function dataIso(d: Date | null): string | null {
+  return d ? d.toISOString().slice(0, 10) : null;
+}
+
+function somar<T>(itens: T[], valor: (item: T) => number): GrupoRdv<T> {
+  // Arredonda em centavos: somar Decimal convertido em float acumula resíduo (0.1+0.2).
+  return { total: Math.round(itens.reduce((soma, item) => soma + valor(item), 0) * 100) / 100, itens };
+}
+
+// `periodos` = os combos ano/mês do filtro da página (já em UTC, `ate` inclusivo), aplicados
+// na data de emissão da RAT. Os títulos NÃO usam o filtro: vencido/este mês/próximos meses é
+// sempre relativo a `hoje`.
+export async function rdvDoConsultor(
+  codemp: number,
+  codfor: number,
+  periodos: { de: Date; ate: Date }[],
+  hoje: Date
+): Promise<RdvConsultor> {
+  const rats = await prisma.rat.findMany({
+    where: {
+      codemp,
+      codfor,
+      sitrat: { in: SITRAT_RDV_PENDENTE },
+      numrat: { not: null },
+      removidoEmSenior: null,
+      OR: periodos.map(({ de, ate }) => ({ datemi: { gte: de, lte: ate } })),
+    },
+    select: { numrat: true, sitrat: true, datemi: true },
+  });
+  const ratPorNumrat = new Map(rats.map((r) => [r.numrat!, r]));
+
+  // RDV liga na RAT só por valor (codemp+numrat), sem relação no Prisma — daí as 2 consultas.
+  const despesas =
+    ratPorNumrat.size === 0
+      ? []
+      : await prisma.registroDespesaViagem.findMany({
+          where: { codemp, numrat: { in: [...ratPorNumrat.keys()] }, excluidaEm: null, removidoEmSenior: null },
+          orderBy: [{ numrat: "asc" }, { datemi: "asc" }, { id: "asc" }],
+        });
+
+  // Number() já aqui na serialização: Decimal do Prisma vira string em JSON e a soma no
+  // consumidor concatenaria texto (ver decimal-prisma-serializa-como-string).
+  const itensRdv: ItemRdvEmRat[] = despesas.map((d) => {
+    const rat = ratPorNumrat.get(d.numrat);
+    return {
+      id: d.id,
+      numrat: d.numrat,
+      sitrat: rat?.sitrat ?? null,
+      sitratLabel: sitratLabel(rat?.sitrat ?? null),
+      datemiRat: dataIso(rat?.datemi ?? null),
+      datemi: dataIso(d.datemi),
+      desrdv: d.desrdv,
+      tipdesLabel: tipdesLabel(d.tipdes),
+      qtdrdv: d.qtdrdv,
+      vlrunt: Number(d.vlrunt ?? 0),
+      vlrtot: Number(d.vlrtot ?? 0),
+    };
+  });
+
+  const titulos = await prisma.tituloPagar.findMany({
+    where: { codfor, codtpt: CODTPT_RDV, sittit: "AB", removidoEmSenior: null },
+    orderBy: [{ vctpro: "asc" }, { numtit: "asc" }],
+  });
+
+  const hojeUtc = Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), hoje.getUTCDate());
+  const fimDoMes = Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() + 1, 0);
+  const vencidos: ItemTituloRdv[] = [];
+  const esteMes: ItemTituloRdv[] = [];
+  const proximosMeses: ItemTituloRdv[] = [];
+  for (const t of titulos) {
+    const item: ItemTituloRdv = {
+      codemp: t.codemp,
+      codfil: t.codfil,
+      numtit: t.numtit,
+      datemi: dataIso(t.datemi)!,
+      vctpro: dataIso(t.vctpro)!,
+      vlrori: Number(t.vlrori),
+      // Valor em aberto é o que falta receber; vlrabe nulo só em título sem baixa nenhuma.
+      vlrabe: Number(t.vlrabe ?? t.vlrori),
+      obstcp: t.obstcp,
+    };
+    const vencimento = t.vctpro.getTime();
+    if (vencimento < hojeUtc) vencidos.push(item);
+    else if (vencimento <= fimDoMes) esteMes.push(item);
+    else proximosMeses.push(item);
+  }
+
+  const valorAberto = (t: ItemTituloRdv) => t.vlrabe;
+  return {
+    rdvEmRat: somar(itensRdv, (d) => d.vlrtot),
+    titulos: {
+      vencidos: somar(vencidos, valorAberto),
+      esteMes: somar(esteMes, valorAberto),
+      proximosMeses: somar(proximosMeses, valorAberto),
+    },
+  };
 }

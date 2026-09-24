@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Modal } from "../../components/ui/Modal";
 import { SelectBuscavel, OpcaoBuscavel } from "../../components/ui/SelectBuscavel";
@@ -8,6 +8,9 @@ import { formatarDuracao } from "../../utils/duracao";
 interface JobSync {
   jobName: string;
   displayName: string;
+  // Nome da tabela na origem (Senior) e local (Postgres) — subtítulo sob o nome, no Atlas.
+  tabelaSenior: string;
+  tabelaLocal: string;
   ordemExecucao: number;
   totalRegistros: number;
   suportaAlterados: boolean;
@@ -231,6 +234,30 @@ const statusTone: Record<string, string> = {
   error: "bg-destructive/15 text-destructive",
 };
 
+// Filtros dos cards de resumo do topo — cada card é um botão. "todas" = sem filtro. Combina
+// (E) com a busca por texto, e os NÚMEROS dos cards continuam contando tudo, filtrado ou não.
+type FiltroKpi = "todas" | "erro" | "rodando" | "sumidos" | "desatualizada";
+
+const ROTULO_FILTRO_KPI: Record<Exclude<FiltroKpi, "todas">, string> = {
+  erro: "Com erro",
+  rodando: "Sincronizando agora",
+  sumidos: "Sumidos no Senior",
+  desatualizada: "Mais desatualizada",
+};
+
+// O que o modal de erro mostra: um instantâneo do job no momento do clique. O polling de 10s
+// pode trocar o status por baixo enquanto o modal está aberto, e o erro que a pessoa está lendo
+// não deve mudar de repente.
+interface ErroAberto {
+  jobName: string;
+  displayName: string;
+  tabelaSenior: string;
+  tabelaLocal: string;
+  quando: string | null;
+  duracaoMs: number | null;
+  mensagem: string;
+}
+
 // Quanto a varredura pode ficar atrás da sincronização antes de virar alerta. Uma tabela
 // que só roda no modo "Alterados" nunca é varrida — o cron completo é diário, então mais
 // de 3 dias de defasagem indica que só o incremental vem rodando.
@@ -341,6 +368,8 @@ export function SincronizacaoErp() {
   // técnico do job ("empresa-sync"), útil pra achar rápido numa lista que já passa de 30
   // tabelas. Só filtra a tabela; os cards de resumo continuam contando tudo.
   const [busca, setBusca] = useState("");
+  const [filtroKpi, setFiltroKpi] = useState<FiltroKpi>("todas");
+  const [erroAberto, setErroAberto] = useState<ErroAberto | null>(null);
 
   function carregar() {
     axios
@@ -744,12 +773,6 @@ export function SincronizacaoErp() {
     (soma, j) => soma + (j.ultimaVarredura?.modo === "simular" ? j.ultimaVarredura.detectados : 0),
     0
   );
-  const buscaNormalizada = busca.trim().toLowerCase();
-  const jobsFiltrados = buscaNormalizada
-    ? jobs.filter(
-        (j) => j.displayName.toLowerCase().includes(buscaNormalizada) || j.jobName.toLowerCase().includes(buscaNormalizada)
-      )
-    : jobs;
   const rodandoAgora = jobs.filter((j) => j.emAndamento).length;
   const maisDesatualizada = jobs.reduce<JobSync | null>((pior, job) => {
     if (!pior) return job;
@@ -757,6 +780,55 @@ export function SincronizacaoErp() {
     const tempoPior = pior.ultimaSincronizacao ? new Date(pior.ultimaSincronizacao).getTime() : -Infinity;
     return tempoJob < tempoPior ? job : pior;
   }, null);
+
+  // Mesmo critério do card "Sumidos no Senior": marcados como removidos OU só detectados em
+  // modo "simular" (o número que interessa na fase de observação).
+  function temSumidos(j: JobSync): boolean {
+    return (j.totalRemovidos ?? 0) > 0 || (j.ultimaVarredura?.modo === "simular" && j.ultimaVarredura.detectados > 0);
+  }
+
+  function passaFiltroKpi(j: JobSync): boolean {
+    switch (filtroKpi) {
+      case "erro":
+        return j.ultimoStatus === "error";
+      case "rodando":
+        return j.emAndamento;
+      case "sumidos":
+        return temSumidos(j);
+      case "desatualizada":
+        return j.jobName === maisDesatualizada?.jobName;
+      default:
+        return true;
+    }
+  }
+
+  // Clicar no card já ativo desliga o filtro (volta a mostrar tudo).
+  function alternarFiltroKpi(f: Exclude<FiltroKpi, "todas">) {
+    setFiltroKpi((atual) => (atual === f ? "todas" : f));
+  }
+
+  function abrirErro(job: JobSync) {
+    setErroAberto({
+      jobName: job.jobName,
+      displayName: job.displayName,
+      tabelaSenior: job.tabelaSenior,
+      tabelaLocal: job.tabelaLocal,
+      quando: job.ultimaSincronizacao,
+      duracaoMs: job.ultimaDuracaoMs,
+      mensagem: job.ultimaMensagem ?? "Sem detalhes registrados para este erro.",
+    });
+  }
+
+  const buscaNormalizada = busca.trim().toLowerCase();
+  const jobsFiltrados = jobs.filter(
+    (j) =>
+      passaFiltroKpi(j) &&
+      (!buscaNormalizada ||
+        j.displayName.toLowerCase().includes(buscaNormalizada) ||
+        j.jobName.toLowerCase().includes(buscaNormalizada) ||
+        j.tabelaSenior.toLowerCase().includes(buscaNormalizada) ||
+        j.tabelaLocal.toLowerCase().includes(buscaNormalizada))
+  );
 
   return (
     <div>
@@ -815,6 +887,16 @@ export function SincronizacaoErp() {
         />
       )}
 
+      <Modal
+        open={erroAberto !== null}
+        onClose={() => setErroAberto(null)}
+        title="Erro na sincronização"
+        subtitulo={erroAberto ? `${erroAberto.displayName} · ${erroAberto.jobName}` : undefined}
+        className="max-w-3xl"
+      >
+        {erroAberto && <ConteudoErro erro={erroAberto} onFechar={() => setErroAberto(null)} />}
+      </Modal>
+
       {loading && (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -828,27 +910,39 @@ export function SincronizacaoErp() {
 
       {!loading && jobs.length > 0 && (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <div className="rounded-lg border border-border bg-surface p-5">
+          <CardKpi ativo={filtroKpi === "todas"} onClick={() => setFiltroKpi("todas")} titulo="Mostrar todas as tabelas">
             <p className="mb-2 text-[11.5px] text-muted">Total de tabelas</p>
             <span className="block font-mono text-2xl font-semibold tabular-nums text-foreground">{totalTabelas}</span>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "erro"}
+            onClick={() => alternarFiltroKpi("erro")}
+            titulo="Mostrar só as tabelas cuja última execução terminou em erro"
+          >
             <p className="mb-2 text-[11.5px] text-muted">Com erro</p>
             <span
               className={`block font-mono text-2xl font-semibold tabular-nums ${comErro > 0 ? "text-destructive" : "text-foreground"}`}
             >
               {comErro}
             </span>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "rodando"}
+            onClick={() => alternarFiltroKpi("rodando")}
+            titulo="Mostrar só as tabelas que estão sincronizando agora"
+          >
             <p className="mb-2 text-[11.5px] text-muted">Sincronizando agora</p>
             <span
               className={`block font-mono text-2xl font-semibold tabular-nums ${rodandoAgora > 0 ? "text-warning" : "text-foreground"}`}
             >
               {rodandoAgora}
             </span>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "sumidos"}
+            onClick={() => alternarFiltroKpi("sumidos")}
+            titulo="Mostrar só as tabelas com registros sumidos (ou detectados em modo simular)"
+          >
             <p className="mb-2 text-[11.5px] text-muted">Sumidos no Senior</p>
             <span
               className={`block font-mono text-2xl font-semibold tabular-nums ${
@@ -867,8 +961,12 @@ export function SincronizacaoErp() {
                 ? "detecção ainda não ligada"
                 : `em ${tabelasComDeteccao} tabela${tabelasComDeteccao === 1 ? "" : "s"} com detecção`}
             </p>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "desatualizada"}
+            onClick={() => alternarFiltroKpi("desatualizada")}
+            titulo="Mostrar só a tabela mais desatualizada"
+          >
             <p className="mb-2 text-[11.5px] text-muted">Mais desatualizada</p>
             <span className="block truncate font-mono text-lg font-semibold tabular-nums text-foreground" title={maisDesatualizada?.displayName}>
               {maisDesatualizada?.displayName ?? "—"}
@@ -876,7 +974,7 @@ export function SincronizacaoErp() {
             <p className="mt-1 text-[11px] text-muted">
               {maisDesatualizada ? formatTempoAtras(maisDesatualizada.ultimaSincronizacao) : "—"}
             </p>
-          </div>
+          </CardKpi>
         </div>
       )}
 
@@ -886,13 +984,29 @@ export function SincronizacaoErp() {
         </p>
       )}
 
-      <div className="mb-3">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
         <input
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
           placeholder="Buscar por descrição ou nome da tabela..."
           className="w-80 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
+        {filtroKpi !== "todas" && (
+          <button
+            type="button"
+            onClick={() => setFiltroKpi("todas")}
+            className="flex items-center gap-2 rounded-md border border-primary bg-primary/5 px-3 py-1.5 text-sm text-foreground hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title="Limpar o filtro do card"
+          >
+            <span>
+              Filtro: <strong className="font-semibold">{ROTULO_FILTRO_KPI[filtroKpi]}</strong>
+              <span className="ml-1.5 text-muted">
+                ({jobsFiltrados.length} de {totalTabelas})
+              </span>
+            </span>
+            <span aria-hidden className="text-muted">✕</span>
+          </button>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-lg border border-border bg-surface">
@@ -911,6 +1025,9 @@ export function SincronizacaoErp() {
                 </th>
                 <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Sumidos
+                </th>
+                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                  Detecção de exclusão
                 </th>
                 <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Última sincronização
@@ -944,6 +1061,9 @@ export function SincronizacaoErp() {
                     </td>
                     <td className="px-2.5 py-3.5 text-right">
                       <Skeleton className="ml-auto h-4 w-10" />
+                    </td>
+                    <td className="px-2.5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-5 w-16 rounded" />
                     </td>
                     <td className="px-2.5 py-3.5">
                       <Skeleton className="h-4 w-28" />
@@ -981,11 +1101,13 @@ export function SincronizacaoErp() {
                       expandido === job.jobName ? "border-l border-primary" : ""
                     }`}
                   >
-                    {job.ordemExecucao}
+                    {String(job.ordemExecucao).padStart(2, "0")}
                   </td>
                   <td className="px-2.5 py-3.5 text-sm font-semibold text-foreground">
                     <span className="flex items-center gap-2">
-                      {job.displayName}
+                      <span className="max-w-[240px] truncate" title={job.displayName}>
+                        {job.displayName}
+                      </span>
                       {job.suportaFiltro && (job.temFiltroTodos || job.temFiltroAlterados) && (
                         <span
                           className="text-primary"
@@ -999,33 +1121,10 @@ export function SincronizacaoErp() {
                           ●
                         </span>
                       )}
-                      {job.ultimaVarredura && (
-                        <span
-                          className={`inline-block rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide ${
-                            modoTone[job.ultimaVarredura.modo] ?? modoTone.desligada
-                          }`}
-                          title={`${
-                            job.ultimaVarredura.modo === "marcar"
-                              ? "Registros que sumirem do Senior são marcados como removidos"
-                              : "Varredura só conta os que sumiram, sem marcar nada"
-                          } — última varredura em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}`}
-                        >
-                          {modoRotulo[job.ultimaVarredura.modo] ?? job.ultimaVarredura.modo}
-                        </span>
-                      )}
-                      {varreduraDefasada(job) && (
-                        <span
-                          className="inline-block rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide text-warning"
-                          title={
-                            job.ultimaVarredura
-                              ? `Sincronizada em ${dateTimeFormatter.format(new Date(job.ultimaSincronizacao as string))}, mas varrida pela última vez em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}. O modo "Alterados" não varre — rode "Sincronizar Todos" pra detectar exclusões.`
-                              : 'Esta tabela tem detecção configurada mas nunca foi varrida. O modo "Alterados" não varre — rode "Sincronizar Todos".'
-                          }
-                        >
-                          varredura atrasada
-                        </span>
-                      )}
                     </span>
+                    <p className="mt-0.5 text-[11px] text-muted">
+                      {job.tabelaSenior} → {job.tabelaLocal}
+                    </p>
                   </td>
                   <td className="px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
                     {numberFormatter.format(job.totalRegistros)}
@@ -1069,18 +1168,68 @@ export function SincronizacaoErp() {
                       );
                     })()}
                   </td>
+                  <td className="px-2.5 py-3.5 text-right">
+                    {!job.varreduraDisponivel ? (
+                      <span
+                        className="font-mono text-sm text-muted"
+                        title="Detecção de exclusão ainda não disponível nesta tabela (falta ligar a execução no código, não é só a coluna no banco)"
+                      >
+                        —
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span
+                          className={`inline-block rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide ${
+                            modoTone[job.varreduraModo] ?? modoTone.desligada
+                          }`}
+                          title={
+                            job.ultimaVarredura
+                              ? `${
+                                  job.ultimaVarredura.modo === "marcar"
+                                    ? "Registros que sumirem do Senior são marcados como removidos"
+                                    : "Varredura só conta os que sumiram, sem marcar nada"
+                                } — última varredura em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}`
+                              : "Detecção configurada, mas ainda não varrida — abra a linha pra mudar o modo."
+                          }
+                        >
+                          {modoRotulo[job.varreduraModo] ?? job.varreduraModo}
+                        </span>
+                        {varreduraDefasada(job) && (
+                          <span
+                            className="inline-block rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide text-warning"
+                            title={
+                              job.ultimaVarredura
+                                ? `Sincronizada em ${dateTimeFormatter.format(new Date(job.ultimaSincronizacao as string))}, mas varrida pela última vez em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}. O modo "Alterados" não varre — rode "Sincronizar Todos" pra detectar exclusões.`
+                                : 'Esta tabela tem detecção configurada mas nunca foi varrida. O modo "Alterados" não varre — rode "Sincronizar Todos".'
+                            }
+                          >
+                            atrasada
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-2.5 py-3.5 text-[12.5px] text-muted">
                     {job.ultimaSincronizacao ? dateTimeFormatter.format(new Date(job.ultimaSincronizacao)) : "Nunca"}
-                    {job.ultimaMensagem && (
-                      <p
-                        className={`mt-0.5 max-w-[240px] truncate text-[11px] ${
-                          job.ultimoStatus === "error" ? "text-destructive" : "text-muted"
-                        }`}
-                        title={job.ultimaMensagem}
-                      >
-                        {job.ultimaMensagem}
-                      </p>
-                    )}
+                    {job.ultimaMensagem &&
+                      (job.ultimoStatus === "error" ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            // A linha inteira abre o painel de filtro; o erro tem o próprio destino.
+                            e.stopPropagation();
+                            abrirErro(job);
+                          }}
+                          className="mt-0.5 block max-w-[240px] truncate text-left text-[11px] text-destructive hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          title="Clique para ver o erro completo"
+                        >
+                          {job.ultimaMensagem}
+                        </button>
+                      ) : (
+                        <p className="mt-0.5 max-w-[240px] truncate text-[11px] text-muted" title={job.ultimaMensagem}>
+                          {job.ultimaMensagem}
+                        </p>
+                      ))}
                   </td>
                   <td className="px-2.5 py-3.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
                     {job.ultimaDuracaoMs != null ? formatarDuracao(job.ultimaDuracaoMs) : "—"}
@@ -1093,6 +1242,18 @@ export function SincronizacaoErp() {
                       <span className="inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide bg-warning/15 text-warning">
                         rodando...
                       </span>
+                    ) : job.ultimoStatus === "error" ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          abrirErro(job);
+                        }}
+                        title="Clique para ver o erro completo"
+                        className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide hover:opacity-70 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${statusTone.error}`}
+                      >
+                        erro
+                      </button>
                     ) : job.ultimoStatus ? (
                       <span
                         className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
@@ -1137,7 +1298,7 @@ export function SincronizacaoErp() {
                 </tr>
                 {expandido === job.jobName && (
                   <tr className="border-t border-border/60 bg-surface-2/40">
-                    <td colSpan={9} className="border-b border-l border-r border-primary px-2.5 py-3">
+                    <td colSpan={10} className="border-b border-l border-r border-primary px-2.5 py-3">
                       <div className="mb-3 flex items-center gap-4 border-b border-border/60">
                         <button
                           onClick={() => abrirPainel(job, "removidos")}
@@ -1356,15 +1517,17 @@ export function SincronizacaoErp() {
               ))}
               {!loading && jobs.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-2.5 py-8 text-center text-sm text-muted">
+                  <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
                     Nenhuma tabela cadastrada.
                   </td>
                 </tr>
               )}
               {!loading && jobs.length > 0 && jobsFiltrados.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-2.5 py-8 text-center text-sm text-muted">
-                    Nenhuma tabela encontrada para "{busca.trim()}".
+                  <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
+                    {busca.trim()
+                      ? `Nenhuma tabela encontrada para "${busca.trim()}"${filtroKpi !== "todas" ? ` no filtro "${ROTULO_FILTRO_KPI[filtroKpi]}"` : ""}.`
+                      : `Nenhuma tabela no filtro "${filtroKpi !== "todas" ? ROTULO_FILTRO_KPI[filtroKpi] : ""}" agora.`}
                   </td>
                 </tr>
               )}
@@ -1921,5 +2084,84 @@ function ModalDimensao({
         )}
       </div>
     </Modal>
+  );
+}
+
+// Card de resumo que é, ao mesmo tempo, botão de filtro. Borda de destaque igual à da linha
+// expandida da tabela (border-primary + bg-primary/5) pra "ativo" ter a mesma cara no app todo.
+function CardKpi({
+  ativo,
+  onClick,
+  titulo,
+  children,
+}: {
+  ativo: boolean;
+  onClick: () => void;
+  titulo: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={ativo}
+      title={titulo}
+      className={`min-w-0 rounded-lg border p-5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        ativo ? "border-primary bg-primary/5" : "border-border bg-surface hover:bg-surface-2"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Corpo do modal de erro: contexto da execução + a mensagem INTEIRA (o backend não corta,
+// SyncLog.message é texto livre; a linha da tabela é que trunca em 240px).
+function ConteudoErro({ erro, onFechar }: { erro: ErroAberto; onFechar: () => void }) {
+  const [copiado, setCopiado] = useState(false);
+
+  async function copiar() {
+    try {
+      await navigator.clipboard.writeText(erro.mensagem.trim());
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      // Sem permissão de área de transferência (contexto não seguro): o texto continua
+      // selecionável no bloco abaixo.
+    }
+  }
+
+  return (
+    <div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12.5px]">
+        <dt className="text-muted">Tabela</dt>
+        <dd className="font-mono text-foreground">
+          {erro.tabelaSenior} → {erro.tabelaLocal}
+        </dd>
+        <dt className="text-muted">Executada em</dt>
+        <dd className="text-foreground">{erro.quando ? dateTimeFormatter.format(new Date(erro.quando)) : "—"}</dd>
+        <dt className="text-muted">Duração</dt>
+        <dd className="font-mono text-foreground">{erro.duracaoMs != null ? formatarDuracao(erro.duracaoMs) : "—"}</dd>
+      </dl>
+      <pre className="mt-3 max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-[12px] leading-relaxed text-destructive">
+        {erro.mensagem.trim()}
+      </pre>
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={copiar}
+          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition hover:bg-surface-2"
+        >
+          {copiado ? "Copiado ✓" : "Copiar erro"}
+        </button>
+        <button
+          type="button"
+          onClick={onFechar}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
+        >
+          Fechar
+        </button>
+      </div>
+    </div>
   );
 }

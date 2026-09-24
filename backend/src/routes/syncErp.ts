@@ -127,6 +127,8 @@ syncErpRouter.get("/", async (_req, res) => {
         return {
           jobName: job.jobName,
           displayName: job.displayName,
+          tabelaSenior: job.tabelaSenior,
+          tabelaLocal: job.tabelaLocal,
           // Ordem em que "Sincronizar Todas as Tabelas" executa esta tabela — mesma ordem
           // de SYNC_JOBS, que respeita as dependências de FK (ex.: FaseProposta antes de
           // AtividadeConsultor).
