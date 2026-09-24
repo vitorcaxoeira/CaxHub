@@ -2707,6 +2707,8 @@ model Avaliacao5S {
   percSeiketsu Decimal?  @db.Decimal(5, 2)
   percShitsuke Decimal?  @db.Decimal(5, 2)
   finalizadaEm DateTime?
+  /// Preenchido nas avaliações de ambiente abertas pela área agrupadora (o pai é só um invólucro, sem respostas).
+  avaliacaoPaiId Int?
   criadoEm     DateTime  @default(now())
   atualizadoEm DateTime  @updatedAt
 
@@ -2715,9 +2717,12 @@ model Avaliacao5S {
   respostas   Avaliacao5SResposta[]
   sensos      Avaliacao5SSenso[]
   observacoes Observacao5S[]
+  pai       Avaliacao5S?  @relation("avaliacaoFilhas", fields: [avaliacaoPaiId], references: [id], onDelete: Cascade)
+  filhas    Avaliacao5S[] @relation("avaliacaoFilhas")
 
   @@index([areaId, data])
   @@index([status])
+  @@index([avaliacaoPaiId])
   @@map("avaliacoes_5s")
 }
 

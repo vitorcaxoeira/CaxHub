@@ -85,7 +85,7 @@ async function podeVerEntidade(req: AuthenticatedRequest, entidadeTipo: string, 
     if (!Number.isInteger(avaliacaoId)) return false;
     const avaliacao = await prisma.avaliacao5S.findUnique({
       where: { id: avaliacaoId },
-      select: { area: { select: { id: true, tipo: true, setorVinculadoId: true } } },
+      select: { area: { select: { id: true, tipo: true, setorVinculadoId: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } } },
     });
     if (!avaliacao) return false;
     return podeVerArea(await carregarAcesso5S(req.user!.userId, req.user!.role), avaliacao.area);

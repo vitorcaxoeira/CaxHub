@@ -23,6 +23,7 @@ interface AreaOpcao {
   id: number;
   nome: string;
   tipo: TipoArea;
+  ehAgrupadora?: boolean;
 }
 
 // Formulário da auditoria: perguntas por senso, para setores ou ambientes comuns. Pergunta sem área
@@ -110,7 +111,7 @@ export function Perguntas5S() {
           <select className={classeCampo} value={areaFiltro} onChange={(e) => setAreaFiltro(e.target.value)}>
             <option value="">Todas as perguntas</option>
             <option value="todas">Só as de todas as áreas</option>
-            {areas.filter((a) => a.tipo === tipoArea).map((a) => (
+            {areas.filter((a) => a.tipo === tipoArea && !a.ehAgrupadora).map((a) => (
               <option key={a.id} value={a.id}>
                 Só de {a.nome}
               </option>
@@ -240,7 +241,7 @@ function FormPergunta({ inicial, sensoInicial, tipoAreaInicial, areas, onFechar 
           <label className={classeRotulo}>Restringir a uma área (opcional)</label>
           <select className={classeCampo} value={areaId} onChange={(e) => setAreaId(e.target.value)}>
             <option value="">Todas as áreas do tipo</option>
-            {areas.filter((a) => a.tipo === tipoArea).map((a) => (
+            {areas.filter((a) => a.tipo === tipoArea && !a.ehAgrupadora).map((a) => (
               <option key={a.id} value={a.id}>
                 {a.nome}
               </option>

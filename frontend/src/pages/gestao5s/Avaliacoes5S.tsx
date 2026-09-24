@@ -35,6 +35,7 @@ interface Linha {
   titulo: string;
   areaNome: string;
   areaTipo: TipoArea;
+  quantidadeAmbientes: number;
   avaliadorNome: string | null;
   data: string;
   status: "em_andamento" | "finalizada";
@@ -185,7 +186,10 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
                 dados?.itens.map((a) => (
                   <tr key={a.id} onClick={() => navigate(`/5s/avaliacoes/${a.id}`)} className="cursor-pointer border-t border-border/60 transition hover:bg-surface-2">
                     <td className="whitespace-nowrap px-4 py-3 text-sm text-foreground">{formatarDiaIso(a.data)}</td>
-                    <td className="px-4 py-3 text-sm font-medium text-foreground">{a.areaNome}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-foreground">
+                      {a.areaNome}
+                      {a.quantidadeAmbientes > 0 && <span className="ml-2 text-[11px] font-normal text-muted">{a.quantidadeAmbientes} ambientes</span>}
+                    </td>
                     <td className="hidden px-4 py-3 text-sm text-muted md:table-cell">{a.avaliadorNome ?? "—"}</td>
                     <td className="px-4 py-3 text-center">
                       <CelulaPerc valor={a.percentuais.geral} />

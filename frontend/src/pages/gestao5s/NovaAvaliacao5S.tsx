@@ -13,18 +13,36 @@ interface Area {
   id: number;
   nome: string;
   tipo: TipoArea;
+  setorVinculadoId: number | null;
   setorVinculadoNome: string | null;
+  // Setor com ambientes comuns vinculados: sem perguntas próprias, avalia todos os ambientes.
+  ehAgrupadora: boolean;
+  vinculados: { id: number; nome: string }[];
+}
+
+// Uma escolha na tela: um setor, um ambiente comum ou o conjunto de ambientes de uma área agrupadora.
+interface Opcao {
+  chave: string;
+  areaId: number;
+  titulo: string;
+  legenda?: string;
+  // Nomes das avaliações que serão abertas (mais de uma quando é uma agrupadora).
+  abre: string[];
+  nomeNoTitulo: string;
+  destaque?: boolean;
 }
 
 // "Nova Avaliação": escolhe o setor/ambiente, mostra o que será criado (título com a data,
 // avaliador logado) e abre o questionário. Título, data e avaliador são automáticos no servidor.
+// Área agrupadora abre uma avaliação por ambiente; avaliar um ambiente sozinho acumula o resultado
+// na área a que ele está vinculado.
 export function NovaAvaliacao5S() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { mostrar } = useToast();
   const [areas, setAreas] = useState<Area[] | null>(null);
   const [erro, setErro] = useState<string | null>(null);
-  const [escolhida, setEscolhida] = useState<Area | null>(null);
+  const [escolhida, setEscolhida] = useState<Opcao | null>(null);
   const [criando, setCriando] = useState(false);
 
   useEffect(() => {
@@ -38,7 +56,7 @@ export function NovaAvaliacao5S() {
     if (!escolhida) return;
     setCriando(true);
     try {
-      const { data } = await axios.post<{ id: number }>("/api/5s/avaliacoes", { areaId: escolhida.id });
+      const { data } = await axios.post<{ id: number }>("/api/5s/avaliacoes", { areaId: escolhida.areaId });
       navigate(`/5s/avaliacoes/${data.id}`);
     } catch (err) {
       mostrar(mensagemDeErro(err, "Não foi possível criar a avaliação"), "destructive");
@@ -46,11 +64,53 @@ export function NovaAvaliacao5S() {
     }
   }
 
-  const grupos: { titulo: string; tipo: TipoArea }[] = [
-    { titulo: "Setores", tipo: "setor" },
-    { titulo: "Ambientes comuns", tipo: "comum" },
-  ];
+  const setores: Opcao[] = (areas ?? [])
+    .filter((a) => a.tipo === "setor" && !a.ehAgrupadora)
+    .map((a) => ({ chave: `a${a.id}`, areaId: a.id, titulo: a.nome, abre: [a.nome], nomeNoTitulo: a.nome }));
+
+  // Ambientes comuns: primeiro cada área agrupadora (avalia todos) seguida dos ambientes dela; depois
+  // os ambientes soltos, sem vínculo.
+  const agrupadoras = (areas ?? []).filter((a) => a.ehAgrupadora);
+  const grupos = agrupadoras.map((mae) => ({
+    mae,
+    opcoes: [
+      {
+        chave: `mae${mae.id}`,
+        areaId: mae.id,
+        titulo: `Avaliar todos · ${mae.nome}`,
+        legenda: `${mae.vinculados.length} ambiente(s): ${mae.vinculados.map((v) => v.nome).join(", ")}`,
+        abre: mae.vinculados.map((v) => v.nome),
+        nomeNoTitulo: mae.nome,
+        destaque: true,
+      } satisfies Opcao,
+      ...(areas ?? [])
+        .filter((a) => a.tipo === "comum" && a.setorVinculadoId === mae.id)
+        .map((a) => ({ chave: `a${a.id}`, areaId: a.id, titulo: a.nome, legenda: `Acumula em ${mae.nome}`, abre: [a.nome], nomeNoTitulo: a.nome, acumulaEm: mae.nome })),
+    ] as (Opcao & { acumulaEm?: string })[],
+  }));
+  const soltos: Opcao[] = (areas ?? [])
+    .filter((a) => a.tipo === "comum" && !agrupadoras.some((m) => m.id === a.setorVinculadoId))
+    .map((a) => ({ chave: `a${a.id}`, areaId: a.id, titulo: a.nome, abre: [a.nome], nomeNoTitulo: a.nome }));
+
   const [dia, mes, ano] = formatarDiaIso(hojeIso()).split("/");
+
+  function Cartao({ o }: { o: Opcao }) {
+    const ativa = escolhida?.chave === o.chave;
+    return (
+      <button
+        type="button"
+        onClick={() => setEscolhida(o)}
+        aria-pressed={ativa}
+        className={cn(
+          "min-h-14 rounded-lg border px-4 py-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          ativa ? "border-primary bg-primary/10" : o.destaque ? "border-primary/40 bg-surface hover:bg-surface-2" : "border-border bg-surface hover:bg-surface-2"
+        )}
+      >
+        <span className="block text-sm font-semibold text-foreground">{o.titulo}</span>
+        {o.legenda && <span className="text-[11px] text-muted">{o.legenda}</span>}
+      </button>
+    );
+  }
 
   return (
     <div>
@@ -66,45 +126,51 @@ export function NovaAvaliacao5S() {
         </p>
       )}
 
+      {areas && setores.length > 0 && (
+        <section className="mb-6">
+          <h2 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Setores</h2>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {setores.map((o) => (
+              <Cartao key={o.chave} o={o} />
+            ))}
+          </div>
+        </section>
+      )}
+
       {areas &&
-        grupos.map(({ titulo, tipo }) => {
-          const lista = areas.filter((a) => a.tipo === tipo);
-          if (lista.length === 0) return null;
-          return (
-            <section key={tipo} className="mb-6">
-              <h2 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">{titulo}</h2>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {lista.map((a) => {
-                  const ativa = escolhida?.id === a.id;
-                  return (
-                    <button
-                      key={a.id}
-                      type="button"
-                      onClick={() => setEscolhida(a)}
-                      aria-pressed={ativa}
-                      className={cn(
-                        "min-h-14 rounded-lg border px-4 py-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        ativa ? "border-primary bg-primary/10" : "border-border bg-surface hover:bg-surface-2"
-                      )}
-                    >
-                      <span className="block text-sm font-semibold text-foreground">{a.nome}</span>
-                      {a.setorVinculadoNome && <span className="text-[11px] text-muted">Vinculado a {a.setorVinculadoNome}</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          );
-        })}
+        grupos.map(({ mae, opcoes }) => (
+          <section key={mae.id} className="mb-6">
+            <h2 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Ambientes comuns · {mae.nome}</h2>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {opcoes.map((o) => (
+                <Cartao key={o.chave} o={o} />
+              ))}
+            </div>
+          </section>
+        ))}
+
+      {areas && soltos.length > 0 && (
+        <section className="mb-6">
+          <h2 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Ambientes comuns</h2>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {soltos.map((o) => (
+              <Cartao key={o.chave} o={o} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {escolhida && (
         <div className="sticky bottom-0 -mx-4 border-t border-border bg-surface/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-lg sm:border">
           <p className="text-sm font-semibold text-foreground">
-            Avaliação 5S – {dia}/{mes}/{ano} – {escolhida.nome}
+            Avaliação 5S – {dia}/{mes}/{ano} – {escolhida.nomeNoTitulo}
           </p>
-          <p className="mb-3 text-[12px] text-muted">Avaliador: {user?.nome ?? "—"} · a data é a de hoje</p>
+          <p className="mb-3 text-[12px] text-muted">
+            Avaliador: {user?.nome ?? "—"} · a data é a de hoje
+            {escolhida.abre.length > 1 && ` · serão abertas ${escolhida.abre.length} avaliações, uma por ambiente`}
+          </p>
           <button type="button" disabled={criando} onClick={iniciar} className={`${classeBotaoPrimario} min-h-11 w-full sm:w-auto`}>
-            {criando ? "Criando…" : "Iniciar avaliação"}
+            {criando ? "Criando…" : escolhida.abre.length > 1 ? "Iniciar avaliações" : "Iniciar avaliação"}
           </button>
         </div>
       )}
