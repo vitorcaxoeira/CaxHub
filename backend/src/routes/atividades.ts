@@ -1077,6 +1077,20 @@ const OPCOES_PRORROGACAO_MIN = [15, 30, 45, 60, 75, 90, 105, 120];
 // lado do cliente vai ler a resposta — por isso responde sempre 204, mesmo sem achar
 // sessão aberta (dono errado, já fechada, corrida com outra aba). Não é um endpoint que
 // alguém possa "usar errado": só grava em cima da PRÓPRIA sessão aberta do chamador.
+// Evidência do gatilho, pra dar pra provar depois por que uma sessão parou por "página
+// fechada" (o `pagehide` não diz se foi fechar, F5, navegar ou voltar). O corpo é OPCIONAL —
+// abas antigas ainda abertas mandam sem — e cada campo é validado/limitado: é entrada do
+// navegador. Sem IP de propósito: o escritório inteiro sai pelo mesmo NAT.
+function detalheDoAvisoDeFechamento(req: AuthenticatedRequest): Prisma.InputJsonObject {
+  const corpo = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+  return {
+    persisted: typeof corpo.persisted === "boolean" ? corpo.persisted : null,
+    visibilityState: corpo.visibilityState === "visible" || corpo.visibilityState === "hidden" ? corpo.visibilityState : null,
+    rota: typeof corpo.rota === "string" ? corpo.rota.slice(0, 200) : null,
+    userAgent: String(req.headers["user-agent"] ?? "").slice(0, 300) || null,
+  };
+}
+
 atividadesRouter.post("/:id/agendar-parada", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
@@ -1087,7 +1101,7 @@ atividadesRouter.post("/:id/agendar-parada", async (req: AuthenticatedRequest, r
     }
     await prisma.atividadeSessaoExecucao.updateMany({
       where: { atividadeId: Number(req.params.id), fim: null, atividade: { codfor: meuCodfor } },
-      data: { fechamentoSolicitadoEm: new Date() },
+      data: { fechamentoSolicitadoEm: new Date(), fechamentoDetalhe: detalheDoAvisoDeFechamento(req) },
     });
     res.status(204).send();
   } catch (error) {
@@ -1128,7 +1142,7 @@ atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, r
     if (sessao.fechamentoSolicitadoEm != null) {
       await prisma.atividadeSessaoExecucao.update({
         where: { id: sessao.id },
-        data: { fechamentoSolicitadoEm: null },
+        data: { fechamentoSolicitadoEm: null, fechamentoDetalhe: Prisma.DbNull },
       });
     }
 

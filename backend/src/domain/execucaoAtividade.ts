@@ -98,6 +98,9 @@ export interface ContextoMovimentacao {
   // Texto livre gravado no metadata do evento de parada — usado pela varredura pra
   // registrar POR QUE parou (teto ou expediente).
   motivoParada?: string;
+  // Evidência do que disparou a parada (hoje: o `pagehide` da parada por página fechada) —
+  // vai pro metadata do evento como `gatilho`, pra dar pra provar depois o que aconteceu.
+  gatilhoParada?: Record<string, unknown> | null;
   // Texto capturado na hora de fechar a sessão (modal "O que foi feito?" ao mover o
   // card pra fora de "Em Andamento" ou clicar Parar) — pré-preenche a Descrição em
   // Meus Apontamentos.
@@ -152,7 +155,7 @@ export interface ResultadoMovimentacao {
 // chama decide quando/como executar (um array próprio, ou combinado com outra chamada
 // desta mesma função, ex.: pausar uma atividade pra iniciar outra na mesma transação).
 export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Promise<ResultadoMovimentacao> {
-  const { atividade, colunaAnterior, colunaNova, usuarioId, origemSessao, correlationId, agora, observacaoFechamento, origemEvento, motivoParada } = ctx;
+  const { atividade, colunaAnterior, colunaNova, usuarioId, origemSessao, correlationId, agora, observacaoFechamento, origemEvento, motivoParada, gatilhoParada } = ctx;
 
   const sessaoAbertaAntes = await prisma.atividadeSessaoExecucao.findFirst({
     where: { atividadeId: atividade.id, fim: null },
@@ -264,6 +267,7 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
               duracaoMinutos: duracaoSessaoFechadaMin,
               observacao: observacaoDaSessao,
               motivo: motivoParada ?? null,
+              ...(gatilhoParada ? { gatilho: gatilhoParada } : {}),
             },
           }),
         ]
