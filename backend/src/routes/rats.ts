@@ -726,19 +726,27 @@ async function desvincularItensAusentesNoSenior(
       // notIn só entra quando há algo pra excluir da busca.
       seqrat: seqratsNoSenior.length > 0 ? { not: null, notIn: seqratsNoSenior } : { not: null },
     },
-    select: { id: true, seqrat: true, origemCaxHub: true },
+    select: { id: true, seqrat: true, sessoes: { select: { id: true } } },
   });
   if (ausentes.length === 0) return { desvinculados: [], excluidos: [] };
 
-  // Mesma ramificação de desvincularRatAusenteNoSenior (cabeçalho, 14/09/2026): item
-  // origemCaxHub=true representa trabalho real feito no CaxHub — desvincula (limpa
-  // numrat/seqrat/datreg) pra permitir reenviar. Item origemCaxHub=false nasceu no Senior via
-  // ratItemSync e nunca teve sessão local — não há nada pra reenviar, o registro foi excluído
-  // de verdade na origem: marca `removidoEmSenior` e PRESERVA numrat/seqrat/datreg como
-  // histórico, permitindo a "ressurreição" automática já existente em varrerRemovidos/
-  // carimbo() se o item um dia voltar a existir lá.
-  const nativosCaxHub = ausentes.filter((i) => i.origemCaxHub);
-  const nativosSenior = ausentes.filter((i) => !i.origemCaxHub);
+  // Mesma ramificação de desvincularRatAusenteNoSenior (cabeçalho, 14/09/2026), mas pelo
+  // vínculo com sessão local (AtividadeSessaoExecucao), não por `origemCaxHub` (achado real,
+  // 23/09/2026, RAT 1861506: a varredura completa noturna de rat-item-sync faz upsert por
+  // (codemp,numrat,seqrat) e esse upsert GRAVA origemCaxHub=false em toda linha, mesmo numa
+  // que já existia local com origemCaxHub=true — assim que um item nascido no CaxHub é
+  // registrado no Senior e volta na consulta seguinte, a flag vira false e o item passa a
+  // colidir com este branch como se nunca tivesse tido sessão, ficando "Excluído no Senior"
+  // sem nenhuma ação possível mesmo tendo apontamento real por trás). Ter sessão é o sinal
+  // que não pode ser sobrescrito por sync nenhum: item com sessão representa trabalho real —
+  // desvincula (limpa numrat/seqrat/datreg, e `removidoEmSenior` se já tiver sido marcado por
+  // engano antes desta correção) pra permitir reenviar. Sem sessão, nasceu no Senior via
+  // ratItemSync — não há nada pra reenviar, o registro foi excluído de verdade na origem:
+  // marca `removidoEmSenior` e PRESERVA numrat/seqrat/datreg como histórico, permitindo a
+  // "ressurreição" automática já existente em varrerRemovidos/carimbo() se o item um dia
+  // voltar a existir lá.
+  const nativosCaxHub = ausentes.filter((i) => i.sessoes.length > 0);
+  const nativosSenior = ausentes.filter((i) => i.sessoes.length === 0);
 
   const operacoes: Prisma.PrismaPromise<unknown>[] = [];
 
@@ -749,7 +757,11 @@ async function desvincularItensAusentesNoSenior(
       prisma.ratItem.updateMany({
         where: { id: { in: idsDesvinculados } },
         // datreg também sai: era a data de registro NO SENIOR, e esse registro não existe mais.
-        data: { numrat: null, seqrat: null, datreg: null },
+        // removidoEmSenior: null limpa a marca "Excluído no Senior" de quem caiu errado nesse
+        // estado antes desta correção (item com sessão, origemCaxHub virado false pelo upsert
+        // da varredura noturna) — sem isso o item ficaria com numrat/seqrat limpos mas
+        // continuaria escondido atrás do badge de excluído.
+        data: { numrat: null, seqrat: null, datreg: null, removidoEmSenior: null },
       }),
       criarEventoAuditoria({
         origem: "tela",
@@ -797,7 +809,7 @@ async function desvincularItensAusentesNoSenior(
   // criou não existe mais no ERP. Removê-la devolve o apontamento ao estado limpo de
   // "confirmado localmente, nunca enviado" — o que também destrava o Excluir, que recusa
   // desfazer quando existe pendência em qualquer status diferente de "pendente". Só pros itens
-  // DESVINCULADOS (origemCaxHub=true) — item excluído não teve numrat/seqrat limpo, não há
+  // DESVINCULADOS (com sessão) — item excluído não teve numrat/seqrat limpo, não há
   // "pendência obsoleta" nele nesse sentido.
   const idsDesvinculados = nativosCaxHub.map((i) => i.id);
   if (idsDesvinculados.length > 0) {
