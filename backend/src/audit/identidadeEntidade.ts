@@ -27,3 +27,11 @@ export function entidadeIdRat(id: number): string {
 export function entidadeIdDespesa(id: number): string {
   return String(id);
 }
+
+export function entidadeIdSolicitacaoViagem(id: number): string {
+  return String(id);
+}
+
+export function entidadeIdAvaliacao5S(id: number): string {
+  return String(id);
+}

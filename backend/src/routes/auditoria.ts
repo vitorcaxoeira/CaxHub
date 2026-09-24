@@ -1,4 +1,7 @@
 import { NextFunction, Response, Router } from "express";
+import { podeVerViagem } from "../domain/solicitacoesViagem";
+import { podeVerArea } from "../domain/gestao5s";
+import { carregarAcesso5S } from "../domain/gestao5sAcesso";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { podeExecutarAcao, resolverContextoConsultor } from "../domain/contextoProjeto";
@@ -59,6 +62,33 @@ async function podeVerEntidade(req: AuthenticatedRequest, entidadeTipo: string, 
     if (!rat) return false;
     if (contexto.consultor?.codfor === rat.codfor) return true;
     return rat.depexe != null && contexto.departamentosGerenciados.includes(rat.depexe);
+  }
+
+  // Solicitação de Viagem: quem pode ver a solicitação vê o histórico dela (solicitante,
+  // atendimento e o gestor do departamento gravado no snapshot) — sem isto o solicitante e o
+  // administrativo, que não são gestores, receberiam 403 no próprio histórico.
+  if (entidadeTipo === "solicitacao_viagem") {
+    const viagemId = Number(entidadeId);
+    if (!Number.isInteger(viagemId)) return false;
+    const viagem = await prisma.solicitacaoViagem.findUnique({
+      where: { id: viagemId },
+      select: { solicitanteId: true, aprovacaoCodemp: true, aprovacaoDepexe: true },
+    });
+    if (!viagem) return false;
+    return podeVerViagem({ userId: user.id, role: req.user!.role, contexto }, viagem);
+  }
+
+  // Avaliação 5S: quem enxerga a área da avaliação enxerga o histórico dela (regra do módulo,
+  // independente de gestor de departamento).
+  if (entidadeTipo === "avaliacao_5s") {
+    const avaliacaoId = Number(entidadeId);
+    if (!Number.isInteger(avaliacaoId)) return false;
+    const avaliacao = await prisma.avaliacao5S.findUnique({
+      where: { id: avaliacaoId },
+      select: { area: { select: { id: true, tipo: true, setorVinculadoId: true } } },
+    });
+    if (!avaliacao) return false;
+    return podeVerArea(await carregarAcesso5S(req.user!.userId, req.user!.role), avaliacao.area);
   }
 
   if (contexto.departamentosGerenciados.length > 0) return true;
