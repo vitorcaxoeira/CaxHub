@@ -51,6 +51,9 @@ export function useRdvConsultor(filtro: FiltroDashboard) {
   const [rdv, setRdv] = useState<RdvConsultor | null>(null);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  // Incrementado por `recarregar` (ex.: depois do "Atualizar" do card) pra refazer a busca sem
+  // mudar o filtro.
+  const [versao, setVersao] = useState(0);
 
   const anosChave = filtro.anos.join(",");
   const mesesChave = filtro.meses.join(",");
@@ -74,7 +77,7 @@ export function useRdvConsultor(filtro: FiltroDashboard) {
     return () => {
       cancelado = true;
     };
-  }, [anosChave, mesesChave, filtro.codfor]);
+  }, [anosChave, mesesChave, filtro.codfor, versao]);
 
-  return { rdv, loading, erro };
+  return { rdv, loading, erro, recarregar: () => setVersao((v) => v + 1) };
 }

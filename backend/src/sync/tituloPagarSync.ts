@@ -29,7 +29,7 @@ function montarQuery(desde?: Date): string {
   return montarQuerySenior(BASE_QUERY, predicados);
 }
 
-interface TituloPagarRow {
+export interface TituloPagarRow {
   codemp: number;
   codfil: number;
   numtit: string;
@@ -56,7 +56,7 @@ interface TituloPagarRow {
 
 // Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
 // schema.prisma (TituloPagar): vlrori/vlrabe Decimal(15,2).
-const COLUNAS: ColunaUpsert[] = [
+export const COLUNAS_TITULO_PAGAR: ColunaUpsert[] = [
   { nome: "codemp", cast: "int" },
   { nome: "codfil", cast: "int" },
   { nome: "numtit", cast: "text" },
@@ -83,7 +83,7 @@ const COLUNAS: ColunaUpsert[] = [
 
 // `String(...).slice(0,10)` pra data, nunca `new Date(v)` — "2025-03-14" é UTC mas
 // "2025-03-14T00:00:00" é local, e em America/Sao_Paulo isso desloca o dia.
-function linhaDe(row: TituloPagarRow): LinhaUpsert {
+export function linhaDeTituloPagar(row: TituloPagarRow): LinhaUpsert {
   return {
     chave: `${row.codemp}-${row.codfil}-${row.numtit}-${row.codtpt}-${row.codfor}`,
     valores: [
@@ -128,9 +128,9 @@ export async function runTituloPagarSync(desde?: Date): Promise<void> {
     const msFetch = Date.now() - inicioFetch;
 
     const inicioEscrita = Date.now();
-    const resultado = await upsertEmLote(rows.map(linhaDe), {
+    const resultado = await upsertEmLote(rows.map(linhaDeTituloPagar), {
       tabela: "titulos_pagar",
-      colunas: COLUNAS,
+      colunas: COLUNAS_TITULO_PAGAR,
       colunasPk: ["codemp", "codfil", "numtit", "codtpt", "codfor"],
       carimbo: inicio,
       tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),

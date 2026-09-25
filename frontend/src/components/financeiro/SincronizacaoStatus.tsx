@@ -16,6 +16,9 @@ interface StatusResponse {
   // Só presente em endpoints que a calculam (hoje: Contábil) — Contas a Receber não devolve
   // este campo, e o componente simplesmente não mostra a duração nesse caso.
   ultimaDuracaoMs?: number | null;
+  // Só presente em endpoints que rodam a atualização em segundo plano e guardam a falha (hoje:
+  // card de RDV). Sem isto a tela só descobre que "terminou", nunca que terminou com erro.
+  ultimoErro?: string | null;
 }
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" });
@@ -107,6 +110,7 @@ export function SincronizacaoStatus({
         .then((data) => {
           if (!data.emAndamento) {
             pararPolling();
+            if (data.ultimoErro) setErro(`Falha ao atualizar: ${data.ultimoErro}`);
             onAtualizado();
           } else if (Date.now() - inicio > POLL_TIMEOUT_MS) {
             pararPolling();

@@ -6,6 +6,7 @@ import { depexeLabel } from "../domain/propostasDominio";
 import { resolverContextoConsultor, ContextoConsultor, codforsDoTime, consultoresFiltraveis } from "../domain/contextoProjeto";
 import { diasDoPeriodo, horasRealizadasNoPeriodo, metaDoPeriodo, rdvDoConsultor, valorHoraVigente } from "../domain/resumoConsultor";
 import { parseIntListParam } from "../lib/queryParams";
+import { rdvConsultorEmAndamento, runSincronizacaoRdvConsultor, statusRdvConsultor } from "../sync/rdvConsultorSync";
 
 export const dashboardRouter = Router();
 
@@ -366,5 +367,60 @@ dashboardRouter.get("/meu-rdv", requireAuth, async (req: AuthenticatedRequest, r
     res.json(await rdvDoConsultor(alvo.codemp, alvo.codfor, periodos, hoje));
   } catch (error) {
     handleError(res, error, "meu-rdv");
+  }
+});
+
+// "Atualizar" do card de RDV (25/09/2026): busca no Senior os títulos a pagar de reembolso do
+// consultor exibido no card, no mesmo formato do botão de Resultado Analítico (GET = status,
+// POST = dispara em segundo plano). A permissão é a de VER o card (resolverConsultorAlvo): o
+// consultor atualiza o próprio; gestor/admin, o de quem estão olhando. Só toca nos títulos
+// daquele consultor, então não precisa do "só admin/gestor" da sincronização contábil.
+async function alvoDaSincronizacaoRdv(
+  req: AuthenticatedRequest,
+  res: import("express").Response
+): Promise<number | null> {
+  const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+  if (!user) {
+    res.status(404).json({ error: "Usuário não encontrado" });
+    return null;
+  }
+  const contexto = await resolverContextoConsultor(user.email);
+  const resolvido = await resolverConsultorAlvo(req, contexto);
+  if ("negado" in resolvido) {
+    res.status(403).json({ error: "Sem permissão para atualizar os valores deste consultor" });
+    return null;
+  }
+  if (!resolvido.alvo || resolvido.alvo.codfor == null) {
+    res.status(404).json({ error: "Cadastro de consultor não encontrado" });
+    return null;
+  }
+  return resolvido.alvo.codfor;
+}
+
+dashboardRouter.get("/meu-rdv/sincronizacao", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const codfor = await alvoDaSincronizacaoRdv(req, res);
+    if (codfor == null) return;
+    res.json(await statusRdvConsultor(codfor));
+  } catch (error) {
+    handleError(res, error, "meu-rdv-sincronizacao-status");
+  }
+});
+
+dashboardRouter.post("/meu-rdv/sincronizacao", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const codfor = await alvoDaSincronizacaoRdv(req, res);
+    if (codfor == null) return;
+    if (rdvConsultorEmAndamento(codfor)) {
+      res.status(409).json({ error: "Atualização já em andamento" });
+      return;
+    }
+    // Não espera o ERP: a tela acompanha pelo GET (polling), como em Resultado Analítico.
+    runSincronizacaoRdvConsultor(codfor).catch((error) => {
+      console.error("[meu-rdv-sincronizacao] falhou:", error instanceof Error ? error.message : error);
+    });
+    res.status(202).json({ status: "iniciado" });
+  } catch (error) {
+    handleError(res, error, "meu-rdv-sincronizacao");
   }
 });

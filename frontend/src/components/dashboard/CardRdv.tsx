@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useRdvConsultor, type GrupoRdv } from "../../hooks/useRdvConsultor";
 import type { FiltroDashboard } from "../../hooks/useDashboardConsultor";
 import { Skeleton } from "../ui/Skeleton";
+import { SincronizacaoStatus } from "../financeiro/SincronizacaoStatus";
 import { BotaoVisibilidade } from "./BotaoVisibilidade";
 import { ModalRegistrosRdv, type ItemTituloComFaixa, type SelecaoRdv } from "./ModalRegistrosRdv";
 
@@ -49,7 +50,7 @@ function ValorRdv({
 // Fechada, dentro do filtro de período) → título a pagar gerado na aprovação (E501TCP,
 // codtpt 10), por vencimento relativo a hoje. Ver rdvDoConsultor no backend.
 export function CardRdv({ filtro, rotuloPeriodo }: { filtro: FiltroDashboard; rotuloPeriodo: string }) {
-  const { rdv, loading, erro } = useRdvConsultor(filtro);
+  const { rdv, loading, erro, recarregar } = useRdvConsultor(filtro);
   const [visivel, setVisivel] = useState(false);
   const [selecao, setSelecao] = useState<SelecaoRdv | null>(null);
 
@@ -72,9 +73,24 @@ export function CardRdv({ filtro, rotuloPeriodo }: { filtro: FiltroDashboard; ro
 
   return (
     <section className="rounded-lg border border-border bg-surface p-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <p className="font-mono text-[10px] uppercase tracking-widest text-muted">RDV · Despesas de viagem</p>
-        <BotaoVisibilidade visivel={visivel} onAlternar={() => setVisivel((v) => !v)} />
+        <div className="flex items-center gap-3">
+          {/* Só com o card expandido (valores à mostra): busca no Senior os títulos a pagar de
+              reembolso deste consultor — os mesmos filtros do card (fornecedor + tipo RDV) — e
+              recarrega os valores quando termina. Mesmo componente e mesmo formato do
+              "Atualizar" de Contábil · Resultado Analítico. O consultor exibido (filtro.codfor)
+              vai na URL, então gestor/admin atualiza o de quem está olhando. */}
+          {visivel && rdv && (
+            <SincronizacaoStatus
+              apiBase={`/api/dashboard/meu-rdv/sincronizacao${filtro.codfor != null ? `?codfor=${filtro.codfor}` : ""}`}
+              formato="completo"
+              podeSincronizar
+              onAtualizado={recarregar}
+            />
+          )}
+          <BotaoVisibilidade visivel={visivel} onAlternar={() => setVisivel((v) => !v)} />
+        </div>
       </div>
       {loading && !rdv ? (
         <Skeleton className="mt-3 h-12 rounded-md" />
