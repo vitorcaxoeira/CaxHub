@@ -106,6 +106,17 @@ export function Avaliacao5S() {
       .catch((err) => setErro(mensagemDeErro(err, "Falha ao carregar a avaliação")));
   }, [id]);
 
+  // Ir de uma avaliação pra outra (ex.: de uma área agrupadora pra uma de suas áreas) só troca o
+  // `id` da rota: o React reaproveita este componente e o estado da tela anterior sobreviveria.
+  // Cada avaliação começa sempre no primeiro senso (Seiri), sem herdar o senso, a foto ou os
+  // dados da anterior. Declarado ANTES do efeito de carga pra rodar primeiro.
+  useEffect(() => {
+    setSensoAtivo("seiri");
+    setFoto(null);
+    setAv(null);
+    setErro(null);
+  }, [id]);
+
   useEffect(() => {
     carregar();
   }, [carregar]);

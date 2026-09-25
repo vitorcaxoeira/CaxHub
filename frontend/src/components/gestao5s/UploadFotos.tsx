@@ -1,5 +1,5 @@
 import axios from "axios";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Miniatura } from "./Miniatura";
 import { classeBotaoSecundario } from "./campos";
 import { mensagemDeErro } from "../../utils/gestao5s";
@@ -40,7 +40,15 @@ interface UploadFotosProps {
 export function UploadFotos({ imagens, urlUpload, campos, podeEditar, onAlterado, onAbrir }: UploadFotosProps) {
   const { mostrar } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const [enviando, setEnviando] = useState(false);
+  // Dispositivo de toque (celular/tablet): oferece "Câmera" e "Galeria" separados. No desktop o
+  // atributo `capture` é ignorado pelo navegador, então um botão de câmera lá só confundiria —
+  // fica o "Foto" de sempre, abrindo o seletor de arquivos. Lido uma vez na montagem.
+  const [aparelhoDeToque, setAparelhoDeToque] = useState(false);
+  useEffect(() => {
+    setAparelhoDeToque(window.matchMedia?.("(pointer: coarse)").matches ?? false);
+  }, []);
 
   async function enviar(lista: FileList | null) {
     if (!lista || lista.length === 0) return;
@@ -57,7 +65,9 @@ export function UploadFotos({ imagens, urlUpload, campos, podeEditar, onAlterado
       mostrar(mensagemDeErro(err, "Falha ao enviar a foto"), "destructive");
     } finally {
       setEnviando(false);
+      // Limpa os dois pra a mesma foto poder ser escolhida de novo.
       if (inputRef.current) inputRef.current.value = "";
+      if (cameraRef.current) cameraRef.current.value = "";
     }
   }
 
@@ -79,9 +89,23 @@ export function UploadFotos({ imagens, urlUpload, campos, podeEditar, onAlterado
       {podeEditar && (
         <>
           <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={(e) => enviar(e.target.files)} />
-          <button type="button" disabled={enviando} onClick={() => inputRef.current?.click()} className={`${classeBotaoSecundario} min-h-11`}>
-            {enviando ? "Enviando…" : "📷 Foto"}
-          </button>
+          {/* Sem `multiple` de propósito: no Android, com `multiple` o navegador esconde a câmera e
+              abre só o seletor de arquivos. `capture="environment"` pede a câmera traseira. */}
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => enviar(e.target.files)} />
+          {aparelhoDeToque ? (
+            <>
+              <button type="button" disabled={enviando} onClick={() => cameraRef.current?.click()} className={`${classeBotaoSecundario} min-h-11`}>
+                {enviando ? "Enviando…" : "📷 Câmera"}
+              </button>
+              <button type="button" disabled={enviando} onClick={() => inputRef.current?.click()} className={`${classeBotaoSecundario} min-h-11`}>
+                🖼 Galeria
+              </button>
+            </>
+          ) : (
+            <button type="button" disabled={enviando} onClick={() => inputRef.current?.click()} className={`${classeBotaoSecundario} min-h-11`}>
+              {enviando ? "Enviando…" : "📷 Foto"}
+            </button>
+          )}
         </>
       )}
     </div>
