@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { Modal } from "../../components/ui/Modal";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { formatarDuracao } from "../../utils/duracao";
 
@@ -15,6 +16,8 @@ interface JobKyria {
   displayName: string;
   urlCompleta: string;
   ordemExecucao: number;
+  ativo: boolean;
+  aceitaFiltros: boolean;
   totalRegistros: number;
   ultimaSincronizacao: string | null;
   ultimoStatus: string | null;
@@ -22,6 +25,23 @@ interface JobKyria {
   ultimaDuracaoMs: number | null;
   proximaExecucao: string;
   emAndamento: boolean;
+}
+
+interface DependenteKyria {
+  jobName: string;
+  displayName: string;
+  tabelaLocal: string;
+}
+
+// Mês corrente completo (dia 01 ao último dia) — default do modal "Sinc. Filtros"; a regra de
+// negócio é que from/to sempre cobrem meses completos (competência), validada também no backend.
+function mesCorrenteCompleto(): { from: string; to: string } {
+  const agora = new Date();
+  const ano = agora.getFullYear();
+  const mes = agora.getMonth() + 1;
+  const ultimo = new Date(ano, mes, 0).getDate();
+  const mm = String(mes).padStart(2, "0");
+  return { from: `${ano}-${mm}-01`, to: `${ano}-${mm}-${String(ultimo).padStart(2, "0")}` };
 }
 
 interface ListaSyncKyria {
@@ -56,6 +76,13 @@ export function SincronizacaoKyria() {
   const [erro, setErro] = useState<string | null>(null);
   const [disparando, setDisparando] = useState<string | null>(null);
   const [iniciandoTodos, setIniciandoTodos] = useState(false);
+  const [filtrosAberto, setFiltrosAberto] = useState(false);
+  const [filtroJob, setFiltroJob] = useState("");
+  const [filtroFrom, setFiltroFrom] = useState("");
+  const [filtroTo, setFiltroTo] = useState("");
+  const [filtroErro, setFiltroErro] = useState<string | null>(null);
+  const [filtroEnviando, setFiltroEnviando] = useState(false);
+  const [confirmacao, setConfirmacao] = useState<{ job: JobKyria; dependentes: DependenteKyria[] } | null>(null);
 
   function carregar() {
     axios
@@ -85,6 +112,54 @@ export function SincronizacaoKyria() {
       setErro(err.response?.data?.error ?? "Falha ao iniciar sincronização");
     } finally {
       setDisparando(null);
+    }
+  }
+
+  async function alterarAtivo(job: JobKyria, ativo: boolean, cascata = false) {
+    setErro(null);
+    try {
+      await axios.patch(`/api/sync-kyria/${job.jobName}/ativo`, { ativo, cascata });
+      setConfirmacao(null);
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao alterar o estado da tabela");
+    }
+  }
+
+  // Ao inativar, varre as tabelas ligadas por FK: se houver alguma ainda ativa, pede confirmação
+  // antes de inativar tudo junto.
+  async function alternarAtivo(job: JobKyria) {
+    if (!job.ativo) return alterarAtivo(job, true);
+    setErro(null);
+    try {
+      const { data } = await axios.get<{ dependentes: DependenteKyria[] }>(`/api/sync-kyria/${job.jobName}/dependentes`);
+      if (data.dependentes.length === 0) return alterarAtivo(job, false);
+      setConfirmacao({ job, dependentes: data.dependentes });
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao verificar tabelas relacionadas");
+    }
+  }
+
+  function abrirFiltros() {
+    const padrao = mesCorrenteCompleto();
+    setFiltroJob(jobs.find((j) => j.aceitaFiltros)?.jobName ?? "");
+    setFiltroFrom(padrao.from);
+    setFiltroTo(padrao.to);
+    setFiltroErro(null);
+    setFiltrosAberto(true);
+  }
+
+  async function sincronizarComFiltros() {
+    setFiltroEnviando(true);
+    setFiltroErro(null);
+    try {
+      await axios.post(`/api/sync-kyria/${filtroJob}/run`, { from: filtroFrom, to: filtroTo });
+      setFiltrosAberto(false);
+      carregar();
+    } catch (err: any) {
+      setFiltroErro(err.response?.data?.error ?? "Falha ao iniciar sincronização com filtros");
+    } finally {
+      setFiltroEnviando(false);
     }
   }
 
@@ -125,13 +200,22 @@ export function SincronizacaoKyria() {
             de exclusão: um registro inativo lá já chega aqui com <code>status: inactive</code>.
           </p>
         </div>
-        <button
-          onClick={dispararTodos}
-          disabled={sincronizandoTodos || iniciandoTodos || jobs.some((j) => j.emAndamento)}
-          className="flex-none rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {sincronizandoTodos || iniciandoTodos ? "Sincronizando todas..." : "Sincronizar Todas as Tabelas"}
-        </button>
+        <div className="flex flex-none gap-2">
+          <button
+            onClick={abrirFiltros}
+            disabled={sincronizandoTodos || iniciandoTodos || jobs.some((j) => j.emAndamento) || !jobs.some((j) => j.aceitaFiltros)}
+            className="rounded-md border border-border px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Sinc. Filtros
+          </button>
+          <button
+            onClick={dispararTodos}
+            disabled={sincronizandoTodos || iniciandoTodos || jobs.some((j) => j.emAndamento)}
+            className="flex-none rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {sincronizandoTodos || iniciandoTodos ? "Sincronizando todas..." : "Sincronizar Todas as Tabelas"}
+          </button>
+        </div>
       </div>
 
       {loading && (
@@ -197,6 +281,9 @@ export function SincronizacaoKyria() {
                   Tabela
                 </th>
                 <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                  Ativa
+                </th>
+                <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   URL
                 </th>
                 <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
@@ -230,6 +317,9 @@ export function SincronizacaoKyria() {
                       <Skeleton className="h-4 w-32" />
                     </td>
                     <td className="px-2.5 py-3.5">
+                      <Skeleton className="h-5 w-9 rounded-full" />
+                    </td>
+                    <td className="px-2.5 py-3.5">
                       <Skeleton className="h-4 w-48" />
                     </td>
                     <td className="px-2.5 py-3.5 text-right">
@@ -259,6 +349,20 @@ export function SincronizacaoKyria() {
                       {job.ordemExecucao}
                     </td>
                     <td className="px-2.5 py-3.5 text-sm font-semibold text-foreground">{job.displayName}</td>
+                    <td className="px-2.5 py-3.5">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={job.ativo}
+                        aria-label={`${job.ativo ? "Desativar" : "Ativar"} ${job.displayName}`}
+                        onClick={() => alternarAtivo(job)}
+                        className={`relative h-5 w-9 rounded-full transition ${job.ativo ? "bg-success" : "bg-muted/40"}`}
+                      >
+                        <span
+                          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${job.ativo ? "left-[18px]" : "left-0.5"}`}
+                        />
+                      </button>
+                    </td>
                     <td className="max-w-[220px] truncate px-2.5 py-3.5 font-mono text-[12px] text-muted" title={job.urlCompleta}>
                       {job.urlCompleta}
                     </td>
@@ -310,7 +414,7 @@ export function SincronizacaoKyria() {
                         </Link>
                         <button
                           onClick={() => disparar(job)}
-                          disabled={job.emAndamento || disparando !== null || sincronizandoTodos}
+                          disabled={!job.ativo || job.emAndamento || disparando !== null || sincronizandoTodos}
                           className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           {disparando === job.jobName ? "Iniciando..." : "Sincronizar agora"}
@@ -323,6 +427,118 @@ export function SincronizacaoKyria() {
           </table>
         </div>
       </div>
+
+      <Modal
+        open={filtrosAberto}
+        onClose={() => setFiltrosAberto(false)}
+        title="Sincronizar com filtros"
+        subtitulo="Ajuste o período (competência) a importar"
+        fecharPorFora={false}
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-muted">Tabela</label>
+            <select
+              value={filtroJob}
+              onChange={(e) => setFiltroJob(e.target.value)}
+              className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {jobs
+                .filter((j) => j.aceitaFiltros)
+                .map((j) => (
+                  <option key={j.jobName} value={j.jobName}>
+                    {j.displayName}
+                  </option>
+                ))}
+            </select>
+            <p className="mt-1 truncate font-mono text-[11px] text-muted">
+              {jobs.find((j) => j.jobName === filtroJob)?.urlCompleta}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted">from (dia 01 do mês)</label>
+              <input
+                type="date"
+                value={filtroFrom}
+                onChange={(e) => setFiltroFrom(e.target.value)}
+                className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted">to (último dia do mês)</label>
+              <input
+                type="date"
+                value={filtroTo}
+                onChange={(e) => setFiltroTo(e.target.value)}
+                className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+          </div>
+          <p className="text-[12px] text-muted">
+            O período sempre cobre meses completos. Se abranger mais de um mês, cada mês é importado como uma
+            competência separada. Sem filtro, o job automático usa a data da última sincronização.
+          </p>
+          {filtroErro && (
+            <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {filtroErro}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setFiltrosAberto(false)}
+              className="rounded-md border border-border px-4 py-2 text-sm text-foreground hover:bg-surface-2"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={sincronizarComFiltros}
+              disabled={filtroEnviando || !filtroJob || !filtroFrom || !filtroTo}
+              className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {filtroEnviando ? "Iniciando..." : "Sincronizar"}
+            </button>
+          </div>
+        </div>
+      </Modal>
+      <Modal
+        open={confirmacao !== null}
+        onClose={() => setConfirmacao(null)}
+        title="Inativar tabelas relacionadas?"
+        subtitulo={confirmacao?.job.displayName}
+        fecharPorFora={false}
+      >
+        {confirmacao && (
+          <div>
+            <p className="text-sm text-foreground">
+              As tabelas abaixo têm chave estrangeira (FK) ligada a <strong>{confirmacao.job.displayName}</strong>. Se
+              você confirmar, todas serão inativadas junto e deixam de importar, manualmente e pelos jobs.
+            </p>
+            <ul className="my-4 divide-y divide-border/60 rounded-md border border-border">
+              {confirmacao.dependentes.map((d) => (
+                <li key={d.jobName} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                  <span className="font-semibold text-foreground">{d.displayName}</span>
+                  <span className="font-mono text-[12px] text-muted">{d.tabelaLocal}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmacao(null)}
+                className="rounded-md border border-border px-4 py-2 text-sm text-foreground hover:bg-surface-2"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => alterarAtivo(confirmacao.job, false, true)}
+                className="rounded-md bg-destructive px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+              >
+                Inativar todas
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

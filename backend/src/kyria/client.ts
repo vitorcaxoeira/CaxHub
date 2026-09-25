@@ -277,6 +277,207 @@ export async function listAllCustomers(options: Omit<ListCustomersOptions, "curs
 }
 
 // ---------------------------------------------------------------------------
+// GET /tickets
+// ---------------------------------------------------------------------------
+
+export interface KyriaTicket {
+  id: string;
+  code: string | null;
+  title: string;
+  description: string | null;
+  statusKey: string;
+  priority: "low" | "medium" | "high" | "urgent";
+  teamId: string | null;
+  responsibleUserId: string | null;
+  requesterUserId: string;
+  projectId: string | null;
+  customerId: string | null;
+  /** Epoch em milissegundos — mesmo formato do Kyria em toda parte. */
+  openedAt: number;
+  updatedAt: number;
+  closedAt: number | null;
+  parentTicketId: string | null;
+  revision: number;
+}
+
+export interface ListTicketsOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListTicketsResult {
+  data: KyriaTicket[];
+  page: KyriaPage;
+  requestId: string;
+}
+
+export async function listTickets(options: ListTicketsOptions = {}): Promise<ListTicketsResult> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/tickets`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: options.limit, cursor: options.cursor },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "listTickets"));
+    }
+  }
+}
+
+/** Pagina automaticamente todas as páginas de /tickets, seguindo `page.nextCursor`. */
+export async function listAllTickets(options: Omit<ListTicketsOptions, "cursor"> = {}): Promise<KyriaTicket[]> {
+  const tickets: KyriaTicket[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const pagina = await listTickets({ ...options, cursor });
+    tickets.push(...pagina.data);
+    if (!pagina.page.hasMore || !pagina.page.nextCursor) break;
+    cursor = pagina.page.nextCursor;
+  }
+
+  return tickets;
+}
+
+// ---------------------------------------------------------------------------
+// GET /ticket-statuses
+// ---------------------------------------------------------------------------
+
+export interface KyriaTicketStatus {
+  id: string;
+  teamId: string | null;
+  key: string;
+  name: string;
+  color: string | null;
+  category: "triage" | "queue" | "awaiting_return" | "execution" | "done" | "cancelled";
+  status: "active" | "inactive";
+  sortOrder: number | null;
+}
+
+export interface ListTicketStatusesOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListTicketStatusesResult {
+  data: KyriaTicketStatus[];
+  page: KyriaPage;
+  requestId: string;
+}
+
+export async function listTicketStatuses(options: ListTicketStatusesOptions = {}): Promise<ListTicketStatusesResult> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/ticket-statuses`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: options.limit, cursor: options.cursor },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "listTicketStatuses"));
+    }
+  }
+}
+
+/** Pagina automaticamente todas as páginas de /ticket-statuses, seguindo `page.nextCursor`. */
+export async function listAllTicketStatuses(options: Omit<ListTicketStatusesOptions, "cursor"> = {}): Promise<KyriaTicketStatus[]> {
+  const statuses: KyriaTicketStatus[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const pagina = await listTicketStatuses({ ...options, cursor });
+    statuses.push(...pagina.data);
+    if (!pagina.page.hasMore || !pagina.page.nextCursor) break;
+    cursor = pagina.page.nextCursor;
+  }
+
+  return statuses;
+}
+
+// ---------------------------------------------------------------------------
+// GET /reports/hours?groupBy=ticket
+// ---------------------------------------------------------------------------
+//
+// Diferente de /teams, /members, /customers, /tickets: NÃO é coleção cursor-paginada — é um
+// relatório agregado, a resposta inteira já vem numa chamada só (`data.rows`), sem `page`. Exige
+// `from`/`to`/`groupBy` (sem default). Testado ao vivo (22/09/2026): a API responde 503 "Time
+// reporting data is not ready" pra boa parte do calendário fora de uma janela recente estreita —
+// ver comentário de KyriaTicketHours no schema.prisma. Com retry em 429 (igual list*): job
+// agendado de verdade agora, não só preview manual do getKyriaSample.
+
+export interface KyriaHoursReportRow {
+  group: { type: "ticket"; id: string; code: string | null; title: string };
+  minutes: number;
+}
+
+// groupBy=customer (recurso #17): `group` traz `name` no lugar de `code`/`title`.
+export interface KyriaCustomerHoursReportRow {
+  // `id` null = horas de ticket sem cliente (visto ao vivo, 24/09/2026).
+  group: { type: "customer"; id: string | null; name: string | null };
+  minutes: number;
+}
+
+export interface GetHoursReportOptions<G extends "ticket" | "customer" = "ticket"> {
+  /** YYYY-MM-DD */
+  from: string;
+  /** YYYY-MM-DD */
+  to: string;
+  groupBy: G;
+}
+
+export interface GetHoursReportResult<Row = KyriaHoursReportRow> {
+  data: { rows: Row[]; totalMinutes: number };
+  meta: Record<string, unknown>;
+  requestId: string;
+}
+
+export async function getHoursReport(options: GetHoursReportOptions<"ticket">): Promise<GetHoursReportResult>;
+export async function getHoursReport(
+  options: GetHoursReportOptions<"customer">
+): Promise<GetHoursReportResult<KyriaCustomerHoursReportRow>>;
+export async function getHoursReport(options: GetHoursReportOptions<"ticket" | "customer">): Promise<GetHoursReportResult<any>> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/reports/hours`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { from: options.from, to: options.to, groupBy: options.groupBy },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "getHoursReport"));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Preview genérico — usado só pelo workflow de Mapeamento de Campos (kyria/fieldPreview.ts),
 // nunca por um job de sync agendado.
 // ---------------------------------------------------------------------------

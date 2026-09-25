@@ -21,4 +21,13 @@ export const KYRIA_KNOWN_RESOURCES: KyriaKnownResource[] = [
   { path: "/label-groups", displayName: "Grupos de Etiqueta", openApiSchemaName: "LabelGroup" },
   { path: "/labels", displayName: "Etiquetas", openApiSchemaName: "Label" },
   { path: "/members", displayName: "Membros", openApiSchemaName: "Member" },
+  // Uma origem por groupBy de GET /reports/hours (o `group` muda de forma em cada um, então
+  // cada agrupamento tem o próprio mapa). O groupBy=ticket é o recurso já registrado como
+  // "/reports/hours" puro, por isso não aparece aqui. Sem datas no path — o preview usa o mês
+  // corrente completo (competencia.ts). Sem openApiSchemaName: `group` é polimórfico.
+  { path: "/reports/hours?groupBy=customer", displayName: "Horas por cliente (relatório)" },
+  { path: "/reports/hours?groupBy=user", displayName: "Horas por usuário (relatório)" },
+  { path: "/reports/hours?groupBy=project", displayName: "Horas por projeto (relatório)" },
+  { path: "/reports/hours?groupBy=team", displayName: "Horas por time (relatório)" },
+  { path: "/reports/hours?groupBy=day", displayName: "Horas por dia (relatório)" },
 ];

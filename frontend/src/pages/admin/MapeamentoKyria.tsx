@@ -661,6 +661,9 @@ export function MapeamentoKyria() {
           <table className="w-full border-collapse">
             <thead>
               <tr>
+                <th className="bg-surface-2 px-2.5 py-2 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                  ID
+                </th>
                 <th className="bg-surface-2 px-2.5 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Recurso
                 </th>
@@ -679,6 +682,9 @@ export function MapeamentoKyria() {
               {carregandoListas &&
                 Array.from({ length: 2 }).map((_, i) => (
                   <tr key={i} className="border-t border-border/60">
+                    <td className="px-2.5 py-3 text-right">
+                      <Skeleton className="ml-auto h-4 w-6" />
+                    </td>
                     <td className="px-2.5 py-3">
                       <Skeleton className="h-4 w-40" />
                     </td>
@@ -695,7 +701,7 @@ export function MapeamentoKyria() {
                 ))}
               {!carregandoListas && registrados.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-2.5 py-4 text-center text-sm text-muted">
+                  <td colSpan={5} className="px-2.5 py-4 text-center text-sm text-muted">
                     Nenhum recurso registrado ainda.
                   </td>
                 </tr>
@@ -703,6 +709,7 @@ export function MapeamentoKyria() {
               {!carregandoListas &&
                 registrados.map((r) => (
                   <tr key={r.id} className="border-t border-border/60">
+                    <td className="px-2.5 py-3 text-right font-mono text-sm tabular-nums text-muted">{r.id}</td>
                     <td className="px-2.5 py-3 text-sm text-foreground">
                       {r.displayName} <span className="font-mono text-[11px] text-muted">{r.resourcePath}</span>
                     </td>

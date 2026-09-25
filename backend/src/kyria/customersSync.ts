@@ -1,3 +1,4 @@
+import { jobAtivo } from "./jobAtivo";
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { listAllCustomers } from "./client";
@@ -7,6 +8,7 @@ export const JOB_NAME = "kyria-customers-sync";
 export const CRON_EXPR = "0 5 * * *";
 
 export async function runKyriaCustomersSync(): Promise<void> {
+  if (!(await jobAtivo(JOB_NAME))) return;
   const inicio = new Date();
   try {
     const customers = await listAllCustomers();

@@ -33,6 +33,37 @@ function campoPrismaPorColuna(model: Model, coluna: string): string | null {
   return model.fields.find((f) => (f.dbName ?? f.name) === coluna)?.name ?? null;
 }
 
+// `JSON.stringify` (por trás de `res.json`) não sabe serializar `bigint` — estoura com "Do not
+// know how to serialize a BigInt". Achado real (22/09/2026): o modal genérico de registro
+// relacionado (`buscarRegistrosRelacionados` abaixo) quebrava inteiro ao abrir `Cliente` porque
+// `cgccpf` é BigInt no schema. Vira string no transporte; não quebra a escrita de volta —
+// `editarCampoInterno` manda esse valor pro Prisma em `data: { [campo]: valor }`, e o Prisma
+// aceita string pra campo BigInt em write (coage sozinho), mesmo comportamento de hoje pra um
+// campo Int vindo como string de um <select> HTML.
+function paraJson(valor: unknown): unknown {
+  return typeof valor === "bigint" ? valor.toString() : valor;
+}
+
+// `delegate.findMany(...)` devolve o objeto do Prisma chaveado pelo nome do CAMPO (camelCase:
+// "statusKey"), mas `coluna.nomeInterno` é o nome da COLUNA Postgres (snake_case: "status_key",
+// o que fica registrado no mapeamento e o que o frontend usa pra ler `linha[nomeInterno]`).
+// Quando os dois nomes coincidem (campo sem `@map`) não dava pra notar, mas todo campo COM
+// `@map` (a maioria de KyriaTicket, e já também parentTeamId/domainUrl/createdAt/updatedAt nos
+// recursos mais antigos) ficava com "—" na tela, sem erro nenhum — achado real (22/09/2026,
+// Vitor: "está mostrando somente alguns dados da tabela"). Reaproveita `campoPrismaPorColuna`
+// (mesma tradução nomeInterno -> campo Prisma que `editarCampoInterno` já usa) pra montar um
+// objeto novo, chaveado do jeito que a tela espera — e já sai seguro pra `res.json` (ver `paraJson`).
+function remapearItens(itensBrutos: Record<string, unknown>[], colunas: ColunaDados[], model: Model): Record<string, unknown>[] {
+  const camposPrisma = colunas.map((c) => ({ nomeInterno: c.nomeInterno, campoPrisma: campoPrismaPorColuna(model, c.nomeInterno) }));
+  return itensBrutos.map((itemBruto) => {
+    const remapeado: Record<string, unknown> = {};
+    for (const { nomeInterno, campoPrisma } of camposPrisma) {
+      remapeado[nomeInterno] = campoPrisma ? paraJson(itemBruto[campoPrisma]) : undefined;
+    }
+    return remapeado;
+  });
+}
+
 function clampPagina(valor: unknown, min: number, max: number, padrao: number): number {
   const n = Number(valor);
   if (!Number.isFinite(n)) return padrao;
@@ -137,11 +168,12 @@ export async function listarDados(job: KyriaSyncJobDescriptor, pageRaw: unknown,
   const pageSize = clampPagina(pageSizeRaw, 1, 100, 30);
   const pk = pkFieldsDoModel(job.tabelaLocal);
 
-  const [total, itens, colunas] = await Promise.all([
+  const [total, itensBrutos, colunas] = await Promise.all([
     delegate.count(),
     delegate.findMany({ skip: (page - 1) * pageSize, take: pageSize, orderBy: pk.map((campo) => ({ [campo]: "asc" })) }),
     resolverColunas(job, model),
   ]);
+  const itens = remapearItens(itensBrutos, colunas, model);
   const descricoes = await resolverDescricoes(colunas, itens);
 
   return { total, page, pageSize, colunas, itens, descricoes };
@@ -165,10 +197,11 @@ export async function listarTodosDados(job: KyriaSyncJobDescriptor): Promise<Lis
   const delegate = resolverDelegate(model);
   const pk = pkFieldsDoModel(job.tabelaLocal);
 
-  const [itens, colunas] = await Promise.all([
+  const [itensBrutos, colunas] = await Promise.all([
     delegate.findMany({ orderBy: pk.map((campo) => ({ [campo]: "asc" })) }),
     resolverColunas(job, model),
   ]);
+  const itens = remapearItens(itensBrutos, colunas, model);
   const descricoes = await resolverDescricoes(colunas, itens);
 
   return { colunas, itens, descricoes };
@@ -185,7 +218,7 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
     include: { campos: true },
   });
   const campoMapeado = recurso?.campos.find((c) => c.nomeInterno === campo);
-  if (!campoMapeado) throw new ErroValidacao(`Campo "${campo}" não está registrado no mapeamento de "${job.path}".`);
+  if (!recurso || !campoMapeado) throw new ErroValidacao(`Campo "${campo}" não está registrado no mapeamento de "${job.path}".`);
   if (campoMapeado.nomeOrigem !== null) throw new ErroValidacao(`Campo "${campo}" vem da API — só campo interno pode ser editado aqui.`);
   if (!campoMapeado.manter) throw new ErroValidacao(`Campo "${campo}" está marcado como "não manter" no mapeamento.`);
 
@@ -210,7 +243,22 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
   const pk = pkFieldsDoModel(job.tabelaLocal);
   if (pk.length !== 1) throw new Error(`"Ver dados" só suporta tabela com PK simples — "${job.tabelaLocal}" tem PK composta (${pk.join(", ")}).`);
   const delegate = resolverDelegate(model);
-  return delegate.update({ where: { [pk[0]]: id }, data: { [campoPrisma]: valor } });
+  const linhaAtualizada = await delegate.update({ where: { [pk[0]]: id }, data: { [campoPrisma]: valor } });
+
+  // Remapeado pro mesmo formato de listarDados/listarTodosDados (nomeInterno, não campo Prisma
+  // cru) — o frontend hoje descarta esse retorno (DadosKyria.tsx só chama carregar() de novo
+  // depois do PATCH), então não corrige bug visível nenhum, mas mantém a resposta consistente
+  // com o resto da API em vez de vazar o nome do campo Prisma e um BigInt cru.
+  const colunas: ColunaDados[] = recurso.campos
+    .filter((c) => c.manter)
+    .map((c) => ({
+      nomeInterno: c.nomeInterno,
+      ehInterno: c.nomeOrigem === null,
+      relacionamentoModelo: c.relacionamentoModelo,
+      relacionamentoCampo: c.relacionamentoCampo,
+      relacionamentoCampoDescricao: c.relacionamentoCampoDescricao,
+    }));
+  return remapearItens([linhaAtualizada], colunas, model)[0];
 }
 
 export interface ListaRelacionados {
@@ -244,10 +292,17 @@ export async function buscarRegistrosRelacionados(nomeModelo: string, busca: str
       ? { OR: camposString.map((campo) => ({ [campo]: { contains: busca.trim(), mode: "insensitive" as const } })) }
       : undefined;
 
-  const [total, itens] = await Promise.all([
+  const [total, itensBrutos] = await Promise.all([
     delegate.count({ where }),
     delegate.findMany({ where, skip: (page - 1) * pageSize, take: pageSize }),
   ]);
+  // Genérico sobre ~75 models — não dá pra saber de antemão quais têm campo BigInt (ex.:
+  // Cliente.cgccpf). `paraJson` em cada valor de cada linha, não só nos campos escalares
+  // listados: `findMany` sem `select` devolve TODOS os campos do model, incluindo os de
+  // relação/agregação que nem entram em `camposEscalares`.
+  const itens = itensBrutos.map((item: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(item).map(([chave, valor]) => [chave, paraJson(valor)]))
+  );
 
   return { total, page, pageSize, colunas: camposEscalares.map((f) => f.name), itens };
 }

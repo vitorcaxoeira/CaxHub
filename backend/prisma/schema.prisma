@@ -1991,6 +1991,10 @@ model KyriaTeam {
   status         KyriaStatus
   sincronizadoEm DateTime    @updatedAt @map("sincronizado_em")
 
+  // Lado inverso de KyriaTicket.team — FK real (22/09/2026, pedido do Vitor: cruzar
+  // kyria_tickets.team_id com kyria_teams.id).
+  tickets KyriaTicket[]
+
   @@map("kyria_teams")
 }
 
@@ -2026,6 +2030,10 @@ model KyriaMember {
   codusu         Int?
   sincronizadoEm DateTime        @updatedAt @map("sincronizado_em")
 
+  // Lado inverso de KyriaTicket.responsavel — FK real (22/09/2026, pedido do Vitor: cruzar
+  // kyria_tickets.responsible_user_id com kyria_members.id).
+  ticketsComoResponsavel KyriaTicket[]
+
   @@map("kyria_members")
 }
 
@@ -2052,7 +2060,158 @@ model KyriaCustomer {
   codcli         Int?
   sincronizadoEm DateTime    @updatedAt @map("sincronizado_em")
 
+  // Lado inverso de KyriaTicket.customer — FK real (22/09/2026, pedido do Vitor: cruzar
+  // kyria_tickets.customer_id com kyria_customers.id).
+  tickets KyriaTicket[]
+  // Lado inverso de KyriaCustomerHours.customer.
+  horas KyriaCustomerHours[]
+
   @@map("kyria_customers")
+}
+
+// Domínio de `category` em GET /ticket-statuses, declarado no OpenAPI do Kyria (enum fechado de
+// 6 valores) — mesmo espírito de KyriaStatus/KyriaMemberRole.
+enum KyriaTicketStatusCategoria {
+  triage
+  queue
+  awaiting_return
+  execution
+  done
+  cancelled
+}
+
+// Espelho local do Kyria — GET /ticket-statuses (ver src/kyria/client.ts,
+// src/kyria/ticketStatusesSync.ts). Campos/tipos do mapeamento registrado (recurso
+// `/ticket-statuses`, Administração > Mapeamento de Campos). `status` reaproveita o enum
+// `KyriaStatus` já existente (mesmo domínio active/inactive de Teams/Members/Customers) — não
+// precisa de enum novo. `key` é o campo que `KyriaTicket.statusKey` referencia (22/09/2026,
+// pedido do Vitor de cruzar as duas tabelas) — NÃO é o `id` opaco do Convex: conferido ao vivo
+// contra os 12 status reais que `key` (ex. "aguardando-retorno") é único em todos, inclusive os
+// 2 que têm `teamId` preenchido, então serve como alvo de FK mesmo sem ser a PK "oficial" do
+// Kyria. `teamId` fica String solta, sem FK — só 2 dos 12 status têm time associado, e o pedido
+// foi especificamente sobre `statusKey`, não sobre expandir esse vínculo também.
+model KyriaTicketStatus {
+  id             String                     @id @db.VarChar(64)
+  teamId         String?                    @map("team_id") @db.VarChar(64)
+  key            String                     @unique @db.VarChar(64)
+  name           String                     @db.VarChar(255)
+  color          String?                    @db.VarChar(16)
+  category       KyriaTicketStatusCategoria
+  status         KyriaStatus
+  sortOrder      Int?                       @map("sort_order")
+  sincronizadoEm DateTime                   @updatedAt @map("sincronizado_em")
+
+  tickets KyriaTicket[]
+
+  @@map("kyria_ticket_statuses")
+}
+
+// Domínio de `priority` em GET /tickets, declarado no OpenAPI do Kyria (enum fechado de 4
+// valores) — mesmo espírito de KyriaStatus/KyriaMemberRole.
+enum KyriaTicketPrioridade {
+  low
+  medium
+  high
+  urgent
+}
+
+// Espelho local do Kyria — GET /tickets (ver src/kyria/client.ts, src/kyria/ticketsSync.ts).
+// Campos, tipos e TAMANHOS vieram do mapeamento registrado (recurso `/tickets`, Administração >
+// Mapeamento de Campos) — o Vitor definiu os `@db.VarChar(n)` de propósito, e é a tabela que tem
+// que bater com o que foi registrado lá, não o contrário. Duas correções em cima da amostra de 1
+// registro que a tela usou pra sugerir tipo/tamanho (nenhum campo string do schema Ticket no
+// OpenAPI declara `maxLength` — a ferramenta só podia mesmo chutar), MEDIDAS contra os 6.668
+// tickets reais já sincronizados (22/09/2026), não a olho:
+//   1. `closedAt`: a amostra tinha um ticket aberto (`closedAt: null`), tela sugeriu `String`;
+//      conferido no OpenAPI que o campo real é `number|null` (epoch ms, igual `openedAt`/
+//      `updatedAt`) — `DateTime?` aqui, e reescrito assim no mapeamento também.
+//   2. `description`: `@db.VarChar(2000)` registrado estourava (máximo real 5.590 — um ticket
+//      tinha um stack trace de erro inteiro colado). Decisão do Vitor: TEXT sem limite só pra
+//      este campo, porque é nota de texto livre, não um identificador de formato previsível como
+//      os outros — os demais campos ficam exatamente com o tamanho que ele definiu (`code`
+//      VarChar(24), `title` VarChar(255), `teamId`/`responsibleUserId`/`requesterUserId`/
+//      `customerId` VarChar(64) — todos couberam nos 6.668 reais, com folga).
+//   3. `statusKey`: `@db.VarChar(15)` registrado estourava (máximo real 36 — vem de
+//      /ticket-statuses, catálogo configurável por workspace, não um enum curto). Decisão do
+//      Vitor: `VarChar(64)`, mesmo tamanho já usado pros IDs opacos do Convex.
+//
+// FKs reais (22/09/2026, pedido do Vitor) pra `team`/`responsavel`/`customer`/`status` —
+// conferido ao vivo ANTES de adicionar que os 6.669 tickets locais não têm nenhuma referência
+// órfã contra teams/members/customers já sincronizados. `requesterUserId` fica sem FK de
+// propósito — não foi pedido, só `responsibleUserId`. O job (`ticketsSync.ts`) pré-filtra antes
+// de gravar: `team`/`responsavel`/`customer` (nullable) viram `null` se a referência ainda não
+// tiver sido sincronizada localmente; `status` (NOT NULL) faz o ticket inteiro ser pulado nesse
+// caso — mesmo cuidado que uma FK de verdade em cima de upsert em lote exige (ver comentário
+// grande no início do arquivo do job).
+model KyriaTicket {
+  id                String                @id @db.VarChar(64)
+  code              String?               @db.VarChar(24)
+  title             String                @db.VarChar(255)
+  description       String?
+  statusKey         String                @map("status_key") @db.VarChar(64)
+  status            KyriaTicketStatus     @relation(fields: [statusKey], references: [key])
+  priority          KyriaTicketPrioridade
+  teamId            String?               @map("team_id") @db.VarChar(64)
+  team              KyriaTeam?            @relation(fields: [teamId], references: [id])
+  responsibleUserId String?               @map("responsible_user_id") @db.VarChar(64)
+  responsavel       KyriaMember?          @relation(fields: [responsibleUserId], references: [id])
+  requesterUserId   String                @map("requester_user_id") @db.VarChar(64)
+  projectId         String?               @map("project_id")
+  customerId        String?               @map("customer_id") @db.VarChar(64)
+  customer          KyriaCustomer?        @relation(fields: [customerId], references: [id])
+  openedAt          DateTime              @map("opened_at")
+  updatedAt         DateTime              @map("updated_at")
+  closedAt          DateTime?             @map("closed_at")
+  parentTicketId    String?               @map("parent_ticket_id")
+  revision          Int
+  sincronizadoEm    DateTime              @updatedAt @map("sincronizado_em")
+
+  horas KyriaTicketHours?
+
+  @@map("kyria_tickets")
+}
+
+// Espelho local do Kyria — GET /reports/hours?groupBy=ticket (recurso `/reports/hours`, ver
+// src/kyria/client.ts, src/kyria/ticketHoursSync.ts). 1 linha por ticket (`id` é FK de verdade
+// pra KyriaTicket — as duas tabelas nasceram juntas nesta leva, decisão do Vitor de exigir
+// integridade real, diferente de KyriaMember.codusu/KyriaCustomer.codcli, que documentam
+// vínculo com tabelas de OUTRO sistema sem FK). `minutes` é o total da janela [janelaDe,
+// janelaAte] mais recente, SUBSTITUÍDO inteiro a cada sync (não acumulado) — decisão do Vitor
+// pra nunca desalinhar do Kyria se um apontamento antigo for editado/apagado lá. Janela fixa e
+// curta (7 dias terminando ontem, ver ticketHoursSync.ts) porque testado ao vivo (22/09/2026):
+// a API dá 503 "Time reporting data is not ready" pra quase todo o calendário fora de uma banda
+// estreita recente — não dá pra confiar num range largo/histórico hoje.
+model KyriaTicketHours {
+  id             String      @id @db.VarChar(64)
+  ticket         KyriaTicket @relation(fields: [id], references: [id])
+  groupType      String      @map("group_type") @db.VarChar(25)
+  code           String?     @db.VarChar(32)
+  title          String      @db.VarChar(255)
+  minutes        Decimal
+  janelaDe       DateTime    @map("janela_de") @db.Date
+  janelaAte      DateTime    @map("janela_ate") @db.Date
+  sincronizadoEm DateTime    @updatedAt @map("sincronizado_em")
+
+  @@map("kyria_ticket_hours")
+}
+
+// Espelho local do Kyria — GET /reports/hours?groupBy=customer (recurso #17, ver
+// src/kyria/customerHoursSync.ts). Tempo de atendimento de cada cliente POR COMPETÊNCIA (mês):
+// a chave é (competencia, customer_id). `competencia` é o dia 01 do mês consultado — derivado
+// do intervalo pedido, não vem da API (kyria/competencia.ts); from/to sempre cobrem o mês
+// inteiro. `minutes` é o total do mês, SUBSTITUÍDO a cada sync (não acumulado). Colunas e tipos
+// seguem o mapeamento registrado (customer_id VARCHAR(64), igual a kyria_customers.id; FK real).
+model KyriaCustomerHours {
+  competencia    DateTime      @db.Date
+  customerId     String        @map("customer_id") @db.VarChar(64)
+  customer       KyriaCustomer @relation(fields: [customerId], references: [id])
+  groupType      String?       @map("group_type") @db.VarChar(32)
+  groupName      String?       @map("group_name") @db.VarChar(255)
+  minutes        Decimal?      @db.Decimal(12, 2)
+  sincronizadoEm DateTime      @updatedAt @map("sincronizado_em")
+
+  @@id([competencia, customerId])
+  @@map("kyria_customer_hours")
 }
 
 // Tipos selecionáveis ao registrar um campo (ver KyriaFieldMapping) — subconjunto fechado dos
@@ -2109,6 +2268,8 @@ model KyriaFieldMapping {
   // Json inteira (ex.: `KyriaTeam.appearance`). NULL = campo INTERNO — não existe na API, só do
   // nosso lado (ex.: FK pra outra tabela do CaxHub), registrado pela tela sem passar por
   // preview nenhum (18/09/2026, pedido do Vitor).
+  // Exceção: em relatórios de horas com groupBy no path, `competencia` é DERIVADO do mês consultado
+  // (kyria/competencia.ts), não vem da resposta da API — o preview o injeta como primeiro campo.
   nomeOrigem    String?        @map("nome_origem")
   ordem         Int
   manter        Boolean        @default(true)
@@ -2955,4 +3116,14 @@ model RateioTituloPagar {
   @@id([codemp, codfil, numtit, codtpt, codfor, seqmov, seqrat])
   @@index([codemp, ctafin, datbas])
   @@map("rateios_pagar")
+}
+
+// Liga/desliga por job Kyria (Administração > Integração Kyria). Sem linha = ativo (default).
+// Inativo bloqueia a execução manual e a agendada — ver src/kyria/jobAtivo.ts.
+model KyriaSyncConfig {
+  jobName      String   @id @map("job_name") @db.VarChar(64)
+  ativo        Boolean  @default(true)
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@map("kyria_sync_config")
 }

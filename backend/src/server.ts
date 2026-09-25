@@ -29,6 +29,10 @@ import { syncKyriaDadosRouter } from "./routes/syncKyriaDados";
 import { scheduleKyriaTeamsSync } from "./kyria/teamsSync";
 import { scheduleKyriaMembersSync } from "./kyria/membersSync";
 import { scheduleKyriaCustomersSync } from "./kyria/customersSync";
+import { scheduleKyriaTicketStatusesSync } from "./kyria/ticketStatusesSync";
+import { scheduleKyriaTicketsSync } from "./kyria/ticketsSync";
+import { scheduleKyriaTicketHoursSync } from "./kyria/ticketHoursSync";
+import { scheduleKyriaCustomerHoursSync } from "./kyria/customerHoursSync";
 import { alocacaoRouter } from "./routes/alocacao";
 import { solicitacoesExcedenteRouter } from "./routes/solicitacoesExcedente";
 import { solicitacoesApontamentoRouter } from "./routes/solicitacoesApontamento";
@@ -268,6 +272,10 @@ async function iniciar() {
     scheduleKyriaTeamsSync();
     scheduleKyriaMembersSync();
     scheduleKyriaCustomersSync();
+    scheduleKyriaTicketStatusesSync();
+    scheduleKyriaTicketsSync();
+    scheduleKyriaTicketHoursSync();
+    scheduleKyriaCustomerHoursSync();
   });
 }
 

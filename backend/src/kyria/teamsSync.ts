@@ -1,3 +1,4 @@
+import { jobAtivo } from "./jobAtivo";
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { listAllTeams } from "./client";
@@ -8,6 +9,7 @@ export const JOB_NAME = "kyria-teams-sync";
 export const CRON_EXPR = "30 4 * * *";
 
 export async function runKyriaTeamsSync(): Promise<void> {
+  if (!(await jobAtivo(JOB_NAME))) return;
   const inicio = new Date();
   try {
     const times = await listAllTeams();
