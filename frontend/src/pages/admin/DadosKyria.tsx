@@ -297,6 +297,26 @@ export function DadosKyria() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobName]);
 
+  // Desfaz o relacionamento: grava null no campo interno. O registro relacionado em si não é
+  // tocado — só o vínculo desta linha. Dá pra vincular de novo depois.
+  const [removendo, setRemovendo] = useState<string | null>(null);
+  async function removerVinculo(linhaId: string, campo: string, rotulo: string) {
+    if (!jobName) return;
+    if (!window.confirm(`Remover o vínculo de "${campo}" (${rotulo})? O registro relacionado não é apagado — só deixa de estar ligado a esta linha.`)) {
+      return;
+    }
+    setRemovendo(`${linhaId}:${campo}`);
+    try {
+      await axios.patch(`/api/sync-kyria/dados/${jobName}/${linhaId}`, { campo, valor: null });
+      toast.mostrar("Vínculo removido.", "success");
+      carregar();
+    } catch (err: any) {
+      toast.mostrar(err.response?.data?.error ?? "Falha ao remover o vínculo", "destructive");
+    } finally {
+      setRemovendo(null);
+    }
+  }
+
   async function escolherRegistro(valor: unknown) {
     if (!edicaoAberta || !jobName) return;
     try {
@@ -434,22 +454,41 @@ export function DadosKyria() {
                     {dados.colunas.map((c) => (
                       <td key={c.nomeInterno} className="px-2.5 py-2 text-[12.5px] text-foreground">
                         {c.ehInterno && c.relacionamentoModelo && c.relacionamentoCampo ? (
-                          <button
-                            onClick={() =>
-                              setEdicaoAberta({
-                                linhaId: String(linha.id),
-                                campo: c.nomeInterno,
-                                modelo: c.relacionamentoModelo!,
-                                campoAlvo: c.relacionamentoCampo!,
-                              })
-                            }
-                            className="text-primary hover:underline"
-                          >
-                            {formatarValor(linha[c.nomeInterno])}
-                            {dados.descricoes[c.nomeInterno]?.[String(linha[c.nomeInterno])] &&
-                              ` — ${dados.descricoes[c.nomeInterno][String(linha[c.nomeInterno])]}`}
-                            {" · trocar"}
-                          </button>
+                          (() => {
+                            const valorAtual = linha[c.nomeInterno];
+                            const vinculado = valorAtual !== null && valorAtual !== undefined && valorAtual !== "";
+                            const descricao = dados.descricoes[c.nomeInterno]?.[String(valorAtual)];
+                            const rotulo = `${formatarValor(valorAtual)}${descricao ? ` — ${descricao}` : ""}`;
+                            const chaveRemocao = `${String(linha.id)}:${c.nomeInterno}`;
+                            return (
+                              <span className="inline-flex items-center gap-2">
+                                <button
+                                  onClick={() =>
+                                    setEdicaoAberta({
+                                      linhaId: String(linha.id),
+                                      campo: c.nomeInterno,
+                                      modelo: c.relacionamentoModelo!,
+                                      campoAlvo: c.relacionamentoCampo!,
+                                    })
+                                  }
+                                  className="text-primary hover:underline"
+                                >
+                                  {rotulo}
+                                  {vinculado ? " · trocar" : " · vincular"}
+                                </button>
+                                {vinculado && (
+                                  <button
+                                    onClick={() => removerVinculo(String(linha.id), c.nomeInterno, rotulo)}
+                                    disabled={removendo === chaveRemocao}
+                                    title="Remover o vínculo deste registro"
+                                    className="text-destructive hover:underline disabled:opacity-50"
+                                  >
+                                    {removendo === chaveRemocao ? "removendo…" : "remover"}
+                                  </button>
+                                )}
+                              </span>
+                            );
+                          })()
                         ) : (
                           formatarValor(linha[c.nomeInterno])
                         )}

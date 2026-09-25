@@ -222,7 +222,13 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
   if (campoMapeado.nomeOrigem !== null) throw new ErroValidacao(`Campo "${campo}" vem da API — só campo interno pode ser editado aqui.`);
   if (!campoMapeado.manter) throw new ErroValidacao(`Campo "${campo}" está marcado como "não manter" no mapeamento.`);
 
-  if (campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo) {
+  // `valor === null` = REMOVER o vínculo (25/09/2026): não há registro relacionado pra conferir —
+  // o campo simplesmente volta a ficar vazio. Só vale pra campo que é de fato um relacionamento
+  // (senão a tela nem oferece a ação) e, mais abaixo, só se a coluna aceitar nulo.
+  if (valor === null && !(campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo)) {
+    throw new ErroValidacao(`Campo "${campo}" não é um relacionamento — não há vínculo a remover.`);
+  }
+  if (valor !== null && campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo) {
     const modeloRelacionado = resolverModel(campoMapeado.relacionamentoModelo, false);
     if (!modeloRelacionado) throw new ErroValidacao(`Model relacionado "${campoMapeado.relacionamentoModelo}" não existe mais no schema.`);
     const delegateRelacionado = resolverDelegate(modeloRelacionado);
@@ -236,6 +242,9 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
   if (!model) throw new Error(`Model Prisma não encontrado pra tabela local "${job.tabelaLocal}".`);
   const campoPrisma = campoPrismaPorColuna(model, campo);
   if (!campoPrisma) throw new ErroValidacao(`Coluna "${campo}" não existe no model "${model.name}".`);
+  if (valor === null && model.fields.find((f) => f.name === campoPrisma)?.isRequired) {
+    throw new ErroValidacao(`Coluna "${campo}" é obrigatória — não dá pra remover o valor.`);
+  }
 
   // A rota só manda UM `id` (um segmento de URL) — funciona pras tabelas Kyria de hoje, todas
   // com PK simples (`id: String @id`). Nenhuma tem PK composta ainda; se um dia tiver, isto

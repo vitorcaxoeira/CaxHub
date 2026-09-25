@@ -74,7 +74,14 @@ syncKyriaDadosRouter.patch("/:jobName/:id", async (req, res) => {
       res.status(400).json({ error: "Informe o campo a editar" });
       return;
     }
-    const linha = await editarCampoInterno(job, req.params.id, campo, req.body?.valor ?? null);
+    // `valor` precisa vir no corpo, mesmo que `null` (= remover o vínculo). Antes um corpo sem
+    // `valor` virava null em silêncio; agora que null desvincula, isso seria um jeito de apagar
+    // o vínculo sem querer.
+    if (!req.body || !("valor" in req.body)) {
+      res.status(400).json({ error: "Informe o valor (use null pra remover o vínculo)" });
+      return;
+    }
+    const linha = await editarCampoInterno(job, req.params.id, campo, req.body.valor ?? null);
     res.json(linha);
   } catch (error) {
     handleError(res, error, "editar");
