@@ -248,14 +248,22 @@ interface RatItemPronto {
   horini: number;
   horfim: number;
   desati: string | null;
-  rat: { codfor: number; codpro: number };
+  rat: { codfor: number; codpro: number; numrat: number | null };
 }
 
 // Monta o payload de `registrarAtividades` a partir do RatItem já validado. Isolado à parte
 // pra ser a MESMA função usada no envio real (enviarApontamento) e na prévia sem envio
 // (previewEnvioSenior) — não existe outro lugar que decida esse mapeamento de campo.
 function montarPayloadApontamento(ratItem: RatItemPronto): RegistrarAtividadesPayload {
+  // Âncora explícita da RAT (25/09/2026): RAT local que já
+  // tem número no Senior manda `numRat` (é a RAT que quem confirmou escolheu, ou a que o
+  // sistema escolheu por ele); RAT local ainda sem número manda `gerRat=S`, senão o Senior
+  // anexaria o item numa RAT aberta qualquer. A fila é serial: o 2º item de uma RAT nova só
+  // sai depois do write-back do 1º gravar o `numrat`, então ele já vai com `numRat`.
+  const destino: Pick<RegistrarAtividadesPayload, "numRat" | "gerRat"> =
+    ratItem.rat.numrat != null ? { numRat: ratItem.rat.numrat } : { gerRat: "S" };
   return {
+    ...destino,
     codEmp: ratItem.codemp,
     codFor: ratItem.rat.codfor,
     codPro: ratItem.rat.codpro,
@@ -667,6 +675,14 @@ export async function processarFilaSincronizacao(
         if (ratDono && ratDono.id !== registrado.ratId) {
           colidiuComOutraRat = true;
           ratDestinoId = ratDono.id;
+        }
+        // Com a RAT de destino explícita (numRat), o Senior deveria gravar exatamente nela.
+        // Número diferente = o contrato não foi respeitado — o reaponte acima segue valendo,
+        // mas fica o rastro pra investigar.
+        if (ratOrigem?.numrat != null && ratOrigem.numrat !== registrado.numrat) {
+          console.warn(
+            `[${JOB_NAME}] RatItem ${registrado.ratItemId}: enviado com numRat ${ratOrigem.numrat}, Senior gravou na RAT ${registrado.numrat}`
+          );
         }
       }
 

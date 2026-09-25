@@ -107,7 +107,18 @@ async function buscarOuCriarRatRascunho(
     orderBy: { id: "desc" },
   });
   if (existente) return { rat: existente, criada: false };
+  return { rat: await criarRatRascunho(atividade, codfor, depexe, dataSessao), criada: true };
+}
 
+// Cria o cabeçalho de uma RAT Digitada local, sem número do Senior ainda. Separada de
+// buscarOuCriarRatRascunho (25/09/2026) pra atender quem confirma e pede "Gerar RAT nova"
+// mesmo havendo RAT aberta — o envio manda `gerRat=S` pro Senior não anexar numa aberta.
+async function criarRatRascunho(
+  atividade: { codemp: number; codpro: number },
+  codfor: number,
+  depexe: number,
+  dataSessao: Date
+) {
   const proposta = await prisma.proposta.findUnique({
     where: { codemp_codpro: { codemp: atividade.codemp, codpro: atividade.codpro } },
   });
@@ -126,7 +137,61 @@ async function buscarOuCriarRatRascunho(
       origemCaxHub: true,
     },
   });
-  return { rat, criada: true };
+  return rat;
+}
+
+// A partir de quantas RATs Digitadas do consultor na proposta a tela oferece escolher o
+// destino. Começou em 2 (decisão do Vitor, 25/09/2026), mas com uma RAT aberta só o seletor
+// não aparecia e não havia como pedir "Gerar RAT nova" (sessões 1856 e 1857 confirmaram
+// direto). Passou pra 1 no mesmo dia, a pedido: o seletor aparece sempre que existe pelo
+// menos uma RAT aberta pra escolher. Sem nenhuma aberta, cria a RAT sozinho.
+const MIN_RATS_PARA_ESCOLHER_DESTINO = 1;
+
+/** Destino escolhido por quem confirma. Ausente = regra automática (buscarOuCriarRatRascunho). */
+export type RatDestino = { ratId: number } | { nova: true };
+
+// Lê `ratDestino` do corpo da requisição sem confiar no formato. Inválido vira ausente
+// (regra automática) em vez de erro: a tela antiga, sem o seletor, nunca manda o campo.
+function lerRatDestino(bruto: unknown): RatDestino | undefined {
+  if (bruto == null || typeof bruto !== "object") return undefined;
+  const b = bruto as Record<string, unknown>;
+  if (b.nova === true) return { nova: true };
+  const ratId = Number(b.ratId);
+  return Number.isInteger(ratId) && ratId > 0 ? { ratId } : undefined;
+}
+
+// Resolve a RAT que vai receber o apontamento. Sem destino escolhido (tela antiga, ou sessão
+// confirmada por outro caminho), segue a regra automática de sempre. A RAT escolhida precisa ser do MESMO consultor+proposta e ainda estar Digitada — é o que o
+// Senior também vai exigir, e barrar aqui evita um RatItem que nasce pra ser recusado.
+async function resolverRatDaConfirmacao(
+  atividade: { codemp: number; codpro: number },
+  codfor: number,
+  depexe: number,
+  dataSessao: Date,
+  destino: RatDestino | undefined
+): Promise<
+  | { ok: true; rat: Awaited<ReturnType<typeof criarRatRascunho>>; criada: boolean; escolha: "automatico" | "rat" | "nova" }
+  | { ok: false; status: number; error: string }
+> {
+  if (!destino) {
+    const r = await buscarOuCriarRatRascunho(atividade, codfor, depexe, dataSessao);
+    return { ok: true, ...r, escolha: "automatico" };
+  }
+  if ("nova" in destino) {
+    return { ok: true, rat: await criarRatRascunho(atividade, codfor, depexe, dataSessao), criada: true, escolha: "nova" };
+  }
+  const rat = await prisma.rat.findUnique({ where: { id: destino.ratId } });
+  if (!rat || rat.codemp !== atividade.codemp || rat.codfor !== codfor || rat.codpro !== atividade.codpro) {
+    return { ok: false, status: 400, error: "A RAT escolhida não é deste consultor nesta proposta" };
+  }
+  if (rat.sitrat !== 9 || rat.removidoEmSenior != null) {
+    return {
+      ok: false,
+      status: 409,
+      error: `A RAT ${rat.numrat ?? rat.id} não está mais Digitada — recarregue a tela e escolha outra`,
+    };
+  }
+  return { ok: true, rat, criada: false, escolha: "rat" };
 }
 
 // Teto de apontamento = alocado + excedentes autorizados. Vale pro gestor também: pra
@@ -170,6 +235,8 @@ interface AjustesConfirmacao {
   // com isto ligado fica responsável por rodar `processarFilaSincronizacao()` uma vez no
   // fim — ela drena a fila em laço serial (ver outboxSenior.ts).
   adiarEnvio?: boolean;
+  // RAT de destino escolhida por quem confirma (25/09/2026) — ver resolverRatDaConfirmacao.
+  ratDestino?: RatDestino;
 }
 
 // Núcleo compartilhado por POST /confirmar (sessão já existe, veio de movimentação de
@@ -321,7 +388,9 @@ async function confirmarSessao(
     };
   }
 
-  const { rat, criada: ratCriada } = await buscarOuCriarRatRascunho(atividade, atividade.codfor, item.depexe, inicio);
+  const destino = await resolverRatDaConfirmacao(atividade, atividade.codfor, item.depexe, inicio, ajustes.ratDestino);
+  if (!destino.ok) return { status: destino.status, body: { error: destino.error } };
+  const { rat, criada: ratCriada, escolha: escolhaDestino } = destino;
   const ratNovo = rat.origemCaxHub && rat.numrat == null;
 
   // RAT_CRIADA (13/09/2026) — só quando o rascunho nasceu agora, não quando reaproveitou um
@@ -380,7 +449,13 @@ async function confirmarSessao(
     entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
     eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_CRIADO,
     alteracoes: null,
-    metadata: { origemCriacao: "caxhub", ratItemId: ratItem.id, seqite: ratItem.seqite, datati: ratItem.datati },
+    metadata: {
+      origemCriacao: "caxhub",
+      ratItemId: ratItem.id,
+      seqite: ratItem.seqite,
+      datati: ratItem.datati,
+      destinoEscolhido: escolhaDestino,
+    },
     correlationId: randomUUID(),
   });
 
@@ -623,8 +698,41 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
       sessoes.map((s) => ({ codemp: s.atividade.codemp, codpro: s.atividade.codpro }))
     );
 
+    // RATs Digitadas candidatas a destino, por consultor+proposta (25/09/2026) — mesma
+    // chave codemp-codfor-codpro do agrupamento do "Confirmar Todos". Uma query só pra todas
+    // as sessões. Os itens vêm junto porque a descrição deles é o único jeito de reconhecer
+    // qual RAT é qual (ex.: proposta 7935, uma RAT por filial do cliente, e a filial só
+    // aparece no texto: "EMPRESA 110, FILIAL 1 - ..."). Só grupos com
+    // MIN_RATS_PARA_ESCOLHER_DESTINO ou mais entram — nos outros a tela confirma direto.
+    const ratsDestino: Record<string, ReturnType<typeof resumirRatDestino>[]> = {};
+    if (sessoes.length > 0) {
+      const chavesGrupo = [
+        ...new Map(
+          sessoes.map((s) => [
+            `${s.atividade.codemp}-${s.atividade.codfor}-${s.atividade.codpro}`,
+            { codemp: s.atividade.codemp, codfor: s.atividade.codfor, codpro: s.atividade.codpro },
+          ])
+        ).values(),
+      ];
+      const ratsAbertas = await prisma.rat.findMany({
+        where: { sitrat: 9, removidoEmSenior: null, OR: chavesGrupo },
+        include: { itens: { select: { datati: true, horini: true, horfim: true, desati: true, id: true } } },
+        orderBy: { id: "desc" },
+      });
+      for (const rat of ratsAbertas) {
+        const chave = `${rat.codemp}-${rat.codfor}-${rat.codpro}`;
+        (ratsDestino[chave] ??= []).push(resumirRatDestino(rat));
+      }
+      for (const chave of Object.keys(ratsDestino)) {
+        if (ratsDestino[chave].length < MIN_RATS_PARA_ESCOLHER_DESTINO) delete ratsDestino[chave];
+      }
+    }
+
     res.json({
       mostrarConsultor,
+      // Primeira de cada lista = a que a regra automática escolheria (id mais alto, mesma
+      // ordem de buscarOuCriarRatRascunho) — a tela pré-seleciona ela.
+      ratsDestino,
       sessoes: sessoes.map((s) => {
         const proposta = propostaPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
         const item = itemPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}-${s.atividade.seqite}`);
@@ -702,6 +810,24 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
   }
 });
 
+// Resumo de uma RAT candidata a destino, pro seletor da confirmação.
+function resumirRatDestino(rat: {
+  id: number;
+  numrat: number | null;
+  datemi: Date | null;
+  itens: { id: number; datati: Date | null; horini: number | null; horfim: number | null; desati: string | null }[];
+}) {
+  const minutos = rat.itens.reduce(
+    (total, i) => total + (i.horini != null && i.horfim != null && i.horfim > i.horini ? i.horfim - i.horini : 0),
+    0
+  );
+  const recentes = [...rat.itens]
+    .sort((a, b) => (b.datati?.getTime() ?? 0) - (a.datati?.getTime() ?? 0) || b.id - a.id)
+    .slice(0, 2)
+    .map((i) => ({ datati: i.datati, desati: i.desati }));
+  return { id: rat.id, numrat: rat.numrat, datemi: rat.datemi, qtdItens: rat.itens.length, minutos, recentes };
+}
+
 apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => {
   try {
     const sessaoId = Number(req.body?.sessaoId);
@@ -718,6 +844,7 @@ apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => 
       ajusteInicio: req.body?.ajusteInicio,
       ajusteFim: req.body?.ajusteFim,
       descricao: req.body?.descricao,
+      ratDestino: lerRatDestino(req.body?.ratDestino),
     }, ctx);
     res.status(status).json(body);
   } catch (error) {
@@ -742,8 +869,15 @@ apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => 
 apontamentosRouter.post("/confirmar-lote", async (req: AuthenticatedRequest, res) => {
   try {
     const itensBrutos = Array.isArray(req.body?.itens) ? req.body.itens : [];
-    const itens = itensBrutos
-      .map((i: any) => ({ sessaoId: Number(i?.sessaoId), descricao: typeof i?.descricao === "string" ? i.descricao : undefined }))
+    const itens: { sessaoId: number; descricao?: string; ratDestino?: RatDestino; grupo: string | null }[] = itensBrutos
+      .map((i: any) => ({
+        sessaoId: Number(i?.sessaoId),
+        descricao: typeof i?.descricao === "string" ? i.descricao : undefined,
+        ratDestino: lerRatDestino(i?.ratDestino),
+        // "Gerar RAT nova" no lote vale pro GRUPO (consultor+proposta), não por sessão:
+        // todas as sessões marcadas com o mesmo grupo vão pra MESMA RAT nova.
+        grupo: typeof i?.ratDestino?.grupo === "string" ? i.ratDestino.grupo : null,
+      }))
       .filter((i: { sessaoId: number }) => Number.isFinite(i.sessaoId));
     if (itens.length === 0) {
       res.status(400).json({ error: "Informe ao menos um sessaoId" });
@@ -765,15 +899,24 @@ apontamentosRouter.post("/confirmar-lote", async (req: AuthenticatedRequest, res
     const confirmados: { sessaoId: number; ratItemId: number; ratId: number }[] = [];
     const falhas: { sessaoId: number; erro: string }[] = [];
 
+    // Grupo -> RAT criada pela 1ª sessão do grupo que pediu "Gerar RAT nova". O laço é
+    // sequencial (ver acima), então a 2ª sessão já acha a RAT que a 1ª criou.
+    const ratNovaPorGrupo = new Map<string, number>();
+
     for (const item of itens) {
+      let ratDestino = item.ratDestino;
+      if (ratDestino && "nova" in ratDestino && item.grupo != null && ratNovaPorGrupo.has(item.grupo)) {
+        ratDestino = { ratId: ratNovaPorGrupo.get(item.grupo)! };
+      }
       const { status, body } = await confirmarSessao(
         item.sessaoId,
-        { descricao: item.descricao, adiarEnvio: true },
+        { descricao: item.descricao, adiarEnvio: true, ratDestino },
         ctx
       );
       if (status >= 400) {
         falhas.push({ sessaoId: item.sessaoId, erro: (body?.error as string) ?? `Falha (status ${status})` });
       } else {
+        if (ratDestino && "nova" in ratDestino && item.grupo != null) ratNovaPorGrupo.set(item.grupo, body.ratId as number);
         confirmados.push({ sessaoId: item.sessaoId, ratItemId: body.ratItemId as number, ratId: body.ratId as number });
       }
     }

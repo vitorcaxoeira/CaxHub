@@ -72,6 +72,36 @@ interface SessaoPendente {
   bloqueadoApontamentoEfetivo: boolean;
 }
 
+// RAT Digitada candidata a receber a sessão confirmada (ver GET /sessoes-pendentes,
+// `ratsDestino`). A descrição dos itens recentes é o que deixa reconhecer qual RAT é qual —
+// ex.: uma RAT por filial do cliente, e a filial só aparece no texto do item.
+interface RatDestinoOpcao {
+  id: number;
+  numrat: number | null;
+  datemi: string | null;
+  qtdItens: number;
+  minutos: number;
+  recentes: { datati: string | null; desati: string | null }[];
+}
+
+// Valor do seletor: id da RAT (como texto) ou "nova".
+const DESTINO_NOVA = "nova";
+
+function chaveGrupoRat(s: { codemp: number; codfor: number; codpro: number }): string {
+  return `${s.codemp}-${s.codfor}-${s.codpro}`;
+}
+
+function ratDestinoDoValor(valor: string | null | undefined): { ratId: number } | { nova: true } | undefined {
+  if (!valor) return undefined;
+  if (valor === DESTINO_NOVA) return { nova: true };
+  const ratId = Number(valor);
+  return Number.isInteger(ratId) && ratId > 0 ? { ratId } : undefined;
+}
+
+function rotuloRatDestino(r: RatDestinoOpcao): string {
+  return `RAT ${r.numrat ?? `local ${r.id}`}${r.datemi ? ` · ${dateFormatter.format(new Date(r.datemi))}` : ""}`;
+}
+
 interface AtividadeResumo {
   id: number;
   codpro: number;
@@ -367,6 +397,77 @@ const selectClass =
 const ENVIO_INTERVALO_MS = 1500;
 const ENVIO_MAX_TENTATIVAS = 13;
 
+// Lista de RATs de destino como cartões de opção (radio), usada na confirmação individual e
+// no resumo do lote. Não é <select> de propósito: a lista nativa do navegador abre com a
+// largura do texto mais longo e vaza pra fora do modal, e a descrição dos itens (que é o que
+// distingue as RATs, ex.: a filial) é longa.
+function OpcoesRatDestino({
+  nome,
+  opcoes,
+  valor,
+  desabilitado = false,
+  onChange,
+  className = "",
+}: {
+  nome: string;
+  opcoes: RatDestinoOpcao[];
+  valor: string;
+  desabilitado?: boolean;
+  onChange: (valor: string) => void;
+  className?: string;
+}) {
+  const itens: { valor: string; rat: RatDestinoOpcao | null }[] = [
+    ...opcoes.map((r) => ({ valor: String(r.id), rat: r })),
+    { valor: DESTINO_NOVA, rat: null },
+  ];
+  return (
+    <div role="radiogroup" className={`space-y-2 ${className}`}>
+      {itens.map(({ valor: v, rat }) => {
+        const marcado = valor === v;
+        return (
+          <label
+            key={v}
+            className={`flex gap-3 rounded-md border p-3 text-sm transition-colors ${
+              desabilitado ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+            } ${marcado ? "border-primary bg-primary/10" : desabilitado ? "border-border" : "border-border hover:bg-surface-2"}`}
+          >
+            <input
+              type="radio"
+              name={nome}
+              value={v}
+              checked={marcado}
+              disabled={desabilitado}
+              onChange={() => onChange(v)}
+              className="mt-0.5 accent-primary"
+            />
+            {rat ? (
+              <span className="min-w-0 flex-1 space-y-1">
+                <span className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-foreground">{rotuloRatDestino(rat)}</span>
+                  <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
+                    {rat.qtdItens} {rat.qtdItens === 1 ? "item" : "itens"} · {formatMinutos(rat.minutos)}
+                  </span>
+                </span>
+                {rat.recentes.map((i, idx) => (
+                  <span key={idx} className="block truncate text-[12px] text-muted" title={i.desati ?? undefined}>
+                    {i.datati ? `${dateFormatter.format(new Date(i.datati))} · ` : ""}
+                    {i.desati || "(sem descrição)"}
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium text-foreground">Gerar RAT nova</span>
+                <span className="block text-[12px] text-muted">Abre um documento novo no Senior.</span>
+              </span>
+            )}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 export function MeusApontamentos() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -375,6 +476,13 @@ export function MeusApontamentos() {
   // time que gerencia (ver GET /sessoes-pendentes) — é o que liga a coluna Consultor e a
   // barra de filtros abaixo.
   const [mostrarConsultor, setMostrarConsultor] = useState(false);
+  // Escolha da RAT de destino na confirmação (25/09/2026). O servidor só manda opções pros
+  // grupos consultor+proposta com 2 ou mais RATs Digitadas, e só quando o contrato do Senior
+  // já aceita RAT de destino — sem opções, Confirmar segue direto como sempre.
+  const [ratsDestino, setRatsDestino] = useState<Record<string, RatDestinoOpcao[]>>({});
+  const [escolhaRat, setEscolhaRat] = useState<{ sessaoId: number; titulo: string; opcoes: RatDestinoOpcao[]; valor: string } | null>(
+    null
+  );
   const [buscaSessoesInput, setBuscaSessoesInput] = useState("");
   const buscaSessoesDebounced = useDebouncedValue(buscaSessoesInput, 350);
   const [codforsFiltroSessoes, setCodforsFiltroSessoes] = useState<number[]>([]);
@@ -473,6 +581,7 @@ export function MeusApontamentos() {
       .then(([sessoesRes, atividadesRes]) => {
         setSessoes(sessoesRes.data.sessoes);
         setMostrarConsultor(Boolean(sessoesRes.data.mostrarConsultor));
+        setRatsDestino(sessoesRes.data.ratsDestino ?? {});
         setAtividades(atividadesRes.data.atividades);
         setErro(null);
       })
@@ -699,7 +808,25 @@ export function MeusApontamentos() {
     }
   }
 
-  async function confirmar(sessaoId: number) {
+  // Clique em Confirmar: se o consultor tem 2+ RATs Digitadas nessa proposta, pergunta
+  // antes em qual delas a sessão entra (ou se gera uma nova); senão confirma direto.
+  function confirmar(sessaoId: number) {
+    const sessao = sessoes.find((s) => s.id === sessaoId);
+    const opcoes = sessao ? ratsDestino[chaveGrupoRat(sessao)] : undefined;
+    if (sessao && opcoes && opcoes.length > 0) {
+      setEscolhaRat({
+        sessaoId,
+        titulo: `Proposta ${sessao.codpro} · ${dataCurtaFormatter.format(new Date(sessao.inicio))} ${formatHorario(sessao.inicio, sessao.fim)}`,
+        opcoes,
+        // Primeira = a que a regra automática escolheria (ordem do servidor).
+        valor: String(opcoes[0].id),
+      });
+      return;
+    }
+    void enviarConfirmacao(sessaoId);
+  }
+
+  async function enviarConfirmacao(sessaoId: number, ratDestino?: { ratId: number } | { nova: true }) {
     setConfirmando(sessaoId);
     // Cai pra observacao (pré-preenchida ao sair de "Em Andamento", ver Atividades.tsx)
     // quando o usuário não editou o campo — senão o texto pré-preenchido só aparecia na
@@ -707,7 +834,11 @@ export function MeusApontamentos() {
     const sessao = sessoes.find((s) => s.id === sessaoId);
     const descricao = descricoes[sessaoId] ?? sessao?.observacao ?? "";
     try {
-      const { data } = await axios.post("/api/apontamentos/confirmar", { sessaoId, descricao: descricao || undefined });
+      const { data } = await axios.post("/api/apontamentos/confirmar", {
+        sessaoId,
+        descricao: descricao || undefined,
+        ...(ratDestino ? { ratDestino } : {}),
+      });
       carregar();
       carregarRats();
       if (data?.ratId != null) expandirEAtualizarRat(data.ratId);
@@ -731,6 +862,8 @@ export function MeusApontamentos() {
     consultorNome: string | null;
     sessaoIds: number[];
     minutos: number;
+    // RAT de destino do grupo inteiro — null quando o grupo não tem escolha (regra automática).
+    destino: string | null;
   }
   const [resumoLote, setResumoLote] = useState<GrupoResumoLote[] | null>(null);
   const [confirmandoLote, setConfirmandoLote] = useState(false);
@@ -744,7 +877,15 @@ export function MeusApontamentos() {
       const chave = `${s.codemp}-${s.codfor}-${s.codpro}`;
       let grupo = porGrupo.get(chave);
       if (!grupo) {
-        grupo = { chave, codpro: s.codpro, consultorNome: s.consultorNome, sessaoIds: [], minutos: 0 };
+        const opcoes = ratsDestino[chave];
+        grupo = {
+          chave,
+          codpro: s.codpro,
+          consultorNome: s.consultorNome,
+          sessaoIds: [],
+          minutos: 0,
+          destino: opcoes && opcoes.length > 0 ? String(opcoes[0].id) : null,
+        };
         porGrupo.set(chave, grupo);
       }
       grupo.sessaoIds.push(s.id);
@@ -757,13 +898,19 @@ export function MeusApontamentos() {
   async function confirmarTodos() {
     if (!resumoLote) return;
     setConfirmandoLote(true);
-    const itens = resumoLote
-      .flatMap((g) => g.sessaoIds)
-      .map((sessaoId) => {
+    const itens = resumoLote.flatMap((g) => {
+      const ratDestino = ratDestinoDoValor(g.destino);
+      return g.sessaoIds.map((sessaoId) => {
         const sessao = sessoes.find((s) => s.id === sessaoId);
         const descricao = descricoes[sessaoId] ?? sessao?.observacao ?? "";
-        return { sessaoId, descricao: descricao || undefined };
+        return {
+          sessaoId,
+          descricao: descricao || undefined,
+          // "grupo" faz o servidor mandar todas as sessões do grupo pra MESMA RAT nova.
+          ...(ratDestino ? { ratDestino: "nova" in ratDestino ? { nova: true, grupo: g.chave } : ratDestino } : {}),
+        };
       });
+    });
     try {
       const { data } = await axios.post("/api/apontamentos/confirmar-lote", { itens });
       setResultadoLote({ confirmados: data.confirmados?.length ?? 0, falhas: data.falhas ?? [] });
@@ -2179,6 +2326,50 @@ export function MeusApontamentos() {
         />
       )}
 
+      {/* Escolha da RAT de destino na confirmação individual (25/09/2026) — só abre quando o
+          consultor tem 2+ RATs Digitadas na proposta (ver confirmar). Cada opção mostra as
+          descrições recentes, que é por onde se reconhece a RAT (ex.: filial do cliente). */}
+      {escolhaRat && (
+        <Modal
+          open
+          onClose={() => confirmando !== escolhaRat.sessaoId && setEscolhaRat(null)}
+          fecharPorFora={false}
+          title="Em qual RAT?"
+          subtitulo={escolhaRat.titulo}
+        >
+          <div className="space-y-4 p-4">
+            <OpcoesRatDestino
+              nome="rat-destino"
+              opcoes={escolhaRat.opcoes}
+              valor={escolhaRat.valor}
+              onChange={(valor) => setEscolhaRat((atual) => (atual ? { ...atual, valor } : atual))}
+              className="max-h-80 overflow-y-auto"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setEscolhaRat(null)}
+                disabled={confirmando === escolhaRat.sessaoId}
+                className="rounded-md border border-border px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const { sessaoId, valor } = escolhaRat;
+                  await enviarConfirmacao(sessaoId, ratDestinoDoValor(valor));
+                  setEscolhaRat(null);
+                }}
+                disabled={confirmando === escolhaRat.sessaoId}
+                className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {confirmando === escolhaRat.sessaoId && <Spinner className="h-3.5 w-3.5" />}
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {/* Resumo antes de confirmar em lote — agrupado pela MESMA chave (consultor+proposta)
           que o servidor usa pra encapsular na RAT, pra deixar visível que nada vai se
           misturar antes de disparar de verdade. Não fecha por fora: some ação em andamento
@@ -2192,15 +2383,30 @@ export function MeusApontamentos() {
           subtitulo={`${resumoLote.reduce((soma, g) => soma + g.sessaoIds.length, 0)} sessões · ${resumoLote.length} RAT${resumoLote.length === 1 ? "" : "s"}`}
         >
           <div className="space-y-4 p-4">
-            <div className="max-h-64 space-y-1.5 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-3">
+            <div className="max-h-[28rem] space-y-3 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-3">
               {resumoLote.map((g) => (
-                <div key={g.chave} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="min-w-0 truncate text-foreground">
-                    Proposta {g.codpro} · {g.consultorNome ?? "eu"}
-                  </span>
-                  <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
-                    {g.sessaoIds.length} apont. · {formatMinutos(g.minutos)}
-                  </span>
+                <div key={g.chave} className="space-y-1">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="min-w-0 truncate text-foreground">
+                      Proposta {g.codpro} · {g.consultorNome ?? "eu"}
+                    </span>
+                    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
+                      {g.sessaoIds.length} apont. · {formatMinutos(g.minutos)}
+                    </span>
+                  </div>
+                  {g.destino != null && (
+                    <OpcoesRatDestino
+                      nome={`rat-destino-${g.chave}`}
+                      opcoes={ratsDestino[g.chave] ?? []}
+                      valor={g.destino}
+                      desabilitado={confirmandoLote || resultadoLote != null}
+                      onChange={(valor) =>
+                        setResumoLote((atual) =>
+                          atual ? atual.map((x) => (x.chave === g.chave ? { ...x, destino: valor } : x)) : atual
+                        )
+                      }
+                    />
+                  )}
                 </div>
               ))}
             </div>

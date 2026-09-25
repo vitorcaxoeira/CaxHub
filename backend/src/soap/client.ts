@@ -217,7 +217,17 @@ export interface RegistrarAtividadesPayload {
   sisOri: string;
   tipEve: string;
   itens: ItemAtividadeSenior[];
+  /**
+   * RAT de destino explícita: anexar os itens NESTA RAT (Digitada) do Senior. Pedido ao
+   * desenvolvedor Senior em 25/09/2026 (publicado em homologação e produção no mesmo dia) —
+   * sem ele é o Senior quem escolhe a RAT aberta, e quem confirma a sessão não consegue
+   * separar o trabalho por filial do cliente (RATs da proposta 7935, uma por filial).
+   */
+  numRat?: number;
+  /** "S" = abrir RAT nova, nunca anexar numa aberta. Mesma origem de `numRat`. */
+  gerRat?: "S";
 }
+
 
 export interface ItemRegistrado {
   ideExt: string | null;
@@ -296,8 +306,11 @@ export function montarEnvelopeRegistrarAtividades(payload: RegistrarAtividadesPa
     `<codEmp>${payload.codEmp}</codEmp>` +
     `<codFor>${payload.codFor}</codFor>` +
     `<codPro>${payload.codPro}</codPro>` +
+    // Ordem alfabética, igual ao XSD (conferido em homologação e produção, 25/09/2026).
+    (payload.gerRat ? `<gerRat>${payload.gerRat}</gerRat>` : "") +
     `<ideExt>${escapeXml(payload.ideExt)}</ideExt>` +
     itensXml +
+    (payload.numRat != null ? `<numRat>${payload.numRat}</numRat>` : "") +
     `<sisOri>${escapeXml(payload.sisOri)}</sisOri>` +
     `<tipEve>${escapeXml(payload.tipEve)}</tipEve>`;
 
