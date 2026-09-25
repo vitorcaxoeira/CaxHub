@@ -210,25 +210,39 @@ interface IdentidadeSenior {
 // perdeu (timeout, queda de rede) e o item ficou marcado como falho aqui. Reenviar às
 // cegas duplicaria o apontamento no ERP; então, antes de qualquer RETENTATIVA, pergunta.
 // Só é barato porque leitura e escrita moram no mesmo serviço.
+//
+// O CONSULTOR entra na conferência (25/09/2026): sem ele, o apontamento de um consultor era
+// confundido com o de OUTRO no mesmo item e horário — reunião com vários consultores é comum.
+// Achado real (RAT 2025438, consultor 305): o Senior tinha só o registro do consultor 637 naquele
+// horário, o reconciliador o tomou por "já enviado" e o apontamento do 305 nunca foi ao Senior;
+// o write-back ainda quebrava em UNIQUE(codemp,numrat,seqrat) por o registro ser de outro item
+// local. O consultor não está na IAT: vem do cabeçalho da RAT (USU_TE777RAT.USU_CODFOR).
+// `seqAti` não entra de propósito: apontamento antigo pode ter USU_SeqAti=0 no Senior (ver
+// ItemAtividadeSenior.seqAti), e exigi-lo criaria falso "não existe" e duplicaria no ERP.
 async function procurarApontamentoNoSenior(item: {
   codemp: number;
+  codfor: number;
   codpro: number | null;
   seqite: number | null;
   datati: Date;
   horini: number;
   horfim: number;
 }): Promise<IdentidadeSenior | null> {
+  if (!Number.isInteger(item.codfor)) throw new Error("codfor inválido na conferência de duplicidade");
   const filtros = [
-    `USU_CODEMP = ${item.codemp}`,
-    item.codpro != null ? `USU_CodPro = ${item.codpro}` : null,
-    item.seqite != null ? `USU_SeqIte = ${item.seqite}` : null,
-    `USU_DATATI = '${item.datati.toISOString().slice(0, 10)}'`,
-    `USU_HORINI = ${item.horini}`,
-    `USU_HORFIM = ${item.horfim}`,
+    `i.USU_CODEMP = ${item.codemp}`,
+    `r.USU_CODFOR = ${item.codfor}`,
+    item.codpro != null ? `i.USU_CodPro = ${item.codpro}` : null,
+    item.seqite != null ? `i.USU_SeqIte = ${item.seqite}` : null,
+    `i.USU_DATATI = '${item.datati.toISOString().slice(0, 10)}'`,
+    `i.USU_HORINI = ${item.horini}`,
+    `i.USU_HORFIM = ${item.horfim}`,
   ].filter(Boolean);
 
   const linhas = (await runSqlViaSoap(
-    `SELECT USU_NUMRAT AS numrat, USU_SEQRAT AS seqrat FROM USU_TE777IAT WHERE ${filtros.join(" AND ")}`
+    `SELECT i.USU_NUMRAT AS numrat, i.USU_SEQRAT AS seqrat FROM USU_TE777IAT i ` +
+      `JOIN USU_TE777RAT r ON r.USU_CODEMP = i.USU_CODEMP AND r.USU_NUMRAT = i.USU_NUMRAT ` +
+      `WHERE ${filtros.join(" AND ")}`
   )) as { numrat: number; seqrat: number }[];
 
   if (linhas.length !== 1) return null; // 0 = não existe; >1 = ambíguo, melhor não adivinhar
@@ -323,6 +337,7 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
   //     propósito não faz o write-back local).
   const jaExiste = await procurarApontamentoNoSenior({
     codemp: ratItem.codemp,
+    codfor: ratItem.rat.codfor,
     codpro: ratItem.codpro,
     seqite: ratItem.seqite,
     datati: ratItem.datati,
@@ -333,6 +348,7 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
     console.warn(
       `[${JOB_NAME}] apontamento ${ratItemId} já existe no Senior (RAT ${jaExiste.numrat}/${jaExiste.seqrat}) — não reenvia, só reconcilia`
     );
+    await garantirIdentidadeLivre(ratItem.id, ratItem.codemp, jaExiste.numrat, jaExiste.seqrat);
     return { tipo: "apontamento", ratId: ratItem.ratId, ratItemId: ratItem.id, ...jaExiste };
   }
 
@@ -357,7 +373,24 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
     );
   }
 
+  await garantirIdentidadeLivre(ratItem.id, ratItem.codemp, resultado.numRat, itemRetornado.seqRat);
   return { tipo: "apontamento", ratId: ratItem.ratId, ratItemId: ratItem.id, numrat: resultado.numRat, seqrat: itemRetornado.seqRat };
+}
+
+// O par (codemp, numrat, seqrat) é único no banco local. Se o Senior devolveu um par que JÁ é de
+// OUTRO apontamento nosso, gravar o write-back estouraria a constraint com um erro de banco
+// ilegível, e a pendência ficaria presa. Recusa antes, com a causa dita em claro.
+async function garantirIdentidadeLivre(ratItemId: number, codemp: number, numrat: number, seqrat: number): Promise<void> {
+  const dono = await prisma.ratItem.findFirst({
+    where: { codemp, numrat, seqrat, id: { not: ratItemId } },
+    select: { id: true },
+  });
+  if (dono) {
+    throw new Error(
+      `O Senior indicou a RAT ${numrat}/${seqrat} para o apontamento ${ratItemId}, mas ela já pertence ao apontamento local ${dono.id} — ` +
+        `possível confusão entre apontamentos de consultores diferentes no mesmo horário. Nada foi gravado; confira no Senior.`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
