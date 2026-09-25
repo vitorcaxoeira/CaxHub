@@ -113,6 +113,15 @@ export interface AreaAcesso {
   id: number;
   tipo: string;
   setorVinculadoId: number | null;
+  // Ambientes comuns ativos vinculados (basta 1 item para saber se a área é agrupadora).
+  ambientes?: { id: number }[];
+}
+
+// Área agrupadora = setor com pelo menos um ambiente comum ativo vinculado. Ela não tem perguntas
+// próprias: avaliá-la abre uma avaliação por ambiente, e o resultado é o acúmulo deles (como a
+// aba "Comum" da planilha do cliente).
+export function ehAgrupadora(area: AreaAcesso): boolean {
+  return area.tipo === "setor" && (area.ambientes?.length ?? 0) > 0;
 }
 
 export function temAcesso(acesso: Acesso5S): boolean {
@@ -131,14 +140,13 @@ export function podeObservar(acesso: Acesso5S): boolean {
   return acesso.papel != null;
 }
 
-// Coordenador e avaliador veem tudo. O líder vê os setores dele, todos os ambientes comuns sem
-// vínculo (compartilhados) e os ambientes vinculados a um dos setores dele.
+// Coordenador e avaliador veem tudo. O líder vê os setores dele, as áreas agrupadoras (que reúnem
+// os ambientes compartilhados) e todos os ambientes comuns.
 export function podeVerArea(acesso: Acesso5S, area: AreaAcesso): boolean {
   if (acesso.papel === "coordenador" || acesso.papel === "avaliador") return true;
   if (acesso.papel !== "lider") return false;
-  if (area.tipo === "setor") return acesso.areasLider.includes(area.id);
-  if (area.setorVinculadoId == null) return true;
-  return acesso.areasLider.includes(area.setorVinculadoId);
+  if (area.tipo === "comum") return true;
+  return acesso.areasLider.includes(area.id) || ehAgrupadora(area);
 }
 
 // Líder só registra observação nas áreas que ele enxerga.

@@ -21,6 +21,7 @@ interface MesBloco {
 interface AreaResultado {
   areaId: number;
   nome: string;
+  acumulado?: boolean;
   avaliacoes: number;
   geral: number | null;
   porSenso: PorSenso;
@@ -33,7 +34,7 @@ interface Dashboard {
   de: string;
   ate: string;
   meses: string[];
-  ranking: { posicao: number; areaId: number; nome: string; geral: number | null; tendencia: Tendencia }[];
+  ranking: { posicao: number; areaId: number; nome: string; acumulado?: boolean; geral: number | null; tendencia: Tendencia }[];
   areas: AreaResultado[];
   empresa: { geral: number | null; porSenso: PorSenso; meses: MesBloco[]; tendencia: Tendencia };
 }
@@ -169,6 +170,7 @@ export function Dashboard5S() {
                     <span className="min-w-0 truncate text-sm text-foreground">
                       <span className="mr-2 inline-block w-7 font-mono text-xs text-muted">{MEDALHA[r.posicao - 1] ?? `${r.posicao}º`}</span>
                       {r.nome}
+                      {r.acumulado && <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary" title="Soma das respostas dos ambientes vinculados">acumulado</span>}
                     </span>
                     <span className="flex flex-none items-center gap-2">
                       <TendenciaSeta tendencia={r.tendencia} />
@@ -204,7 +206,10 @@ export function Dashboard5S() {
                     .sort((a, b) => (b.geral ?? -1) - (a.geral ?? -1))
                     .map((a) => (
                       <tr key={a.areaId} className="border-t border-border/60">
-                        <td className="whitespace-nowrap px-3 py-2 text-sm text-foreground">{a.nome}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-sm text-foreground">
+                          {a.nome}
+                          {a.acumulado && <span className="ml-2 text-[10px] text-primary">acumulado</span>}
+                        </td>
                         {SENSOS.map((s) => (
                           <td key={s.chave} className="px-2 py-2 text-center">
                             <Celula valor={a.porSenso[s.chave]} />

@@ -20,6 +20,7 @@ interface Participante {
 interface Setor {
   id: number;
   nome: string;
+  ehAgrupadora?: boolean;
 }
 
 const DESCRICAO_PAPEL: Record<Papel5S, string> = {
@@ -50,7 +51,7 @@ export function Participantes5S() {
 
   useEffect(carregar, [carregar]);
   useEffect(() => {
-    axios.get<Setor[]>("/api/5s/areas", { params: { tipo: "setor" } }).then(({ data }) => setSetores(data)).catch(() => {});
+    axios.get<Setor[]>("/api/5s/areas", { params: { tipo: "setor" } }).then(({ data }) => setSetores(data.filter((s) => !s.ehAgrupadora))).catch(() => {});
   }, []);
 
   async function remover(p: Participante) {

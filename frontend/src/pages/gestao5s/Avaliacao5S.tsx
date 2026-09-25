@@ -43,6 +43,7 @@ interface BlocoSenso {
 
 interface ObservacaoEquipe {
   id: number;
+  areaNome: string;
   dataOcorrido: string;
   texto: string;
   autorNome: string | null;
@@ -62,6 +63,17 @@ interface Detalhe {
   respostas: Resposta[];
   sensos: BlocoSenso[];
   observacoesEquipe: ObservacaoEquipe[];
+  // Avaliação de ambiente aberta por uma área agrupadora aponta o pai; o pai lista as filhas.
+  pai: { id: number; titulo: string } | null;
+  filhas: {
+    id: number;
+    titulo: string;
+    areaNome: string;
+    status: "em_andamento" | "finalizada";
+    percentuais: Percentuais;
+    respondidas: number;
+    total: number;
+  }[];
 }
 
 const CAMPOS_BLOCO: { chave: "observacoes" | "melhorias" | "pontosAtencao" | "informacoes"; rotulo: string }[] = [
@@ -193,6 +205,89 @@ export function Avaliacao5S() {
     );
   }
 
+  // Avaliação-pai de uma área agrupadora: não tem perguntas próprias. Mostra o resultado acumulado dos
+  // ambientes (soma das notas / (5 × perguntas), como a aba Comum da planilha) e um cartão por
+  // ambiente, que abre o questionário dele.
+  if (av.filhas.length > 0) {
+    const finalizadas = av.filhas.filter((f) => f.status === "finalizada").length;
+    return (
+      <div className="pb-24">
+        <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Gestão 5S · Avaliação</p>
+        <h1 className="font-display text-xl font-bold text-foreground sm:text-2xl">{av.titulo}</h1>
+        <p className="mb-4 mt-1 text-sm text-muted">
+          {formatarDiaIso(av.data)} · Avaliador: {av.avaliadorNome ?? "—"} · {finalizadas}/{av.filhas.length} ambientes finalizados ·{" "}
+          <span className={av.status === "em_andamento" ? "text-warning" : "text-success"}>{av.status === "em_andamento" ? "Em andamento" : "Finalizada"}</span>
+        </p>
+
+        <section className="mb-6 rounded-lg border border-border bg-surface p-4 shadow-sm">
+          <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">Resultado acumulado dos ambientes</p>
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+            {SENSOS.map((s) => (
+              <div key={s.chave} className="rounded-md border border-border/60 p-2 text-center">
+                <p className="text-[11px] text-muted">{s.curto}</p>
+                <p className={cn("mt-1 inline-block rounded px-1.5 py-0.5 font-mono text-sm tabular-nums", CELULA_TOM[tomDaNota(av.percentuais.porSenso[s.chave])])}>{formatarPerc(av.percentuais.porSenso[s.chave])}</p>
+              </div>
+            ))}
+            <div className="rounded-md border border-border p-2 text-center">
+              <p className="text-[11px] font-semibold text-foreground">Geral</p>
+              <p className={cn("mt-1 inline-block rounded px-1.5 py-0.5 font-mono text-sm font-bold tabular-nums", CELULA_TOM[tomDaNota(av.percentuais.geral)])}>{formatarPerc(av.percentuais.geral, 1)}</p>
+            </div>
+          </div>
+        </section>
+
+        <h2 className="mb-2 font-display text-lg font-bold text-foreground">Ambientes</h2>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {av.filhas.map((f) => (
+            <Link key={f.id} to={`/5s/avaliacoes/${f.id}`} className="block rounded-lg border border-border bg-surface p-3 transition hover:bg-surface-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm font-semibold text-foreground">{f.areaNome}</span>
+                <span className={cn("rounded px-1.5 py-0.5 font-mono text-xs tabular-nums", CELULA_TOM[tomDaNota(f.percentuais.geral)])}>{formatarPerc(f.percentuais.geral)}</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2">
+                <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${f.total ? (f.respondidas / f.total) * 100 : 0}%` }} />
+              </div>
+              <p className="mt-1 text-[11px] text-muted">
+                {f.respondidas}/{f.total} respondidas · <span className={f.status === "finalizada" ? "text-success" : "text-warning"}>{f.status === "finalizada" ? "Finalizado" : "Em andamento"}</span>
+              </p>
+            </Link>
+          ))}
+        </div>
+
+        {av.observacoesEquipe.length > 0 && (
+          <section className="mt-8">
+            <h2 className="mb-2 font-display text-lg font-bold text-foreground">Observações da equipe no mês</h2>
+            <div className="space-y-2">
+              {av.observacoesEquipe.map((o) => (
+                <div key={o.id} className="rounded-lg border border-border bg-surface p-3">
+                  <p className="text-[11px] text-muted">
+                    {formatarDiaIso(o.dataOcorrido)} · {o.areaNome} · {o.autorNome ?? "—"}
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{o.texto}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 px-4 py-2.5 backdrop-blur lg:left-60">
+          <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
+            <p className="text-[12px] text-muted">Cada ambiente é finalizado na própria avaliação; a rodada fecha quando todos estiverem finalizados.</p>
+            <div className="flex flex-none items-center gap-2">
+              {av.pode.excluir && (
+                <button type="button" disabled={processando} onClick={excluir} className={classeBotaoPerigo}>
+                  Excluir rodada
+                </button>
+              )}
+              <Link to="/5s/avaliacoes" className={classeBotaoSecundario}>
+                Voltar
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const senso = SENSOS.find((s) => s.chave === sensoAtivo)!;
   const indice = SENSOS.findIndex((s) => s.chave === sensoAtivo);
   const perguntas = av.respostas.filter((r) => r.senso === sensoAtivo);
@@ -201,6 +296,11 @@ export function Avaliacao5S() {
 
   return (
     <div className="pb-24">
+      {av.pai && (
+        <Link to={`/5s/avaliacoes/${av.pai.id}`} className="mb-2 inline-block text-sm text-primary hover:underline">
+          ← Parte de: {av.pai.titulo}
+        </Link>
+      )}
       <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Gestão 5S · Avaliação</p>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -316,7 +416,7 @@ export function Avaliacao5S() {
             {av.observacoesEquipe.map((o) => (
               <div key={o.id} className="rounded-lg border border-border bg-surface p-3">
                 <p className="text-[11px] text-muted">
-                  {formatarDiaIso(o.dataOcorrido)} · {o.autorNome ?? "—"}
+                  {formatarDiaIso(o.dataOcorrido)} · {o.areaNome} · {o.autorNome ?? "—"}
                 </p>
                 <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{o.texto}</p>
                 {o.imagens.length > 0 && (

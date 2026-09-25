@@ -20,8 +20,10 @@ import {
   SENSOS,
   Senso,
   TIPOS_AREA,
+  TipoArea,
   calcularPercentuais,
   chaveMes,
+  ehAgrupadora,
   ehSenso,
   hojeComoData,
   media,
@@ -134,8 +136,8 @@ function filtroAreasVisiveis(acesso: Acesso5S): Prisma.Area5SWhereInput {
   if (acesso.papel !== "lider") return {};
   return {
     OR: [
-      { tipo: "setor", id: { in: acesso.areasLider } },
-      { tipo: "comum", OR: [{ setorVinculadoId: null }, { setorVinculadoId: { in: acesso.areasLider } }] },
+      { tipo: "setor", OR: [{ id: { in: acesso.areasLider } }, { ambientes: { some: { ativo: true } } }] },
+      { tipo: "comum" },
     ],
   };
 }
@@ -192,6 +194,7 @@ const SELECT_AREA = {
   ativo: true,
   ordem: true,
   setorVinculado: { select: { nome: true } },
+  ambientes: { where: { ativo: true }, select: { id: true, nome: true }, orderBy: [{ ordem: "asc" }, { nome: "asc" }] },
 } satisfies Prisma.Area5SSelect;
 
 type AreaLinha = Prisma.Area5SGetPayload<{ select: typeof SELECT_AREA }>;
@@ -205,6 +208,9 @@ function serializarArea(a: AreaLinha) {
     setorVinculadoNome: a.setorVinculado?.nome ?? null,
     ativo: a.ativo,
     ordem: a.ordem,
+    // Setor com ambientes comuns vinculados: não tem perguntas próprias, vira agrupador.
+    ehAgrupadora: a.tipo === "setor" && a.ambientes.length > 0,
+    vinculados: a.ambientes,
   };
 }
 
@@ -266,6 +272,10 @@ gestao5sRouter.put("/areas/:id", async (req: Req5S, res) => {
     if (!atual) return void res.status(404).json({ error: "Área não encontrada" });
     const v = await validarArea(req.body ?? {}, id);
     if (v.erro) return void res.status(400).json({ error: v.erro });
+    if (v.dados!.tipo === "comum") {
+      const vinculados = await prisma.area5S.count({ where: { setorVinculadoId: id, ativo: true } });
+      if (vinculados > 0) return void res.status(400).json({ error: "Este setor tem ambientes vinculados e não pode virar ambiente comum" });
+    }
     if (v.dados!.tipo !== atual.tipo) {
       const usada = await prisma.avaliacao5S.count({ where: { areaId: id } });
       if (usada > 0) return void res.status(409).json({ error: "Não é possível trocar o tipo de uma área que já tem avaliações" });
@@ -531,10 +541,19 @@ gestao5sRouter.delete("/participantes/:id", async (req: Req5S, res) => {
 // ---------- avaliações ----------
 
 const INCLUDE_DETALHE = {
-  area: { select: { id: true, nome: true, tipo: true, setorVinculadoId: true } },
+  area: { select: { id: true, nome: true, tipo: true, setorVinculadoId: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } },
   avaliador: { select: { id: true, nome: true } },
   respostas: { orderBy: [{ ordem: "asc" }, { id: "asc" }], include: { imagens: { select: { id: true, nomeArquivo: true }, orderBy: { id: "asc" } } } },
   sensos: { include: { imagens: { select: { id: true, nomeArquivo: true }, orderBy: { id: "asc" } } } },
+  pai: { select: { id: true, titulo: true } },
+  filhas: {
+    orderBy: { id: "asc" },
+    include: {
+      area: { select: { nome: true, tipo: true } },
+      avaliador: { select: { nome: true } },
+      respostas: { select: { nota: true, naoSeAplica: true } },
+    },
+  },
 } satisfies Prisma.Avaliacao5SInclude;
 
 type AvaliacaoDetalhe = Prisma.Avaliacao5SGetPayload<{ include: typeof INCLUDE_DETALHE }>;
@@ -563,9 +582,14 @@ function donoOuCoordenador(acesso: Acesso5S, userId: number, avaliadorId: number
   return podeAvaliar(acesso) && (acesso.papel === "coordenador" || avaliadorId === userId);
 }
 
-function permissoes(acesso: Acesso5S, userId: number, a: { status: string; avaliadorId: number | null }) {
+function permissoes(acesso: Acesso5S, userId: number, a: { status: string; avaliadorId: number | null; filhas?: { status: string }[] }) {
   const dono = donoOuCoordenador(acesso, userId, a.avaliadorId);
   const emAndamento = a.status === "em_andamento";
+  // Avaliação-pai (invólucro da área agrupadora): sem respostas próprias, o status é derivado das
+  // filhas. Só dá para excluí-la (e às filhas) enquanto todas estiverem em andamento.
+  if ((a.filhas?.length ?? 0) > 0) {
+    return { editar: false, finalizar: false, reabrir: false, excluir: dono && a.filhas!.every((f) => f.status === "em_andamento") };
+  }
   return { editar: dono && emAndamento, finalizar: dono && emAndamento, reabrir: dono && !emAndamento, excluir: dono && emAndamento };
 }
 
@@ -585,8 +609,10 @@ function serializarResumo(a: {
   percShitsuke: Prisma.Decimal | null;
   area: { nome: string; tipo: string };
   avaliador: { nome: string } | null;
+  _count?: { filhas: number };
 }) {
   return {
+    quantidadeAmbientes: a._count?.filhas ?? 0,
     id: a.id,
     titulo: a.titulo,
     areaId: a.areaId,
@@ -605,6 +631,13 @@ function serializarDetalhe(a: AvaliacaoDetalhe, acesso: Acesso5S, userId: number
   const blocos = new Map(a.sensos.map((s) => [s.senso, s]));
   return {
     ...serializarResumo(a),
+    quantidadeAmbientes: a.filhas.length,
+    pai: a.pai,
+    filhas: a.filhas.map((f) => ({
+      ...serializarResumo(f),
+      respondidas: f.respostas.filter((r) => r.nota != null || r.naoSeAplica).length,
+      total: f.respostas.length,
+    })),
     pode: permissoes(acesso, userId, a),
     respostas: a.respostas.map((r) => ({
       id: r.id,
@@ -655,7 +688,7 @@ async function abrirAvaliacao(req: Req5S, res: Response) {
 async function recalcular(tx: Prisma.TransactionClient, avaliacaoId: number) {
   const respostas = await tx.avaliacao5SResposta.findMany({ where: { avaliacaoId }, select: { senso: true, nota: true, naoSeAplica: true } });
   const p = calcularPercentuais(respostas);
-  await tx.avaliacao5S.update({
+  const atual = await tx.avaliacao5S.update({
     where: { id: avaliacaoId },
     data: {
       percGeral: p.geral,
@@ -666,7 +699,49 @@ async function recalcular(tx: Prisma.TransactionClient, avaliacaoId: number) {
       percShitsuke: p.porSenso.shitsuke,
     },
   });
+  if (atual.avaliacaoPaiId) await sincronizarPai(tx, atual.avaliacaoPaiId);
   return p;
+}
+
+// Mantém a avaliação-pai coerente com as filhas: percentuais = pool das respostas de todas elas (soma
+// das notas / (5 × aplicáveis), como a aba "Comum" da planilha), status derivado (finalizada só
+// quando todas estão) e, sem filhas, o invólucro some.
+async function sincronizarPai(tx: Prisma.TransactionClient, paiId: number) {
+  const filhas = await tx.avaliacao5S.findMany({
+    where: { avaliacaoPaiId: paiId },
+    select: { status: true, respostas: { select: { senso: true, nota: true, naoSeAplica: true } } },
+  });
+  if (filhas.length === 0) {
+    await tx.avaliacao5S.delete({ where: { id: paiId } });
+    return;
+  }
+  const p = calcularPercentuais(filhas.flatMap((f) => f.respostas));
+  const finalizada = filhas.every((f) => f.status === "finalizada");
+  const pai = await tx.avaliacao5S.findUnique({ where: { id: paiId }, select: { status: true, finalizadaEm: true } });
+  await tx.avaliacao5S.update({
+    where: { id: paiId },
+    data: {
+      percGeral: p.geral,
+      percSeiri: p.porSenso.seiri,
+      percSeiton: p.porSenso.seiton,
+      percSeiso: p.porSenso.seiso,
+      percSeiketsu: p.porSenso.seiketsu,
+      percShitsuke: p.porSenso.shitsuke,
+      status: finalizada ? "finalizada" : "em_andamento",
+      finalizadaEm: finalizada ? (pai?.finalizadaEm ?? new Date()) : null,
+    },
+  });
+}
+
+// Perguntas ativas que valem para a área (gerais do tipo + as restritas a ela), na ordem dos sensos.
+async function perguntasAtivasDaArea(area: { id: number; tipo: string }) {
+  const perguntas = await prisma.pergunta5S.findMany({
+    where: { ativo: true, tipoArea: area.tipo, OR: [{ areaId: null }, { areaId: area.id }] },
+    orderBy: [{ ordem: "asc" }, { id: "asc" }],
+  });
+  const ordemSenso = new Map(CHAVES_SENSO.map((s, i) => [s as string, i]));
+  perguntas.sort((x, y) => (ordemSenso.get(x.senso) ?? 9) - (ordemSenso.get(y.senso) ?? 9) || x.ordem - y.ordem || x.id - y.id);
+  return perguntas;
 }
 
 gestao5sRouter.get("/avaliacoes", async (req: Req5S, res) => {
@@ -676,6 +751,7 @@ gestao5sRouter.get("/avaliacoes", async (req: Req5S, res) => {
     const filtros: Prisma.Avaliacao5SWhereInput[] = [filtroAvaliacoesVisiveis(acesso)];
     const areaId = num(req.query.areaId);
     if (areaId) filtros.push({ areaId });
+    else filtros.push({ avaliacaoPaiId: null });
     const avaliadorId = num(req.query.avaliadorId);
     if (avaliadorId) filtros.push({ avaliadorId });
     const tipo = TIPOS_AREA.find((t) => t === req.query.tipo);
@@ -690,7 +766,7 @@ gestao5sRouter.get("/avaliacoes", async (req: Req5S, res) => {
       prisma.avaliacao5S.count({ where }),
       prisma.avaliacao5S.findMany({
         where,
-        include: { area: { select: { nome: true, tipo: true } }, avaliador: { select: { nome: true } } },
+        include: { area: { select: { nome: true, tipo: true } }, avaliador: { select: { nome: true } }, _count: { select: { filhas: true } } },
         orderBy: [{ data: "desc" }, { id: "desc" }],
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -711,14 +787,41 @@ gestao5sRouter.post("/avaliacoes", async (req: Req5S, res) => {
     if (!areaId) return void res.status(400).json({ error: "Escolha a área a ser avaliada" });
     const area = await prisma.area5S.findUnique({ where: { id: areaId } });
     if (!area || !area.ativo) return void res.status(400).json({ error: "Área não encontrada ou inativa" });
-    const perguntas = await prisma.pergunta5S.findMany({
-      where: { ativo: true, tipoArea: area.tipo, OR: [{ areaId: null }, { areaId: area.id }] },
-      orderBy: [{ ordem: "asc" }, { id: "asc" }],
-    });
-    if (perguntas.length === 0) return void res.status(400).json({ error: "Não há perguntas ativas para este tipo de área. Cadastre o formulário antes." });
-    const ordemSenso = new Map(CHAVES_SENSO.map((s, i) => [s as string, i]));
-    perguntas.sort((x, y) => (ordemSenso.get(x.senso) ?? 9) - (ordemSenso.get(y.senso) ?? 9) || x.ordem - y.ordem || x.id - y.id);
     const data = hojeComoData();
+
+    // Área agrupadora (setor com ambientes comuns vinculados): sem perguntas próprias. Abre uma
+    // avaliação por ambiente, todas ligadas a uma avaliação-pai que acumula o resultado.
+    const ambientes = area.tipo === "setor" ? await prisma.area5S.findMany({ where: { setorVinculadoId: area.id, ativo: true, tipo: "comum" }, orderBy: [{ ordem: "asc" }, { nome: "asc" }] }) : [];
+    if (ambientes.length > 0) {
+      const conjuntos: { amb: (typeof ambientes)[number]; ps: Awaited<ReturnType<typeof perguntasAtivasDaArea>> }[] = [];
+      for (const amb of ambientes) {
+        const ps = await perguntasAtivasDaArea(amb);
+        if (ps.length > 0) conjuntos.push({ amb, ps });
+      }
+      if (conjuntos.length === 0) return void res.status(400).json({ error: "Nenhum ambiente vinculado tem perguntas ativas. Cadastre o formulário antes." });
+      const pai = await prisma.$transaction(async (tx) => {
+        const casca = await tx.avaliacao5S.create({ data: { titulo: montarTitulo(data, area.nome), areaId: area.id, avaliadorId: req.user!.userId, data } });
+        await auditar(tx, req, casca, EVENTOS_AUDITORIA.AVALIACAO_5S_CRIADA, { metadata: { areaId: area.id, area: area.nome, ambientes: conjuntos.length } });
+        for (const { amb, ps } of conjuntos) {
+          const filha = await tx.avaliacao5S.create({
+            data: {
+              titulo: montarTitulo(data, amb.nome),
+              areaId: amb.id,
+              avaliadorId: req.user!.userId,
+              data,
+              avaliacaoPaiId: casca.id,
+              respostas: { create: ps.map((p, i) => ({ perguntaId: p.id, senso: p.senso, perguntaTexto: p.texto, ordem: i })) },
+            },
+          });
+          await auditar(tx, req, filha, EVENTOS_AUDITORIA.AVALIACAO_5S_CRIADA, { metadata: { areaId: amb.id, area: amb.nome, perguntas: ps.length, avaliacaoPaiId: casca.id } });
+        }
+        return casca;
+      });
+      return void res.status(201).json({ id: pai.id, ambientes: conjuntos.length });
+    }
+
+    const perguntas = await perguntasAtivasDaArea(area);
+    if (perguntas.length === 0) return void res.status(400).json({ error: "Não há perguntas ativas para este tipo de área. Cadastre o formulário antes." });
     const criada = await prisma.$transaction(async (tx) => {
       const nova = await tx.avaliacao5S.create({
         data: {
@@ -747,13 +850,13 @@ gestao5sRouter.get("/avaliacoes/:id", async (req: Req5S, res) => {
     const ini = new Date(Date.UTC(a.data.getUTCFullYear(), a.data.getUTCMonth(), 1));
     const fim = new Date(Date.UTC(a.data.getUTCFullYear(), a.data.getUTCMonth() + 1, 0));
     const obs = await prisma.observacao5S.findMany({
-      where: { areaId: a.areaId, dataOcorrido: { gte: ini, lte: fim } },
-      include: { autor: { select: { nome: true } }, imagens: { select: { id: true, nomeArquivo: true } } },
+      where: { areaId: { in: [a.areaId, ...a.filhas.map((f) => f.areaId)] }, dataOcorrido: { gte: ini, lte: fim } },
+      include: { area: { select: { nome: true } }, autor: { select: { nome: true } }, imagens: { select: { id: true, nomeArquivo: true } } },
       orderBy: { dataOcorrido: "asc" },
     });
     res.json({
       ...serializarDetalhe(a, acesso, userId),
-      observacoesEquipe: obs.map((o) => ({ id: o.id, dataOcorrido: isoDia(o.dataOcorrido), texto: o.texto, autorNome: o.autor?.nome ?? null, imagens: o.imagens })),
+      observacoesEquipe: obs.map((o) => ({ id: o.id, areaNome: o.area.nome, dataOcorrido: isoDia(o.dataOcorrido), texto: o.texto, autorNome: o.autor?.nome ?? null, imagens: o.imagens })),
     });
   } catch (error) {
     handleError(res, error, "avaliacoes-detalhe");
@@ -849,6 +952,7 @@ gestao5sRouter.post("/avaliacoes/:id/finalizar", async (req: Req5S, res) => {
       await recalcular(tx, a.id);
       await tx.avaliacao5S.update({ where: { id: a.id }, data: { status: "finalizada", finalizadaEm: new Date() } });
       await auditar(tx, req, a, EVENTOS_AUDITORIA.AVALIACAO_5S_FINALIZADA);
+      if (a.avaliacaoPaiId) await sincronizarPai(tx, a.avaliacaoPaiId);
     });
     res.status(204).send();
   } catch (error) {
@@ -865,6 +969,7 @@ gestao5sRouter.post("/avaliacoes/:id/reabrir", async (req: Req5S, res) => {
     await prisma.$transaction(async (tx) => {
       await tx.avaliacao5S.update({ where: { id: a.id }, data: { status: "em_andamento", finalizadaEm: null } });
       await auditar(tx, req, a, EVENTOS_AUDITORIA.AVALIACAO_5S_REABERTA);
+      if (a.avaliacaoPaiId) await sincronizarPai(tx, a.avaliacaoPaiId);
     });
     res.status(204).send();
   } catch (error) {
@@ -878,13 +983,17 @@ gestao5sRouter.delete("/avaliacoes/:id", async (req: Req5S, res) => {
     if (!r) return;
     const { a, acesso, userId } = r;
     if (!permissoes(acesso, userId, a).excluir) return void res.status(403).json({ error: "Só é possível excluir avaliações em andamento" });
-    const arquivos = [...a.respostas.flatMap((x) => x.imagens), ...a.sensos.flatMap((s) => s.imagens)];
-    const caminhos = arquivos.length
-      ? (await prisma.imagem5S.findMany({ where: { id: { in: arquivos.map((i) => i.id) } }, select: { caminhoArquivo: true } })).map((i) => i.caminhoArquivo)
-      : [];
+    const donas = { OR: [{ id: a.id }, { avaliacaoPaiId: a.id }] };
+    const caminhos = (
+      await prisma.imagem5S.findMany({
+        where: { OR: [{ resposta: { avaliacao: donas } }, { avaliacaoSenso: { avaliacao: donas } }] },
+        select: { caminhoArquivo: true },
+      })
+    ).map((i) => i.caminhoArquivo);
     await prisma.$transaction(async (tx) => {
-      await auditar(tx, req, a, EVENTOS_AUDITORIA.AVALIACAO_5S_EXCLUIDA, { metadata: { area: a.area.nome, data: isoDia(a.data) } });
+      await auditar(tx, req, a, EVENTOS_AUDITORIA.AVALIACAO_5S_EXCLUIDA, { metadata: { area: a.area.nome, data: isoDia(a.data), ambientes: a.filhas.length } });
       await tx.avaliacao5S.delete({ where: { id: a.id } });
+      if (a.avaliacaoPaiId) await sincronizarPai(tx, a.avaliacaoPaiId);
     });
     for (const c of caminhos) fs.unlink(path.join(CINCO_S_DIR, c), () => {});
     res.status(204).send();
@@ -961,9 +1070,9 @@ async function abrirImagem(req: Req5S, res: Response) {
   const img = await prisma.imagem5S.findUnique({
     where: { id },
     include: {
-      resposta: { select: { avaliacao: { select: { id: true, titulo: true, status: true, avaliadorId: true, area: { select: { id: true, tipo: true, setorVinculadoId: true } } } } } },
-      avaliacaoSenso: { select: { avaliacao: { select: { id: true, titulo: true, status: true, avaliadorId: true, area: { select: { id: true, tipo: true, setorVinculadoId: true } } } } } },
-      observacao: { select: { autorId: true, area: { select: { id: true, tipo: true, setorVinculadoId: true } } } },
+      resposta: { select: { avaliacao: { select: { id: true, titulo: true, status: true, avaliadorId: true, area: { select: { id: true, tipo: true, setorVinculadoId: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } } } } } },
+      avaliacaoSenso: { select: { avaliacao: { select: { id: true, titulo: true, status: true, avaliadorId: true, area: { select: { id: true, tipo: true, setorVinculadoId: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } } } } } },
+      observacao: { select: { autorId: true, area: { select: { id: true, tipo: true, setorVinculadoId: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } } } },
     },
   });
   if (!img) {
@@ -1016,7 +1125,7 @@ gestao5sRouter.delete("/imagens/:imagemId", async (req: Req5S, res) => {
 // ---------- observações da equipe ----------
 
 const INCLUDE_OBS = {
-  area: { select: { id: true, nome: true, tipo: true, setorVinculadoId: true } },
+  area: { select: { id: true, nome: true, tipo: true, setorVinculadoId: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } },
   autor: { select: { nome: true } },
   imagens: { select: { id: true, nomeArquivo: true }, orderBy: { id: "asc" } },
 } satisfies Prisma.Observacao5SInclude;
@@ -1067,7 +1176,7 @@ async function validarObs(req: Req5S, acesso: Acesso5S) {
   if (!ehDataIso(body.dataOcorrido)) return { erro: "Informe a data do ocorrido" };
   const areaId = num(body.areaId);
   if (!areaId) return { erro: "Escolha a área" };
-  const area = await prisma.area5S.findUnique({ where: { id: areaId }, select: { id: true, tipo: true, setorVinculadoId: true } });
+  const area = await prisma.area5S.findUnique({ where: { id: areaId }, select: { id: true, tipo: true, setorVinculadoId: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } });
   if (!area) return { erro: "Área não encontrada" };
   if (!podeObservarArea(acesso, area)) return { erro: "Você não pode registrar observações nesta área", status: 403 };
   return { dados: { texto, areaId, dataOcorrido: paraData(body.dataOcorrido) } };
@@ -1216,6 +1325,90 @@ function tendenciaDaSerie(serie: Array<number | null>): ReturnType<typeof tenden
   return tendencia(comDado[comDado.length - 1], comDado[comDado.length - 2]);
 }
 
+type MesBloco = Bloco & { mes: string; quantidade: number };
+
+interface ResultadoArea {
+  areaId: number;
+  nome: string;
+  // Área agrupadora: resultado acumulado das respostas dos ambientes vinculados.
+  acumulado: boolean;
+  avaliacoes: number;
+  meses: MesBloco[];
+}
+
+// Resultado mensal por área.
+// - Setor sem ambientes e ambiente comum: média das avaliações finalizadas do mês.
+// - Área agrupadora (setor com ambientes vinculados): pool das RESPOSTAS de todas as avaliações dos
+//   ambientes no mês — soma das notas / (5 × aplicáveis), a mesma conta da aba "Comum" da planilha
+//   (ambiente com mais perguntas pesa mais).
+async function resultadosPorArea(acesso: Acesso5S, tipo: TipoArea, meses: string[], areaId?: number): Promise<ResultadoArea[]> {
+  const { ini, fim } = intervaloDeMeses(meses[0], meses[meses.length - 1]);
+  const janela = { gte: ini, lte: fim };
+  const avaliacoes = await prisma.avaliacao5S.findMany({
+    where: { AND: [filtroAvaliacoesVisiveis(acesso), { status: "finalizada", filhas: { none: {} }, area: { tipo }, data: janela, ...(areaId ? { areaId } : {}) }] },
+    select: {
+      areaId: true, data: true, percGeral: true, percSeiri: true, percSeiton: true, percSeiso: true, percSeiketsu: true, percShitsuke: true,
+      area: { select: { nome: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } },
+    },
+  });
+
+  const porArea = new Map<number, { nome: string; itens: typeof avaliacoes }>();
+  for (const a of avaliacoes) {
+    // Agrupadora não usa a média das próprias avaliações: o resultado dela vem do pool abaixo.
+    if (ehAgrupadora({ id: a.areaId, tipo, setorVinculadoId: null, ambientes: a.area.ambientes })) continue;
+    const e = porArea.get(a.areaId) ?? { nome: a.area.nome, itens: [] };
+    e.itens.push(a);
+    porArea.set(a.areaId, e);
+  }
+  const resultado: ResultadoArea[] = [...porArea.entries()].map(([id, { nome, itens }]) => ({
+    areaId: id,
+    nome,
+    acumulado: false,
+    avaliacoes: itens.length,
+    meses: meses.map((mes) => {
+      const doMes = itens.filter((i) => chaveMes(i.data) === mes);
+      return { mes, quantidade: doMes.length, ...mediaBloco(doMes) };
+    }),
+  }));
+
+  if (tipo === "setor") {
+    const dosAmbientes = await prisma.avaliacao5S.findMany({
+      where: {
+        AND: [
+          filtroAvaliacoesVisiveis(acesso),
+          { status: "finalizada", data: janela, area: { tipo: "comum", setorVinculado: { is: { ativo: true } }, ...(areaId ? { setorVinculadoId: areaId } : {}) } },
+        ],
+      },
+      select: {
+        data: true,
+        area: { select: { setorVinculadoId: true, setorVinculado: { select: { nome: true } } } },
+        respostas: { select: { senso: true, nota: true, naoSeAplica: true } },
+      },
+    });
+    const porMae = new Map<number, { nome: string; itens: typeof dosAmbientes }>();
+    for (const a of dosAmbientes) {
+      const mae = a.area.setorVinculadoId!;
+      const e = porMae.get(mae) ?? { nome: a.area.setorVinculado!.nome, itens: [] };
+      e.itens.push(a);
+      porMae.set(mae, e);
+    }
+    for (const [id, { nome, itens }] of porMae) {
+      resultado.push({
+        areaId: id,
+        nome,
+        acumulado: true,
+        avaliacoes: itens.length,
+        meses: meses.map((mes) => {
+          const doMes = itens.filter((i) => chaveMes(i.data) === mes);
+          const p = calcularPercentuais(doMes.flatMap((i) => i.respostas));
+          return { mes, quantidade: doMes.length, geral: p.geral, porSenso: p.porSenso };
+        }),
+      });
+    }
+  }
+  return resultado;
+}
+
 gestao5sRouter.get("/dashboard", async (req: Req5S, res) => {
   try {
     const acesso = exigirAcesso(req, res);
@@ -1226,40 +1419,18 @@ gestao5sRouter.get("/dashboard", async (req: Req5S, res) => {
     const inicio = ehMes(req.query.de) ? req.query.de : inicioPadrao;
     const meses = listarMeses(inicio, fim);
     if (meses.length === 0 || meses.length > 36) return void res.status(400).json({ error: "O período deve ter de 1 a 36 meses" });
-    const { ini, fim: dataFim } = intervaloDeMeses(inicio, fim);
 
-    const avaliacoes = await prisma.avaliacao5S.findMany({
-      where: { AND: [filtroAvaliacoesVisiveis(acesso), { status: "finalizada", area: { tipo }, data: { gte: ini, lte: dataFim } }] },
-      select: {
-        areaId: true, data: true, percGeral: true, percSeiri: true, percSeiton: true, percSeiso: true, percSeiketsu: true, percShitsuke: true,
-        area: { select: { nome: true } },
-      },
-    });
-
-    const porArea = new Map<number, { nome: string; itens: typeof avaliacoes }>();
-    for (const a of avaliacoes) {
-      const e = porArea.get(a.areaId) ?? { nome: a.area.nome, itens: [] };
-      e.itens.push(a);
-      porArea.set(a.areaId, e);
-    }
-
-    const areas = [...porArea.entries()].map(([areaId, { nome, itens }]) => {
-      const serieMeses = meses.map((mes) => {
-        const doMes = itens.filter((i) => chaveMes(i.data) === mes);
-        return { mes, quantidade: doMes.length, ...mediaBloco(doMes) };
-      });
-      const consolidado = mediaDeBlocos(serieMeses.filter((m) => m.geral != null));
-      return {
-        areaId,
-        nome,
-        avaliacoes: itens.length,
-        ...consolidado,
-        meses: serieMeses,
-        tendencia: tendenciaDaSerie(serieMeses.map((m) => m.geral)),
-      };
-    });
+    const areas = (await resultadosPorArea(acesso, tipo, meses)).map((r) => ({
+      areaId: r.areaId,
+      nome: r.nome,
+      acumulado: r.acumulado,
+      avaliacoes: r.avaliacoes,
+      ...mediaDeBlocos(r.meses.filter((m) => m.geral != null)),
+      meses: r.meses,
+      tendencia: tendenciaDaSerie(r.meses.map((m) => m.geral)),
+    }));
     areas.sort((x, y) => (y.geral ?? -1) - (x.geral ?? -1) || x.nome.localeCompare(y.nome));
-    const ranking = areas.map((a, i) => ({ posicao: i + 1, areaId: a.areaId, nome: a.nome, geral: a.geral, tendencia: a.tendencia }));
+    const ranking = areas.map((a, i) => ({ posicao: i + 1, areaId: a.areaId, nome: a.nome, acumulado: a.acumulado, geral: a.geral, tendencia: a.tendencia }));
 
     const empresaMeses = meses.map((mes) => {
       const doMes = areas.map((a) => a.meses.find((m) => m.mes === mes)!).filter((m) => m.geral != null);
@@ -1273,8 +1444,9 @@ gestao5sRouter.get("/dashboard", async (req: Req5S, res) => {
   }
 });
 
-// Comparativo mensal: por senso (e geral), a média de cada mês pedido. Sem areaId, agrega todas as
-// áreas visíveis do tipo escolhido (média das médias de cada área, peso igual).
+// Comparativo mensal: por senso (e geral), o resultado de cada mês pedido. Sem areaId, agrega todas as
+// áreas visíveis do tipo escolhido (média dos resultados de cada área, peso igual). Com areaId de uma
+// área agrupadora, o resultado é o acúmulo dos ambientes vinculados.
 gestao5sRouter.get("/comparativo", async (req: Req5S, res) => {
   try {
     const acesso = exigirAcesso(req, res);
@@ -1285,18 +1457,14 @@ gestao5sRouter.get("/comparativo", async (req: Req5S, res) => {
     }
     meses.sort();
     const areaId = num(req.query.areaId);
-    const tipo = TIPOS_AREA.find((t) => t === req.query.tipo) ?? "setor";
-    const { ini, fim } = intervaloDeMeses(meses[0], meses[meses.length - 1]);
-    const avaliacoes = await prisma.avaliacao5S.findMany({
-      where: { AND: [filtroAvaliacoesVisiveis(acesso), { status: "finalizada", data: { gte: ini, lte: fim }, ...(areaId ? { areaId } : { area: { tipo } }) }] },
-      select: { areaId: true, data: true, percGeral: true, percSeiri: true, percSeiton: true, percSeiso: true, percSeiketsu: true, percShitsuke: true },
-    });
-    const blocos = meses.map((mes) => {
-      const doMes = avaliacoes.filter((a) => chaveMes(a.data) === mes);
-      const porAreaDoMes = new Map<number, AvaliacaoAgregavel[]>();
-      for (const a of doMes) porAreaDoMes.set(a.areaId, [...(porAreaDoMes.get(a.areaId) ?? []), a]);
-      return mediaDeBlocos([...porAreaDoMes.values()].map(mediaBloco));
-    });
+    let tipo: TipoArea = TIPOS_AREA.find((t) => t === req.query.tipo) ?? "setor";
+    if (areaId) {
+      const area = await prisma.area5S.findUnique({ where: { id: areaId }, select: { tipo: true } });
+      if (!area) return void res.status(404).json({ error: "Área não encontrada" });
+      tipo = area.tipo as TipoArea;
+    }
+    const resultados = await resultadosPorArea(acesso, tipo, meses, areaId ?? undefined);
+    const blocos = meses.map((mes) => mediaDeBlocos(resultados.map((r) => r.meses.find((m) => m.mes === mes)!).filter((m) => m.geral != null)));
     const linhas = [
       ...SENSOS.map((s) => ({ chave: s.chave, rotulo: s.rotulo, valores: blocos.map((b) => b.porSenso[s.chave]) })),
       { chave: "geral", rotulo: "Geral", valores: blocos.map((b) => b.geral) },

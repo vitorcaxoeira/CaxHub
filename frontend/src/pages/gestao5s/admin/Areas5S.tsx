@@ -15,6 +15,8 @@ interface Area {
   setorVinculadoNome: string | null;
   ativo: boolean;
   ordem: number;
+  ehAgrupadora: boolean;
+  vinculados: { id: number; nome: string }[];
 }
 
 // Cadastro de setores/áreas e ambientes comuns que entram nas auditorias. Um ambiente comum pode
@@ -100,7 +102,10 @@ export function Areas5S() {
               {areas?.map((a) => (
                 <tr key={a.id} className="border-t border-border/60">
                   <td className="px-4 py-3 text-sm font-medium text-foreground">{a.nome}</td>
-                  <td className="px-4 py-3 text-sm text-muted">{TIPO_AREA_ROTULO[a.tipo]}</td>
+                  <td className="px-4 py-3 text-sm text-muted">
+                    {TIPO_AREA_ROTULO[a.tipo]}
+                    {a.ehAgrupadora && <span className="ml-2 text-[11px] text-primary">agrupa {a.vinculados.length} ambiente(s)</span>}
+                  </td>
                   <td className="hidden px-4 py-3 text-sm text-muted sm:table-cell">{a.setorVinculadoNome ?? "—"}</td>
                   <td className="px-4 py-3 text-xs">
                     <span className={a.ativo ? "text-success" : "text-muted"}>{a.ativo ? "Ativa" : "Inativa"}</span>
@@ -175,6 +180,9 @@ function FormArea({ inicial, setores, onFechar }: { inicial: Area | null; setore
         {tipo === "comum" && (
           <div>
             <label className={classeRotulo}>Vincular a um setor (opcional)</label>
+            <p className="mb-1.5 text-[11px] text-muted">
+              O resultado do ambiente acumula no setor escolhido. Esse setor passa a ser um agrupador: não tem perguntas próprias e avaliá-lo abre uma avaliação por ambiente.
+            </p>
             <select className={classeCampo} value={vinculo} onChange={(e) => setVinculo(e.target.value)}>
               <option value="">Compartilhado (todos os líderes veem)</option>
               {setores

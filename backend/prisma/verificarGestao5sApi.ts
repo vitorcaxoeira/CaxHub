@@ -1,6 +1,12 @@
-// Teste ponta a ponta do módulo Gestão 5S contra o banco LOCAL: sobe só o router /5s num Express
-// mínimo (sem os syncs agendados do server.ts), cria dados temporários e apaga tudo no final.
-// Rodar: node_modules/.bin/ts-node prisma/verificarGestao5sApi.ts
+// Teste ponta a ponta do módulo Gestão 5S: sobe só o router /5s num Express mínimo (sem os syncs
+// agendados do server.ts), cria dados temporários e apaga tudo no final.
+//
+// Roda num SCHEMA ISOLADO do Postgres local (nunca no `public`): os perguntas/áreas reais cadastradas
+// no banco de desenvolvimento mudariam as contagens e os percentuais esperados. Sequência:
+//   1. DATABASE_URL apontando pro mesmo banco com ?schema=t5s_e2e
+//   2. criar o schema (CREATE SCHEMA t5s_e2e) e rodar `prisma migrate deploy` com essa URL
+//   3. DATABASE_URL=<essa URL> node_modules/.bin/ts-node --transpile-only prisma/verificarGestao5sApi.ts
+//   4. DROP SCHEMA t5s_e2e CASCADE
 import "dotenv/config";
 import assert from "assert";
 import express from "express";
@@ -16,6 +22,11 @@ import { CINCO_S_DIR, garantirDiretorioUploads } from "../src/config/uploads";
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 const TAG = `t5s${Date.now()}`;
 
+if (!/schema=(?!public\b)[^&]+/.test(process.env.DATABASE_URL ?? "")) {
+  console.error("Recusado: rode num schema isolado (DATABASE_URL com ?schema=<outro que não public>). Veja o comentário no topo.");
+  process.exit(1);
+}
+
 async function main() {
   garantirDiretorioUploads();
   const app = express();
@@ -25,8 +36,9 @@ async function main() {
   const server = app.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/5s`;
 
-  const role = await prisma.role.findFirstOrThrow({ where: { name: "consultoria" } });
-  const admin = await prisma.user.findFirstOrThrow({ where: { role: { name: "admin" }, status: "ativo" } });
+  const role = await prisma.role.upsert({ where: { name: "consultoria" }, update: {}, create: { name: "consultoria" } });
+  const roleAdmin = await prisma.role.upsert({ where: { name: "admin" }, update: {}, create: { name: "admin" } });
+  const admin = await prisma.user.create({ data: { email: `${TAG}-admin@teste.local`, nome: "Teste admin", roleId: roleAdmin.id, status: "ativo" } });
   const mk = (n: string) => prisma.user.create({ data: { email: `${TAG}-${n}@teste.local`, nome: `Teste ${n}`, roleId: role.id, status: "ativo" } });
   const [uAval, uLider, uNada] = await Promise.all([mk("aval"), mk("lider"), mk("nada")]);
   const tok = (u: { id: number }, r: string) => signToken({ userId: u.id, role: r });
@@ -64,8 +76,10 @@ async function main() {
     };
     const adm = await criarArea({ nome: `${TAG} Adm`, tipo: "setor" });
     const dev = await criarArea({ nome: `${TAG} Dev`, tipo: "setor" });
-    const copa = await criarArea({ nome: `${TAG} Copa`, tipo: "comum" });
-    const salaDev = await criarArea({ nome: `${TAG} Sala Dev`, tipo: "comum", setorVinculadoId: dev });
+    // Área agrupadora: setor "Comum" com dois ambientes comuns vinculados (como a aba Comum da planilha).
+    const mae = await criarArea({ nome: `${TAG} Comum`, tipo: "setor" });
+    const copa = await criarArea({ nome: `${TAG} Copa`, tipo: "comum", setorVinculadoId: mae });
+    const sala = await criarArea({ nome: `${TAG} Sala`, tipo: "comum", setorVinculadoId: mae });
     ok(await api("admin", "POST", "/areas", { nome: "x", tipo: "comum", setorVinculadoId: copa }), 400, "vínculo só com setor");
 
     // 3. Perguntas: 2 por senso p/ setor + 1 p/ comum
@@ -79,6 +93,8 @@ async function main() {
     }
     const pc = await api("admin", "POST", "/perguntas", { tipoArea: "comum", senso: "seiri", texto: `${TAG} comum` });
     perguntaIds.push(pc.dados.id);
+    ok(await api("admin", "POST", "/perguntas", { tipoArea: "comum", areaId: sala, senso: "seiri", texto: `${TAG} sala` }), 201, "pergunta só da sala");
+    ok(await api("admin", "PUT", `/areas/${mae}`, { nome: `${TAG} Comum`, tipo: "comum" }), 400, "setor agrupador não vira ambiente comum");
     ok(await api("aval", "POST", "/perguntas", { tipoArea: "setor", senso: "seiri", texto: "x" }), 403, "avaliador não cadastra");
 
     // 4. Participantes
@@ -156,7 +172,9 @@ async function main() {
     r = await api("lider", "GET", "/areas");
     const nomes = (r.dados as { nome: string }[]).map((a) => a.nome);
     assert.ok(nomes.includes(`${TAG} Adm`) && nomes.includes(`${TAG} Copa`), "líder vê seu setor e ambiente compartilhado");
-    assert.ok(!nomes.includes(`${TAG} Dev`) && !nomes.includes(`${TAG} Sala Dev`), "líder não vê outro setor nem ambiente vinculado a ele");
+    assert.ok(nomes.includes(`${TAG} Comum`) && nomes.includes(`${TAG} Sala`), "líder vê a agrupadora e todos os ambientes comuns");
+    assert.ok(!nomes.includes(`${TAG} Dev`), "líder não vê outro setor");
+    assert.ok((await api("admin", "GET", "/areas")).dados.find((a: { id: number }) => a.id === mae).ehAgrupadora, "área com ambientes é agrupadora");
     r = await api("lider", "GET", `/avaliacoes?areaId=${dev}`);
     assert.strictEqual(r.dados.total, 0);
 
@@ -164,7 +182,7 @@ async function main() {
     ok(await api("lider", "POST", "/observacoes", { areaId: adm, dataOcorrido: new Date().toISOString().slice(0, 10), texto: "Talher sujo na mesa" }), 201, "observação no setor");
     ok(await api("lider", "POST", "/observacoes", { areaId: copa, dataOcorrido: new Date().toISOString().slice(0, 10), texto: "Pia molhada" }), 201, "observação no comum");
     ok(await api("lider", "POST", "/observacoes", { areaId: dev, dataOcorrido: new Date().toISOString().slice(0, 10), texto: "x" }), 403, "sem observar outro setor");
-    ok(await api("lider", "POST", "/observacoes", { areaId: salaDev, dataOcorrido: new Date().toISOString().slice(0, 10), texto: "x" }), 403, "sem observar ambiente de outro setor");
+    ok(await api("lider", "POST", "/observacoes", { areaId: sala, dataOcorrido: new Date().toISOString().slice(0, 10), texto: "Xícara suja" }), 201, "líder observa qualquer ambiente comum");
     r = await api("aval", "GET", `/avaliacoes/${av1}`);
     assert.strictEqual(r.dados.observacoesEquipe.length, 1, "observação do mês aparece na avaliação");
 
@@ -189,6 +207,91 @@ async function main() {
     avaliacaoIds.splice(avaliacaoIds.indexOf(av1), 1);
     ok(await api("aval", "DELETE", `/avaliacoes/${av2}`), 403, "finalizada não exclui");
     assert.ok(!fs.existsSync(path.join(CINCO_S_DIR, "sentinela")), "sanidade");
+
+    // 13. Área agrupadora: uma avaliação por ambiente, resultado acumulado por respostas
+    r = await api("aval", "POST", "/avaliacoes", { areaId: mae });
+    ok(r, 201, "avaliar a agrupadora");
+    assert.strictEqual(r.dados.ambientes, 2);
+    const pai = r.dados.id;
+    avaliacaoIds.push(pai);
+    r = await api("aval", "GET", `/avaliacoes/${pai}`);
+    assert.strictEqual(r.dados.filhas.length, 2, "uma avaliação por ambiente");
+    assert.strictEqual(r.dados.respostas.length, 0, "o pai não tem respostas");
+    assert.strictEqual(r.dados.pode.editar, false);
+    ok(await api("aval", "POST", `/avaliacoes/${pai}/finalizar`), 403, "pai não finaliza direto");
+    const idCopa = r.dados.filhas.find((f: { areaNome: string }) => f.areaNome.endsWith("Copa")).id;
+    const idSala = r.dados.filhas.find((f: { areaNome: string }) => f.areaNome.endsWith("Sala")).id;
+    r = await api("aval", "GET", "/avaliacoes");
+    const ids = r.dados.itens.map((x: { id: number }) => x.id);
+    assert.ok(ids.includes(pai) && !ids.includes(idCopa) && !ids.includes(idSala), "lista mostra o pai e esconde as filhas");
+    assert.strictEqual(r.dados.itens.find((x: { id: number }) => x.id === pai).quantidadeAmbientes, 2);
+    r = await api("aval", "GET", `/avaliacoes?areaId=${copa}`);
+    assert.ok(r.dados.itens.some((x: { id: number }) => x.id === idCopa), "filtrando o ambiente a filha aparece");
+
+    const responder = async (id: number, notas: number[]) => {
+      const d = (await api("aval", "GET", `/avaliacoes/${id}`)).dados;
+      assert.strictEqual(d.respostas.length, notas.length, "perguntas do ambiente");
+      assert.ok(d.pai && d.pai.id === pai, "filha aponta o pai");
+      for (const [i, rp] of d.respostas.entries()) ok(await api("aval", "PUT", `/avaliacoes/${id}/respostas/${rp.id}`, { nota: notas[i] }), 200, "responder ambiente");
+    };
+    await responder(idCopa, [5]); // pergunta geral de ambiente
+    await responder(idSala, [3, 1]); // geral + a específica da sala
+    ok(await api("aval", "POST", `/avaliacoes/${idCopa}/finalizar`), 204, "finalizar copa");
+    r = await api("aval", "GET", `/avaliacoes/${pai}`);
+    assert.strictEqual(r.dados.status, "em_andamento", "pai só finaliza quando todas as filhas finalizam");
+    ok(await api("aval", "POST", `/avaliacoes/${idSala}/finalizar`), 204, "finalizar sala");
+    r = await api("aval", "GET", `/avaliacoes/${pai}`);
+    assert.strictEqual(r.dados.status, "finalizada");
+    assert.strictEqual(r.dados.percentuais.porSenso.seiri, 60, "acumulado = soma das notas / (5 × perguntas), não média dos %");
+    ok(await api("aval", "POST", `/avaliacoes/${idSala}/reabrir`), 204, "reabrir a sala");
+    assert.strictEqual((await api("aval", "GET", `/avaliacoes/${pai}`)).dados.status, "em_andamento", "reabrir uma filha reabre o pai");
+    ok(await api("aval", "POST", `/avaliacoes/${idSala}/finalizar`), 204, "refinalizar a sala");
+
+    r = await api("admin", "GET", "/dashboard?tipo=setor");
+    const linhaMae = r.dados.ranking.find((x: { nome: string }) => x.nome === `${TAG} Comum`);
+    assert.ok(linhaMae && linhaMae.acumulado && linhaMae.geral === 60, "agrupadora entra no ranking de setores com o acúmulo");
+    r = await api("admin", "GET", "/dashboard?tipo=comum");
+    const comuns = r.dados.ranking.filter((x: { nome: string }) => x.nome.startsWith(TAG)).map((x: { nome: string; geral: number }) => [x.nome.replace(`${TAG} `, ""), x.geral]);
+    assert.deepStrictEqual(comuns.sort(), [["Copa", 100], ["Sala", 40]], "a aba de ambientes mostra cada ambiente");
+    r = await api("lider", "GET", "/dashboard?tipo=setor");
+    assert.ok(r.dados.ranking.some((x: { nome: string }) => x.nome === `${TAG} Comum`), "líder vê a agrupadora no ranking");
+    assert.ok(!r.dados.ranking.some((x: { nome: string }) => x.nome === `${TAG} Dev`), "líder não vê outro setor");
+    const mesAgora = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+    const mesAnt = new Date();
+    mesAnt.setMonth(mesAnt.getMonth() - 1, 1);
+    const mesAntStr = `${mesAnt.getFullYear()}-${String(mesAnt.getMonth() + 1).padStart(2, "0")}`;
+    r = await api("admin", "GET", `/comparativo?meses=${mesAntStr},${mesAgora}&areaId=${mae}`);
+    assert.deepStrictEqual(r.dados.linhas.find((l: { chave: string }) => l.chave === "geral").valores, [null, 60], "comparativo da agrupadora usa o acúmulo");
+
+    // Avaliar um ambiente sozinho: sem pai, e o resultado acumula na área mãe
+    r = await api("aval", "POST", "/avaliacoes", { areaId: copa });
+    ok(r, 201, "avaliar só um ambiente");
+    const solta = r.dados.id;
+    avaliacaoIds.push(solta);
+    r = await api("aval", "GET", `/avaliacoes/${solta}`);
+    assert.strictEqual(r.dados.pai, null);
+    ok(await api("aval", "PUT", `/avaliacoes/${solta}/respostas/${r.dados.respostas[0].id}`, { nota: 5 }), 200, "responder");
+    ok(await api("aval", "POST", `/avaliacoes/${solta}/finalizar`), 204, "finalizar ambiente solto");
+    r = await api("admin", "GET", "/dashboard?tipo=setor");
+    assert.strictEqual(r.dados.ranking.find((x: { nome: string }) => x.nome === `${TAG} Comum`).geral, 70, "ambiente avaliado sozinho acumula na mãe: (5+3+1+5)/20 = 70%");
+
+    // Exclusão: o pai só sai com todas as filhas em andamento e leva as filhas junto
+    ok(await api("aval", "DELETE", `/avaliacoes/${pai}`), 403, "pai com filha finalizada não exclui");
+    ok(await api("aval", "POST", `/avaliacoes/${idCopa}/reabrir`), 204, "reabrir copa");
+    ok(await api("aval", "POST", `/avaliacoes/${idSala}/reabrir`), 204, "reabrir sala");
+    ok(await api("aval", "DELETE", `/avaliacoes/${pai}`), 204, "excluir o pai");
+    avaliacaoIds.splice(avaliacaoIds.indexOf(pai), 1);
+    assert.strictEqual(await prisma.avaliacao5S.count({ where: { id: { in: [pai, idCopa, idSala] } } }), 0, "as filhas saem junto");
+    // Excluir a última filha de um pai remove o invólucro
+    r = await api("aval", "POST", "/avaliacoes", { areaId: mae });
+    const pai2 = r.dados.id;
+    avaliacaoIds.push(pai2);
+    const filhas2 = (await api("aval", "GET", `/avaliacoes/${pai2}`)).dados.filhas.map((f: { id: number }) => f.id);
+    ok(await api("aval", "DELETE", `/avaliacoes/${filhas2[0]}`), 204, "excluir uma filha");
+    assert.ok(await prisma.avaliacao5S.findUnique({ where: { id: pai2 } }), "pai continua com a outra filha");
+    ok(await api("aval", "DELETE", `/avaliacoes/${filhas2[1]}`), 204, "excluir a última filha");
+    assert.strictEqual(await prisma.avaliacao5S.findUnique({ where: { id: pai2 } }), null, "sem filhas o invólucro some");
+    avaliacaoIds.splice(avaliacaoIds.indexOf(pai2), 1);
 
     console.log("OK — API do 5S: acesso, cadastros, avaliação, imagens, recorte de líder, dashboard e auditoria");
   } finally {
