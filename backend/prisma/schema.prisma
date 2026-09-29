@@ -54,6 +54,7 @@ model User {
   viagensViajante           SolicitacaoViagemViajante[]
   viagensCotacoes           SolicitacaoViagemCotacao[]
   viagensAnexos             SolicitacaoViagemAnexo[]
+  comprovantesRat           ComprovanteRat[]
 }
 
 // Limiar mínimo de caixa configurado por usuário na Curva de Caixa Projetada (Fluxo de Caixa).
@@ -1133,7 +1134,8 @@ model Rat {
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
-  itens RatItem[]
+  itens        RatItem[]
+  comprovantes ComprovanteRat[]
 
   @@unique([codemp, numprj, codfpj, numrat])
   @@map("rats")
@@ -1825,9 +1827,40 @@ model RegistroDespesaViagem {
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   sincronizacoesPendentes SincronizacaoPendenteDespesa[]
+  comprovantes            ComprovanteRat[]
 
   @@unique([codemp, numrat, seqrdv])
   @@map("registros_despesa_viagem")
+}
+
+// Comprovante (foto/PDF de nota, cupom, recibo) de despesa de viagem — arquivo em disco
+// (uploads/comprovantes-rat, volume Docker), só o metadado aqui. Sempre pertence a uma RAT
+// (`ratId`); `despesaId` opcional liga a uma despesa dela — nulo = comprovante "solto" na RAT
+// (ex.: fotografado na hora, vinculado ao lançar a despesa). Só existe no CaxHub: o
+// `ManterItemDespesa` do Senior não recebe arquivo. Ver rotas em routes/rats.ts.
+// - despesa SetNull: excluir a despesa devolve os comprovantes pra RAT, nunca apaga arquivo
+//   (o soft delete confirmado pelo Senior faz o mesmo à mão, em outboxSeniorDespesa.ts).
+// - rat Restrict: RAT não é apagada pela tela; a única limpeza (cabeçalho órfão em
+//   outboxSenior.ts) move os comprovantes antes — se um dia escapar, falha alto em vez de
+//   perder arquivo.
+model ComprovanteRat {
+  id             Int      @id @default(autoincrement())
+  ratId          Int
+  despesaId      Int?
+  userId         Int?
+  nomeArquivo    String   @db.VarChar(255)
+  caminhoArquivo String   @db.VarChar(500)
+  tamanhoBytes   Int
+  mimeType       String   @db.VarChar(100)
+  criadoEm       DateTime @default(now())
+
+  rat     Rat                    @relation(fields: [ratId], references: [id], onDelete: Restrict)
+  despesa RegistroDespesaViagem? @relation(fields: [despesaId], references: [id], onDelete: SetNull)
+  user    User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([ratId])
+  @@index([despesaId])
+  @@map("rat_comprovantes")
 }
 
 // Fila de envio de despesa (RDV) pro Senior via `ManterItemDespesa` — mesmas regras de

@@ -637,6 +637,30 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeStatus,
     resumo: (e) => `RAT fechada no Senior — ${rotuloEntidade(e)}`,
   },
+  COMPROVANTE_RAT_ADICIONADO: {
+    tone: "neutral",
+    rotuloGrupo: "RAT",
+    icone: IconeCriacao,
+    resumo: (e) =>
+      e.metadata?.despesaId != null
+        ? `Anexou o comprovante ${e.metadata?.nomeArquivo ?? ""} à despesa ${e.metadata.despesaId}`
+        : `Anexou o comprovante ${e.metadata?.nomeArquivo ?? ""} à RAT`,
+  },
+  COMPROVANTE_RAT_VINCULADO: {
+    tone: "neutral",
+    rotuloGrupo: "RAT",
+    icone: IconeEdicao,
+    resumo: (e) =>
+      e.metadata?.despesaIdNovo != null
+        ? `Vinculou o comprovante ${e.metadata?.nomeArquivo ?? ""} à despesa ${e.metadata.despesaIdNovo}`
+        : `Desvinculou o comprovante ${e.metadata?.nomeArquivo ?? ""} da despesa ${e.metadata?.despesaIdAnterior ?? ""}`,
+  },
+  COMPROVANTE_RAT_REMOVIDO: {
+    tone: "neutral",
+    rotuloGrupo: "RAT",
+    icone: IconeRemocao,
+    resumo: (e) => `Removeu o comprovante ${e.metadata?.nomeArquivo ?? ""}`,
+  },
 };
 
 const CONFIG_PADRAO: ConfigEvento = {

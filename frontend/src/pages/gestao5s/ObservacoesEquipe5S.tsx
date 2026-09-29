@@ -2,7 +2,7 @@ import axios from "axios";
 import { useCallback, useEffect, useState } from "react";
 import { Miniatura } from "../../components/gestao5s/Miniatura";
 import { UploadFotos } from "../../components/gestao5s/UploadFotos";
-import { Visualizador } from "../../components/gestao5s/Visualizador";
+import { Visualizador } from "../../components/ui/Visualizador";
 import { classeBotaoPrimario, classeBotaoSecundario, classeCampo, classeRotulo } from "../../components/gestao5s/campos";
 import { Modal } from "../../components/ui/Modal";
 import { Pagination } from "../../components/ui/Pagination";

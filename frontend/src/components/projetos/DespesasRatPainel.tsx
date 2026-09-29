@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "../ui/Spinner";
 import { toneBadge, type Tone } from "../ui/badges";
 import { IconeIntegracaoErp } from "../ui/IconeIntegracaoErp";
+import { Modal } from "../ui/Modal";
 import { ModalLancarDespesa } from "./ModalLancarDespesa";
+import { Comprovante, ComprovantesRat, JanelaComprovantesRat, OpcaoDespesaComprovante } from "./ComprovantesRat";
 
 export interface Opcao {
   value: number | string;
@@ -45,6 +47,10 @@ export interface DespesaLancada {
   exclusaoPendente: boolean;
   podeEditar: boolean;
   podeExcluir: boolean;
+  // Comprovantes (ComprovanteRat) ligados a esta despesa, e se dá pra anexar/vincular agora
+  // (dono/admin, RAT Digitada, sem exclusão pendente) — regra decidida no servidor.
+  qtdComprovantes: number;
+  podeAnexar: boolean;
   // Coluna "Sinc. ERP" — mesma filosofia (calcularIntegracaoErp/IconeIntegracaoErp) já usada em
   // "Sessões pendentes de confirmação" e no Cronograma: label/tom já resolvidos no servidor.
   integracaoErpLabel: string;
@@ -61,6 +67,10 @@ interface RespostaDespesas {
   // Motivo de podeLancar=false pronto pra exibir — só preenchido quando podeGerenciar=true
   // (pra quem só visualiza, mostrar aviso de bloqueio de uma ação que nunca teve seria ruído).
   mensagemBloqueio: string | null;
+  // Comprovantes da RAT ainda sem despesa (fotografados na hora, vinculados depois).
+  comprovantesSoltos: number;
+  // Número da RAT no Senior (nulo até ele confirmar) — título da janela e nome do .zip.
+  numrat: number | null;
   despesas: DespesaLancada[];
   rotas: Rota[];
   opcoesTipo: Opcao[];
@@ -80,6 +90,11 @@ const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: 
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const formatMoney = (v: number | null) => (v == null ? "—" : `R$ ${currency.format(v)}`);
 const formatData = (v: string | null) => (v ? dateFormatter.format(new Date(v)) : "—");
+
+// Deslocamento por km rodado (1) e por rota (7) não têm nota a comprovar — ficam fora do aviso
+// "Sem comprovante" (o comprovante continua possível, só não é cobrado).
+const TIPOS_SEM_NOTA = new Set([1, 7]);
+const faltaComprovante = (despesa: DespesaLancada) => despesa.qtdComprovantes === 0 && !TIPOS_SEM_NOTA.has(despesa.tipdes);
 
 // "falha" (destructive) e "pendente" (neutral) são os dois estados em que faz sentido clicar
 // pra forçar um reenvio — "enviando" já está em voo (clicar de novo seria redundante, o
@@ -119,6 +134,13 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
   const [modalDespesa, setModalDespesa] = useState<{ despesa: DespesaLancada | null } | null>(null);
   // Id da despesa cujo reenvio está em voo — só trava o ícone clicado (ver reenviar abaixo).
   const [reenviandoId, setReenviandoId] = useState<number | null>(null);
+  // Todos os comprovantes da RAT (soltos e vinculados) — GET /:id/comprovantes, junto das despesas.
+  const [comprovantes, setComprovantes] = useState<Comprovante[]>([]);
+  const [podeAnexarComprovantes, setPodeAnexarComprovantes] = useState(false);
+  // Despesa com o modal "Comprovantes" aberto (id — a linha é relida de `dados` a cada render).
+  const [comprovantesDaDespesaId, setComprovantesDaDespesaId] = useState<number | null>(null);
+  // Janela com TODOS os comprovantes da RAT (botão entre "Imprimir" e "Nova Despesa").
+  const [janelaComprovantesAberta, setJanelaComprovantesAberta] = useState(false);
   // Timers do acompanhamento de reenvio (ver acompanharReenvio), cancelados ao desmontar pra
   // não bater no endpoint depois que a aba RDVs (ou a linha da RAT) já saiu de tela — mesmo
   // padrão de timersEnvioRef em MeusApontamentos.tsx.
@@ -134,8 +156,13 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
   async function carregar(mostrarLoading = true): Promise<RespostaDespesas | null> {
     if (mostrarLoading) setLoading(true);
     try {
-      const { data } = await axios.get(`/api/rats/${ratId}/despesas`);
+      const [{ data }, { data: dadosComprovantes }] = await Promise.all([
+        axios.get(`/api/rats/${ratId}/despesas`),
+        axios.get(`/api/rats/${ratId}/comprovantes`),
+      ]);
       setDados(data);
+      setComprovantes(dadosComprovantes.comprovantes);
+      setPodeAnexarComprovantes(dadosComprovantes.podeAnexar);
       setErro(null);
       return data;
     } catch (err: any) {
@@ -153,6 +180,17 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
 
   const totalLancado = useMemo(() => dados?.despesas.reduce((total, despesa) => total + (despesa.vlrtot ?? 0), 0) ?? 0, [dados]);
   const pendentesDeEnvio = dados?.despesas.filter((despesa) => despesa.pendenteDeEnvio).length ?? 0;
+  const semComprovante = dados?.despesas.filter(faltaComprovante).length ?? 0;
+  const comprovantesSoltos = comprovantes.filter((c) => c.despesaId == null);
+  // Rótulo da despesa nos seletores/títulos de comprovante — começa pela descrição (a data sozinha
+  // ficava cortada no <select>).
+  const rotuloDespesa = (d: DespesaLancada) => `${d.desrdv ?? d.tipdesLabel} · ${formatMoney(d.vlrtot)} · ${formatData(d.datemi)}`;
+  // Destinos possíveis no seletor "Despesa" de cada comprovante — só as que aceitam anexo agora.
+  const opcoesDespesa: OpcaoDespesaComprovante[] = useMemo(
+    () => (dados?.despesas ?? []).filter((d) => d.podeAnexar).map((d) => ({ id: d.id, rotulo: rotuloDespesa(d) })),
+    [dados]
+  );
+  const despesaDoModalComprovantes = dados?.despesas.find((d) => d.id === comprovantesDaDespesaId) ?? null;
 
   // Aba de verdade (não popup pequeno como o modal de lançar) — o relatório precisa de espaço
   // pra revisar antes de imprimir. Nome de janela fixo por RAT: clicar de novo reaproveita a
@@ -263,6 +301,25 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
             >
               Imprimir
             </button>
+            {/* Comprovantes da RAT inteira (soltos e de cada despesa): fica aberto pra quem só
+                visualiza, que pode conferir e baixar. Ponto de aviso = há comprovante ainda
+                sem despesa. */}
+            {(podeAnexarComprovantes || comprovantes.length > 0) && (
+              <button
+                type="button"
+                onClick={() => setJanelaComprovantesAberta(true)}
+                className="relative rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Comprovantes ({comprovantes.length})
+                {comprovantesSoltos.length > 0 && (
+                  <span
+                    aria-label={`${comprovantesSoltos.length} sem despesa`}
+                    title={`${comprovantesSoltos.length} comprovante(s) sem despesa`}
+                    className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-warning"
+                  />
+                )}
+              </button>
+            )}
             {dados.podeGerenciar && (
               <button
                 type="button"
@@ -289,6 +346,7 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
                 <span className="mt-0.5 block text-xs text-muted">
                   {dados.despesas.length === 0 ? "Nenhuma despesa lançada" : `${dados.despesas.length} ${dados.despesas.length === 1 ? "lançamento" : "lançamentos"}`} · {formatMoney(totalLancado)}
                   {pendentesDeEnvio > 0 && ` · ${pendentesDeEnvio} pendente${pendentesDeEnvio === 1 ? "" : "s"} de envio`}
+                  {semComprovante > 0 && ` · ${semComprovante} sem comprovante`}
                 </span>
               </span>
               <span className="shrink-0 text-sm font-medium text-primary">{historicoAberto ? "Ocultar" : "Ver lançamentos"}</span>
@@ -334,6 +392,7 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
                                 <p className="truncate" title={despesa.desrdv ?? undefined}>{despesa.desrdv ?? "—"}</p>
                                 {despesa.pendenteDeEnvio && <span className="mt-1 inline-block rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">Pendente de envio</span>}
                                 {despesa.exclusaoPendente && <span className="mt-1 inline-block rounded-full bg-destructive/15 px-1.5 py-0.5 text-[9.5px] font-medium text-destructive">Exclusão pendente</span>}
+                                {faltaComprovante(despesa) && <span className="mt-1 inline-block rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">Sem comprovante</span>}
                               </td>
                               <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">{despesa.qtdrdv ?? "—"}</td>
                               <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">{formatMoney(despesa.vlrunt)}</td>
@@ -360,6 +419,11 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
                               </td>
                               <td className="py-1.5 text-right">
                                 <div className="flex justify-end gap-3">
+                                  {(despesa.qtdComprovantes > 0 || despesa.podeAnexar) && (
+                                    <button type="button" onClick={() => setComprovantesDaDespesaId(despesa.id)} className="whitespace-nowrap text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                      Comprovantes ({despesa.qtdComprovantes})
+                                    </button>
+                                  )}
                                   {despesa.podeEditar && (
                                     <button type="button" onClick={() => setModalDespesa({ despesa })} className="text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                                       Editar
@@ -392,13 +456,25 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
                             <span>{formatData(despesa.datemi)}</span>
                             <span>{despesa.fatrdvLabel === "Sim" ? "Fatura cliente" : "Não fatura cliente"}</span>
                           </div>
-                          {(despesa.pendenteDeEnvio || despesa.exclusaoPendente || despesa.podeEditar || despesa.podeExcluir) && (
+                          {(despesa.pendenteDeEnvio ||
+                            despesa.exclusaoPendente ||
+                            faltaComprovante(despesa) ||
+                            despesa.qtdComprovantes > 0 ||
+                            despesa.podeAnexar ||
+                            despesa.podeEditar ||
+                            despesa.podeExcluir) && (
                             <div className="flex items-center justify-between gap-3">
                               <span className="space-x-1">
                                 {despesa.pendenteDeEnvio && <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">Pendente de envio</span>}
                                 {despesa.exclusaoPendente && <span className="rounded-full bg-destructive/15 px-1.5 py-0.5 text-[9.5px] font-medium text-destructive">Exclusão pendente</span>}
+                                {faltaComprovante(despesa) && <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">Sem comprovante</span>}
                               </span>
                               <span className="flex shrink-0 gap-3">
+                                {(despesa.qtdComprovantes > 0 || despesa.podeAnexar) && (
+                                  <button type="button" onClick={() => setComprovantesDaDespesaId(despesa.id)} className="text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                    Comprovantes ({despesa.qtdComprovantes})
+                                  </button>
+                                )}
                                 {despesa.podeEditar && (
                                   <button type="button" onClick={() => setModalDespesa({ despesa })} className="text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                                     Editar
@@ -429,6 +505,9 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
               opcoesTipo={dados.opcoesTipo}
               opcoesModalidade={dados.opcoesModalidade}
               despesaEmEdicao={modalDespesa.despesa}
+              comprovantes={comprovantes}
+              opcoesDespesa={opcoesDespesa}
+              onComprovantesAlterados={() => void carregar(false)}
               onFechar={() => setModalDespesa(null)}
               onSalvo={(despesaId) => {
                 carregar(false);
@@ -438,6 +517,38 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
                 acompanharReenvio(despesaId);
               }}
             />
+          )}
+
+          {janelaComprovantesAberta && (
+            <JanelaComprovantesRat
+              ratId={ratId}
+              numrat={dados.numrat}
+              comprovantes={comprovantes}
+              despesas={dados.despesas.map((d) => ({ id: d.id, rotulo: rotuloDespesa(d), podeAnexar: d.podeAnexar }))}
+              podeAnexar={podeAnexarComprovantes}
+              onAlterado={() => void carregar(false)}
+              onFechar={() => setJanelaComprovantesAberta(false)}
+            />
+          )}
+
+          {despesaDoModalComprovantes && (
+            <Modal
+              open
+              onClose={() => setComprovantesDaDespesaId(null)}
+              title="Comprovantes da despesa"
+              subtitulo={`${despesaDoModalComprovantes.desrdv ?? despesaDoModalComprovantes.tipdesLabel} · ${formatMoney(despesaDoModalComprovantes.vlrtot)}`}
+              className="max-w-xl"
+            >
+              <ComprovantesRat
+                ratId={ratId}
+                comprovantes={comprovantes.filter((c) => c.despesaId === despesaDoModalComprovantes.id)}
+                despesaIdAlvo={despesaDoModalComprovantes.id}
+                podeAnexar={despesaDoModalComprovantes.podeAnexar}
+                opcoesDespesa={opcoesDespesa}
+                textoVazio="Nenhum comprovante anexado a esta despesa."
+                onAlterado={() => void carregar(false)}
+              />
+            </Modal>
           )}
         </>
       )}

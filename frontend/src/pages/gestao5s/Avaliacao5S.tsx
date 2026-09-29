@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { BotoesNota } from "../../components/gestao5s/BotoesNota";
 import { UploadFotos } from "../../components/gestao5s/UploadFotos";
 import { Miniatura } from "../../components/gestao5s/Miniatura";
-import { Visualizador } from "../../components/gestao5s/Visualizador";
+import { Visualizador } from "../../components/ui/Visualizador";
 import { classeBotaoPerigo, classeBotaoPrimario, classeBotaoSecundario, classeCampo, classeRotulo } from "../../components/gestao5s/campos";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useToast } from "../../components/ui/Toast";

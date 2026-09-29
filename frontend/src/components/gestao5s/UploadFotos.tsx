@@ -1,31 +1,12 @@
 import axios from "axios";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Miniatura } from "./Miniatura";
 import { classeBotaoSecundario } from "./campos";
 import { mensagemDeErro } from "../../utils/gestao5s";
 import type { ImagemRef } from "../../utils/gestao5s";
+import { reduzirImagem } from "../../utils/reduzirImagem";
+import { BotoesCameraGaleria } from "../ui/BotoesCameraGaleria";
 import { useToast } from "../ui/Toast";
-
-const LADO_MAX = 1600;
-
-// Reduz a foto no cliente (lado maior ≤ 1600px, webp) antes de enviar: foto de celular chega a
-// vários MB e o limite do servidor é 10 MB. Se o navegador não decodificar o arquivo (ex.: HEIC),
-// envia o original e deixa o servidor decidir.
-async function reduzir(arquivo: File): Promise<File> {
-  try {
-    const bitmap = await createImageBitmap(arquivo);
-    const escala = Math.min(1, LADO_MAX / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(bitmap.width * escala);
-    canvas.height = Math.round(bitmap.height * escala);
-    canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.82));
-    if (!blob) return arquivo;
-    return new File([blob], arquivo.name.replace(/\.[^.]+$/, "") + ".webp", { type: "image/webp" });
-  } catch {
-    return arquivo;
-  }
-}
 
 interface UploadFotosProps {
   imagens: ImagemRef[];
@@ -39,24 +20,14 @@ interface UploadFotosProps {
 
 export function UploadFotos({ imagens, urlUpload, campos, podeEditar, onAlterado, onAbrir }: UploadFotosProps) {
   const { mostrar } = useToast();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
   const [enviando, setEnviando] = useState(false);
-  // Dispositivo de toque (celular/tablet): oferece "Câmera" e "Galeria" separados. No desktop o
-  // atributo `capture` é ignorado pelo navegador, então um botão de câmera lá só confundiria —
-  // fica o "Foto" de sempre, abrindo o seletor de arquivos. Lido uma vez na montagem.
-  const [aparelhoDeToque, setAparelhoDeToque] = useState(false);
-  useEffect(() => {
-    setAparelhoDeToque(window.matchMedia?.("(pointer: coarse)").matches ?? false);
-  }, []);
 
-  async function enviar(lista: FileList | null) {
-    if (!lista || lista.length === 0) return;
+  async function enviar(arquivos: File[]) {
     setEnviando(true);
     try {
-      for (const arquivo of Array.from(lista)) {
+      for (const arquivo of arquivos) {
         const form = new FormData();
-        form.append("arquivo", await reduzir(arquivo));
+        form.append("arquivo", await reduzirImagem(arquivo));
         for (const [k, v] of Object.entries(campos ?? {})) form.append(k, v);
         await axios.post(urlUpload, form);
       }
@@ -65,9 +36,6 @@ export function UploadFotos({ imagens, urlUpload, campos, podeEditar, onAlterado
       mostrar(mensagemDeErro(err, "Falha ao enviar a foto"), "destructive");
     } finally {
       setEnviando(false);
-      // Limpa os dois pra a mesma foto poder ser escolhida de novo.
-      if (inputRef.current) inputRef.current.value = "";
-      if (cameraRef.current) cameraRef.current.value = "";
     }
   }
 
@@ -87,26 +55,7 @@ export function UploadFotos({ imagens, urlUpload, campos, podeEditar, onAlterado
         <Miniatura key={img.id} id={img.id} nome={img.nomeArquivo} onAbrir={onAbrir} onRemover={podeEditar ? () => remover(img.id) : undefined} />
       ))}
       {podeEditar && (
-        <>
-          <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={(e) => enviar(e.target.files)} />
-          {/* Sem `multiple` de propósito: no Android, com `multiple` o navegador esconde a câmera e
-              abre só o seletor de arquivos. `capture="environment"` pede a câmera traseira. */}
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => enviar(e.target.files)} />
-          {aparelhoDeToque ? (
-            <>
-              <button type="button" disabled={enviando} onClick={() => cameraRef.current?.click()} className={`${classeBotaoSecundario} min-h-11`}>
-                {enviando ? "Enviando…" : "📷 Câmera"}
-              </button>
-              <button type="button" disabled={enviando} onClick={() => inputRef.current?.click()} className={`${classeBotaoSecundario} min-h-11`}>
-                🖼 Galeria
-              </button>
-            </>
-          ) : (
-            <button type="button" disabled={enviando} onClick={() => inputRef.current?.click()} className={`${classeBotaoSecundario} min-h-11`}>
-              {enviando ? "Enviando…" : "📷 Foto"}
-            </button>
-          )}
-        </>
+        <BotoesCameraGaleria enviando={enviando} classeBotao={`${classeBotaoSecundario} min-h-11`} onSelecionar={(arquivos) => void enviar(arquivos)} />
       )}
     </div>
   );

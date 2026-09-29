@@ -167,6 +167,13 @@ export const EVENTOS_AUDITORIA = {
   RAT_FECHAMENTO_SOLICITADO: "RAT_FECHAMENTO_SOLICITADO",
   RAT_FECHADA: "RAT_FECHADA",
 
+  // Comprovantes (foto/PDF) das despesas de viagem — ComprovanteRat, sempre de uma RAT e
+  // opcionalmente ligado a uma despesa dela (routes/rats.ts). Só existem no CaxHub, nada vai
+  // pro Senior. VINCULADO cobre vincular, trocar e desvincular (metadata.despesaIdAnterior/Novo).
+  COMPROVANTE_RAT_ADICIONADO: "COMPROVANTE_RAT_ADICIONADO",
+  COMPROVANTE_RAT_VINCULADO: "COMPROVANTE_RAT_VINCULADO",
+  COMPROVANTE_RAT_REMOVIDO: "COMPROVANTE_RAT_REMOVIDO",
+
   // Apontamento que existia no Senior e não voltou mais na consulta (foi apagado lá): o
   // vínculo numrat/seqrat é limpo pra permitir reintegrar. Ver
   // desvincularItensAusentesNoSenior em backend/src/routes/rats.ts.

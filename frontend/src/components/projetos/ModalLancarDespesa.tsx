@@ -1,8 +1,17 @@
 import axios from "axios";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../ui/Modal";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 import { DespesaLancada, Opcao, Rota } from "./DespesasRatPainel";
+import {
+  ArquivoEmEspera,
+  Comprovante,
+  ComprovantesRat,
+  OpcaoDespesaComprovante,
+  SelecaoComprovantesLancamento,
+  ehImagemExibivel,
+  enviarComprovante,
+} from "./ComprovantesRat";
 
 interface ModalLancarDespesaProps {
   ratId: number;
@@ -20,6 +29,11 @@ interface ModalLancarDespesaProps {
   // pego em voo pelo primeiro refresh (comum, o envio roda em segundo plano) ficava com o
   // ícone "enviando" preso pra sempre — mesmo bug já corrigido pro botão de reenviar manual.
   onSalvo: (despesaId: number) => void;
+  // Todos os comprovantes da RAT (GET /:id/comprovantes, carregado pelo pai): os soltos entram
+  // na seleção do lançamento; em edição, os já vinculados à despesa aparecem acima.
+  comprovantes: Comprovante[];
+  opcoesDespesa: OpcaoDespesaComprovante[];
+  onComprovantesAlterados: () => void;
 }
 
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -36,7 +50,18 @@ const fieldErrorClass = "mt-1 text-xs text-destructive";
 // popup própria (window.open) por um instante em 08/09/2026, revertido a pedido do Vitor: "só
 // modal mesmo". Sem fetch próprio — recebe tudo já carregado (rotas/opções) e a despesa a
 // editar (se houver) como props, do mesmo GET /:id/despesas que DespesasRatPainel já fez.
-export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade, despesaEmEdicao, onFechar, onSalvo }: ModalLancarDespesaProps) {
+export function ModalLancarDespesa({
+  ratId,
+  rotas,
+  opcoesTipo,
+  opcoesModalidade,
+  despesaEmEdicao,
+  onFechar,
+  onSalvo,
+  comprovantes,
+  opcoesDespesa,
+  onComprovantesAlterados,
+}: ModalLancarDespesaProps) {
   // Deslocamento é o TIPO 7 (TIPDES_DESLOCAMENTO_ROTA, backend/src/domain/rdvDominio.ts), não a
   // presença de `moddes`: o Senior grava despesa avulsa com moddes = ' ' (espaço, não NULL) e
   // rotid = 0 — ~200 linhas em produção. `moddes != null` abria todas na aba de rota.
@@ -51,6 +76,69 @@ export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade,
   // de uma edição salva com sucesso (o formulário vira "nova despesa" em seguida, no MESMO
   // modal — decisão explícita: não fecha sozinho).
   const [editandoId, setEditandoId] = useState<number | null>(despesaEmEdicao?.id ?? null);
+
+  // Comprovantes escolhidos pra despesa em lançamento/edição — só vão ao servidor depois que a
+  // despesa for salva (a nova ainda não tem id). Um estado só, compartilhado pelas duas abas.
+  const [soltosMarcados, setSoltosMarcados] = useState<number[]>([]);
+  const [arquivosNovos, setArquivosNovos] = useState<ArquivoEmEspera[]>([]);
+  // Prévias (objectURL) ainda vivas ao fechar o modal são revogadas na desmontagem.
+  const arquivosNovosRef = useRef(arquivosNovos);
+  arquivosNovosRef.current = arquivosNovos;
+  useEffect(() => () => arquivosNovosRef.current.forEach((a) => a.previa && URL.revokeObjectURL(a.previa)), []);
+  const comprovantesSoltos = comprovantes.filter((c) => c.despesaId == null);
+  const comprovantesDaDespesa = editandoId != null ? comprovantes.filter((c) => c.despesaId === editandoId) : [];
+
+  function adicionarArquivos(arquivos: File[]) {
+    setArquivosNovos((atuais) => [
+      ...atuais,
+      ...arquivos.map((arquivo) => ({
+        chave: `${Date.now()}-${Math.random()}`,
+        arquivo,
+        previa: ehImagemExibivel(arquivo.type) ? URL.createObjectURL(arquivo) : null,
+      })),
+    ]);
+  }
+
+  function removerArquivoNovo(chave: string) {
+    setArquivosNovos((atuais) => {
+      const removido = atuais.find((a) => a.chave === chave);
+      if (removido?.previa) URL.revokeObjectURL(removido.previa);
+      return atuais.filter((a) => a.chave !== chave);
+    });
+  }
+
+  function alternarSolto(id: number) {
+    setSoltosMarcados((atuais) => (atuais.includes(id) ? atuais.filter((x) => x !== id) : [...atuais, id]));
+  }
+
+  // Aplica os comprovantes escolhidos à despesa recém-salva. Falha aqui não desfaz a despesa
+  // (já gravada) — devolve quantos não foram, pra avisar.
+  async function aplicarComprovantes(despesaId: number): Promise<number> {
+    if (soltosMarcados.length === 0 && arquivosNovos.length === 0) return 0;
+    let falhas = 0;
+    for (const id of soltosMarcados) {
+      try {
+        await axios.patch(`/api/rats/comprovantes/${id}`, { despesaId });
+      } catch {
+        falhas += 1;
+      }
+    }
+    for (const novo of arquivosNovos) {
+      try {
+        await enviarComprovante(ratId, novo.arquivo, despesaId);
+      } catch {
+        falhas += 1;
+      }
+    }
+    arquivosNovos.forEach((a) => a.previa && URL.revokeObjectURL(a.previa));
+    setArquivosNovos([]);
+    setSoltosMarcados([]);
+    onComprovantesAlterados();
+    return falhas;
+  }
+
+  const avisoFalhaComprovantes = (falhas: number) =>
+    `${falhas} comprovante(s) não foram anexados — anexe de novo pela ação "Comprovantes" da despesa.`;
 
   // Formulário "Despesa avulsa" — nasce preenchido quando despesaEmEdicao é uma despesa avulsa.
   const [tipdes, setTipdes] = useState<number | "">(
@@ -171,6 +259,8 @@ export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade,
         despesaId = data.id;
         setSucesso("Despesa lançada. Você já pode incluir a próxima.");
       }
+      const falhas = await aplicarComprovantes(despesaId);
+      if (falhas > 0) setErro(avisoFalhaComprovantes(falhas));
       onSalvo(despesaId);
       resetFormularioDespesa();
       setTentouEnviar(false);
@@ -207,6 +297,8 @@ export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade,
         despesaId = data.id;
         setSucesso("Deslocamento lançado. Você já pode incluir o próximo.");
       }
+      const falhas = await aplicarComprovantes(despesaId);
+      if (falhas > 0) setErro(avisoFalhaComprovantes(falhas));
       onSalvo(despesaId);
       resetFormularioDeslocamento();
       setTentouEnviar(false);
@@ -243,6 +335,37 @@ export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade,
     `flex-1 rounded-md px-3 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
       ativa ? "bg-primary text-primary-foreground shadow-sm" : "text-muted hover:bg-surface-2 hover:text-foreground"
     }`;
+
+  // Mesma seção nas duas abas. Em edição, os já vinculados vêm primeiro, com ação imediata
+  // (remover/trocar/desvincular); abaixo, o que ainda vai ser vinculado ao salvar.
+  const secaoComprovantes = (
+    <section className="space-y-3 rounded-md border border-border bg-surface-2/40 p-3">
+      <div>
+        <span className="block text-[11px] font-medium uppercase tracking-wide text-muted">Comprovantes (opcional)</span>
+        <p className="mt-0.5 text-xs text-muted">Foto ou PDF da nota, cupom ou recibo — vinculados ao salvar a despesa.</p>
+      </div>
+      {comprovantesDaDespesa.length > 0 && editandoId != null && (
+        <ComprovantesRat
+          ratId={ratId}
+          comprovantes={comprovantesDaDespesa}
+          despesaIdAlvo={editandoId}
+          podeAnexar
+          opcoesDespesa={opcoesDespesa}
+          mostrarEnvio={false}
+          onAlterado={onComprovantesAlterados}
+        />
+      )}
+      <SelecaoComprovantesLancamento
+        soltos={comprovantesSoltos}
+        marcados={soltosMarcados}
+        onAlternarSolto={alternarSolto}
+        novos={arquivosNovos}
+        onAdicionar={adicionarArquivos}
+        onRemoverNovo={removerArquivoNovo}
+        desabilitado={salvando}
+      />
+    </section>
+  );
 
   return (
     // Sem `fecharPorFora` (clique fora/Esc não fecham) — mesmo cuidado de ModalObservacaoAtividade:
@@ -354,6 +477,8 @@ export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade,
                 </span>
               </button>
             </div>
+
+            {secaoComprovantes}
 
             <div className="flex flex-col-reverse gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-muted">O total é conferido novamente ao salvar.</p>
@@ -502,6 +627,8 @@ export function ModalLancarDespesa({ ratId, rotas, opcoesTipo, opcoesModalidade,
                     />
                   </div>
                 </details>
+
+                {secaoComprovantes}
 
                 <div className="flex flex-col-reverse gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs text-muted">O total é conferido novamente ao salvar.</p>

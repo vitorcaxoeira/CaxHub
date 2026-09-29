@@ -1,5 +1,10 @@
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
+import multer from "multer";
+import archiver from "archiver";
+import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, codforsDoTime } from "../domain/contextoProjeto";
@@ -15,7 +20,9 @@ import {
   type IntegracaoErpStatus,
 } from "../domain/ratDominio";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
-import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA, type EventoAuditoriaTipo } from "../audit/taxonomia";
+import { COMPROVANTES_RAT_DIR } from "../config/uploads";
+import { montarPdfComprovantes, type ModoPdfComprovantes } from "../domain/pdfComprovantes";
 import { entidadeIdRat } from "../audit/identidadeEntidade";
 import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
 import {
@@ -1629,6 +1636,16 @@ ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
       pendenciasPorDespesa.set(pendencia.despesaId, lista);
     }
 
+    // Comprovantes (ComprovanteRat): quantos cada despesa tem (badge "Sem comprovante") e quantos
+    // estão soltos na RAT, sem despesa — ver seção de comprovantes no fim deste arquivo.
+    const [comprovantesPorDespesa, comprovantesSoltos] = await Promise.all([
+      despesaIds.length > 0
+        ? prisma.comprovanteRat.groupBy({ by: ["despesaId"], where: { despesaId: { in: despesaIds } }, _count: { _all: true } })
+        : Promise.resolve([]),
+      prisma.comprovanteRat.count({ where: { ratId: rat.id, despesaId: null } }),
+    ]);
+    const qtdComprovantesPorDespesa = new Map(comprovantesPorDespesa.map((g) => [g.despesaId, g._count._all]));
+
     // `podeGerenciar` (permissão de dono/admin) entra na conta: sem ela, `podeLancar` é sempre
     // false pra quem só visualiza — mesmo quando a RAT em si estaria em condição de receber
     // despesa (numrat + Digitado). `mensagemBloqueio` só faz sentido pra quem gerencia (avisar
@@ -1639,6 +1656,8 @@ ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
       podeGerenciar,
       podeLancar: podeAlterar,
       mensagemBloqueio: podeGerenciar && !podeAlterar ? mensagemBloqueioDespesas(rat) : null,
+      comprovantesSoltos,
+      numrat: rat.numrat,
       despesas: despesas.map((d) => {
         const pendenciasDaDespesa = pendenciasPorDespesa.get(d.id) ?? [];
         const emAndamento = pendenciasDaDespesa.some((p) => p.status === "enviando");
@@ -1693,6 +1712,10 @@ ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
           exclusaoPendente,
           podeEditar: podeMexer,
           podeExcluir: podeMexer,
+          // Comprovante não vai pro Senior, então envio em voo não trava; exclusão pendente sim
+          // (o comprovante voltaria pra RAT assim que o Senior confirmasse).
+          podeAnexar: podeAlterar && !exclusaoPendente,
+          qtdComprovantes: qtdComprovantesPorDespesa.get(d.id) ?? 0,
           integracaoErpLabel: integracaoErpLabel(integracaoDespesa),
           integracaoErpTone: integracaoErpTone(integracaoDespesa),
           integracaoErpErro,
@@ -1814,6 +1837,68 @@ const CATEGORIAS_RELATORIO_DESPESA: { categoria: string; tipdes: number[] }[] = 
   { categoria: "Outros", tipdes: [6] },
 ];
 
+// Dados do relatório de despesas de UMA RAT — usados pelo relatório de impressão (rota abaixo) e
+// pela capa do PDF de prestação de contas (GET /:id/comprovantes/pdf). Recebe a RAT já resolvida
+// e autorizada; a checagem de permissão fica com quem chama.
+async function dadosRelatorioDespesas(rat: import("@prisma/client").Rat) {
+  const [cliente, consultor, despesas] = await Promise.all([
+    rat.codcli != null ? prisma.cliente.findUnique({ where: { codcli: rat.codcli } }) : null,
+    prisma.consultor.findFirst({ where: { codemp: rat.codemp, codfor: rat.codfor } }),
+    // Excluída (soft delete confirmado no Senior) fica de fora — mesmo filtro de
+    // GET /:id/despesas.
+    rat.numrat != null
+      ? prisma.registroDespesaViagem.findMany({
+          where: { codemp: rat.codemp, numrat: rat.numrat, excluidaEm: null },
+          orderBy: [{ datemi: "asc" }, { id: "asc" }],
+        })
+      : [],
+  ]);
+
+  // Deslocamento por rota (tipdes=7) com qtdrdv=0 é lixo de teste/rascunho (rota selecionada
+  // sem km de verdade) — não é um lançamento real, não entra no relatório impresso nem nos
+  // totais/resumo (pedido explícito do Vitor, 09/09/2026).
+  const despesasImpressas = despesas.filter((d) => !(d.tipdes === TIPDES_DESLOCAMENTO_ROTA && (d.qtdrdv ?? 0) === 0));
+
+  // "Faturar Cliente" não existe como campo agregado da RAT — só por despesa (`fatrdv`).
+  // Deriva como verdadeiro se QUALQUER despesa faturar (decisão explícita do Vitor).
+  const faturaCliente = despesasImpressas.some((d) => d.fatrdv === "S");
+
+  const resumoPorCategoria = CATEGORIAS_RELATORIO_DESPESA.map(({ categoria, tipdes }) => {
+    const doGrupo = despesasImpressas.filter((d) => d.tipdes != null && tipdes.includes(d.tipdes));
+    return {
+      categoria,
+      qtdrdv: doGrupo.reduce((soma, d) => soma + (d.qtdrdv ?? 0), 0),
+      vlrtot: doGrupo.reduce((soma, d) => soma + Number(d.vlrtot ?? 0), 0),
+    };
+  });
+
+  return {
+    rat: {
+      numrat: rat.numrat,
+      datemi: rat.datemi,
+      consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`,
+      cliente: cliente ? `${cliente.codcli} - ${cliente.nomcli}` : null,
+      codpro: rat.codpro,
+      numprj: rat.numprj,
+      codfpj: rat.codfpj,
+      faturaCliente,
+    },
+    despesas: despesasImpressas.map((d) => ({
+      id: d.id,
+      tipdes: d.tipdes,
+      tipdesLabel: tipdesLabel(d.tipdes),
+      desrdv: d.desrdv,
+      qtdrdv: d.qtdrdv,
+      // Decimal do Prisma serializa como string em JSON — mesmo cuidado de GET /:id/despesas.
+      vlrunt: d.vlrunt != null ? Number(d.vlrunt) : null,
+      vlrtot: d.vlrtot != null ? Number(d.vlrtot) : null,
+      datemi: d.datemi,
+    })),
+    resumoPorCategoria,
+    total: despesasImpressas.reduce((soma, d) => soma + Number(d.vlrtot ?? 0), 0),
+  };
+}
+
 // GET /:id/despesas/relatorio — dados pro relatório de impressão da RDV
 // (RelatorioDespesasRat.tsx, frontend, aberto numa aba própria a partir do botão "Imprimir" em
 // DespesasRatPainel.tsx), no modelo já usado dentro do Senior. Mesma visibilidade de
@@ -1837,61 +1922,7 @@ ratsRouter.get("/:id/despesas/relatorio", async (req: AuthenticatedRequest, res)
       return;
     }
 
-    const [cliente, consultor, despesas] = await Promise.all([
-      rat.codcli != null ? prisma.cliente.findUnique({ where: { codcli: rat.codcli } }) : null,
-      prisma.consultor.findFirst({ where: { codemp: rat.codemp, codfor: rat.codfor } }),
-      // Excluída (soft delete confirmado no Senior) fica de fora — mesmo filtro de
-      // GET /:id/despesas.
-      rat.numrat != null
-        ? prisma.registroDespesaViagem.findMany({
-            where: { codemp: rat.codemp, numrat: rat.numrat, excluidaEm: null },
-            orderBy: [{ datemi: "asc" }, { id: "asc" }],
-          })
-        : [],
-    ]);
-
-    // Deslocamento por rota (tipdes=7) com qtdrdv=0 é lixo de teste/rascunho (rota selecionada
-    // sem km de verdade) — não é um lançamento real, não entra no relatório impresso nem nos
-    // totais/resumo (pedido explícito do Vitor, 09/09/2026).
-    const despesasImpressas = despesas.filter((d) => !(d.tipdes === TIPDES_DESLOCAMENTO_ROTA && (d.qtdrdv ?? 0) === 0));
-
-    // "Faturar Cliente" não existe como campo agregado da RAT — só por despesa (`fatrdv`).
-    // Deriva como verdadeiro se QUALQUER despesa faturar (decisão explícita do Vitor).
-    const faturaCliente = despesasImpressas.some((d) => d.fatrdv === "S");
-
-    const resumoPorCategoria = CATEGORIAS_RELATORIO_DESPESA.map(({ categoria, tipdes }) => {
-      const doGrupo = despesasImpressas.filter((d) => d.tipdes != null && tipdes.includes(d.tipdes));
-      return {
-        categoria,
-        qtdrdv: doGrupo.reduce((soma, d) => soma + (d.qtdrdv ?? 0), 0),
-        vlrtot: doGrupo.reduce((soma, d) => soma + Number(d.vlrtot ?? 0), 0),
-      };
-    });
-
-    res.json({
-      rat: {
-        numrat: rat.numrat,
-        datemi: rat.datemi,
-        consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`,
-        cliente: cliente ? `${cliente.codcli} - ${cliente.nomcli}` : null,
-        codpro: rat.codpro,
-        numprj: rat.numprj,
-        codfpj: rat.codfpj,
-        faturaCliente,
-      },
-      despesas: despesasImpressas.map((d) => ({
-        tipdes: d.tipdes,
-        tipdesLabel: tipdesLabel(d.tipdes),
-        desrdv: d.desrdv,
-        qtdrdv: d.qtdrdv,
-        // Decimal do Prisma serializa como string em JSON — mesmo cuidado de GET /:id/despesas.
-        vlrunt: d.vlrunt != null ? Number(d.vlrunt) : null,
-        vlrtot: d.vlrtot != null ? Number(d.vlrtot) : null,
-        datemi: d.datemi,
-      })),
-      resumoPorCategoria,
-      total: despesasImpressas.reduce((soma, d) => soma + Number(d.vlrtot ?? 0), 0),
-    });
+    res.json(await dadosRelatorioDespesas(rat));
   } catch (error) {
     handleError(res, error, "despesas-relatorio");
   }
@@ -2126,5 +2157,413 @@ ratsRouter.delete("/despesas/:despesaId", async (req: AuthenticatedRequest, res)
     res.json({ ok: true, pendente: true });
   } catch (error) {
     handleError(res, error, "despesas-excluir");
+  }
+});
+
+// ---------- comprovantes (foto/PDF) das despesas de viagem ----------
+//
+// ComprovanteRat (25/09/2026, pedido do Vitor): sempre pertence a uma RAT e, opcionalmente, a
+// uma despesa dela — nulo = "solto" na RAT (fotografado na hora, vinculado depois ao lançar a
+// despesa). Arquivo em disco (COMPROVANTES_RAT_DIR, volume Docker), só o metadado no banco;
+// nada vai pro Senior. Mesmas regras das despesas: ver = podeVerRat; anexar/vincular/remover =
+// dono ou admin (podeGerenciarDespesas) com a RAT Digitada (podeAlterarDespesasDaRat).
+
+const MIMES_COMPROVANTE = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
+const TAMANHO_MAX_COMPROVANTE_MB = 15;
+const MAX_COMPROVANTES_POR_RAT = 30;
+
+const uploadComprovante = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      fs.mkdirSync(COMPROVANTES_RAT_DIR, { recursive: true });
+      cb(null, COMPROVANTES_RAT_DIR);
+    },
+    filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: TAMANHO_MAX_COMPROVANTE_MB * 1024 * 1024 },
+  // O multer lê o nome do arquivo como latin1 por padrão — "Separação.pdf" chegava como
+  // "SeparaÃ§Ã£o.pdf". Os navegadores mandam UTF-8.
+  defParamCharset: "utf8",
+  fileFilter: (_req, file, cb) => {
+    if (MIMES_COMPROVANTE.has(file.mimetype)) cb(null, true);
+    else cb(new Error("Tipo de arquivo não permitido (use foto ou PDF)"));
+  },
+});
+
+function receberComprovante(req: AuthenticatedRequest, res: import("express").Response, next: import("express").NextFunction) {
+  uploadComprovante.single("arquivo")(req, res, (err: unknown) => {
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      res.status(400).json({ error: `Arquivo maior que ${TAMANHO_MAX_COMPROVANTE_MB} MB` });
+      return;
+    }
+    if (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Falha no upload" });
+      return;
+    }
+    next();
+  });
+}
+
+// Leitura: quem vê a RAT. Escrita: ratComPermissao (dono/admin) + RAT Digitada.
+async function ratDosComprovantes(
+  req: AuthenticatedRequest,
+  res: import("express").Response,
+  ratId: number,
+  acesso: "leitura" | "escrita"
+): Promise<import("@prisma/client").Rat | null> {
+  if (acesso === "escrita") {
+    const rat = await ratComPermissao(req, res, ratId);
+    if (!rat) return null;
+    if (!podeAlterarDespesasDaRat(rat)) {
+      res.status(400).json({ error: mensagemBloqueioDespesas(rat) });
+      return null;
+    }
+    return rat;
+  }
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) {
+    res.status(404).json({ error: "Usuário não encontrado" });
+    return null;
+  }
+  const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+  if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+    res.status(404).json({ error: "RAT não encontrada" });
+    return null;
+  }
+  return rat;
+}
+
+async function comprovanteComRat(req: AuthenticatedRequest, res: import("express").Response, acesso: "leitura" | "escrita") {
+  const id = Number(req.params.comprovanteId);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Id inválido" });
+    return null;
+  }
+  const comprovante = await prisma.comprovanteRat.findUnique({ where: { id } });
+  if (!comprovante) {
+    res.status(404).json({ error: "Comprovante não encontrado" });
+    return null;
+  }
+  const rat = await ratDosComprovantes(req, res, comprovante.ratId, acesso);
+  if (!rat) return null;
+  return { comprovante, rat };
+}
+
+// `despesaId` vindo do corpo (multipart = string, JSON = número/null): ausente/vazio = solto.
+function lerDespesaId(valor: unknown): number | null | "invalido" {
+  if (valor === undefined || valor === null || valor === "") return null;
+  const n = Number(valor);
+  return Number.isInteger(n) && n > 0 ? n : "invalido";
+}
+
+// Despesa não tem FK pra Rat (casa por codemp+numrat), então o vínculo confere a chave natural.
+// Excluída ou com exclusão aguardando o Senior não recebe comprovante — ele voltaria pra RAT
+// assim que a exclusão confirmasse.
+async function erroDespesaDoVinculo(rat: { codemp: number; numrat: number | null }, despesaId: number): Promise<string | null> {
+  const despesa = await prisma.registroDespesaViagem.findUnique({ where: { id: despesaId } });
+  if (!despesa || despesa.excluidaEm != null || despesa.codemp !== rat.codemp || despesa.numrat !== rat.numrat) {
+    return "Despesa não encontrada nesta RAT";
+  }
+  const exclusaoPendente = await prisma.sincronizacaoPendenteDespesa.findFirst({
+    where: { despesaId, tipo: "excluir_despesa", status: { in: ["pendente", "enviando", "bloqueado"] } },
+  });
+  return exclusaoPendente ? "Esta despesa está com exclusão pendente no Senior" : null;
+}
+
+function auditarComprovante(
+  tx: Prisma.TransactionClient,
+  req: AuthenticatedRequest,
+  rat: import("@prisma/client").Rat,
+  eventoTipo: EventoAuditoriaTipo,
+  metadata: Record<string, unknown>
+) {
+  return criarEventoAuditoria(
+    {
+      origem: "tela",
+      usuarioId: req.user!.userId,
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+      eventoTipo,
+      alteracoes: null,
+      metadata,
+      correlationId: req.correlationId!,
+    },
+    tx
+  );
+}
+
+type ComprovanteComAutor = Prisma.ComprovanteRatGetPayload<{ include: { user: { select: { nome: true } } } }>;
+
+function serializarComprovante(c: ComprovanteComAutor) {
+  return {
+    id: c.id,
+    despesaId: c.despesaId,
+    nomeArquivo: c.nomeArquivo,
+    mimeType: c.mimeType,
+    tamanhoBytes: c.tamanhoBytes,
+    autorNome: c.user?.nome ?? null,
+    criadoEm: c.criadoEm,
+  };
+}
+
+// GET /:id/comprovantes — todos os comprovantes da RAT (soltos e vinculados).
+ratsRouter.get("/:id/comprovantes", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const rat = await ratDosComprovantes(req, res, id, "leitura");
+    if (!rat) return;
+    const ctx = await contextoDoUsuario(req);
+    const podeAnexar = !!ctx && podeGerenciarDespesas(ctx.role, ctx.contexto, rat) && podeAlterarDespesasDaRat(rat);
+    const comprovantes = await prisma.comprovanteRat.findMany({
+      where: { ratId: rat.id },
+      include: { user: { select: { nome: true } } },
+      orderBy: { id: "asc" },
+    });
+    res.json({ podeAnexar, comprovantes: comprovantes.map(serializarComprovante) });
+  } catch (error) {
+    handleError(res, error, "comprovantes-listar");
+  }
+});
+
+// GET /:id/comprovantes/zip — baixa todos os comprovantes da RAT num .zip, uma pasta por despesa
+// ("Sem despesa" pros soltos). `store` (sem compressão): foto webp/jpeg e PDF já vêm comprimidos.
+function nomeSeguroZip(texto: string): string {
+  return texto.replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "arquivo";
+}
+
+ratsRouter.get("/:id/comprovantes/zip", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const rat = await ratDosComprovantes(req, res, id, "leitura");
+    if (!rat) return;
+    const comprovantes = await prisma.comprovanteRat.findMany({ where: { ratId: rat.id }, orderBy: { id: "asc" } });
+    if (comprovantes.length === 0) {
+      res.status(404).json({ error: "Esta RAT não tem comprovantes" });
+      return;
+    }
+    const despesaIds = [...new Set(comprovantes.map((c) => c.despesaId).filter((d): d is number => d != null))];
+    const despesas = despesaIds.length
+      ? await prisma.registroDespesaViagem.findMany({ where: { id: { in: despesaIds } }, select: { id: true, desrdv: true } })
+      : [];
+    const pastaDaDespesa = new Map(despesas.map((d) => [d.id, nomeSeguroZip(`Despesa ${d.id} - ${d.desrdv ?? ""}`)]));
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="comprovantes-RAT-${rat.numrat ?? rat.id}.zip"`);
+    const zip = archiver("zip", { store: true });
+    zip.on("error", (err) => {
+      console.error("[rats:comprovantes-zip]", err.message);
+      res.destroy(err);
+    });
+    zip.pipe(res);
+    const usados = new Set<string>();
+    for (const c of comprovantes) {
+      const arquivo = path.join(COMPROVANTES_RAT_DIR, c.caminhoArquivo);
+      if (!fs.existsSync(arquivo)) continue;
+      const pasta = c.despesaId != null ? pastaDaDespesa.get(c.despesaId) ?? `Despesa ${c.despesaId}` : "Sem despesa";
+      const ext = path.extname(c.nomeArquivo);
+      const base = nomeSeguroZip(path.basename(c.nomeArquivo, ext));
+      let nome = `${pasta}/${base}${ext}`;
+      for (let n = 2; usados.has(nome.toLowerCase()); n += 1) nome = `${pasta}/${base} (${n})${ext}`;
+      usados.add(nome.toLowerCase());
+      zip.file(arquivo, { name: nome });
+    }
+    await zip.finalize();
+  } catch (error) {
+    if (res.headersSent) res.destroy();
+    else handleError(res, error, "comprovantes-zip");
+  }
+});
+
+// GET /:id/comprovantes/pdf?modo=prestacao|simples — todos os comprovantes da RAT num PDF único,
+// montado aqui no servidor (domain/pdfComprovantes.ts). "prestacao" = capa com o resumo da RAT e das
+// despesas + faixa de identificação e rodapé numerado em cada página; "simples" = só os anexos em
+// sequência. Mesma permissão (leitura) e mesma regra de 404 do .zip.
+ratsRouter.get("/:id/comprovantes/pdf", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const modo = req.query.modo;
+    if (modo !== "prestacao" && modo !== "simples") {
+      res.status(400).json({ error: "Modo inválido (use prestacao ou simples)" });
+      return;
+    }
+    const rat = await ratDosComprovantes(req, res, id, "leitura");
+    if (!rat) return;
+    const comprovantes = await prisma.comprovanteRat.findMany({ where: { ratId: rat.id }, orderBy: { id: "asc" } });
+    if (comprovantes.length === 0) {
+      res.status(404).json({ error: "Esta RAT não tem comprovantes" });
+      return;
+    }
+    const [relatorio, usuario] = await Promise.all([
+      dadosRelatorioDespesas(rat),
+      prisma.user.findUnique({ where: { id: req.user!.userId }, select: { nome: true } }),
+    ]);
+    const pdf = await montarPdfComprovantes({
+      modo: modo as ModoPdfComprovantes,
+      relatorio,
+      comprovantes: comprovantes.map((c) => ({
+        id: c.id,
+        despesaId: c.despesaId,
+        nomeArquivo: c.nomeArquivo,
+        mimeType: c.mimeType,
+        arquivo: path.join(COMPROVANTES_RAT_DIR, c.caminhoArquivo),
+      })),
+      geradoPor: usuario?.nome ?? "CaxHub",
+    });
+    const prefixo = modo === "prestacao" ? "prestacao-contas" : "comprovantes";
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${prefixo}-RAT-${rat.numrat ?? rat.id}.pdf"`);
+    res.end(Buffer.from(pdf));
+  } catch (error) {
+    handleError(res, error, "comprovantes-pdf");
+  }
+});
+
+// POST /:id/comprovantes — multipart: `arquivo` + `despesaId` opcional.
+ratsRouter.post("/:id/comprovantes", receberComprovante, async (req: AuthenticatedRequest, res) => {
+  const descartar = () => req.file && fs.unlink(req.file.path, () => {});
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      descartar();
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const rat = await ratDosComprovantes(req, res, id, "escrita");
+    if (!rat) return void descartar();
+    if (!req.file) {
+      res.status(400).json({ error: "Arquivo é obrigatório" });
+      return;
+    }
+    const despesaId = lerDespesaId(req.body?.despesaId);
+    if (despesaId === "invalido") {
+      descartar();
+      res.status(400).json({ error: "Despesa inválida" });
+      return;
+    }
+    if (despesaId != null) {
+      const erro = await erroDespesaDoVinculo(rat, despesaId);
+      if (erro) {
+        descartar();
+        res.status(400).json({ error: erro });
+        return;
+      }
+    }
+    if ((await prisma.comprovanteRat.count({ where: { ratId: rat.id } })) >= MAX_COMPROVANTES_POR_RAT) {
+      descartar();
+      res.status(400).json({ error: `Limite de ${MAX_COMPROVANTES_POR_RAT} comprovantes por RAT atingido` });
+      return;
+    }
+    const criado = await prisma.$transaction(async (tx) => {
+      const c = await tx.comprovanteRat.create({
+        data: {
+          ratId: rat.id,
+          despesaId,
+          userId: req.user!.userId,
+          nomeArquivo: req.file!.originalname.slice(0, 255),
+          caminhoArquivo: req.file!.filename,
+          tamanhoBytes: req.file!.size,
+          mimeType: req.file!.mimetype,
+        },
+        include: { user: { select: { nome: true } } },
+      });
+      await auditarComprovante(tx, req, rat, EVENTOS_AUDITORIA.COMPROVANTE_RAT_ADICIONADO, {
+        comprovanteId: c.id,
+        nomeArquivo: c.nomeArquivo,
+        despesaId,
+      });
+      return c;
+    });
+    res.status(201).json(serializarComprovante(criado));
+  } catch (error) {
+    descartar();
+    handleError(res, error, "comprovantes-criar");
+  }
+});
+
+// PATCH /comprovantes/:comprovanteId — `{ despesaId: number | null }`: vincular, trocar de
+// despesa ou desvincular (volta a ficar solto na RAT), sem reenviar o arquivo.
+ratsRouter.patch("/comprovantes/:comprovanteId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const r = await comprovanteComRat(req, res, "escrita");
+    if (!r) return;
+    const { comprovante, rat } = r;
+    const despesaId = lerDespesaId(req.body?.despesaId);
+    if (despesaId === "invalido") {
+      res.status(400).json({ error: "Despesa inválida" });
+      return;
+    }
+    if (despesaId === comprovante.despesaId) {
+      res.json({ ok: true });
+      return;
+    }
+    if (despesaId != null) {
+      const erro = await erroDespesaDoVinculo(rat, despesaId);
+      if (erro) {
+        res.status(400).json({ error: erro });
+        return;
+      }
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.comprovanteRat.update({ where: { id: comprovante.id }, data: { despesaId } });
+      await auditarComprovante(tx, req, rat, EVENTOS_AUDITORIA.COMPROVANTE_RAT_VINCULADO, {
+        comprovanteId: comprovante.id,
+        nomeArquivo: comprovante.nomeArquivo,
+        despesaIdAnterior: comprovante.despesaId,
+        despesaIdNovo: despesaId,
+      });
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "comprovantes-vincular");
+  }
+});
+
+// GET /comprovantes/:comprovanteId/arquivo — inline (miniatura na tela, PDF em aba nova). Só
+// por rota autenticada: o frontend busca o blob com o header e mostra por objectURL.
+ratsRouter.get("/comprovantes/:comprovanteId/arquivo", async (req: AuthenticatedRequest, res) => {
+  try {
+    const r = await comprovanteComRat(req, res, "leitura");
+    if (!r) return;
+    res.type(r.comprovante.mimeType);
+    res.sendFile(path.join(COMPROVANTES_RAT_DIR, r.comprovante.caminhoArquivo), (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: "Arquivo não encontrado" });
+    });
+  } catch (error) {
+    handleError(res, error, "comprovantes-arquivo");
+  }
+});
+
+ratsRouter.delete("/comprovantes/:comprovanteId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const r = await comprovanteComRat(req, res, "escrita");
+    if (!r) return;
+    const { comprovante, rat } = r;
+    await prisma.$transaction(async (tx) => {
+      await tx.comprovanteRat.delete({ where: { id: comprovante.id } });
+      await auditarComprovante(tx, req, rat, EVENTOS_AUDITORIA.COMPROVANTE_RAT_REMOVIDO, {
+        comprovanteId: comprovante.id,
+        nomeArquivo: comprovante.nomeArquivo,
+        despesaId: comprovante.despesaId,
+      });
+    });
+    fs.unlink(path.join(COMPROVANTES_RAT_DIR, comprovante.caminhoArquivo), () => {});
+    res.status(204).send();
+  } catch (error) {
+    handleError(res, error, "comprovantes-excluir");
   }
 });

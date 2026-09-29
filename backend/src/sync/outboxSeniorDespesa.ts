@@ -398,6 +398,12 @@ export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasI
                   // vínculo com o Senior (que já não existe mais) é que some.
                   { excluidaEm: new Date(), seqrdv: null },
         }),
+        // Exclusão confirmada: os comprovantes da despesa voltam a ficar soltos na RAT (mesma
+        // regra do hard delete, que faz isso pelo FK SetNull) — senão ficariam presos numa
+        // despesa que some das telas.
+        ...(registrado.tipo === "excluida"
+          ? [prisma.comprovanteRat.updateMany({ where: { despesaId: registrado.despesaId }, data: { despesaId: null } })]
+          : []),
         prisma.sincronizacaoPendenteDespesa.update({
           where: { id: item.id },
           data: { status: "enviado", processadoEm: new Date(), ultimoErro: null },

@@ -1,28 +1,4 @@
-import axios from "axios";
-import { useEffect, useState } from "react";
-
-// As imagens do 5S só saem por rota autenticada, então <img src> puro não funciona: busca o
-// blob com o header de autorização (axios global) e mostra por objectURL.
-export function useImagemBlob(id: number): string | null {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let objectUrl: string | null = null;
-    let cancelado = false;
-    axios
-      .get(`/api/5s/imagens/${id}`, { responseType: "blob" })
-      .then(({ data }) => {
-        if (cancelado) return;
-        objectUrl = URL.createObjectURL(data);
-        setUrl(objectUrl);
-      })
-      .catch(() => {});
-    return () => {
-      cancelado = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [id]);
-  return url;
-}
+import { useBlobAutenticado } from "../../hooks/useBlobAutenticado";
 
 interface MiniaturaProps {
   id: number;
@@ -32,7 +8,8 @@ interface MiniaturaProps {
 }
 
 export function Miniatura({ id, nome, onRemover, onAbrir }: MiniaturaProps) {
-  const url = useImagemBlob(id);
+  // As imagens do 5S só saem por rota autenticada — ver useBlobAutenticado.
+  const url = useBlobAutenticado(`/api/5s/imagens/${id}`);
   return (
     <div className="relative h-20 w-20 flex-none overflow-hidden rounded-md border border-border bg-surface-2">
       {url ? (

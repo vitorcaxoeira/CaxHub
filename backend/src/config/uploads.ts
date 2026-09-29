@@ -16,9 +16,13 @@ export const VIAGEM_DIR = path.join(UPLOADS_DIR, "solicitacoes-viagem");
 // Fotos da Gestão 5S (avaliações, observações da equipe) — só via rota autenticada.
 export const CINCO_S_DIR = path.join(UPLOADS_DIR, "gestao-5s");
 
+// Comprovantes (foto/PDF) das despesas de viagem das RATs — só via rota autenticada.
+export const COMPROVANTES_RAT_DIR = path.join(UPLOADS_DIR, "comprovantes-rat");
+
 export function garantirDiretorioUploads(): void {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
   fs.mkdirSync(AVATARS_DIR, { recursive: true });
   fs.mkdirSync(VIAGEM_DIR, { recursive: true });
   fs.mkdirSync(CINCO_S_DIR, { recursive: true });
+  fs.mkdirSync(COMPROVANTES_RAT_DIR, { recursive: true });
 }

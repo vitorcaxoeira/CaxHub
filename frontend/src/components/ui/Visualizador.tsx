@@ -1,4 +1,4 @@
-// Lightbox simples para uma foto já carregada (objectURL).
+// Lightbox simples para uma foto já carregada (objectURL) — 5S e comprovantes de despesa.
 export function Visualizador({ url, onFechar }: { url: string | null; onFechar: () => void }) {
   if (!url) return null;
   return (

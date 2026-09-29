@@ -719,6 +719,14 @@ export async function processarFilaSincronizacao(
         }
       }
 
+      // A limpeza do cabeçalho órfão (deleteMany abaixo) só apaga se a RAT original ficar sem
+      // item nenhum. Nesse caso os comprovantes dela (ComprovanteRat, FK Restrict) vão junto
+      // do item pra RAT dona — sem isso o Restrict derrubaria a transação inteira.
+      const moverComprovantesDaRatOrigem =
+        registrado?.tipo === "apontamento" &&
+        colidiuComOutraRat &&
+        (await prisma.ratItem.count({ where: { ratId: registrado.ratId, id: { not: registrado.ratItemId } } })) === 0;
+
       // O write-back vai na MESMA transação que baixa a fila: ou o apontamento fica
       // marcado como registrado e a pendência fecha, ou nenhum dos dois. É o que impede
       // um item de ficar "enviado" sem numrat (e portanto ainda excluível na tela).
@@ -739,6 +747,9 @@ export async function processarFilaSincronizacao(
               // qualquer outro caso (sem colisão, ou RAT original com outros itens) é
               // no-op. Uma RAT "Digitado" sem nenhum item nunca chegou a existir de
               // verdade no Senior, então apagar aqui não perde nada.
+              ...(moverComprovantesDaRatOrigem
+                ? [prisma.comprovanteRat.updateMany({ where: { ratId: registrado.ratId }, data: { ratId: ratDestinoId! } })]
+                : []),
               prisma.rat.deleteMany({ where: { id: registrado.ratId, itens: { none: {} } } }),
             ]
           : []),
