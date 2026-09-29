@@ -331,19 +331,30 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    // Busca na observação dos itens (RatItem.desati) — separada da busca livre acima de
-    // propósito: só dispara a query em RatItem quando o campo vem preenchido (28/08/2026,
-    // mesmo cuidado de [[custo-condicional-ao-filtro-nao-ao-request]]); sem termo, este
-    // bloco inteiro é pulado e GET /rats não ganha custo nenhum a mais. Opera sobre `rats`
-    // já reduzido pelos filtros acima, então o alcance da query já sai proporcional ao que
-    // sobrou, não ao total do sistema.
+    // Busca na observação dos itens (RatItem.desati) ou no id da atividade exibido na coluna
+    // "Id. Ativ." da tela (AtividadeSessaoExecucao.atividadeId, via RatItem.sessoes — é o id
+    // LOCAL do CaxHub, não o seqati do Senior: são números diferentes, e a coluna mostra o
+    // primeiro) — separada da busca livre acima de propósito: só dispara a query em RatItem
+    // quando o campo vem preenchido (28/08/2026, mesmo cuidado de
+    // [[custo-condicional-ao-filtro-nao-ao-request]]); sem termo, este bloco inteiro é pulado
+    // e GET /rats não ganha custo nenhum a mais. Opera sobre `rats` já reduzido pelos filtros
+    // acima, então o alcance da query já sai proporcional ao que sobrou, não ao total do
+    // sistema. atividadeId é Int, então casa por igualdade só quando o termo digitado é
+    // inteiramente numérico (29/09/2026).
     const buscaItem = typeof req.query.buscaItem === "string" ? req.query.buscaItem.trim() : "";
     if (buscaItem) {
       const ratIdsCandidatos = rats.map((r) => r.id);
+      const buscaItemNumerica = /^\d+$/.test(buscaItem) ? Number(buscaItem) : null;
       const itensCorrespondentes =
         ratIdsCandidatos.length > 0
           ? await prisma.ratItem.findMany({
-              where: { ratId: { in: ratIdsCandidatos }, desati: { contains: buscaItem, mode: "insensitive" } },
+              where: {
+                ratId: { in: ratIdsCandidatos },
+                OR: [
+                  { desati: { contains: buscaItem, mode: "insensitive" } },
+                  ...(buscaItemNumerica !== null ? [{ sessoes: { some: { atividadeId: buscaItemNumerica } } }] : []),
+                ],
+              },
               select: { ratId: true },
             })
           : [];
@@ -1411,10 +1422,17 @@ async function ratsElegiveisFechamentoFiltradas(role: string, contexto: Contexto
   const buscaItem = typeof query.buscaItem === "string" ? query.buscaItem.trim() : "";
   if (buscaItem) {
     const ratIdsCandidatos = rats.map((r) => r.id);
+    const buscaItemNumerica = /^\d+$/.test(buscaItem) ? Number(buscaItem) : null;
     const itensCorrespondentes =
       ratIdsCandidatos.length > 0
         ? await prisma.ratItem.findMany({
-            where: { ratId: { in: ratIdsCandidatos }, desati: { contains: buscaItem, mode: "insensitive" } },
+            where: {
+              ratId: { in: ratIdsCandidatos },
+              OR: [
+                { desati: { contains: buscaItem, mode: "insensitive" } },
+                ...(buscaItemNumerica !== null ? [{ sessoes: { some: { atividadeId: buscaItemNumerica } } }] : []),
+              ],
+            },
             select: { ratId: true },
           })
         : [];

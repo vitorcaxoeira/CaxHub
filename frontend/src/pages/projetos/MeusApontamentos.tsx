@@ -1924,7 +1924,7 @@ export function MeusApontamentos() {
               />
               <input
                 type="text"
-                placeholder="Buscar na observação dos itens..."
+                placeholder="Buscar na observação ou id da atividade..."
                 value={buscaItemInput}
                 onChange={(e) => setBuscaItemInput(e.target.value)}
                 className={`${selectClass} w-64`}
