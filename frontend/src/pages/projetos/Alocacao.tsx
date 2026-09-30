@@ -37,6 +37,9 @@ interface PropostaRow {
   qtdhorTotal: number;
   horasAlocadas: number;
   saldo: number;
+  // false = proposta fora de Aprovada/Em Execução, trazida só pela busca por número exato
+  // (ver GET /alocacao/propostas): só o Sync. ERP faz sentido nela.
+  alocavel: boolean;
 }
 
 interface ConsultorResumo {
@@ -656,6 +659,14 @@ export function Alocacao() {
                           >
                             {row.sitproLabel}
                           </span>
+                          {!row.alocavel && (
+                            <span
+                              className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge.warning}`}
+                              title="Situação fora do recorte de alocação (Aprovada/Em Execução) — rode o Sync. ERP para atualizar"
+                            >
+                              Fora do recorte
+                            </span>
+                          )}
                         </p>
                       </td>
                       <td className="max-w-[240px] truncate px-2.5 py-1.5 text-sm text-foreground" title={row.cliente}>
@@ -726,7 +737,10 @@ export function Alocacao() {
                             >
                               {estaSincronizando(chave) ? "Sincronizando..." : "Sync. ERP"}
                             </DropdownMenu.Item>
-                            <DropdownMenu.Item onSelect={() => navigate(`/projetos/alocacao/${row.codemp}/${row.codpro}/cronograma`)}>
+                            <DropdownMenu.Item
+                              onSelect={() => navigate(`/projetos/alocacao/${row.codemp}/${row.codpro}/cronograma`)}
+                              disabled={!row.alocavel}
+                            >
                               Cronograma
                             </DropdownMenu.Item>
                           </DropdownMenu.Content>

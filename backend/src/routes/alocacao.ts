@@ -510,6 +510,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       qtdhorTotal: a.qtdhorTotal,
       horasAlocadas: a.horasAlocadas,
       saldo: a.qtdhorTotal - a.horasAlocadas,
+      alocavel: true,
     }));
 
     if (busca) {
@@ -528,6 +529,57 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
         if (codforFiltro.includes(a.codfor)) propostasComConsultor.add(`${a.codemp}-${a.codpro}`);
       }
       linhas = linhas.filter((l) => propostasComConsultor.has(`${l.codemp}-${l.codpro}`));
+    }
+    // Busca por NÚMERO EXATO de uma proposta fora de SITPRO_ALOCAVEL (Executada, Rejeitada,
+    // Cancelada...): a lista normal só carrega 4/7, então ela sumia — e o motivo típico de
+    // procurá-la é justamente a situação ter mudado no Senior e o espelho local estar velho.
+    // Entra marcada `alocavel: false` (o frontend deixa só o Sync. ERP habilitado). Só por
+    // número exato, pra não despejar as milhares de propostas encerradas na lista; respeita o
+    // mesmo escopo de departamento da lista; fica de fora de KPIs e dos filtros de
+    // saldo/situação/modalidade/consultor (descrevem o estado da alocação, que não se aplica).
+    if (/^\d{1,9}$/.test(busca)) {
+      const foraDoRecorte = await prisma.proposta.findMany({
+        where: { codpro: Number(busca), OR: [{ sitpro: null }, { sitpro: { notIn: SITPRO_ALOCAVEL } }] },
+        include: { cliente: true },
+      });
+      if (foraDoRecorte.length > 0) {
+        const itensFora = await prisma.propostaItem.findMany({
+          where: { OR: foraDoRecorte.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
+        });
+        const alocacoesFora = itensFora.length
+          ? await prisma.atividadeConsultor.findMany({
+              where: { sitreg: "A", OR: itensFora.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })) },
+              select: { codemp: true, codpro: true, qtdhor: true },
+            })
+          : [];
+        for (const p of foraDoRecorte) {
+          const itensDaProposta = itensFora.filter((i) => i.codemp === p.codemp && i.codpro === p.codpro);
+          const depsItens = new Set(itensDaProposta.map((i) => i.depexe).filter((d): d is number => d != null));
+          if (!origemDaProposta(p.depexe, depsItens, depexesConsultados)) continue;
+          const qtdhorTotal = itensDaProposta.reduce((soma, i) => soma + (i.qtdhor ?? 0), 0);
+          const horasAlocadas = alocacoesFora
+            .filter((a) => a.codemp === p.codemp && a.codpro === p.codpro)
+            .reduce((soma, a) => soma + (a.qtdhor ?? 0), 0);
+          linhas.push({
+            codemp: p.codemp,
+            codpro: p.codpro,
+            numprj: p.numprj,
+            cliente: `${p.cliente.codcli} - ${p.cliente.nomcli}`,
+            despro: p.despro,
+            sitpro: p.sitpro,
+            sitproLabel: sitproLabel(p.sitpro),
+            sitproTone: sitproTone(p.sitpro),
+            datret: p.datret,
+            depexeLabel: depexeLabel(p.depexe),
+            modproLabel: modproLabel(p.modpro),
+            totalItens: itensDaProposta.length,
+            qtdhorTotal,
+            horasAlocadas,
+            saldo: qtdhorTotal - horasAlocadas,
+            alocavel: false,
+          });
+        }
+      }
     }
     linhas.sort((a, b) => b.codpro - a.codpro);
 
