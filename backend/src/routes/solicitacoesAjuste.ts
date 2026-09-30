@@ -4,7 +4,13 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, gerenciaDepartamento, gestorNomePorDepartamento } from "../domain/contextoProjeto";
 import { conflitosDoIntervalo, mensagemDeConflito } from "../domain/conflitoApontamento";
-import { saldoDaAtividade, formatarMinutos } from "../domain/tetoAtividade";
+import {
+  saldoDaAtividade,
+  formatarMinutos,
+  minutosReservadosPendentes,
+  realizadoDasAtividades,
+  tetoDaAtividade,
+} from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
 import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
@@ -185,7 +191,10 @@ solicitacoesAjusteRouter.post("/", async (req: AuthenticatedRequest, res) => {
     // A sessão atual já entra no `realizado`, então tira a duração dela antes de somar a
     // nova — senão a mesma hora contaria duas vezes.
     const duracaoAtualDaSessao = sessao.fim ? Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000) : 0;
-    const recusaTeto = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao);
+    const recusaTeto = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao, {
+      exigirTeto: true,
+      reservadoPendente: await minutosReservadosPendentes(atividade.id, { ignorarAjusteDaSessaoId: sessaoId }),
+    });
     if (recusaTeto) {
       res.status(recusaTeto.status).json(recusaTeto.body);
       return;
@@ -264,7 +273,8 @@ function serializar(
   gestorNome: string | null,
   podeDecidir: boolean,
   bloqueadoApontamentoEfetivo: boolean,
-  propostaInfo?: PropostaInfo
+  propostaInfo?: PropostaInfo,
+  consumo?: { teto: number; realizado: number }
 ) {
   return {
     id: s.id,
@@ -299,6 +309,10 @@ function serializar(
     // apontamento bloqueado (ver domain/bloqueioApontamento.ts) — a tela desabilita só
     // "Aprovar", "Reprovar" continua sempre disponível.
     bloqueadoApontamentoEfetivo,
+    // Minutos. Só nos pendentes (a tela projeta o efeito de aprovar em cima disto); nos
+    // decididos não há projeção a mostrar.
+    teto: consumo?.teto ?? null,
+    realizado: consumo?.realizado ?? null,
   };
 }
 
@@ -347,6 +361,13 @@ solicitacoesAjusteRouter.get("/", async (req: AuthenticatedRequest, res) => {
       todas.map((s) => ({ codemp: s.sessao.atividade.codemp, codpro: s.sessao.atividade.codpro }))
     );
 
+    // Realizado em lote (2 queries no total) só das atividades com pedido PENDENTE — é o
+    // único caso em que a tela mostra a barra de consumo.
+    const atividadesPendentes = todas.filter((s) => s.status === "pendente").map((s) => s.sessao.atividade);
+    const realizadoPorAtividade = await realizadoDasAtividades(
+      [...new Map(atividadesPendentes.map((a) => [a.id, a])).values()]
+    );
+
     const visiveis = todas
       .map((s) => {
         const a = s.sessao.atividade;
@@ -358,7 +379,11 @@ solicitacoesAjusteRouter.get("/", async (req: AuthenticatedRequest, res) => {
         const gestorNome = depexe != null ? mapaGestor.get(`${a.codemp}-${depexe}`) ?? null : null;
         const cfg = cfgBloqueioPorProposta.get(`${a.codemp}-${a.codpro}`) ?? { bloqueiaApontamento: false, bloqueiaExcedente: true };
         const bloqueadoApontamentoEfetivo = resolverBloqueioComConfig(cfg, a).bloqueadoApontamento;
-        return serializar(s, depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo);
+        const consumo =
+          s.status === "pendente"
+            ? { teto: tetoDaAtividade(a), realizado: realizadoPorAtividade.get(a.id) ?? 0 }
+            : undefined;
+        return serializar(s, depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo, consumo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 

@@ -9,6 +9,8 @@ import {
   SolicitacaoExcedente,
 } from "../../components/projetos/AtividadeDetalhe";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
+import { IndicadorProgresso } from "../../components/cronograma/IndicadorProgresso";
+import { tomConsumo } from "../../lib/consumoHoras";
 import { formatHoras, horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
 
@@ -81,6 +83,9 @@ export interface SolicitacaoAjuste {
   // apontamento bloqueado (ver domain/bloqueioApontamento.ts, backend) — só desabilita
   // "Aprovar"; "Reprovar" continua sempre disponível.
   bloqueadoApontamentoEfetivo: boolean;
+  // Minutos. Só nos pendentes (null nos decididos) — alimentam a barra de consumo.
+  teto: number | null;
+  realizado: number | null;
 }
 
 // Pedido de mudança numa das 3 flags de configuração da proposta (PropostaModoAlocacao) e a
@@ -136,6 +141,78 @@ const TOM_STATUS: Record<string, string> = {
 // "03/08 09:00 – 10:30" a partir de dois ISO.
 function intervalo(inicio: string, fim: string): string {
   return `${dateTimeFormatter.format(new Date(inicio))} – ${dateTimeFormatter.format(new Date(fim))}`;
+}
+
+// Duração do intervalo pedido/aprovado num ajuste — mesmo formato "H:MM h" usado no resto
+// do app (formatHoras), pro gestor não precisar calcular de cabeça quanto tempo o pedido
+// representa.
+function minutosEntre(inicio: string, fim: string): number {
+  return Math.round((new Date(fim).getTime() - new Date(inicio).getTime()) / 60000);
+}
+
+function duracaoIntervalo(inicio: string, fim: string): string {
+  return formatHoras(minutosEntre(inicio, fim) / 60);
+}
+
+// Duração em minutos do horário que o gestor está digitando no formulário "Decidir" — null
+// enquanto os campos não formam um intervalo válido (aí a barra volta a usar o pedido).
+function minutosDoFormulario(data: string, horaInicio: string, horaFim: string): number | null {
+  if (!data || !horaInicio || !horaFim || horaFim <= horaInicio) return null;
+  const minutos = Math.round((new Date(`${data}T${horaFim}`).getTime() - new Date(`${data}T${horaInicio}`).getTime()) / 60000);
+  return Number.isFinite(minutos) ? minutos : null;
+}
+
+// Versões translúcidas das cores de tomConsumo pro trecho "que o pedido acrescenta". Ficam
+// como strings literais aqui (e não montadas com `${cor}/40`) porque o Tailwind só gera as
+// classes que aparecem por extenso no código-fonte.
+const COR_TRECHO_PEDIDO: Record<string, string> = {
+  "bg-destructive": "bg-destructive/40",
+  "bg-warning": "bg-warning/40",
+  "bg-primary": "bg-primary/40",
+};
+
+const hm = (minutos: number) => minutosParaInputHoras(minutos);
+
+// Barra de consumo da atividade (mesma leitura do card do Quadro: realizado sobre o TETO,
+// alocado + excedentes) com o efeito de aprovar o pedido em cima: o percentual e a barra
+// "depois", e o trecho do pedido numa versão clara da cor do estado projetado. `deltaMinutos`
+// pode ser negativo (ajuste que encurta) — aí o trecho claro é o que o pedido libera.
+function ImpactoNoTeto({ teto, realizado, deltaMinutos }: { teto: number; realizado: number; deltaMinutos: number }) {
+  if (teto <= 0) {
+    return <p className="mt-1.5 text-[12px] text-warning">Atividade sem horas alocadas — não há teto pra conferir este pedido.</p>;
+  }
+  const projetado = Math.max(0, realizado + deltaMinutos);
+  const avancoAtual = realizado / teto;
+  const avancoProjetado = projetado / teto;
+  const tomAtual = tomConsumo(avancoAtual);
+  const tomProjetado = tomConsumo(avancoProjetado);
+  // A barra é desenhada sobre max(teto, projetado, realizado): quando estoura, o trilho
+  // cresce e o marcador mostra onde o teto termina, em vez de a barra só travar em 100%.
+  const escala = Math.max(teto, projetado, realizado);
+  const excede = projetado - teto;
+
+  return (
+    <div className="mt-1.5">
+      <p className="font-mono text-[12px] tabular-nums text-muted">
+        Realizado {hm(realizado)} / {hm(teto)} h <span className={tomAtual.texto}>({Math.round(avancoAtual * 100)}%)</span>
+        {" → "}
+        {deltaMinutos < 0 ? "após aprovar (libera " + hm(-deltaMinutos) + ") " : "após aprovar "}
+        <span className={tomProjetado.texto}>
+          {hm(projetado)} / {hm(teto)} h ({Math.round(avancoProjetado * 100)}%)
+        </span>
+        {excede > 0 && <span className="font-semibold text-destructive"> · excede o teto em {hm(excede)}</span>}
+      </p>
+      <IndicadorProgresso
+        className="mt-1"
+        alturaPx={6}
+        camadas={[
+          { percentual: Math.max(realizado, projetado) / escala, cor: COR_TRECHO_PEDIDO[tomProjetado.barra] },
+          { percentual: Math.min(realizado, projetado) / escala, cor: tomAtual.barra },
+        ]}
+        marcador={escala > teto ? { percentual: teto / escala, cor: "bg-foreground" } : undefined}
+      />
+    </div>
+  );
 }
 
 const classeBotao = {
@@ -747,13 +824,28 @@ function ListaApontamentos({
 
               <p className="mt-1.5 font-mono text-[12px] text-muted">
                 Pediu <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+                {" "}
+                <span className="text-warning">({duracaoIntervalo(s.inicioSolicitado, s.fimSolicitado)})</span>
             {s.inicioAprovado && s.fimAprovado && (
               <>
                 {" · Aprovado "}
                 <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>
+                {" "}
+                <span className="text-success">({duracaoIntervalo(s.inicioAprovado, s.fimAprovado)})</span>
               </>
             )}
           </p>
+
+          {s.status === "pendente" && s.teto != null && s.realizado != null && (
+            <ImpactoNoTeto
+              teto={s.teto}
+              realizado={s.realizado}
+              deltaMinutos={
+                (decidindoId === s.id ? minutosDoFormulario(data, horaInicio, horaFim) : null) ??
+                minutosEntre(s.inicioSolicitado, s.fimSolicitado)
+              }
+            />
+          )}
 
           <p className="mt-1.5 text-[13px] text-foreground">
             <span className="text-muted">Descrição do trabalho: </span>
@@ -1041,16 +1133,43 @@ function ListaAjustes({
 
               <p className="mt-1.5 font-mono text-[12px] text-muted">
                 De{" "}
-                <span className="text-muted">{intervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>
+                <span className="text-muted">{intervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>{" "}
+                <span className="text-muted">({duracaoIntervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)})</span>
                 {" para "}
-                <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+                <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>{" "}
+                <span className="text-warning">({duracaoIntervalo(s.inicioSolicitado, s.fimSolicitado)})</span>
                 {s.inicioAprovado && s.fimAprovado && (
                   <>
                     {" · Gravado "}
-                    <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>
+                    <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>{" "}
+                    <span className="text-success">({duracaoIntervalo(s.inicioAprovado, s.fimAprovado)})</span>
                   </>
                 )}
               </p>
+              <p className="mt-0.5 font-mono text-[12px] tabular-nums text-muted">
+                Original{" "}
+                <span className="text-foreground">{duracaoIntervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>
+                {" → após o ajuste "}
+                <span className="text-warning">{duracaoIntervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+                {" ("}
+                {(() => {
+                  const dif = minutosEntre(s.inicioSolicitado, s.fimSolicitado) - minutosEntre(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual);
+                  return `${dif >= 0 ? "+" : "−"}${minutosParaInputHoras(Math.abs(dif))} h`;
+                })()}
+                {")"}
+              </p>
+
+              {s.status === "pendente" && s.teto != null && s.realizado != null && (
+                <ImpactoNoTeto
+                  teto={s.teto}
+                  realizado={s.realizado}
+                  deltaMinutos={
+                    ((decidindoId === s.id ? minutosDoFormulario(data, horaInicio, horaFim) : null) ??
+                      minutosEntre(s.inicioSolicitado, s.fimSolicitado)) -
+                    (s.fimAtual ? minutosEntre(s.inicioAtual, s.fimAtual) : 0)
+                  }
+                />
+              )}
 
               <p className="mt-1.5 text-[13px] text-foreground">
                 <span className="text-muted">Motivo: </span>

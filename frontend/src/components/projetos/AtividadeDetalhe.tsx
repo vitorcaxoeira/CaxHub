@@ -79,6 +79,10 @@ export interface SolicitacaoApontamento {
   // apontamento bloqueado (ver domain/bloqueioApontamento.ts, backend) — só desabilita
   // "Aprovar"; "Reprovar" continua sempre disponível.
   bloqueadoApontamentoEfetivo: boolean;
+  // Minutos. Só nos pendentes da lista de Aprovações (null nos decididos e no drawer) —
+  // alimentam a barra de consumo.
+  teto: number | null;
+  realizado: number | null;
 }
 
 export interface SolicitacaoExcedente {

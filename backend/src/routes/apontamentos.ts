@@ -200,25 +200,48 @@ async function resolverRatDaConfirmacao(
 //
 // `descontarMinutos` é a duração de uma sessão que JÁ está no realizado e vai ser
 // substituída por este intervalo. Zero quando a sessão ainda nem existe.
+//
+// `opcoes` só é passado na CRIAÇÃO de pedidos (solicitação de apontamento/ajuste); sem ele a
+// conta é a de sempre, e confirmar/aprovar não mudam:
+//   - `exigirTeto`: atividade sem horas alocadas (teto 0) é recusada. Nos outros fluxos ela
+//     passa de propósito (executar numa atividade ainda não dimensionada), mas um PEDIDO
+//     sem teto não tem contra o que o gestor conferir.
+//   - `reservadoPendente`: minutos que outros pedidos pendentes da atividade já reservam.
 export async function recusarSeEstourarTeto(
   atividade: Parameters<typeof saldoDaAtividade>[0],
   inicio: Date,
   fim: Date,
-  descontarMinutos = 0
+  descontarMinutos = 0,
+  opcoes: { exigirTeto?: boolean; reservadoPendente?: number } = {}
 ): Promise<{ status: number; body: Record<string, unknown> } | null> {
   const duracao = Math.round((fim.getTime() - inicio.getTime()) / 60000);
   const { teto, realizado } = await saldoDaAtividade(atividade);
-  const realizadoBase = realizado - descontarMinutos;
-  if (teto <= 0 || realizadoBase + duracao <= teto) return null;
+  if (teto <= 0) {
+    if (!opcoes.exigirTeto) return null;
+    return {
+      status: 409,
+      body: {
+        error: "Esta atividade ainda não tem horas alocadas — peça ao gestor pra alocar antes de solicitar apontamento.",
+        teto,
+        realizado,
+        disponivel: 0,
+      },
+    };
+  }
+
+  const reservado = opcoes.reservadoPendente ?? 0;
+  const realizadoBase = realizado - descontarMinutos + reservado;
+  if (realizadoBase + duracao <= teto) return null;
 
   const disponivel = teto - realizadoBase;
+  const sufixoReserva = reservado > 0 ? ` (já descontados ${formatarMinutos(reservado)} de pedidos pendentes)` : "";
   return {
     status: 409,
     body: {
       error:
         disponivel > 0
-          ? `Apontamento de ${formatarMinutos(duracao)} excede o teto da atividade. Saldo disponível: ${formatarMinutos(disponivel)} (alocado + excedentes: ${formatarMinutos(teto)}). Ajuste o horário ou peça ao gestor pra liberar horas excedentes.`
-          : `A atividade já consumiu todo o teto de ${formatarMinutos(teto)} (alocado + excedentes). Peça ao gestor pra liberar horas excedentes antes de apontar.`,
+          ? `Apontamento de ${formatarMinutos(duracao)} excede o teto da atividade. Saldo disponível: ${formatarMinutos(disponivel)}${sufixoReserva} (alocado + excedentes: ${formatarMinutos(teto)}). Ajuste o horário ou peça ao gestor pra liberar horas excedentes.`
+          : `A atividade já consumiu todo o teto de ${formatarMinutos(teto)} (alocado + excedentes)${sufixoReserva}. Peça ao gestor pra liberar horas excedentes antes de apontar.`,
       teto,
       realizado: realizadoBase,
       disponivel,

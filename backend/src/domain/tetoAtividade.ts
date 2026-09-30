@@ -27,23 +27,39 @@ export function tetoDaAtividade(atividade: Pick<AtividadeConsultor, "qtdhor" | "
 // Sessão ABERTA (fim: null) fica de fora de propósito: o tempo dela ainda está correndo e
 // não é realizado, é o que a varredura de parada automática projeta em cima deste número.
 export async function realizadoDaAtividade(atividade: Pick<AtividadeConsultor, "id" | "seqati">): Promise<number> {
+  const porId = await realizadoDasAtividades([atividade]);
+  return porId.get(atividade.id) ?? 0;
+}
+
+// Versão em lote de realizadoDaAtividade — a MESMA conta, em 2 queries pro conjunto inteiro
+// (nunca 1 por atividade). É a única implementação: a pontual acima só chama esta com um
+// item, pra a regra não ter cópia que possa divergir.
+export async function realizadoDasAtividades(
+  atividades: Pick<AtividadeConsultor, "id" | "seqati">[]
+): Promise<Map<number, number>> {
+  const resultado = new Map<number, number>();
+  if (atividades.length === 0) return resultado;
+
+  const ids = atividades.map((a) => a.id);
+  // `> 0n`, não só `!= null`: seqati=0 não é um seqAti real — ver mesmo comentário em
+  // routes/alocacao.ts e routes/atividades.ts. Uma atividade com seqati=0 buscaria aqui
+  // TODO RatItem de seqati=0 do banco inteiro, não só os dela.
+  const seqatis = atividades.filter((a) => a.seqati != null && a.seqati > 0n).map((a) => a.seqati as bigint);
+
   const [sessoes, ratItens] = await Promise.all([
     prisma.atividadeSessaoExecucao.findMany({
-      where: { atividadeId: atividade.id, confirmada: false, fim: { not: null }, excluidaEm: null },
-      select: { inicio: true, fim: true },
+      where: { atividadeId: { in: ids }, confirmada: false, fim: { not: null }, excluidaEm: null },
+      select: { atividadeId: true, inicio: true, fim: true },
     }),
-    // `> 0n`, não só `!= null`: seqati=0 não é um seqAti real — ver mesmo comentário em
-    // routes/alocacao.ts e routes/atividades.ts. Uma atividade com seqati=0 buscaria aqui
-    // TODO RatItem de seqati=0 do banco inteiro, não só os dela.
-    atividade.seqati != null && atividade.seqati > 0n
+    seqatis.length > 0
       ? prisma.ratItem.findMany({
           where: {
-            seqati: atividade.seqati,
+            seqati: { in: seqatis },
             horini: { not: null },
             horfim: { not: null },
             rat: { sitrat: { not: SITRAT_CANCELADO } },
           },
-          select: { horini: true, horfim: true },
+          select: { seqati: true, horini: true, horfim: true },
         })
       : Promise.resolve([]),
   ]);
@@ -51,17 +67,62 @@ export async function realizadoDaAtividade(atividade: Pick<AtividadeConsultor, "
   // Acumula em MILISSEGUNDOS e arredonda UMA vez, no total. Arredondar sessão a sessão
   // descartava até 30s de cada uma, e zerava por completo as de menos de 30s: três starts
   // curtos somavam 0 minuto. Agora três sessões de 25s somam 1 minuto, como deve ser.
-  let milissegundos = 0;
+  const msPorAtividade = new Map<number, number>();
   for (const s of sessoes) {
     if (s.fim == null) continue;
-    milissegundos += s.fim.getTime() - s.inicio.getTime();
+    msPorAtividade.set(s.atividadeId, (msPorAtividade.get(s.atividadeId) ?? 0) + (s.fim.getTime() - s.inicio.getTime()));
   }
   // RatItem já vem em minutos inteiros (horini/horfim são a granularidade do Senior), então
   // entra como está — não há segundo a preservar aqui.
-  let minutos = Math.round(milissegundos / 60000);
+  const minutosRatPorSeqati = new Map<bigint, number>();
   for (const r of ratItens) {
-    if (r.horini == null || r.horfim == null) continue;
-    minutos += r.horfim - r.horini;
+    if (r.seqati == null || r.horini == null || r.horfim == null) continue;
+    minutosRatPorSeqati.set(r.seqati, (minutosRatPorSeqati.get(r.seqati) ?? 0) + (r.horfim - r.horini));
+  }
+
+  for (const a of atividades) {
+    const minutosSessoes = Math.round((msPorAtividade.get(a.id) ?? 0) / 60000);
+    const minutosRat = a.seqati != null && a.seqati > 0n ? minutosRatPorSeqati.get(a.seqati) ?? 0 : 0;
+    resultado.set(a.id, minutosSessoes + minutosRat);
+  }
+  return resultado;
+}
+
+// Minutos que os pedidos PENDENTES da atividade ainda vão consumir se aprovados. Não entram
+// em `realizado` (a sessão só nasce na aprovação), então sem isto vários pedidos que cabem
+// um de cada vez passariam, juntos, do teto.
+//
+// Pedido de apontamento reserva a duração inteira. Pedido de ajuste reserva só o que passa
+// da duração atual da sessão (um ajuste que ENCURTA não libera saldo antes de aprovado).
+// `ignorarAjusteDaSessaoId` tira da soma o pedido de ajuste da própria sessão que está sendo
+// (re)avaliada, pra não contar a mesma hora duas vezes.
+export async function minutosReservadosPendentes(
+  atividadeId: number,
+  opcoes: { ignorarAjusteDaSessaoId?: number } = {}
+): Promise<number> {
+  const [apontamentos, ajustes] = await Promise.all([
+    prisma.solicitacaoApontamento.findMany({
+      where: { atividadeId, status: "pendente" },
+      select: { inicioSolicitado: true, fimSolicitado: true },
+    }),
+    prisma.solicitacaoAjusteApontamento.findMany({
+      where: {
+        status: "pendente",
+        sessao: { atividadeId },
+        ...(opcoes.ignorarAjusteDaSessaoId != null ? { sessaoId: { not: opcoes.ignorarAjusteDaSessaoId } } : {}),
+      },
+      select: { inicioSolicitado: true, fimSolicitado: true, sessao: { select: { inicio: true, fim: true } } },
+    }),
+  ]);
+
+  let minutos = 0;
+  for (const p of apontamentos) {
+    minutos += Math.round((p.fimSolicitado.getTime() - p.inicioSolicitado.getTime()) / 60000);
+  }
+  for (const a of ajustes) {
+    const pedido = Math.round((a.fimSolicitado.getTime() - a.inicioSolicitado.getTime()) / 60000);
+    const atual = a.sessao.fim ? Math.round((a.sessao.fim.getTime() - a.sessao.inicio.getTime()) / 60000) : 0;
+    minutos += Math.max(0, pedido - atual);
   }
   return minutos;
 }
