@@ -34,7 +34,7 @@ export interface ImagemRef {
   nomeArquivo: string;
 }
 
-export function formatarPerc(v: number | null | undefined, casas = 0): string {
+export function formatarPerc(v: number | null | undefined, casas = 2): string {
   if (v == null) return "—";
   return `${v.toLocaleString("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas })}%`;
 }

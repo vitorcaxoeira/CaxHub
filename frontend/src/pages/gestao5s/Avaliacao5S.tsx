@@ -241,7 +241,7 @@ export function Avaliacao5S() {
             ))}
             <div className="rounded-md border border-border p-2 text-center">
               <p className="text-[11px] font-semibold text-foreground">Geral</p>
-              <p className={cn("mt-1 inline-block rounded px-1.5 py-0.5 font-mono text-sm font-bold tabular-nums", CELULA_TOM[tomDaNota(av.percentuais.geral)])}>{formatarPerc(av.percentuais.geral, 1)}</p>
+              <p className={cn("mt-1 inline-block rounded px-1.5 py-0.5 font-mono text-sm font-bold tabular-nums", CELULA_TOM[tomDaNota(av.percentuais.geral)])}>{formatarPerc(av.percentuais.geral)}</p>
             </div>
           </div>
         </section>
@@ -453,7 +453,7 @@ export function Avaliacao5S() {
             <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
               Geral
               <span className={cn("rounded px-1.5 py-0.5 font-mono text-sm tabular-nums", CELULA_TOM[tomDaNota(av.percentuais.geral)])}>
-                {formatarPerc(av.percentuais.geral, 1)}
+                {formatarPerc(av.percentuais.geral)}
               </span>
             </p>
           </div>

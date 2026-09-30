@@ -787,7 +787,16 @@ gestao5sRouter.post("/avaliacoes", async (req: Req5S, res) => {
     if (!areaId) return void res.status(400).json({ error: "Escolha a área a ser avaliada" });
     const area = await prisma.area5S.findUnique({ where: { id: areaId } });
     if (!area || !area.ativo) return void res.status(400).json({ error: "Área não encontrada ou inativa" });
-    const data = hojeComoData();
+    const hoje = hojeComoData();
+    // Lançamento retroativo (avaliações feitas em planilha): data informada, nunca no futuro.
+    let data = hoje;
+    if (req.body?.data !== undefined && req.body?.data !== null && req.body?.data !== "") {
+      if (!ehDataIso(req.body.data)) return void res.status(400).json({ error: "Data da avaliação inválida" });
+      data = paraData(req.body.data);
+      if (data.getTime() > hoje.getTime()) return void res.status(400).json({ error: "A data da avaliação não pode ser futura" });
+      if (data.getUTCFullYear() < 2000) return void res.status(400).json({ error: "Data da avaliação inválida" });
+    }
+    const retro = data.getTime() !== hoje.getTime() ? { retroativa: true, dataInformada: isoDia(data) } : {};
 
     // Área agrupadora (setor com ambientes comuns vinculados): sem perguntas próprias. Abre uma
     // avaliação por ambiente, todas ligadas a uma avaliação-pai que acumula o resultado.
@@ -801,7 +810,7 @@ gestao5sRouter.post("/avaliacoes", async (req: Req5S, res) => {
       if (conjuntos.length === 0) return void res.status(400).json({ error: "Nenhum ambiente vinculado tem perguntas ativas. Cadastre o formulário antes." });
       const pai = await prisma.$transaction(async (tx) => {
         const casca = await tx.avaliacao5S.create({ data: { titulo: montarTitulo(data, area.nome), areaId: area.id, avaliadorId: req.user!.userId, data } });
-        await auditar(tx, req, casca, EVENTOS_AUDITORIA.AVALIACAO_5S_CRIADA, { metadata: { areaId: area.id, area: area.nome, ambientes: conjuntos.length } });
+        await auditar(tx, req, casca, EVENTOS_AUDITORIA.AVALIACAO_5S_CRIADA, { metadata: { areaId: area.id, area: area.nome, ambientes: conjuntos.length, ...retro } });
         for (const { amb, ps } of conjuntos) {
           const filha = await tx.avaliacao5S.create({
             data: {
@@ -813,7 +822,7 @@ gestao5sRouter.post("/avaliacoes", async (req: Req5S, res) => {
               respostas: { create: ps.map((p, i) => ({ perguntaId: p.id, senso: p.senso, perguntaTexto: p.texto, ordem: i })) },
             },
           });
-          await auditar(tx, req, filha, EVENTOS_AUDITORIA.AVALIACAO_5S_CRIADA, { metadata: { areaId: amb.id, area: amb.nome, perguntas: ps.length, avaliacaoPaiId: casca.id } });
+          await auditar(tx, req, filha, EVENTOS_AUDITORIA.AVALIACAO_5S_CRIADA, { metadata: { areaId: amb.id, area: amb.nome, perguntas: ps.length, avaliacaoPaiId: casca.id, ...retro } });
         }
         return casca;
       });
@@ -832,7 +841,7 @@ gestao5sRouter.post("/avaliacoes", async (req: Req5S, res) => {
           respostas: { create: perguntas.map((p, i) => ({ perguntaId: p.id, senso: p.senso, perguntaTexto: p.texto, ordem: i })) },
         },
       });
-      await auditar(tx, req, nova, EVENTOS_AUDITORIA.AVALIACAO_5S_CRIADA, { metadata: { areaId: area.id, area: area.nome, perguntas: perguntas.length } });
+      await auditar(tx, req, nova, EVENTOS_AUDITORIA.AVALIACAO_5S_CRIADA, { metadata: { areaId: area.id, area: area.nome, perguntas: perguntas.length, ...retro } });
       return nova;
     });
     res.status(201).json({ id: criada.id });

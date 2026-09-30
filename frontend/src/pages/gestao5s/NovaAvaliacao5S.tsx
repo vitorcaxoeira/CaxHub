@@ -44,6 +44,7 @@ export function NovaAvaliacao5S() {
   const [erro, setErro] = useState<string | null>(null);
   const [escolhida, setEscolhida] = useState<Opcao | null>(null);
   const [criando, setCriando] = useState(false);
+  const [dataAvaliacao, setDataAvaliacao] = useState(hojeIso());
 
   useEffect(() => {
     axios
@@ -53,10 +54,10 @@ export function NovaAvaliacao5S() {
   }, []);
 
   async function iniciar() {
-    if (!escolhida) return;
+    if (!escolhida || !dataValida) return;
     setCriando(true);
     try {
-      const { data } = await axios.post<{ id: number }>("/api/5s/avaliacoes", { areaId: escolhida.areaId });
+      const { data } = await axios.post<{ id: number }>("/api/5s/avaliacoes", { areaId: escolhida.areaId, data: dataAvaliacao });
       navigate(`/5s/avaliacoes/${data.id}`);
     } catch (err) {
       mostrar(mensagemDeErro(err, "Não foi possível criar a avaliação"), "destructive");
@@ -92,7 +93,10 @@ export function NovaAvaliacao5S() {
     .filter((a) => a.tipo === "comum" && !agrupadoras.some((m) => m.id === a.setorVinculadoId))
     .map((a) => ({ chave: `a${a.id}`, areaId: a.id, titulo: a.nome, abre: [a.nome], nomeNoTitulo: a.nome }));
 
-  const [dia, mes, ano] = formatarDiaIso(hojeIso()).split("/");
+  const hoje = hojeIso();
+  const dataValida = /^\d{4}-\d{2}-\d{2}$/.test(dataAvaliacao) && dataAvaliacao <= hoje && dataAvaliacao >= "2000-01-01";
+  const retroativa = dataValida && dataAvaliacao !== hoje;
+  const [dia, mes, ano] = formatarDiaIso(dataValida ? dataAvaliacao : hoje).split("/");
 
   function Cartao({ o }: { o: Opcao }) {
     const ativa = escolhida?.chave === o.chave;
@@ -162,14 +166,35 @@ export function NovaAvaliacao5S() {
 
       {escolhida && (
         <div className="sticky bottom-0 -mx-4 border-t border-border bg-surface/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-lg sm:border">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px] text-muted">
+            <label htmlFor="data-avaliacao">Data da avaliação</label>
+            <input
+              id="data-avaliacao"
+              type="date"
+              value={dataAvaliacao}
+              max={hoje}
+              min="2000-01-01"
+              onChange={(e) => setDataAvaliacao(e.target.value)}
+              className="min-h-9 rounded-md border border-border bg-surface-2 px-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {retroativa && (
+              <>
+                <span className="font-medium text-warning">Lançamento retroativo</span>
+                <button type="button" onClick={() => setDataAvaliacao(hoje)} className="underline hover:text-foreground">
+                  Hoje
+                </button>
+              </>
+            )}
+            {!dataValida && <span className="text-destructive">Informe uma data válida, até hoje</span>}
+          </div>
           <p className="text-sm font-semibold text-foreground">
             Avaliação 5S – {dia}/{mes}/{ano} – {escolhida.nomeNoTitulo}
           </p>
           <p className="mb-3 text-[12px] text-muted">
-            Avaliador: {user?.nome ?? "—"} · a data é a de hoje
+            Avaliador: {user?.nome ?? "—"}
             {escolhida.abre.length > 1 && ` · serão abertas ${escolhida.abre.length} avaliações, uma por ambiente`}
           </p>
-          <button type="button" disabled={criando} onClick={iniciar} className={`${classeBotaoPrimario} min-h-11 w-full sm:w-auto`}>
+          <button type="button" disabled={criando || !dataValida} onClick={iniciar} className={`${classeBotaoPrimario} min-h-11 w-full sm:w-auto`}>
             {criando ? "Criando…" : escolhida.abre.length > 1 ? "Iniciar avaliações" : "Iniciar avaliação"}
           </button>
         </div>

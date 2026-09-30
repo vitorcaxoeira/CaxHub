@@ -39,10 +39,10 @@ interface Dashboard {
   empresa: { geral: number | null; porSenso: PorSenso; meses: MesBloco[]; tendencia: Tendencia };
 }
 
-function Celula({ valor, negrito = false }: { valor: number | null; negrito?: boolean }) {
+function Celula({ valor, negrito = false, casas = 2 }: { valor: number | null; negrito?: boolean; casas?: number }) {
   return (
-    <span className={cn("inline-block min-w-12 rounded px-1.5 py-0.5 text-center font-mono text-xs tabular-nums", CELULA_TOM[tomDaNota(valor)], negrito && "font-bold")}>
-      {formatarPerc(valor)}
+    <span className={cn("inline-block min-w-14 rounded px-1.5 py-0.5 text-center font-mono text-xs tabular-nums", CELULA_TOM[tomDaNota(valor)], negrito && "font-bold")}>
+      {formatarPerc(valor, casas)}
     </span>
   );
 }
@@ -152,12 +152,12 @@ export function Dashboard5S() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Kpi
               rotulo={tipo === "setor" ? "Geral da empresa" : "Geral dos ambientes"}
-              valor={formatarPerc(dados.empresa.geral, 1)}
+              valor={formatarPerc(dados.empresa.geral)}
               tom={CELULA_TOM[tomDaNota(dados.empresa.geral)].split(" ")[1]}
               rodape={<TendenciaSeta tendencia={dados.empresa.tendencia} comTexto />}
             />
-            <Kpi rotulo="Melhor resultado" valor={formatarPerc(melhor?.geral ?? null, 1)} rodape={melhor?.nome} />
-            <Kpi rotulo="Menor resultado" valor={pior ? formatarPerc(pior.geral, 1) : "—"} rodape={pior?.nome ?? "—"} />
+            <Kpi rotulo="Melhor resultado" valor={formatarPerc(melhor?.geral ?? null)} rodape={melhor?.nome} />
+            <Kpi rotulo="Menor resultado" valor={pior ? formatarPerc(pior.geral) : "—"} rodape={pior?.nome ?? "—"} />
             <Kpi rotulo="Avaliações no período" valor={String(dados.areas.reduce((a, x) => a + x.avaliacoes, 0))} rodape={`${dados.areas.length} ${tipo === "setor" ? "setor(es)" : "ambiente(s)"}`} />
           </div>
 
@@ -174,7 +174,7 @@ export function Dashboard5S() {
                     </span>
                     <span className="flex flex-none items-center gap-2">
                       <TendenciaSeta tendencia={r.tendencia} />
-                      <span className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatarPerc(r.geral, 1)}</span>
+                      <span className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatarPerc(r.geral)}</span>
                     </span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-surface-2">
