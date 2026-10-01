@@ -11,77 +11,18 @@ import { useToast } from "../../components/ui/Toast";
 import { cn } from "../../lib/cn";
 import { mensagemDeErro } from "../../utils/gestao5s";
 import {
+  BlocoSenso5S as BlocoSenso,
+  CAMPOS_BLOCO,
   CELULA_TOM,
-  ImagemRef,
+  DetalheAvaliacao5S as Detalhe,
   Percentuais,
+  Resposta5S as Resposta,
   SENSOS,
   Senso,
   formatarDiaIso,
   formatarPerc,
   tomDaNota,
 } from "../../utils/gestao5s";
-
-interface Resposta {
-  id: number;
-  senso: Senso;
-  texto: string;
-  nota: number | null;
-  naoSeAplica: boolean;
-  inconsistencia: string | null;
-  complemento: string | null;
-  imagens: ImagemRef[];
-}
-
-interface BlocoSenso {
-  senso: Senso;
-  observacoes: string | null;
-  melhorias: string | null;
-  pontosAtencao: string | null;
-  informacoes: string | null;
-  imagens: ImagemRef[];
-}
-
-interface ObservacaoEquipe {
-  id: number;
-  areaNome: string;
-  dataOcorrido: string;
-  texto: string;
-  autorNome: string | null;
-  imagens: ImagemRef[];
-}
-
-interface Detalhe {
-  id: number;
-  titulo: string;
-  areaNome: string;
-  areaTipo: string;
-  avaliadorNome: string | null;
-  data: string;
-  status: "em_andamento" | "finalizada";
-  percentuais: Percentuais;
-  pode: { editar: boolean; finalizar: boolean; reabrir: boolean; excluir: boolean };
-  respostas: Resposta[];
-  sensos: BlocoSenso[];
-  observacoesEquipe: ObservacaoEquipe[];
-  // Avaliação de ambiente aberta por uma área agrupadora aponta o pai; o pai lista as filhas.
-  pai: { id: number; titulo: string } | null;
-  filhas: {
-    id: number;
-    titulo: string;
-    areaNome: string;
-    status: "em_andamento" | "finalizada";
-    percentuais: Percentuais;
-    respondidas: number;
-    total: number;
-  }[];
-}
-
-const CAMPOS_BLOCO: { chave: "observacoes" | "melhorias" | "pontosAtencao" | "informacoes"; rotulo: string }[] = [
-  { chave: "observacoes", rotulo: "Observações" },
-  { chave: "melhorias", rotulo: "Possíveis melhorias" },
-  { chave: "pontosAtencao", rotulo: "Pontos de atenção" },
-  { chave: "informacoes", rotulo: "Informações adicionais" },
-];
 
 // Questionário e detalhe de uma avaliação 5S. Mobile-first: um senso por vez, botões de nota
 // grandes, salvamento automático a cada resposta e barra de resultado fixa no rodapé. Sem permissão

@@ -1,63 +1,16 @@
 import axios from "axios";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAcesso5S } from "../../auth/Require5S";
-import { TendenciaSeta } from "../../components/gestao5s/TendenciaSeta";
-import { classeBotaoPrimario, classeCampo, classeRotulo } from "../../components/gestao5s/campos";
+import { classeBotaoPrimario, classeBotaoSecundario, classeCampo, classeRotulo } from "../../components/gestao5s/campos";
+import { DashboardResultado, DesempenhoPorSenso, EvolucaoMensalTabela, KpisResultado, RankingResultado } from "../../components/gestao5s/ResultadoSecoes";
 import { CORES_SERIE, LinhasMultiSerie } from "../../components/ui/LinhasMultiSerie";
+import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Tabs } from "../../components/ui/Tabs";
 import { cn } from "../../lib/cn";
 import { mensagemDeErro } from "../../utils/gestao5s";
-import { CELULA_TOM, PorSenso, SENSOS, Tendencia, TipoArea, formatarPerc, mesAtual, rotuloMes, somarMeses, tomDaNota } from "../../utils/gestao5s";
-
-interface MesBloco {
-  mes: string;
-  quantidade?: number;
-  geral: number | null;
-  porSenso: PorSenso;
-}
-
-interface AreaResultado {
-  areaId: number;
-  nome: string;
-  acumulado?: boolean;
-  avaliacoes: number;
-  geral: number | null;
-  porSenso: PorSenso;
-  meses: MesBloco[];
-  tendencia: Tendencia;
-}
-
-interface Dashboard {
-  tipo: TipoArea;
-  de: string;
-  ate: string;
-  meses: string[];
-  ranking: { posicao: number; areaId: number; nome: string; acumulado?: boolean; geral: number | null; tendencia: Tendencia }[];
-  areas: AreaResultado[];
-  empresa: { geral: number | null; porSenso: PorSenso; meses: MesBloco[]; tendencia: Tendencia };
-}
-
-function Celula({ valor, negrito = false, casas = 2 }: { valor: number | null; negrito?: boolean; casas?: number }) {
-  return (
-    <span className={cn("inline-block min-w-14 rounded px-1.5 py-0.5 text-center font-mono text-xs tabular-nums", CELULA_TOM[tomDaNota(valor)], negrito && "font-bold")}>
-      {formatarPerc(valor, casas)}
-    </span>
-  );
-}
-
-function Kpi({ rotulo, valor, rodape, tom }: { rotulo: string; valor: string; rodape?: React.ReactNode; tom?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-surface p-4 shadow-sm">
-      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{rotulo}</p>
-      <p className={cn("mt-1 font-display text-2xl font-bold tabular-nums", tom ?? "text-foreground")}>{valor}</p>
-      {rodape && <div className="mt-1 text-[12px] text-muted">{rodape}</div>}
-    </div>
-  );
-}
-
-const MEDALHA = ["🥇", "🥈", "🥉"];
+import { ModoImpressao5S, SENSOS, TipoArea, mesAtual, rotuloMes, somarMeses } from "../../utils/gestao5s";
 
 // Dashboard de ranking do 5S: resultado geral, ranking por área, desempenho por senso (matriz) e
 // evolução mensal. Só considera avaliações FINALIZADAS; a média do mês é a média das avaliações.
@@ -67,23 +20,64 @@ export function Dashboard5S() {
   const [tipo, setTipo] = useState<TipoArea>("setor");
   const [de, setDe] = useState(somarMeses(mesAtual(), -5));
   const [ate, setAte] = useState(mesAtual());
-  const [dados, setDados] = useState<Dashboard | null>(null);
+  const [dados, setDados] = useState<DashboardResultado | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [foco, setFoco] = useState("geral");
+  // O "Até" inicial é o último mês com avaliação que o perfil logado enxerga (por aba). Enquanto
+  // não chega, o dashboard não carrega — evita buscar o mês corrente e já trocar em seguida. Depois
+  // que o usuário mexe no período, trocar de aba não sobrescreve mais a escolha dele.
+  const [periodoPronto, setPeriodoPronto] = useState(false);
+  const periodoManual = useRef(false);
 
   useEffect(() => {
-    if (de > ate) return;
+    if (periodoManual.current) {
+      setPeriodoPronto(true);
+      return;
+    }
+    let cancelado = false;
+    axios
+      .get<{ mes: string | null }>("/api/5s/ultimo-mes", { params: { tipo } })
+      .then(({ data }) => {
+        if (cancelado) return;
+        const fim = data.mes ?? mesAtual();
+        setAte(fim);
+        setDe(somarMeses(fim, -5));
+      })
+      .catch(() => {})
+      .finally(() => !cancelado && setPeriodoPronto(true));
+    return () => {
+      cancelado = true;
+    };
+  }, [tipo]);
+
+  function trocarTipo(novo: TipoArea) {
+    if (!periodoManual.current) {
+      setPeriodoPronto(false);
+      setLoading(true);
+    }
+    setTipo(novo);
+  }
+
+  function mudarPeriodo(campo: "de" | "ate", valor: string) {
+    if (!valor) return;
+    periodoManual.current = true;
+    if (campo === "de") setDe(valor);
+    else setAte(valor);
+  }
+
+  useEffect(() => {
+    if (!periodoPronto || de > ate) return;
     setLoading(true);
     axios
-      .get<Dashboard>("/api/5s/dashboard", { params: { tipo, de, ate } })
+      .get<DashboardResultado>("/api/5s/dashboard", { params: { tipo, de, ate } })
       .then(({ data }) => {
         setDados(data);
         setErro(null);
       })
       .catch((err) => setErro(mensagemDeErro(err, "Falha ao carregar o dashboard")))
       .finally(() => setLoading(false));
-  }, [tipo, de, ate]);
+  }, [periodoPronto, tipo, de, ate]);
 
   useEffect(() => setFoco("geral"), [tipo]);
 
@@ -102,9 +96,14 @@ export function Dashboard5S() {
 
   const tituloEvolucao = foco === "geral" ? "Evolução mensal por área (resultado geral)" : foco === "empresa" ? "Evolução mensal por senso (média geral)" : `Evolução mensal por senso · ${dados?.areas.find((a) => String(a.areaId) === foco)?.nome ?? ""}`;
 
-  const melhor = dados?.ranking[0];
-  const pior = dados && dados.ranking.length > 1 ? dados.ranking[dados.ranking.length - 1] : null;
   const semDados = !!dados && dados.areas.length === 0;
+
+  // Abre o relatório numa aba própria (fora do AppShell), com os mesmos filtros da tela — o
+  // relatório busca os dados sozinho, então não depende do estado desta página.
+  function imprimir(modo: ModoImpressao5S) {
+    const params = new URLSearchParams({ tipo, de, ate, modo });
+    window.open(`/5s/relatorio?${params.toString()}`, "_blank");
+  }
 
   return (
     <div>
@@ -124,18 +123,32 @@ export function Dashboard5S() {
           { key: "comum", label: "Ambientes comuns" },
         ]}
         activeKey={tipo}
-        onChange={(k) => setTipo(k as TipoArea)}
+        onChange={(k) => trocarTipo(k as TipoArea)}
       />
 
-      <div className="mb-6 grid max-w-md grid-cols-2 gap-3">
-        <div>
-          <label className={classeRotulo}>De</label>
-          <input type="month" className={classeCampo} value={de} max={ate} onChange={(e) => e.target.value && setDe(e.target.value)} />
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div className="grid w-full max-w-md grid-cols-2 gap-3">
+          <div>
+            <label className={classeRotulo}>De</label>
+            <input type="month" className={classeCampo} value={de} max={ate} onChange={(e) => mudarPeriodo("de", e.target.value)} />
+          </div>
+          <div>
+            <label className={classeRotulo}>Até</label>
+            <input type="month" className={classeCampo} value={ate} min={de} onChange={(e) => mudarPeriodo("ate", e.target.value)} />
+          </div>
         </div>
-        <div>
-          <label className={classeRotulo}>Até</label>
-          <input type="month" className={classeCampo} value={ate} min={de} onChange={(e) => e.target.value && setAte(e.target.value)} />
-        </div>
+
+        <DropdownMenu placement="bottom-end">
+          <DropdownMenu.Trigger>
+            <button type="button" disabled={!dados || semDados || de > ate} className={cn(classeBotaoSecundario, "min-h-10 whitespace-nowrap")}>
+              Imprimir <span aria-hidden>▾</span>
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content className="w-44">
+            <DropdownMenu.Item onSelect={() => imprimir("resumido")}>Resumido</DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={() => imprimir("detalhado")}>Detalhado</DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu>
       </div>
 
       {erro && <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">{erro}</p>}
@@ -149,92 +162,9 @@ export function Dashboard5S() {
 
       {dados && !semDados && (
         <div className={cn("space-y-6 transition-opacity", loading && "opacity-60")}>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Kpi
-              rotulo={tipo === "setor" ? "Geral da empresa" : "Geral dos ambientes"}
-              valor={formatarPerc(dados.empresa.geral)}
-              tom={CELULA_TOM[tomDaNota(dados.empresa.geral)].split(" ")[1]}
-              rodape={<TendenciaSeta tendencia={dados.empresa.tendencia} comTexto />}
-            />
-            <Kpi rotulo="Melhor resultado" valor={formatarPerc(melhor?.geral ?? null)} rodape={melhor?.nome} />
-            <Kpi rotulo="Menor resultado" valor={pior ? formatarPerc(pior.geral) : "—"} rodape={pior?.nome ?? "—"} />
-            <Kpi rotulo="Avaliações no período" valor={String(dados.areas.reduce((a, x) => a + x.avaliacoes, 0))} rodape={`${dados.areas.length} ${tipo === "setor" ? "setor(es)" : "ambiente(s)"}`} />
-          </div>
-
-          <section className="rounded-lg border border-border bg-surface p-4 shadow-sm sm:p-6">
-            <p className="mb-4 font-mono text-[10px] uppercase tracking-widest text-muted">🏆 Ranking por {tipo === "setor" ? "área" : "ambiente"}</p>
-            <ol className="space-y-3">
-              {dados.ranking.map((r) => (
-                <li key={r.areaId}>
-                  <div className="mb-1 flex items-baseline justify-between gap-2">
-                    <span className="min-w-0 truncate text-sm text-foreground">
-                      <span className="mr-2 inline-block w-7 font-mono text-xs text-muted">{MEDALHA[r.posicao - 1] ?? `${r.posicao}º`}</span>
-                      {r.nome}
-                      {r.acumulado && <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary" title="Soma das respostas dos ambientes vinculados">acumulado</span>}
-                    </span>
-                    <span className="flex flex-none items-center gap-2">
-                      <TendenciaSeta tendencia={r.tendencia} />
-                      <span className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatarPerc(r.geral)}</span>
-                    </span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-surface-2">
-                    <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.max(2, r.geral ?? 0)}%` }} />
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </section>
-
-          <section className="overflow-hidden rounded-lg border border-border bg-surface shadow-sm">
-            <p className="px-4 pt-4 font-mono text-[10px] uppercase tracking-widest text-muted sm:px-6 sm:pt-6">Desempenho por senso</p>
-            <div className="overflow-x-auto p-2 sm:p-4">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    <th className="px-3 py-2">{tipo === "setor" ? "Área" : "Ambiente"}</th>
-                    {SENSOS.map((s) => (
-                      <th key={s.chave} className="px-2 py-2 text-center" title={s.rotulo}>
-                        {s.curto}
-                      </th>
-                    ))}
-                    <th className="px-2 py-2 text-center">Geral</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dados.areas
-                    .slice()
-                    .sort((a, b) => (b.geral ?? -1) - (a.geral ?? -1))
-                    .map((a) => (
-                      <tr key={a.areaId} className="border-t border-border/60">
-                        <td className="whitespace-nowrap px-3 py-2 text-sm text-foreground">
-                          {a.nome}
-                          {a.acumulado && <span className="ml-2 text-[10px] text-primary">acumulado</span>}
-                        </td>
-                        {SENSOS.map((s) => (
-                          <td key={s.chave} className="px-2 py-2 text-center">
-                            <Celula valor={a.porSenso[s.chave]} />
-                          </td>
-                        ))}
-                        <td className="px-2 py-2 text-center">
-                          <Celula valor={a.geral} negrito />
-                        </td>
-                      </tr>
-                    ))}
-                  <tr className="border-t-2 border-border bg-surface-2">
-                    <td className="px-3 py-2 text-sm font-semibold text-foreground">{tipo === "setor" ? "Média da empresa" : "Média geral"}</td>
-                    {SENSOS.map((s) => (
-                      <td key={s.chave} className="px-2 py-2 text-center">
-                        <Celula valor={dados.empresa.porSenso[s.chave]} />
-                      </td>
-                    ))}
-                    <td className="px-2 py-2 text-center">
-                      <Celula valor={dados.empresa.geral} negrito />
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <KpisResultado dados={dados} />
+          <RankingResultado dados={dados} />
+          <DesempenhoPorSenso dados={dados} />
 
           <div>
             <div className="mb-3 max-w-sm">
@@ -252,39 +182,7 @@ export function Dashboard5S() {
             <LinhasMultiSerie titulo={tituloEvolucao} rotulos={dados.meses.map(rotuloMes)} series={serieEvolucao} descricao="Média das avaliações finalizadas no mês" />
           </div>
 
-          <section className="overflow-hidden rounded-lg border border-border bg-surface shadow-sm">
-            <p className="px-4 pt-4 font-mono text-[10px] uppercase tracking-widest text-muted sm:px-6 sm:pt-6">Evolução mensal (%)</p>
-            <div className="overflow-x-auto p-2 sm:p-4">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    <th className="px-3 py-2">{tipo === "setor" ? "Área" : "Ambiente"}</th>
-                    {dados.meses.map((m) => (
-                      <th key={m} className="px-2 py-2 text-center">
-                        {rotuloMes(m)}
-                      </th>
-                    ))}
-                    <th className="px-2 py-2 text-center">Tendência</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dados.areas.map((a) => (
-                    <tr key={a.areaId} className="border-t border-border/60">
-                      <td className="whitespace-nowrap px-3 py-2 text-sm text-foreground">{a.nome}</td>
-                      {a.meses.map((m) => (
-                        <td key={m.mes} className="px-2 py-2 text-center">
-                          <Celula valor={m.geral} />
-                        </td>
-                      ))}
-                      <td className="px-2 py-2 text-center">
-                        <TendenciaSeta tendencia={a.tendencia} comTexto />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <EvolucaoMensalTabela dados={dados} />
 
           <p className="text-[12px] text-muted">
             Veja o detalhe de cada avaliação em{" "}

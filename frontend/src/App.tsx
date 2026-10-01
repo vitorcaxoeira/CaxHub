@@ -45,6 +45,7 @@ import { NovaAvaliacao5S } from "./pages/gestao5s/NovaAvaliacao5S";
 import { Avaliacoes5S } from "./pages/gestao5s/Avaliacoes5S";
 import { Avaliacao5S } from "./pages/gestao5s/Avaliacao5S";
 import { ObservacoesEquipe5S } from "./pages/gestao5s/ObservacoesEquipe5S";
+import { RelatorioResultado5S } from "./pages/gestao5s/RelatorioResultado5S";
 import { Areas5S } from "./pages/gestao5s/admin/Areas5S";
 import { Perguntas5S } from "./pages/gestao5s/admin/Perguntas5S";
 import { Participantes5S } from "./pages/gestao5s/admin/Participantes5S";
@@ -74,6 +75,17 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            {/* Relatório impresso do Resultado geral 5S (botão Imprimir do dashboard) — fora do
+                AppShell pelo mesmo motivo da rota acima; mantém o login e o acesso ao módulo 5S. */}
+            <Route
+              element={
+                <ProtectedRoute>
+                  <Require5S />
+                </ProtectedRoute>
+              }
+            >
+              <Route path="/5s/relatorio" element={<RelatorioResultado5S />} />
+            </Route>
             <Route
               element={
                 <ProtectedRoute>

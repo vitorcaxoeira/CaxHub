@@ -1,11 +1,10 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
-@theme {
-  --font-sans: 'Public Sans', system-ui, -apple-system, sans-serif;
-  --font-display: 'Archivo', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
-
+/* `inline`: as utilities (bg-surface, text-muted...) usam `var(--surface)` direto, em vez de
+   `var(--color-surface)`. Sem isso o valor é resolvido na raiz e herdado já calculado, e trocar o
+   tema num trecho da página (`.tema-claro` / `.dark` no relatório do 5S) não surtia efeito. */
+@theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
@@ -21,6 +20,12 @@
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-ring: var(--ring);
+}
+
+@theme {
+  --font-sans: 'Public Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'Archivo', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
 
   /* Camadas de sobreposição — maior valor já usado no app até aqui era z-50 (Toast,
      antigo menu de contexto do cronograma); popover fica acima de tudo (dropdowns,
@@ -31,7 +36,10 @@
 }
 
 /* ---------- TEMA CLARO ---------- */
-:root {
+/* `.tema-claro` aplica as mesmas variáveis num sub-trecho da página — usado nos relatórios de
+   impressão, que saem sempre em fundo branco mesmo com o app no tema escuro. */
+:root,
+.tema-claro {
   --background: #F1F3EF;
   --surface: #FFFFFF;
   --surface-2: #E8ECE4;

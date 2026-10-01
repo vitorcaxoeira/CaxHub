@@ -36,6 +36,7 @@ import {
   tendencia,
 } from "../domain/gestao5s";
 import { carregarAcesso5S } from "../domain/gestao5sAcesso";
+import { RelatorioPdfError, gerarPdfDaPagina } from "../lib/relatorioPdf";
 
 // Módulo Gestão 5S — auditorias mensais de setores e ambientes comuns. Dado 100% do CaxHub.
 // O acesso vem do cadastro em Participante5S (coordenador | avaliador | lider), não do papel do
@@ -1417,6 +1418,68 @@ async function resultadosPorArea(acesso: Acesso5S, tipo: TipoArea, meses: string
   }
   return resultado;
 }
+
+// Último mês com avaliação finalizada que o dashboard conta, respeitando o que o perfil logado enxerga
+// (filtroAvaliacoesVisiveis). Mesmos critérios de resultadosPorArea: no tipo "setor" entram também os
+// ambientes comuns vinculados a setor ativo (o "acumulado"). Alimenta o "Até" inicial do dashboard;
+// `mes` vem null quando não há nenhuma avaliação.
+gestao5sRouter.get("/ultimo-mes", async (req: Req5S, res) => {
+  try {
+    const acesso = exigirAcesso(req, res);
+    if (!acesso) return;
+    const tipo = TIPOS_AREA.find((t) => t === req.query.tipo) ?? "setor";
+    const contaNoDashboard: Prisma.Avaliacao5SWhereInput =
+      tipo === "setor"
+        ? {
+            OR: [
+              { filhas: { none: {} }, area: { tipo: "setor" } },
+              { area: { tipo: "comum", setorVinculado: { is: { ativo: true } } } },
+            ],
+          }
+        : { filhas: { none: {} }, area: { tipo: "comum" } };
+    const ultima = await prisma.avaliacao5S.findFirst({
+      where: { AND: [filtroAvaliacoesVisiveis(acesso), { status: "finalizada" }, contaNoDashboard] },
+      orderBy: { data: "desc" },
+      select: { data: true },
+    });
+    res.json({ mes: ultima ? chaveMes(ultima.data) : null });
+  } catch (error) {
+    handleError(res, error, "ultimo-mes");
+  }
+});
+
+// PDF do relatório impresso do Resultado geral (botão "Baixar PDF"). Um Chromium headless abre a
+// própria página /5s/relatorio com o token de quem pediu, então o arquivo sai igual ao impresso e só
+// com o que esse perfil enxerga. Os parâmetros são validados aqui e a URL é montada no servidor.
+gestao5sRouter.post("/relatorio/pdf", async (req: Req5S, res) => {
+  try {
+    const acesso = exigirAcesso(req, res);
+    if (!acesso) return;
+    const b = req.body ?? {};
+    const tipo = TIPOS_AREA.find((t) => t === b.tipo);
+    if (!tipo || !ehMes(b.de) || !ehMes(b.ate) || b.de > b.ate) return void res.status(400).json({ error: "Tipo ou período inválido" });
+    const modo = b.modo === "detalhado" ? "detalhado" : "resumido";
+    const params = new URLSearchParams({
+      tipo,
+      de: b.de,
+      ate: b.ate,
+      modo,
+      tema: b.tema === "escuro" ? "escuro" : "claro",
+      orientacao: b.orientacao === "paisagem" ? "paisagem" : "retrato",
+    });
+    const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    const pdf = await gerarPdfDaPagina(`/5s/relatorio?${params.toString()}`, token);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="resultado-5s-${tipo}-${b.de}_a_${b.ate}-${modo}.pdf"`);
+    res.send(pdf);
+  } catch (error) {
+    if (error instanceof RelatorioPdfError) {
+      console.error("[gestao-5s:relatorio-pdf]", error.message);
+      return void res.status(error.status).json({ error: error.message });
+    }
+    handleError(res, error, "relatorio-pdf");
+  }
+});
 
 gestao5sRouter.get("/dashboard", async (req: Req5S, res) => {
   try {

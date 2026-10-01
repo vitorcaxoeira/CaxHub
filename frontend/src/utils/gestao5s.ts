@@ -11,6 +11,9 @@ export const SENSOS: { chave: Senso; nome: string; rotulo: string; curto: string
 ];
 
 export type TipoArea = "setor" | "comum";
+// Relatório impresso do resultado geral (/5s/relatorio). Por ora os dois modos trazem o mesmo
+// conteúdo; o "detalhado" será evoluído depois que o resumido for homologado.
+export type ModoImpressao5S = "resumido" | "detalhado";
 export type Papel5S = "coordenador" | "avaliador" | "lider";
 export type Tendencia = "melhora" | "queda" | "estavel" | null;
 
@@ -33,6 +36,70 @@ export interface ImagemRef {
   id: number;
   nomeArquivo: string;
 }
+
+// ---------- detalhe de uma avaliação (GET /5s/avaliacoes/:id) ----------
+
+export interface Resposta5S {
+  id: number;
+  senso: Senso;
+  texto: string;
+  nota: number | null;
+  naoSeAplica: boolean;
+  inconsistencia: string | null;
+  complemento: string | null;
+  imagens: ImagemRef[];
+}
+
+export interface BlocoSenso5S {
+  senso: Senso;
+  observacoes: string | null;
+  melhorias: string | null;
+  pontosAtencao: string | null;
+  informacoes: string | null;
+  imagens: ImagemRef[];
+}
+
+export interface ObservacaoEquipe5S {
+  id: number;
+  areaNome: string;
+  dataOcorrido: string;
+  texto: string;
+  autorNome: string | null;
+  imagens: ImagemRef[];
+}
+
+export interface DetalheAvaliacao5S {
+  id: number;
+  titulo: string;
+  areaNome: string;
+  areaTipo: string;
+  avaliadorNome: string | null;
+  data: string;
+  status: "em_andamento" | "finalizada";
+  percentuais: Percentuais;
+  pode: { editar: boolean; finalizar: boolean; reabrir: boolean; excluir: boolean };
+  respostas: Resposta5S[];
+  sensos: BlocoSenso5S[];
+  observacoesEquipe: ObservacaoEquipe5S[];
+  // Avaliação de ambiente aberta por uma área agrupadora aponta o pai; o pai lista as filhas.
+  pai: { id: number; titulo: string } | null;
+  filhas: {
+    id: number;
+    titulo: string;
+    areaNome: string;
+    status: "em_andamento" | "finalizada";
+    percentuais: Percentuais;
+    respondidas: number;
+    total: number;
+  }[];
+}
+
+export const CAMPOS_BLOCO: { chave: "observacoes" | "melhorias" | "pontosAtencao" | "informacoes"; rotulo: string }[] = [
+  { chave: "observacoes", rotulo: "Observações" },
+  { chave: "melhorias", rotulo: "Possíveis melhorias" },
+  { chave: "pontosAtencao", rotulo: "Pontos de atenção" },
+  { chave: "informacoes", rotulo: "Informações adicionais" },
+];
 
 export function formatarPerc(v: number | null | undefined, casas = 2): string {
   if (v == null) return "—";
