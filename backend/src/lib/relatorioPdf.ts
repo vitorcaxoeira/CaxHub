@@ -85,8 +85,15 @@ export function gerarPdfDaPagina(caminho: string, token: string): Promise<Buffer
       await page.evaluateOnNewDocument(`localStorage.setItem("token", ${JSON.stringify(token)})`);
       await page.goto(`${origem}${caminho}`, { waitUntil: "domcontentloaded" });
 
-      // A página avisa quando carregou tudo (dados, detalhes e fotos) ou quando falhou.
-      await page.waitForFunction("window.__relatorioPronto === true || typeof window.__relatorioErro === 'string'", { timeout: TEMPO_MAXIMO_MS });
+      // A página avisa quando carregou tudo (dados, detalhes e fotos) ou quando falhou. Além do aviso,
+      // confere o DOM: sem foto pendente (placeholder `data-foto-pendente`) e com todas as <img>
+      // completas — cinto de segurança pra o PDF nunca sair com quadro de foto vazio.
+      await page.waitForFunction(
+        `typeof window.__relatorioErro === 'string' || (window.__relatorioPronto === true
+          && !document.querySelector('[data-foto-pendente]')
+          && Array.from(document.images).every((i) => i.complete))`,
+        { timeout: TEMPO_MAXIMO_MS }
+      );
       const erro = await page.evaluate("window.__relatorioErro");
       if (typeof erro === "string") throw new RelatorioPdfError(erro, 422);
       await page.evaluate("document.fonts.ready.then(() => undefined)");

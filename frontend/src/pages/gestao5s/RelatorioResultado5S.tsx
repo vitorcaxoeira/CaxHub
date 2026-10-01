@@ -1,8 +1,8 @@
 import axios from "axios";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AvaliacaoResumo5S, AvaliacoesDoMes } from "../../components/gestao5s/AvaliacoesDoMes";
-import { DetalheAvaliacaoImpressao, FalhaAvaliacao } from "../../components/gestao5s/DetalheAvaliacaoImpressao";
+import { DetalheAvaliacaoImpressao, FalhaAvaliacao, contarFotos } from "../../components/gestao5s/DetalheAvaliacaoImpressao";
 import { ImagensRelatorioProvider, ProgressoImagens } from "../../components/gestao5s/ImagemRelatorio";
 import { DashboardResultado, DesempenhoPorSenso, EvolucaoMensalTabela, KpisResultado, RankingResultado } from "../../components/gestao5s/ResultadoSecoes";
 import { Spinner } from "../../components/ui/Spinner";
@@ -216,7 +216,16 @@ export function RelatorioResultado5S() {
   const detalhado = modo === "detalhado";
   const lista = avaliacoes ?? [];
   const detalhesProntos = !!avaliacoes && (lista.length === 0 || !!detalhes);
-  const fotosProntas = fotos.concluidas >= fotos.total;
+  // Total de fotos vem dos DADOS (não do que já se registrou na tela): senão, no render em que os
+  // detalhes chegam, `total` ainda é 0 e `0 >= 0` liberava o PDF antes de qualquer foto carregar.
+  const fotosEsperadas = useMemo(() => {
+    if (!detalhes) return 0;
+    return (avaliacoes ?? []).reduce((n, a) => {
+      const d = detalhes.get(a.id);
+      return d ? n + contarFotos(d, d.filhas.map((f) => ({ id: f.id, nome: f.areaNome, detalhe: detalhes.get(f.id) ?? null }))) : n;
+    }, 0);
+  }, [detalhes, avaliacoes]);
+  const fotosProntas = fotos.concluidas >= fotosEsperadas;
   const preparando = detalhado && (!detalhesProntos || !fotosProntas);
 
   // Sinal pro Chromium do servidor (PDF): só gera depois de "pronto" e desiste com "erro".
@@ -224,7 +233,7 @@ export function RelatorioResultado5S() {
     const w = window as unknown as { __relatorioPronto?: boolean; __relatorioErro?: string };
     if (erro) w.__relatorioErro = erro;
     else if (semDados) w.__relatorioErro = "Nenhuma avaliação finalizada neste período";
-    else if (!loading && dados && !preparando) w.__relatorioPronto = true;
+    else w.__relatorioPronto = !loading && !!dados && !preparando;
   }, [erro, semDados, loading, dados, preparando]);
 
   async function baixarPdf() {
@@ -263,7 +272,7 @@ export function RelatorioResultado5S() {
     <div
       className={cn(
         "min-h-screen bg-background px-4 py-4 text-foreground [-webkit-print-color-adjust:exact] [print-color-adjust:exact] sm:px-6 sm:py-5",
-        escuro ? "dark print:p-[10mm]" : "tema-claro print:bg-white print:p-0"
+        escuro ? "dark relatorio-escuro print:p-[10mm]" : "tema-claro relatorio-claro print:bg-white print:p-0"
       )}
     >
       {/* Orientação da folha vem da barra. No escuro a margem da folha é zerada e o respiro vem do
@@ -276,7 +285,7 @@ export function RelatorioResultado5S() {
         <div className="flex items-center gap-2">
           {preparando && (
             <span className="mr-1 text-xs text-muted" role="status">
-              {!detalhesProntos ? `Carregando avaliações ${progressoDetalhes.feitos}/${progressoDetalhes.total}…` : `Carregando fotos ${Math.min(fotos.concluidas, fotos.total)}/${fotos.total}…`}
+              {!detalhesProntos ? `Carregando avaliações ${progressoDetalhes.feitos}/${progressoDetalhes.total}…` : `Carregando fotos ${Math.min(fotos.concluidas, fotosEsperadas)}/${fotosEsperadas}…`}
             </span>
           )}
           <Segmentado rotulo="Orientação da folha" opcoes={["retrato", "paisagem"]} valor={orientacao} onChange={escolherOrientacao} />

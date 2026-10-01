@@ -91,7 +91,13 @@ export function ImagemRelatorio({ id, nome }: { id: number; nome: string }) {
       {src ? (
         <img src={src} alt={nome} className="h-full w-full object-cover" />
       ) : (
-        <div className={falhou ? "flex h-full w-full items-center justify-center p-1 text-center text-[10px] text-muted" : "h-full w-full animate-pulse"}>{falhou ? "foto indisponível" : null}</div>
+        // `data-foto-pendente`: o Chromium do PDF só gera quando não resta nenhum (relatorioPdf.ts).
+        <div
+          data-foto-pendente={falhou ? undefined : ""}
+          className={falhou ? "flex h-full w-full items-center justify-center p-1 text-center text-[10px] text-muted" : "h-full w-full animate-pulse"}
+        >
+          {falhou ? "foto indisponível" : null}
+        </div>
       )}
     </div>
   );

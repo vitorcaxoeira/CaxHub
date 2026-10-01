@@ -93,6 +93,16 @@ function CorpoAvaliacao({ av }: { av: DetalheAvaliacao5S }) {
   );
 }
 
+// Quantas fotos `DetalheAvaliacaoImpressao` vai desenhar para esta avaliação — mesma regra do render
+// (fotos das respostas e do fechamento de cada senso, das filhas quando é pai, e das observações da
+// equipe do próprio av). O relatório usa o total pra saber se TODAS as fotos já terminaram de carregar
+// (sem depender de as fotos já terem se registrado).
+export function contarFotos(av: DetalheAvaliacao5S, filhas: FilhaDetalhe[]): number {
+  const doCorpo = (d: DetalheAvaliacao5S) => d.respostas.reduce((n, r) => n + r.imagens.length, 0) + d.sensos.reduce((n, b) => n + b.imagens.length, 0);
+  const corpo = av.filhas.length > 0 ? filhas.reduce((n, f) => n + (f.detalhe ? doCorpo(f.detalhe) : 0), 0) : doCorpo(av);
+  return corpo + av.observacoesEquipe.reduce((n, o) => n + o.imagens.length, 0);
+}
+
 function Falha({ id }: { id: number }) {
   return <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">Não foi possível carregar a avaliação #{id}.</p>;
 }

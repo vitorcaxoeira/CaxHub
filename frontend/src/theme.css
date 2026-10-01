@@ -98,3 +98,16 @@ body {
   filter: invert(1);
   cursor: pointer;
 }
+
+/* Relatório de impressão (5S): o tema dele é independente do tema do app, mas o fundo de html/body vem
+   do tema do APP (no Chromium do PDF, sem preferência salva, é o escuro). Com `printBackground` isso
+   pintava de preto o resto da folha abaixo do conteúdo. Aqui o fundo da página acompanha o wrapper do
+   relatório. Valores = --background do tema claro (branco, papel) e do .dark. */
+html:has(.relatorio-claro),
+html:has(.relatorio-claro) body {
+  background-color: #fff;
+}
+html:has(.relatorio-escuro),
+html:has(.relatorio-escuro) body {
+  background-color: #0b120f;
+}
