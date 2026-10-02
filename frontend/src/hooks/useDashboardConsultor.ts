@@ -27,6 +27,12 @@ export interface ResumoConsultor {
   sessoesPendentes: number;
   ratsPendentes: number;
   notificacoesNaoLidas: number;
+  // Pedidos de apontamento avulso aguardando o gestor (reprovados não entram) e a soma do
+  // tempo pedido.
+  emAprovacao: { quantidade: number; minutos: number };
+  // Pedidos de ajuste de horário aguardando o gestor; `diferencaMinutos` = tempo pedido −
+  // tempo atual das sessões (pode ser negativo).
+  emAjuste: { quantidade: number; diferencaMinutos: number };
 }
 
 // `semConsultor: true` é o mesmo shape de /dashboard/meu-perfil pra usuário sem registro de

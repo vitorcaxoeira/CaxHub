@@ -247,7 +247,7 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       })
     );
 
-    const [valorHora, sessoesPendentes, ratsPendentes, notificacoesNaoLidas] = await Promise.all([
+    const [valorHora, sessoesPendentes, ratsPendentes, notificacoesNaoLidas, pedidosEmAprovacao, ajustesPendentes] = await Promise.all([
       valorHoraVigente(codemp, codfor),
       // Sem filtro de período — são contagens "agora" (pendências em aberto), nunca foram
       // recortadas pelo mês exibido.
@@ -256,7 +256,34 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       }),
       prisma.rat.count({ where: { codemp, codfor, sitrat: 9 } }),
       prisma.notificacao.count({ where: { userId: user.id, lida: false } }),
+      // "Em Aprovação": apontamentos avulsos (horas não registradas) esperando o gestor. Só
+      // `pendente` — reprovada (e aprovada, que já virou sessão) fica de fora.
+      prisma.solicitacaoApontamento.findMany({
+        where: { status: "pendente", atividade: { codemp, codfor, sitreg: "A" } },
+        select: { inicioSolicitado: true, fimSolicitado: true },
+      }),
+      // "Em Ajuste": pedidos de correção de horário de sessão já confirmada. Sessão excluída
+      // não conta (some da fila, ver AtividadeSessaoExecucao.excluidaEm).
+      prisma.solicitacaoAjusteApontamento.findMany({
+        where: { status: "pendente", sessao: { excluidaEm: null, atividade: { codemp, codfor, sitreg: "A" } } },
+        select: { inicioSolicitado: true, fimSolicitado: true, sessao: { select: { inicio: true, fim: true } } },
+      }),
     ]);
+    const minutosEntre = (inicio: Date, fim: Date) => (fim.getTime() - inicio.getTime()) / 60000;
+    const emAprovacao = {
+      quantidade: pedidosEmAprovacao.length,
+      minutos: Math.round(pedidosEmAprovacao.reduce((soma, p) => soma + minutosEntre(p.inicioSolicitado, p.fimSolicitado), 0)),
+    };
+    // Diferença líquida: duração pedida − duração atual da sessão (negativa = pedido de reduzir).
+    const emAjuste = {
+      quantidade: ajustesPendentes.length,
+      diferencaMinutos: Math.round(
+        ajustesPendentes.reduce(
+          (soma, a) => soma + minutosEntre(a.inicioSolicitado, a.fimSolicitado) - (a.sessao.fim ? minutosEntre(a.sessao.inicio, a.sessao.fim) : 0),
+          0
+        )
+      ),
+    };
 
     const diasUteisEntre = (de: Date, ate: Date) =>
       diasDoPeriodo(de, ate).filter((d) => {
@@ -326,6 +353,8 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       sessoesPendentes,
       ratsPendentes,
       notificacoesNaoLidas,
+      emAprovacao,
+      emAjuste,
     });
   } catch (error) {
     handleError(res, error, "meu-resumo");

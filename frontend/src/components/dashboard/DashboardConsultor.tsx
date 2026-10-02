@@ -26,14 +26,45 @@ function tomMeta(avanco: number): string {
   return "bg-warning";
 }
 
-function Estatistica({ label, valor, destaque }: { label: string; valor: string; destaque?: "success" | "warning" | "destructive" }) {
+function Estatistica({
+  label,
+  valor,
+  detalhe,
+  detalheNaoOficial,
+  detalheTitulo,
+  destaque,
+}: {
+  label: string;
+  valor: string;
+  detalhe?: string;
+  // Linha de baixo é uma estimativa, não um número do sistema — âmbar e itálico pra não ser
+  // confundida com o valor oficial de cima.
+  detalheNaoOficial?: boolean;
+  detalheTitulo?: string;
+  destaque?: "success" | "warning" | "destructive";
+}) {
   const cor = destaque === "success" ? "text-success" : destaque === "warning" ? "text-warning" : destaque === "destructive" ? "text-destructive" : "text-foreground";
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{label}</p>
-      <p className={`mt-1.5 font-mono text-xl font-semibold tabular-nums ${cor}`}>{valor}</p>
+    <div className="rounded-lg border border-border bg-surface p-4 2xl:p-3">
+      <p className="font-mono text-[10px] uppercase leading-tight tracking-widest text-muted 2xl:tracking-wider">{label}</p>
+      <p className={`mt-1.5 font-mono text-xl font-semibold tabular-nums 2xl:text-lg ${cor}`}>{valor}</p>
+      {detalhe && (
+        <p
+          title={detalheTitulo}
+          className={`mt-0.5 font-mono text-[11px] ${detalheNaoOficial ? "cursor-help italic text-warning" : "text-muted"}`}
+        >
+          {detalhe}
+        </p>
+      )}
     </div>
   );
+}
+
+// formatHorasCompacto perde o sinal quando a parte inteira das horas é 0 (-30 min vira
+// "00:30"), então o sinal sai daqui, com o módulo formatado à parte.
+function formatarDiferencaHoras(minutos: number): string {
+  if (minutos === 0) return "00:00 h";
+  return `${minutos > 0 ? "+" : "-"}${formatHorasCompacto(Math.abs(minutos))} h`;
 }
 
 // Agrupa os dias do período em semanas (domingo–sábado, mesmo recorte do dashboard de
@@ -142,8 +173,8 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
 
   if (loading) {
     return (
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        {Array.from({ length: 6 }).map((_, i) => (
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7 2xl:gap-3">
+        {Array.from({ length: 7 }).map((_, i) => (
           <Skeleton key={i} className="h-20 rounded-lg" />
         ))}
       </div>
@@ -180,12 +211,25 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
         <p className="font-mono text-[11px] text-muted">{rotuloPeriodo}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        <Estatistica label="Total de horas" valor={`${formatHorasCompacto(resumo.totalMinutos)} h`} />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7 2xl:gap-3">
         <Estatistica
-          label="Saldo de horas"
-          valor={resumo.saldoMinutos == null ? "—" : `${resumo.saldoMinutos >= 0 ? "+" : ""}${formatHorasCompacto(resumo.saldoMinutos)} h`}
-          destaque={resumo.saldoMinutos == null ? undefined : resumo.saldoMinutos >= 0 ? "success" : "warning"}
+          label="Total de horas"
+          valor={`${formatHorasCompacto(resumo.totalMinutos)} h`}
+          detalhe={`≈ ${formatHorasCompacto(resumo.totalMinutos + resumo.emAprovacao.minutos + resumo.emAjuste.diferencaMinutos)} h`}
+          detalheNaoOficial
+          detalheTitulo="Estimativa, não oficial: total de horas + horas em aprovação + diferença dos ajustes pendentes. Só vale se o gestor aprovar tudo."
+        />
+        <Estatistica
+          label="Em Aprovação"
+          valor={`${formatHorasCompacto(resumo.emAprovacao.minutos)} h`}
+          detalhe={resumo.emAprovacao.quantidade > 0 ? `${resumo.emAprovacao.quantidade} ${resumo.emAprovacao.quantidade === 1 ? "sessão" : "sessões"}` : undefined}
+          destaque={resumo.emAprovacao.quantidade > 0 ? "warning" : undefined}
+        />
+        <Estatistica
+          label="Em Ajuste"
+          valor={formatarDiferencaHoras(resumo.emAjuste.diferencaMinutos)}
+          detalhe={resumo.emAjuste.quantidade > 0 ? `${resumo.emAjuste.quantidade} ${resumo.emAjuste.quantidade === 1 ? "sessão" : "sessões"}` : undefined}
+          destaque={resumo.emAjuste.quantidade > 0 ? "warning" : undefined}
         />
         <Estatistica
           label="Meta diária"
@@ -198,12 +242,16 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
           }
         />
         <Estatistica
+          label="Saldo de horas"
+          valor={resumo.saldoMinutos == null ? "—" : `${resumo.saldoMinutos >= 0 ? "+" : ""}${formatHorasCompacto(resumo.saldoMinutos)} h`}
+          destaque={resumo.saldoMinutos == null ? undefined : resumo.saldoMinutos >= 0 ? "success" : "warning"}
+        />
+        <Estatistica
           label="Sessões pendentes"
           valor={String(resumo.sessoesPendentes)}
           destaque={resumo.sessoesPendentes > 0 ? "warning" : undefined}
         />
         <Estatistica label="RATs pendentes" valor={String(resumo.ratsPendentes)} destaque={resumo.ratsPendentes > 0 ? "warning" : undefined} />
-        <Estatistica label="Notificações" valor={String(resumo.notificacoesNaoLidas)} destaque={resumo.notificacoesNaoLidas > 0 ? "warning" : undefined} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
