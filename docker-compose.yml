@@ -32,6 +32,10 @@ services:
       - backend
     ports:
       - "8080:80"
+    volumes:
+      # Instalador do CaxHub Desktop (CaxHub-Desktop-Setup.exe), copiado por scp na VPS —
+      # o binário não vai pro git nem passa pelo build da imagem (ver desktop/README.md).
+      - ./downloads:/srv/downloads:ro
 
 volumes:
   db_data:

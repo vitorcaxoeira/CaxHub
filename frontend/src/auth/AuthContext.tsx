@@ -1,5 +1,6 @@
 import axios from "axios";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
+import { apagarDispositivo, estaNoApp, gravarDispositivo, lerDispositivo, nomeDoComputador } from "../lib/desktop";
 
 interface PayloadJwt {
   userId: number;
@@ -46,6 +47,60 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+// ---------- CaxHub Desktop: sessão que sobrevive ao JWT de 8h ----------
+// Só dentro do app Tauri (estaNoApp). Depois do primeiro login o app guarda um token de
+// dispositivo; quando o JWT vence (ou o app abre no dia seguinte), troca por um novo em vez de
+// mandar a pessoa pro login. Usa fetch e não axios de propósito: passa fora dos interceptors
+// abaixo, que reagem a 401. Revogar o computador (Meu perfil) ou sair no app derruba isso.
+async function sessaoPorDispositivo(): Promise<{ token: string; user: AuthUser } | null> {
+  if (!estaNoApp()) return null;
+  const dispositivo = lerDispositivo();
+  if (!dispositivo) return null;
+  try {
+    const resposta = await fetch("/api/desktop/sessao", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: dispositivo.token }),
+    });
+    // 401 = revogado, vencido ou usuário inativo: o token não serve mais, esquece.
+    if (resposta.status === 401) {
+      apagarDispositivo();
+      return null;
+    }
+    // Erro de rede ou do servidor: mantém o token, a próxima tentativa pode funcionar.
+    if (!resposta.ok) return null;
+    return await resposta.json();
+  } catch {
+    return null;
+  }
+}
+
+async function registrarDispositivo(jwt: string): Promise<void> {
+  try {
+    const resposta = await fetch("/api/desktop/dispositivos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+      body: JSON.stringify({ nome: nomeDoComputador() }),
+    });
+    // 403 = usuário sem consultor vinculado; nesse caso o app só não guarda a sessão.
+    if (!resposta.ok) return;
+    const { id, token } = await resposta.json();
+    gravarDispositivo({ id, token });
+  } catch {
+    // sem rede agora: registra no próximo login
+  }
+}
+
+function revogarDispositivoAtual(jwt: string | null): void {
+  const dispositivo = lerDispositivo();
+  apagarDispositivo();
+  if (!dispositivo || !jwt) return;
+  void fetch(`/api/desktop/dispositivos/${dispositivo.id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${jwt}` },
+  }).catch(() => undefined);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("token"));
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -55,6 +110,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     axios.defaults.headers.common.Authorization = token ? `Bearer ${token}` : undefined;
 
     if (!token) {
+      // No CaxHub Desktop o JWT vence entre uma abertura e outra: antes de mandar pro login,
+      // tenta o token de dispositivo.
+      if (estaNoApp() && lerDispositivo()) {
+        let superado = false;
+        sessaoPorDispositivo()
+          .then((nova) => {
+            if (!superado && nova) adotarSessao(nova.token, nova.user);
+          })
+          .finally(() => {
+            if (!superado) setLoading(false);
+          });
+        return () => {
+          superado = true;
+        };
+      }
       setLoading(false);
       return;
     }
@@ -73,10 +143,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelado) setUser(data.user);
       })
       .catch(() => {
-        if (!cancelado) {
-          localStorage.removeItem("token");
-          setToken(null);
+        if (cancelado) return;
+        // Dentro do app, JWT vencido não é o fim: tenta o token de dispositivo antes de deslogar.
+        // Devolve a promise pro `finally` esperar — senão o loading cai com o token velho ainda
+        // no estado e a tela dispara requisições que vão dar 401.
+        if (estaNoApp() && lerDispositivo()) {
+          return sessaoPorDispositivo().then((nova) => {
+            if (cancelado) return;
+            if (nova) {
+              adotarSessao(nova.token, nova.user);
+            } else {
+              localStorage.removeItem("token");
+              setToken(null);
+            }
+          });
         }
+        localStorage.removeItem("token");
+        setToken(null);
       })
       .finally(() => {
         if (!cancelado) setLoading(false);
@@ -160,6 +243,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const tokenEnviado = (error.config?.headers?.Authorization as string | undefined)?.replace(/^Bearer /, "");
         const tokenAtual = localStorage.getItem("token");
         if (error.response?.status === 401 && tokenEnviado && tokenEnviado === tokenAtual) {
+          // CaxHub Desktop: o JWT venceu com o app aberto. Troca pelo token de dispositivo e
+          // refaz a requisição UMA vez (`_recuperada` evita laço se o 401 não for de sessão).
+          if (estaNoApp() && lerDispositivo() && !error.config?._recuperada) {
+            return sessaoPorDispositivo().then((nova) => {
+              if (!nova) {
+                localStorage.removeItem("token");
+                setToken(null);
+                setUser(null);
+                return Promise.reject(error);
+              }
+              adotarSessao(nova.token, nova.user);
+              error.config._recuperada = true;
+              error.config.headers.Authorization = `Bearer ${nova.token}`;
+              return axios.request(error.config);
+            });
+          }
           localStorage.removeItem("token");
           setToken(null);
           setUser(null);
@@ -170,13 +269,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => axios.interceptors.response.eject(id);
   }, []);
 
+  function adotarSessao(novoToken: string, novoUser: AuthUser) {
+    localStorage.setItem("token", novoToken);
+    axios.defaults.headers.common.Authorization = `Bearer ${novoToken}`;
+    setToken(novoToken);
+    setUser(novoUser);
+  }
+
   function login(newToken: string, newUser: AuthUser) {
     localStorage.setItem("token", newToken);
     setToken(newToken);
     setUser(newUser);
+    // CaxHub Desktop: primeiro login neste computador registra o dispositivo (some em "Meu perfil").
+    if (estaNoApp() && !lerDispositivo()) void registrarDispositivo(newToken);
   }
 
   function logout() {
+    // Sair no app é sair de verdade: revoga este computador, senão ele reentraria sozinho.
+    if (estaNoApp()) revogarDispositivoAtual(token);
     localStorage.removeItem("token");
     setToken(null);
     setUser(null);

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CaxHub</title>
+    <style>
+      /* Tela local mostrada enquanto o app espera o servidor (ver conectar_quando_disponivel em
+         src-tauri/src/lib.rs, que redireciona sozinho assim que ele responde). */
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+        background: #0f1115; color: #c9cdd4; font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+        -webkit-user-select: none; user-select: none;
+      }
+      .marca { font-weight: 700; letter-spacing: .04em; color: #fff; }
+      .roda {
+        width: 16px; height: 16px; border-radius: 50%;
+        border: 2px solid #3a3f4a; border-top-color: #8aa4ff; animation: gira 0.9s linear infinite;
+      }
+      @keyframes gira { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body data-tauri-drag-region>
+    <img src="icone.png" width="56" height="56" alt="" style="border-radius: 12px" data-tauri-drag-region />
+    <div class="marca" data-tauri-drag-region>CaxHub</div>
+    <div class="roda"></div>
+    <div id="msg" data-tauri-drag-region>Conectando ao servidor…</div>
+  </body>
+</html>
