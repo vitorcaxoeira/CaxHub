@@ -19,15 +19,26 @@ const CONVITE_VALIDADE_DIAS = 7;
 // STATUS_VALIDOS em routes/sincronizacao.ts.
 const STATUS_VALIDOS = ["ativo", "pendente", "inativo"] as const;
 
-function toPublicUser(user: {
-  id: number;
-  email: string;
-  nome: string;
-  fotoUrl: string | null;
-  roleId: number;
-  status: string;
-  role: { id: number; name: string };
-}) {
+// "Conectado" no CaxHub Desktop = computador autorizado (não revogado e dentro dos 30 dias de validade,
+// que deslizam a cada uso — ver routes/desktop.ts) de um usuário ATIVO: inativo ou pendente não
+// consegue trocar o token do computador por uma sessão, então o computador dele não está conectado
+// de verdade. Mesma definição da lista do próprio usuário em Meu perfil (GET /desktop/dispositivos).
+function dispositivoAtivo(agora: Date): Prisma.DispositivoDesktopWhereInput {
+  return { revogadoEm: null, expiraEm: { gt: agora } };
+}
+
+function toPublicUser(
+  user: {
+    id: number;
+    email: string;
+    nome: string;
+    fotoUrl: string | null;
+    roleId: number;
+    status: string;
+    role: { id: number; name: string };
+  },
+  desktopConectados = 0
+) {
   return {
     id: user.id,
     email: user.email,
@@ -36,6 +47,7 @@ function toPublicUser(user: {
     roleId: user.roleId,
     roleName: user.role.name,
     status: user.status,
+    desktopConectados,
   };
 }
 
@@ -60,12 +72,16 @@ usersRouter.get("/roles", async (_req, res) => {
 // filtros. Carregado uma vez pela tela, não a cada mudança de filtro.
 usersRouter.get("/indicadores", async (_req, res) => {
   try {
-    const grupos = await prisma.user.groupBy({ by: ["status"], _count: true });
+    const [grupos, comDesktop] = await Promise.all([
+      prisma.user.groupBy({ by: ["status"], _count: true }),
+      // Usuários DISTINTOS (não computadores): quem tem 2 PCs conta uma vez.
+      prisma.user.count({ where: { status: "ativo", dispositivosDesktop: { some: dispositivoAtivo(new Date()) } } }),
+    ]);
     const totais: Record<string, number> = { ativo: 0, pendente: 0, inativo: 0 };
     for (const g of grupos) {
       if (g.status in totais) totais[g.status] = g._count;
     }
-    res.json(totais);
+    res.json({ ...totais, comDesktop });
   } catch (error) {
     handleError(res, error, "indicadores");
   }
@@ -311,11 +327,75 @@ usersRouter.get("/", async (req, res) => {
     }
     if (roleIds) where.roleId = { in: roleIds };
     if (status) where.status = status;
+    const agora = new Date();
+    // AND com o filtro de situação: "só com desktop" + "inativos" dá lista vazia, como o KPI diz.
+    if (req.query.desktop === "1") {
+      where.AND = [{ status: "ativo" }, { dispositivosDesktop: { some: dispositivoAtivo(agora) } }];
+    }
 
     const users = await prisma.user.findMany({ where, include: { role: true }, orderBy: { nome: "asc" } });
-    res.json({ users: users.map(toPublicUser) });
+
+    // Uma consulta só pra contagem de todos os usuários da página (nada de N+1).
+    const idsAtivos = users.filter((u) => u.status === "ativo").map((u) => u.id);
+    const contagens = idsAtivos.length
+      ? await prisma.dispositivoDesktop.groupBy({
+          by: ["userId"],
+          where: { userId: { in: idsAtivos }, ...dispositivoAtivo(agora) },
+          _count: true,
+        })
+      : [];
+    const porUsuario = new Map(contagens.map((c) => [c.userId, c._count]));
+    res.json({ users: users.map((u) => toPublicUser(u, porUsuario.get(u.id) ?? 0)) });
   } catch (error) {
     handleError(res, error, "list");
+  }
+});
+
+// ---------- Computadores conectados (CaxHub Desktop) ----------
+usersRouter.get("/:id/desktop", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const user = await prisma.user.findUnique({ where: { id }, select: { id: true } });
+    if (!user) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const dispositivos = await prisma.dispositivoDesktop.findMany({
+      where: { userId: id, ...dispositivoAtivo(new Date()) },
+      orderBy: { ultimoUsoEm: "desc" },
+      select: { id: true, nome: true, criadoEm: true, ultimoUsoEm: true },
+    });
+    res.json({ dispositivos });
+  } catch (error) {
+    handleError(res, error, "desktop-list");
+  }
+});
+
+// Revoga o computador de OUTRO usuário (PC perdido, colaborador que saiu): o app dele cai no login na
+// próxima troca de token. O dono refaz o login pelo app se for o caso.
+usersRouter.delete("/:id/desktop/:dispositivoId", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const dispositivoId = Number(req.params.dispositivoId);
+    if (!Number.isInteger(id) || !Number.isInteger(dispositivoId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const r = await prisma.dispositivoDesktop.updateMany({
+      where: { id: dispositivoId, userId: id, revogadoEm: null },
+      data: { revogadoEm: new Date() },
+    });
+    if (r.count === 0) {
+      res.status(404).json({ error: "Computador não encontrado" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "desktop-delete");
   }
 });
 

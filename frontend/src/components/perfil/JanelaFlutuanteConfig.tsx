@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { estaNoApp } from "../../lib/desktop";
 import { Skeleton } from "../ui/Skeleton";
 import { useToast } from "../ui/Toast";
+import { ListaComputadores } from "../desktop/ListaComputadores";
 
 // Seção "Janela flutuante" do Meu perfil: opções do CaxHub Desktop por usuário e os computadores
 // onde ele está conectado. Só aparece pra quem tem consultor vinculado (o backend responde 403
@@ -48,10 +49,6 @@ const OPCOES: { campo: "abrirAoIniciar" | "sempreNoTopo" | "alertasJornada"; tit
       "Notificação do Windows quando uma atividade em execução é parada fora da janela (no navegador, por exemplo), quando o expediente ou o teto de horas acabar e quando você está no horário de trabalho sem atividade em execução.",
   },
 ];
-
-function formatarData(iso: string): string {
-  return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
-}
 
 export function JanelaFlutuanteConfig() {
   const { mostrar } = useToast();
@@ -194,23 +191,7 @@ export function JanelaFlutuanteConfig() {
       {dispositivos.length === 0 ? (
         <p className="text-xs text-muted">Nenhum computador conectado ainda.</p>
       ) : (
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {dispositivos.map((d) => (
-            <li key={d.id} className="flex items-center justify-between gap-3 px-3 py-2">
-              <span className="min-w-0">
-                <span className="block truncate text-sm text-foreground">{d.nome}</span>
-                <span className="block text-xs text-muted">Último uso: {formatarData(d.ultimoUsoEm)}</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => void desconectar(d.id)}
-                className="flex-none rounded-md border border-border px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                Desconectar
-              </button>
-            </li>
-          ))}
-        </ul>
+        <ListaComputadores computadores={dispositivos} onDesconectar={(id) => void desconectar(id)} />
       )}
     </section>
   );

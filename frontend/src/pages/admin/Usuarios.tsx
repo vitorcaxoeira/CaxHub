@@ -5,6 +5,7 @@ import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/Mult
 import { Skeleton } from "../../components/ui/Skeleton";
 import { copiarParaAreaDeTransferencia } from "../../utils/clipboard";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { ModalComputadoresUsuario } from "../../components/admin/ModalComputadoresUsuario";
 
 interface Role {
   id: number;
@@ -19,6 +20,8 @@ interface Usuario {
   roleId: number;
   roleName: string;
   status: string;
+  // Computadores com o CaxHub Desktop conectados (só conta usuário ativo) — ver GET /users.
+  desktopConectados: number;
 }
 
 interface FormState {
@@ -44,6 +47,21 @@ const statusTone: Record<string, string> = {
 };
 
 const statusRotulo: Record<string, string> = { ativo: "Ativo", pendente: "Pendente", inativo: "Inativo" };
+
+function IconeComputador() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="13" rx="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+    </svg>
+  );
+}
+
+function rotuloComputadores(n: number): string {
+  if (n === 0) return "Nenhum computador conectado";
+  return n === 1 ? "1 computador conectado" : `${n} computadores conectados`;
+}
 
 export function Usuarios() {
   const { user: usuarioLogado } = useAuth();
@@ -73,6 +91,10 @@ export function Usuarios() {
   // Situação vem de um clique num KPI (só um valor por vez, ver alternarStatusFiltro); Papel
   // é multi-select; busca é texto livre debounced — mesmo padrão de SincronizacaoSenior.tsx.
   const [statusFiltro, setStatusFiltro] = useState<string | null>(null);
+  // KPI "Com desktop conectado": liga/desliga o filtro de quem tem computador conectado (combina com a situação).
+  const [soDesktop, setSoDesktop] = useState(false);
+  // Usuário cujo modal de computadores está aberto.
+  const [computadoresDe, setComputadoresDe] = useState<Usuario | null>(null);
   const [roleFiltro, setRoleFiltro] = useState<number[]>([]);
   const [buscaInput, setBuscaInput] = useState("");
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
@@ -80,7 +102,7 @@ export function Usuarios() {
   // Totais por situação da base INTEIRA (não reagem a statusFiltro/roleFiltro/buscaDebounced)
   // — mesma regra de GET /sincronizacao/indicadores: o KPI mostra sempre o todo, só a lista
   // abaixo reage aos filtros.
-  const [indicadores, setIndicadores] = useState({ ativo: 0, pendente: 0, inativo: 0 });
+  const [indicadores, setIndicadores] = useState({ ativo: 0, pendente: 0, inativo: 0, comDesktop: 0 });
   const [loadingIndicadores, setLoadingIndicadores] = useState(true);
 
   function carregar() {
@@ -91,6 +113,7 @@ export function Usuarios() {
           busca: buscaDebounced || undefined,
           roleId: roleFiltro.length > 0 ? roleFiltro.join(",") : undefined,
           status: statusFiltro || undefined,
+          desktop: soDesktop ? 1 : undefined,
         },
       }),
       axios.get("/api/users/roles"),
@@ -122,7 +145,7 @@ export function Usuarios() {
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFiltro, roleFiltro, buscaDebounced]);
+  }, [statusFiltro, roleFiltro, buscaDebounced, soDesktop]);
 
   function alternarStatusFiltro(status: string) {
     setStatusFiltro((atual) => (atual === status ? null : status));
@@ -349,8 +372,8 @@ export function Usuarios() {
       </div>
 
       {loadingIndicadores ? (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-border bg-surface p-5">
               <Skeleton className="mb-2 h-3.5 w-20" />
               <Skeleton className="h-7 w-12" />
@@ -358,7 +381,7 @@ export function Usuarios() {
           ))}
         </div>
       ) : (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {/* Clicáveis: filtram a lista abaixo por situação (mesmo espírito do KPI de
               SincronizacaoSenior.tsx) — o total de cada cartão nunca muda com o clique, só o
               da base inteira. */}
@@ -388,6 +411,16 @@ export function Usuarios() {
           >
             <p className="mb-2 text-[11.5px] text-muted">Inativos</p>
             <span className="block font-mono text-2xl font-semibold tabular-nums text-muted">{indicadores.inativo}</span>
+          </button>
+          <button
+            onClick={() => setSoDesktop((atual) => !atual)}
+            title="Usuários com o CaxHub Desktop conectado em algum computador (clique para filtrar a lista)"
+            className={`rounded-lg border p-5 text-left transition ${
+              soDesktop ? "border-primary ring-2 ring-primary/40" : "border-border hover:bg-surface-2"
+            }`}
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Com desktop conectado</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-primary">{indicadores.comDesktop}</span>
           </button>
         </div>
       )}
@@ -439,6 +472,9 @@ export function Usuarios() {
                 <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Status
                 </th>
+                <th className="bg-surface-2 px-5 py-3 text-center font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                  Desktop
+                </th>
                 <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Ações
                 </th>
@@ -459,6 +495,9 @@ export function Usuarios() {
                     </td>
                     <td className="px-5 py-3.5">
                       <Skeleton className="h-5 w-14 rounded" />
+                    </td>
+                    <td className="px-5 py-3.5 text-center">
+                      <Skeleton className="mx-auto h-5 w-5 rounded" />
                     </td>
                     <td className="px-5 py-3.5 text-right">
                       <Skeleton className="ml-auto h-4 w-20" />
@@ -483,6 +522,20 @@ export function Usuarios() {
                     >
                       {statusRotulo[usuario.status] ?? "Ativo"}
                     </span>
+                  </td>
+                  <td className="px-5 py-3.5 text-center">
+                    {/* Verde = há computador conectado (clique abre a lista); cinza apagado = nenhum. */}
+                    <button
+                      onClick={() => setComputadoresDe(usuario)}
+                      disabled={usuario.desktopConectados === 0}
+                      aria-label={rotuloComputadores(usuario.desktopConectados)}
+                      title={rotuloComputadores(usuario.desktopConectados)}
+                      className={`inline-flex rounded p-1 transition ${
+                        usuario.desktopConectados > 0 ? "text-success hover:bg-success/15" : "cursor-default text-muted/40"
+                      }`}
+                    >
+                      <IconeComputador />
+                    </button>
                   </td>
                   <td className="px-5 py-3.5 text-right">
                     {usuario.status === "pendente" && (
@@ -525,7 +578,7 @@ export function Usuarios() {
               ))}
               {!loading && usuarios.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-5 py-8 text-center text-sm text-muted">
+                  <td colSpan={6} className="px-5 py-8 text-center text-sm text-muted">
                     Nenhum usuário encontrado com esses filtros.
                   </td>
                 </tr>
@@ -720,6 +773,20 @@ export function Usuarios() {
             </div>
           </div>
         </div>
+      )}
+
+      {computadoresDe && (
+        <ModalComputadoresUsuario
+          usuario={computadoresDe}
+          onFechar={() => setComputadoresDe(null)}
+          onAlterado={(restantes) => {
+            // Atualiza a coluna e o KPI sem recarregar (e sem piscar o esqueleto dos cartões).
+            setUsuarios((lista) => lista.map((u) => (u.id === computadoresDe.id ? { ...u, desktopConectados: restantes } : u)));
+            axios.get("/api/users/indicadores").then(({ data }) => setIndicadores(data)).catch(() => {});
+            // Com o filtro "só desktop" ligado, quem ficou sem computador sai da lista.
+            if (soDesktop && restantes === 0) carregar();
+          }}
+        />
       )}
     </div>
   );
