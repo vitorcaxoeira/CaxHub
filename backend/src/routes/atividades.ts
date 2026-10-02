@@ -64,6 +64,19 @@ function parseIntParam(value: unknown): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
+// Lista separada por vírgula ("1,3") dos seletores multi-seleção. Aceita um valor único ("3") e
+// vazio/ausente vira [] (sem recorte). Diferente de `codfor`, o 0 é valor válido aqui — por isso
+// o descarte é só de segmento vazio ou não numérico, nunca de zero (Number("") é 0, não NaN).
+function parseListaIntParam(value: unknown): number[] {
+  if (typeof value !== "string") return [];
+  return value
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v !== "")
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+}
+
 async function contextoDoUsuario(req: AuthenticatedRequest) {
   const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
   if (!user) return null;
@@ -601,9 +614,9 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
     }
     const { contexto, role } = ctx;
 
-    const filtroDepexe = parseIntParam(req.query.depexe);
-    const filtroColunaId = parseIntParam(req.query.colunaId);
-    const filtroPripro = parseIntParam(req.query.pripro);
+    const filtroDepexes = parseListaIntParam(req.query.depexe);
+    const filtroColunaIds = parseListaIntParam(req.query.colunaId);
+    const filtroPripros = parseListaIntParam(req.query.pripro);
     // Lista separada por vírgula ("134,207") — o seletor da tela é multi-seleção. Number("")
     // é 0, não NaN, então sem a guarda de string vazia um filtro ausente viraria [0] e
     // esconderia todas as atividades. Mesmo padrão de rats.ts e de Mercado > Pedidos.
@@ -638,9 +651,9 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
     };
 
     const rows = visiveis
-      .filter((item) => filtroDepexe === null || item.depexe === filtroDepexe)
-      .filter((item) => filtroColunaId === null || item.colunaId === filtroColunaId)
-      .filter((item) => filtroPripro === null || item.pripro === filtroPripro)
+      .filter((item) => filtroDepexes.length === 0 || filtroDepexes.includes(item.depexe))
+      .filter((item) => filtroColunaIds.length === 0 || (item.colunaId != null && filtroColunaIds.includes(item.colunaId)))
+      .filter((item) => filtroPripros.length === 0 || (item.pripro != null && filtroPripros.includes(item.pripro)))
       .filter((item) => filtroCodfors.length === 0 || filtroCodfors.includes(item.codfor))
       .filter((item) => !somenteAtrasadas || item.atrasada)
       .filter(

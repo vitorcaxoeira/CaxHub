@@ -17,6 +17,17 @@ export function lerCodfors(valor: string): number[] {
     .filter((v) => Number.isFinite(v) && v !== 0);
 }
 
+// Mesma leitura de lerCodfors, mas sem descartar 0 — departamento/prioridade/situação podem
+// ter código 0 válido (só o codfor 0 é "sem consultor").
+function lerLista(valor: string): number[] {
+  return valor
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v !== "")
+    .map(Number)
+    .filter((v) => Number.isFinite(v));
+}
+
 const SITUACAO_KPI_LABEL: Record<SituacaoKpi, string> = {
   backlog: "Backlog",
   atrasadas: "Atrasadas",
@@ -59,32 +70,29 @@ export function AtividadesFiltros({
         onChange={(e) => onFiltros({ busca: e.target.value })}
         className={`${selectClass} w-56`}
       />
-      <select value={filtros.depexe} onChange={(e) => onFiltros({ depexe: e.target.value })} className={selectClass}>
-        <option value="">Todos os departamentos</option>
-        {departamentos.map((d) => (
-          <option key={d.value} value={d.value}>
-            {d.label}
-          </option>
-        ))}
-      </select>
-      <select value={filtros.colunaId} onChange={(e) => onFiltros({ colunaId: e.target.value })} className={selectClass}>
-        <option value="">Todas as situações</option>
-        {colunas.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.nome}
-          </option>
-        ))}
-      </select>
-      <select value={filtros.pripro} onChange={(e) => onFiltros({ pripro: e.target.value })} className={selectClass}>
-        <option value="">Todas as prioridades</option>
-        {prioridades.map((p) => (
-          <option key={p.value} value={p.value}>
-            {p.label}
-          </option>
-        ))}
-      </select>
-      {/* codfor viaja como "134,207" (string) porque é o formato que já vai pra URL e pro
-          backend; a conversão pra lista vive só aqui, na borda do componente. */}
+      {/* Os quatro seletores são multi-seleção e viajam como "1,3" (string), o formato que já
+          vai pra URL e pro backend; a conversão pra lista vive só aqui, na borda. */}
+      <MultiSelectDropdown
+        opcoes={departamentos}
+        selecionados={lerLista(filtros.depexe)}
+        onChange={(valores) => onFiltros({ depexe: valores.join(",") })}
+        labelTodos="Todos os departamentos"
+        labelSufixo="departamentos"
+      />
+      <MultiSelectDropdown
+        opcoes={colunas.map((c) => ({ value: c.id, label: c.nome }))}
+        selecionados={lerLista(filtros.colunaId)}
+        onChange={(valores) => onFiltros({ colunaId: valores.join(",") })}
+        labelTodos="Todas as situações"
+        labelSufixo="situações"
+      />
+      <MultiSelectDropdown
+        opcoes={prioridades}
+        selecionados={lerLista(filtros.pripro)}
+        onChange={(valores) => onFiltros({ pripro: valores.join(",") })}
+        labelTodos="Todas as prioridades"
+        labelSufixo="prioridades"
+      />
       <MultiSelectDropdown
         opcoes={consultores}
         selecionados={lerCodfors(filtros.codfor)}
