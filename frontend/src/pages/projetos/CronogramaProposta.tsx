@@ -6,6 +6,7 @@ import { useCronograma } from "../../hooks/useCronograma";
 import { ArvoreCronograma } from "../../components/cronograma/ArvoreCronograma";
 import { IndicadorProgresso } from "../../components/cronograma/IndicadorProgresso";
 import { KpisCronograma } from "../../components/cronograma/KpisCronograma";
+import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Modal } from "../../components/ui/Modal";
 import { IconeStatusSolicitacao, TOM_STATUS_SOLICITACAO, StatusSolicitacao } from "../../components/ui/IconeStatusSolicitacao";
 
@@ -153,6 +154,10 @@ export function CronogramaProposta() {
     abrirPedido(campo, rotulo, valor);
   }
 
+  function imprimir(conteudo: "tabela" | "gantt" | "ambos") {
+    window.open(`/projetos/alocacao/${codemp}/${codpro}/cronograma/relatorio?conteudo=${conteudo}`, "_blank");
+  }
+
   const orcamentoTotal = useMemo(() => somarOrcamentos(nos.filter((n) => n.tipo === "item"), agregarHoras(nos)), [nos]);
 
   // Avanço da proposta = Realizado sobre ORÇADO (o contratado), não sobre o Alocado.
@@ -172,9 +177,29 @@ export function CronogramaProposta() {
 
   return (
     <div>
-      <button onClick={() => navigate(-1)} className="text-sm text-primary hover:underline">
-        ← Voltar
-      </button>
+      <div className="flex items-center justify-between gap-3">
+        <button onClick={() => navigate(-1)} className="text-sm text-primary hover:underline">
+          ← Voltar
+        </button>
+        {/* Relatório impresso em aba própria (RelatorioCronograma): mesmo modelo do 5S, com tabela,
+            Gantt ou os dois. Nível, escala, tema e folha se escolhem na barra do relatório. */}
+        <DropdownMenu placement="bottom-end">
+          <DropdownMenu.Trigger>
+            <button
+              type="button"
+              disabled={loading || !!erro || nos.length === 0}
+              className="whitespace-nowrap rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Imprimir <span aria-hidden>▾</span>
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content className="w-48">
+            <DropdownMenu.Item onSelect={() => imprimir("tabela")}>Tabela</DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={() => imprimir("gantt")}>Gantt</DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={() => imprimir("ambos")}>Tabela + Gantt</DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu>
+      </div>
 
       {proposta && (
         <div className="mb-4 mt-3">

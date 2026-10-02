@@ -25,6 +25,7 @@ import {
   planejarAlteracao,
   validarNaFaixa,
 } from "../domain/datasCronograma";
+import { gerarPdfDaPagina, RelatorioPdfError } from "../lib/relatorioPdf";
 import { enfileirar, processarFilaSincronizacao, reprocessar } from "../sync/outboxSenior";
 import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
 import { runPropostaItemSyncPorCodpro } from "../sync/propostaItemSync";
@@ -1757,6 +1758,60 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     });
   } catch (error) {
     handleError(res, error, "cronograma");
+  }
+});
+
+// PDF do relatório impresso do Cronograma: abre a página do próprio frontend num Chromium headless
+// (mesmo mecanismo do PDF do Resultado 5S) com o token de quem pediu, então sai idêntico ao "Imprimir".
+// O acesso é o do GET .../cronograma — o que o usuário não enxerga na tela também não vira PDF.
+alocacaoRouter.post("/propostas/:codemp/:codpro/cronograma/pdf", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    if (!Number.isFinite(codemp) || !Number.isFinite(codpro)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await departamentosPermitidos(role, contexto);
+    const proposta = await prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
+    if (!proposta || proposta.sitpro == null || !SITPRO_ALOCAVEL.includes(proposta.sitpro)) {
+      res.status(404).json({ error: "Proposta não encontrada ou não alocável" });
+      return;
+    }
+    if (!(await podeVerProposta(permitidos, codemp, codpro))) {
+      res.status(403).json({ error: "Sem acesso a esta proposta" });
+      return;
+    }
+
+    const b = req.body ?? {};
+    const escolher = <T extends string>(valor: unknown, validos: readonly T[], padrao: T): T => validos.find((v) => v === valor) ?? padrao;
+    const conteudo = escolher(b.conteudo, ["tabela", "gantt", "ambos"] as const, "ambos");
+    const nivel = escolher(b.nivel, ["resumido", "detalhado"] as const, "detalhado");
+    const params = new URLSearchParams({
+      conteudo,
+      nivel,
+      escala: escolher(b.escala, ["auto", "semana", "mes"] as const, "auto"),
+      tema: escolher(b.tema, ["claro", "escuro"] as const, "claro"),
+      orientacao: escolher(b.orientacao, ["retrato", "paisagem"] as const, "paisagem"),
+    });
+    const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    const pdf = await gerarPdfDaPagina(`/projetos/alocacao/${codemp}/${codpro}/cronograma/relatorio?${params.toString()}`, token);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="cronograma-${codpro}-${conteudo}-${nivel}.pdf"`);
+    res.send(pdf);
+  } catch (error) {
+    if (error instanceof RelatorioPdfError) {
+      console.error("[alocacao:cronograma-pdf]", error.message);
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    handleError(res, error, "cronograma-pdf");
   }
 });
 
