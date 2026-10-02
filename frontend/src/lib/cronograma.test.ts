@@ -4,16 +4,22 @@ import {
   agregarHoras,
   aninharPorFaixas,
   calcularOrcamentoItem,
+  dataIso,
   derivarStatus,
   descreverSaldoDistribuicao,
   estadoAlertaItem,
   filtrarPreservandoAncestrais,
   FaixaAninhamento,
+  formatarDataBr,
+  formatarDataCurta,
   formatHorasCompacto,
   larguraHorasProposta,
+  limitesDatasDoNo,
   minimoAlocavel,
+  NoComPeriodo,
   NoCronograma,
   orcamentoDeTotais,
+  periodosEfetivos,
   projetarSaldo,
   somarDistribuidas,
   somarExcedentes,
@@ -510,5 +516,60 @@ describe("larguraHorasProposta", () => {
     const nos = [no({ id: 1, tipo: "item", nome: "Item", horasPrevistas: 125 * 60 })]; // 125h
     const total = somarOrcamentos(nos, agregarHoras(nos));
     expect(larguraHorasProposta(total)).toBe(3);
+  });
+});
+
+describe("hierarquia de datas", () => {
+  function p(parcial: Partial<NoComPeriodo> & Pick<NoComPeriodo, "id" | "nome">): NoComPeriodo {
+    return { parentId: null, ...parcial };
+  }
+  // Raiz [01/10..31/12] → Item (sem datas) → Pasta [01/11..30/11] → Atividade [05/11..10/11]
+  const nos: NoComPeriodo[] = [
+    p({ id: 1, nome: "Raiz", dataPrevistaInicio: "2026-10-01T00:00:00.000Z", dataPrevistaFim: "2026-12-31T00:00:00.000Z" }),
+    p({ id: -3, nome: "Item", parentId: 1 }),
+    p({ id: 2, nome: "Pasta", parentId: -3, dataPrevistaInicio: "2026-11-01", dataPrevistaFim: "2026-11-30" }),
+    p({ id: 5, nome: "Ativ", parentId: 2, dataPrevistaInicio: "2026-11-05", dataPrevistaFim: "2026-11-10" }),
+    p({ id: 6, nome: "Ativ sem data", parentId: 2 }),
+  ];
+  const porId = new Map(nos.map((n) => [n.id, n]));
+
+  it("dataIso e formatadores usam só o dia, sem fuso", () => {
+    expect(dataIso("2026-10-01T00:00:00.000Z")).toBe("2026-10-01");
+    expect(dataIso(null)).toBeNull();
+    expect(formatarDataBr("2026-10-01T00:00:00.000Z")).toBe("01/10/2026");
+    expect(formatarDataCurta("2026-10-01")).toBe("01/10/26");
+    expect(formatarDataBr(null)).toBe("");
+  });
+
+  it("limite vem do ancestral mais próximo com data, cada lado separado", () => {
+    // O item não tem data: o limite dele vem da raiz.
+    expect(limitesDatasDoNo(porId.get(-3)!, porId)).toEqual({ inicio: "2026-10-01", fim: "2026-12-31", origemInicio: "Raiz", origemFim: "Raiz" });
+    // A pasta tem as duas datas: a atividade usa as dela, não as da raiz.
+    expect(limitesDatasDoNo(porId.get(5)!, porId)).toEqual({ inicio: "2026-11-01", fim: "2026-11-30", origemInicio: "Pasta", origemFim: "Pasta" });
+    // Raiz sem pai: sem limite.
+    expect(limitesDatasDoNo(porId.get(1)!, porId)).toEqual({ inicio: null, fim: null, origemInicio: null, origemFim: null });
+  });
+
+  it("pai que só tem o início deixa o fim vir de mais acima", () => {
+    const so = new Map<number, NoComPeriodo>([
+      [1, p({ id: 1, nome: "Raiz", dataPrevistaFim: "2026-12-31" })],
+      [2, p({ id: 2, nome: "Pasta", parentId: 1, dataPrevistaInicio: "2026-11-01" })],
+      [3, p({ id: 3, nome: "Ativ", parentId: 2 })],
+    ]);
+    expect(limitesDatasDoNo(so.get(3)!, so)).toEqual({ inicio: "2026-11-01", fim: "2026-12-31", origemInicio: "Pasta", origemFim: "Raiz" });
+  });
+
+  it("período efetivo: o próprio quando tem, senão o que os descendentes cobrem", () => {
+    const ef = periodosEfetivos([
+      p({ id: 1, nome: "Item" }),
+      p({ id: 2, nome: "Pasta", parentId: 1 }),
+      p({ id: 3, nome: "A", parentId: 2, dataPrevistaInicio: "2026-11-05", dataPrevistaFim: "2026-11-10" }),
+      p({ id: 4, nome: "B", parentId: 2, dataPrevistaInicio: "2026-11-20", dataPrevistaFim: "2026-11-28" }),
+      p({ id: 5, nome: "Vazia", parentId: 1 }),
+    ]);
+    expect(ef.get(2)).toEqual({ inicio: "2026-11-05", fim: "2026-11-28", inicioDerivado: true, fimDerivado: true });
+    expect(ef.get(1)).toEqual({ inicio: "2026-11-05", fim: "2026-11-28", inicioDerivado: true, fimDerivado: true });
+    expect(ef.get(3)).toEqual({ inicio: "2026-11-05", fim: "2026-11-10", inicioDerivado: false, fimDerivado: false });
+    expect(ef.get(5)).toEqual({ inicio: null, fim: null, inicioDerivado: false, fimDerivado: false });
   });
 });

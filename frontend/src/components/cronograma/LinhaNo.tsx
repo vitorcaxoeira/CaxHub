@@ -3,10 +3,13 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   HorasAgregadas,
   OrcamentoItem,
+  PeriodoEfetivo,
   StatusNo,
   estadoAlertaItem,
   formatHorasCompacto,
   formatarAlocacoes,
+  formatarDataBr,
+  formatarDataCurta,
   larguraColunaHorasPx,
 } from "../../lib/cronograma";
 import { NoCronogramaCompleto } from "../../hooks/useCronograma";
@@ -71,6 +74,9 @@ interface LinhaNoProps {
   agregado: HorasAgregadas;
   // Horas contratadas do item da proposta, já somadas pra cima (ver agregarOrcado).
   orcado: number;
+  // Início/fim exibidos: o próprio do nó ou, quando ele não tem, o que os descendentes cobrem
+  // (ver periodosEfetivos) — o derivado aparece em itálico/cinza.
+  periodo?: PeriodoEfetivo;
   // Só presente pra tipo="item". Não alimenta mais coluna nenhuma — sobrou pra decidir o
   // estado de alerta da linha (borda, fundo e os chips de estouro).
   orcamento?: OrcamentoItem;
@@ -115,6 +121,7 @@ export function LinhaNo({
   statusEfetivo,
   agregado,
   orcado,
+  periodo,
   orcamento,
   contagemDescendentes,
   selecionado,
@@ -206,9 +213,9 @@ export function LinhaNo({
       onToggleExpandir();
       return;
     }
-    // Folha (pasta vazia ou atividade sem filhos): não há o que expandir, então o clique
-    // continua abrindo a edição direto. Item nunca abre: ele não é editável aqui.
-    if (no.tipo !== "item") onAbrirDrawer();
+    // Folha (pasta vazia, atividade ou item sem nada dentro): não há o que expandir, então o clique
+    // abre a edição direto — no item, só o período e a observação (o resto vem do Senior).
+    onAbrirDrawer();
   }
 
   // Tratamento de linha por estado de alerta do item — só os dois mais graves pintam a
@@ -349,6 +356,13 @@ export function LinhaNo({
                 {no.nome}
               </span>
 
+              {/* Observação: o texto inteiro fica no hover; abrir o painel de edição mostra e edita. */}
+              {no.observacao && (
+                <span className="flex-none text-[12px] text-muted" title={`Observação: ${no.observacao}`} aria-label="Tem observação">
+                  💬
+                </span>
+              )}
+
             {/* Chips de alerta dentro da coluna de estrutura: são condicionais, e do lado
                 de fora empurrariam as colunas estáticas em algumas linhas e não em outras. */}
             {no.tipo === "item" && alerta === "estouro_realizado" && (
@@ -431,6 +445,28 @@ export function LinhaNo({
             </span>
           )}
         </div>
+
+        {/* Início / Fim — o próprio período do nó; em cinza itálico quando é derivado dos
+            descendentes (pasta/item sem data própria). Só de xl pra cima: abaixo disso a linha já
+            está apertada e o período fica no painel de edição. */}
+        {([
+          { chave: "inicio", valor: periodo?.inicio ?? null, derivado: periodo?.inicioDerivado ?? false, rotulo: "Início" },
+          { chave: "fim", valor: periodo?.fim ?? null, derivado: periodo?.fimDerivado ?? false, rotulo: "Fim" },
+        ] as const).map((c) => (
+          <div
+            key={c.chave}
+            className={`hidden w-[64px] flex-none text-center font-mono text-[11px] tabular-nums xl:block ${
+              c.derivado ? "italic text-muted/70" : "text-muted"
+            }`}
+            title={
+              c.valor
+                ? `${c.rotulo} previsto: ${formatarDataBr(c.valor)}${c.derivado ? " (calculado pelas atividades abaixo)" : ""}`
+                : `${c.rotulo} previsto: não definido`
+            }
+          >
+            {formatarDataCurta(c.valor)}
+          </div>
+        ))}
 
         {/* Colunas numéricas — Orçado, Realizado e Alocado. Todas com a MESMA largura,
             `flex-none` e presentes em toda linha, inclusive quando vazias: é isso que faz
