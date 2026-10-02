@@ -324,6 +324,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
       } ${open ? "lg:w-60 lg:border-r" : "lg:w-0 lg:border-r-0"}`}
     >
       <div className="flex h-16 items-center border-b border-border px-5">
+        <img src="/marca/icone-128.png" alt="" className="mr-2.5 h-8 w-8 flex-none rounded-lg" />
         <p className="whitespace-nowrap font-display text-lg font-bold text-foreground">CaxHub</p>
       </div>
       <nav className="flex-1 space-y-1 whitespace-nowrap px-3 py-4">

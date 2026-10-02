@@ -1,4 +1,6 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { ReactNode } from "react";
+import { estaNoApp } from "./lib/desktop";
 import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
@@ -53,6 +55,17 @@ import { Participantes5S } from "./pages/gestao5s/admin/Participantes5S";
 import { ListarPedidos } from "./pages/mercado/ListarPedidos";
 import { PedidoVisualizacao } from "./pages/mercado/PedidoVisualizacao";
 import { AnaliseFaturamento } from "./pages/mercado/AnaliseFaturamento";
+import { FlutuanteShell } from "./layout/FlutuanteShell";
+import { JanelaFlutuante } from "./pages/flutuante/JanelaFlutuante";
+
+// CaxHub Desktop: a janela é só a flutuante. Qualquer outra rota (ex.: link antigo, "voltar") volta
+// pra ela; o sistema completo abre no navegador pelo botão "Abrir completo". Fora do app não faz nada.
+const ROTAS_LIVRES_NO_APP = ["/flutuante", "/login", "/aceitar-convite"];
+function SoFlutuanteNoApp({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  if (estaNoApp() && !ROTAS_LIVRES_NO_APP.includes(pathname)) return <Navigate to="/flutuante" replace />;
+  return <>{children}</>;
+}
 
 export default function App() {
   return (
@@ -60,6 +73,7 @@ export default function App() {
       <ToastProvider>
         <AuthProvider>
           <BrowserRouter>
+            <SoFlutuanteNoApp>
             <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/aceitar-convite" element={<AceitarConvite />} />
@@ -87,6 +101,19 @@ export default function App() {
             >
               <Route path="/5s/relatorio" element={<RelatorioResultado5S />} />
             </Route>
+            {/* Janela flutuante do CaxHub Desktop — fora do AppShell de propósito: sem Sidebar/Topbar,
+                feita pra uma janela de ~360px que fica sempre à vista. A tela cuida do acesso (403 do
+                backend = usuário sem consultor vinculado); roda também num navegador comum. */}
+            <Route
+              path="/flutuante"
+              element={
+                <ProtectedRoute>
+                  <FlutuanteShell>
+                    <JanelaFlutuante />
+                  </FlutuanteShell>
+                </ProtectedRoute>
+              }
+            />
             <Route
               element={
                 <ProtectedRoute>
@@ -167,6 +194,7 @@ export default function App() {
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+            </SoFlutuanteNoApp>
         </BrowserRouter>
       </AuthProvider>
       </ToastProvider>

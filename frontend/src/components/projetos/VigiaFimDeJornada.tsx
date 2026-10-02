@@ -38,6 +38,16 @@ const INTERVALO_CONSULTA_MS = 30_000;
 // vencido, mesmo depois do consultor confirmar que ia trabalhar mais 15 minutos.
 export const EVENTO_SESSAO_ALTERADA = "caxhub:sessao-alterada";
 
+// Disparado quando o vigia abre o alerta de fim de expediente ou o teto de horas estoura. Quem
+// quiser reagir (a janela flutuante do CaxHub Desktop manda uma notificação nativa e traz a
+// janela pra frente) ouve isto; o vigia em si não muda de comportamento por causa dele.
+export const EVENTO_VIGIA_ALERTA = "caxhub:vigia-alerta";
+export interface DetalheVigiaAlerta {
+  codpro: number;
+  motivo: "fim_de_expediente" | "teto_atingido";
+  iniciouForaDoExpediente: boolean;
+}
+
 export function avisarSessaoAlterada() {
   window.dispatchEvent(new CustomEvent(EVENTO_SESSAO_ALTERADA));
 }
@@ -156,6 +166,21 @@ export function VigiaFimDeJornada() {
   // qualquer outra tela a sessão ficava correndo até o cron de 5 min. Corrigido em
   // 14/08/2026, junto do clamp que impede gravar além do limite.
   const tetoVencido = sessao?.motivo === "teto_atingido" && limiteMs != null && agora >= limiteMs;
+
+  // Uma vez por sessão+limite: prorrogar muda o limite e, quando o tempo novo vencer, avisa de novo.
+  const alertaEmitido = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessao || !(perguntando || tetoVencido)) return;
+    const chave = `${sessao.atividadeId}-${sessao.inicio}-${sessao.limite}`;
+    if (alertaEmitido.current === chave) return;
+    alertaEmitido.current = chave;
+    const detalhe: DetalheVigiaAlerta = {
+      codpro: sessao.codpro,
+      motivo: tetoVencido ? "teto_atingido" : "fim_de_expediente",
+      iniciouForaDoExpediente: sessao.iniciouForaDoExpediente,
+    };
+    window.dispatchEvent(new CustomEvent(EVENTO_VIGIA_ALERTA, { detail: detalhe }));
+  }, [sessao, perguntando, tetoVencido]);
 
   const encerrar = useCallback(
     async (imediato: boolean, texto?: string) => {

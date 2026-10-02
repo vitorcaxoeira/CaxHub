@@ -39,7 +39,10 @@ export function Topbar({ sidebarOpen, onToggleSidebar, onToggleMobileMenu }: Top
             <line x1="4" y1="18" x2="20" y2="18" />
           </svg>
         </button>
-        <p className="font-display text-base font-semibold text-foreground lg:hidden">CaxHub</p>
+        <div className="flex items-center gap-2 lg:hidden">
+          <img src="/marca/icone-128.png" alt="" className="h-7 w-7 rounded-md" />
+          <p className="font-display text-base font-semibold text-foreground">CaxHub</p>
+        </div>
       </div>
 
       <div className="flex items-center gap-3">
