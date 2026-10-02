@@ -3,6 +3,7 @@ import express from "express";
 import { garantirDiretorioUploads, AVATARS_DIR } from "./config/uploads";
 import { authRouter } from "./auth/routes";
 import { perfilRouter } from "./routes/perfil";
+import { desktopRouter } from "./routes/desktop";
 import { dashboardRouter } from "./routes/dashboard";
 import { financeiroRouter } from "./routes/financeiro";
 import { recebimentosRouter } from "./routes/recebimentos";
@@ -134,6 +135,7 @@ app.use((_req, res, next) => {
 
 app.use("/auth", authRouter);
 app.use("/perfil", perfilRouter);
+app.use("/desktop", desktopRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/financeiro", financeiroRouter);
 app.use("/financeiro/recebimentos", recebimentosRouter);
