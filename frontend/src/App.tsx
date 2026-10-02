@@ -39,6 +39,7 @@ import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
 import { SincronizacaoKyria } from "./pages/admin/SincronizacaoKyria";
 import { MapeamentoKyria } from "./pages/admin/MapeamentoKyria";
 import { DadosKyria } from "./pages/admin/DadosKyria";
+import { DadosErp } from "./pages/admin/DadosErp";
 import { DepartamentoGrupoContabil } from "./pages/admin/DepartamentoGrupoContabil";
 import { Dashboard5S } from "./pages/gestao5s/Dashboard5S";
 import { NovaAvaliacao5S } from "./pages/gestao5s/NovaAvaliacao5S";
@@ -154,6 +155,7 @@ export default function App() {
                 <Route path="/admin/usuarios" element={<Usuarios />} />
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
+                <Route path="/admin/sincronizacao-erp/dados/:jobName" element={<DadosErp />} />
                 <Route path="/admin/sincronizacao-kyria" element={<SincronizacaoKyria />} />
                 <Route path="/admin/mapeamento-kyria" element={<MapeamentoKyria />} />
                 <Route path="/admin/sincronizacao-kyria/dados/:jobName" element={<DadosKyria />} />

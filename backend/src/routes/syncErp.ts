@@ -11,6 +11,7 @@ import { montarQuerySenior } from "../sync/consultaSenior";
 import { AuthenticatedRequest } from "../auth/middleware";
 import { DIMENSOES, dimensaoPorChave, jobsComDimensao, jobsSemDimensao } from "../sync/dimensoesFiltro";
 import { diagnosticarRecorte, marcarOrfaosDoRecorte, suportaMarcarRemovido } from "../sync/recorteRetroativo";
+import { listarDadosDoJob, PAGE_SIZE_MAXIMO } from "../sync/dadosSincronizados";
 import { modoConfiguradoDoJob, carregarModosVarreduraAtivos, ModoVarredura } from "../sync/politicaVarredura";
 import { tamanhoLoteConfigurado, carregarTamanhosLoteAtivos } from "../sync/politicaLote";
 import { TAMANHO_LOTE_PADRAO, TETO_PARAMS_PROTOCOLO } from "../sync/upsertEmLote";
@@ -228,6 +229,34 @@ syncErpRouter.get("/:jobName/removidos", async (req, res) => {
     res.json({ itens: await job.listarRemovidos(limite, ultimaVarredura?.varreduraInicio ?? null) });
   } catch (error) {
     handleError(res, error, "removidos");
+  }
+});
+
+// GET /:jobName/dados — linhas já sincronizadas da tabela espelho (tela "Ver dados"), somente
+// leitura. `pageSize` até PAGE_SIZE_MAXIMO: a tela pede o teto de uma vez pra decidir o modo
+// pelo tamanho real (total <= teto → índice no cliente; senão busca/paginação aqui).
+syncErpRouter.get("/:jobName/dados", async (req, res) => {
+  try {
+    const job = SYNC_JOBS.find((j) => j.jobName === req.params.jobName);
+    if (!job) {
+      res.status(404).json({ error: "Job não encontrado" });
+      return;
+    }
+    const resultado = await listarDadosDoJob(job, {
+      page: Number(req.query.page) || 1,
+      pageSize: Number(req.query.pageSize) || 30,
+      busca: typeof req.query.busca === "string" ? req.query.busca : "",
+    });
+    res.json({
+      jobName: job.jobName,
+      displayName: job.displayName,
+      tabelaSenior: job.tabelaSenior,
+      tabelaLocal: job.tabelaLocal,
+      limiteIndice: PAGE_SIZE_MAXIMO,
+      ...resultado,
+    });
+  } catch (error) {
+    handleError(res, error, "dados");
   }
 });
 

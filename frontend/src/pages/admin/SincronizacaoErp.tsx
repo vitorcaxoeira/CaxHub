@@ -1,5 +1,7 @@
 import axios from "axios";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
+import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Modal } from "../../components/ui/Modal";
 import { SelectBuscavel, OpcaoBuscavel } from "../../components/ui/SelectBuscavel";
@@ -284,6 +286,7 @@ function formatTempoAtras(iso: string | null): string {
 }
 
 export function SincronizacaoErp() {
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState<JobSync[]>([]);
   const [sincronizandoTodos, setSincronizandoTodos] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1271,28 +1274,45 @@ export function SincronizacaoErp() {
                   <td
                     className={`px-2.5 py-3.5 text-right ${expandido === job.jobName ? "border-r border-primary" : ""}`}
                   >
-                    <div className="flex justify-end gap-3">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          disparar(job, "todos");
-                        }}
-                        disabled={job.emAndamento || disparando !== null || sincronizandoTodos}
-                        className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {disparando === `${job.jobName}-todos` ? "Iniciando..." : "Sincronizar Todos"}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          disparar(job, "alterados");
-                        }}
-                        disabled={!job.suportaAlterados || job.emAndamento || disparando !== null || sincronizandoTodos}
-                        title={!job.suportaAlterados ? "Essa tabela não tem campo de data de geração/alteração no Senior" : undefined}
-                        className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {disparando === `${job.jobName}-alterados` ? "Iniciando..." : "Sincronizar Alterados"}
-                      </button>
+                    {/* Ações da linha agrupadas no menu "⋯". O wrapper barra o clique: o Content vai
+                        num portal, mas eventos React sobem pela árvore de componentes até o onClick
+                        da <tr>, que abriria/fecharia o painel expansível. */}
+                    <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenu placement="bottom-end">
+                        <DropdownMenu.Trigger>
+                          <button
+                            aria-label={`Ações de ${job.displayName}`}
+                            title="Ações"
+                            className="rounded-md px-2 py-1 text-lg leading-none text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            ⋯
+                          </button>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Content className="w-56 p-0 py-1">
+                          <DropdownMenu.Item
+                            onSelect={() => navigate(`/admin/sincronizacao-erp/dados/${job.jobName}`)}
+                            className="rounded-none px-3 py-2"
+                          >
+                            Ver dados
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Item
+                            onSelect={() => disparar(job, "todos")}
+                            disabled={job.emAndamento || disparando !== null || sincronizandoTodos}
+                            className="rounded-none px-3 py-2"
+                          >
+                            {disparando === `${job.jobName}-todos` ? "Iniciando..." : "Sincronizar Todos"}
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            onSelect={() => disparar(job, "alterados")}
+                            disabled={!job.suportaAlterados || job.emAndamento || disparando !== null || sincronizandoTodos}
+                            title={!job.suportaAlterados ? "Essa tabela não tem campo de data de geração/alteração no Senior" : undefined}
+                            className="rounded-none px-3 py-2"
+                          >
+                            {disparando === `${job.jobName}-alterados` ? "Iniciando..." : "Sincronizar Alterados"}
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu>
                     </div>
                   </td>
                 </tr>
