@@ -264,7 +264,7 @@ export function RelatorioCronograma() {
             <thead className="[display:table-header-group]">
               <tr className="border-b-2 border-foreground text-left align-bottom">
                 <th className={cabecalho}>Estrutura</th>
-                {respAntes && <th className={cabecalho}>Responsável</th>}
+                {respAntes && <th className={cabecalho}>Depto. / Resp.</th>}
                 <th className={`${cabecalho} text-center`}>Início</th>
                 <th className={`${cabecalho} text-center`}>Fim</th>
                 {tem("orcado") && (
@@ -287,7 +287,9 @@ export function RelatorioCronograma() {
                 const atrasada = no.tipo === "atividade" && !!periodo?.fim && periodo.fim < hoje && statusEfetivo !== "concluida";
                 const ehItem = no.tipo === "item";
                 const ehRaiz = no.tipo === "pasta" && no.seqite == null;
-                const resp = no.tipo === "atividade" ? no.responsavelNome : null;
+                // Com Gantt a Estrutura é estreita: o departamento do item usa o espaço da coluna de responsável (vazio
+                // nos itens), da esquerda pra direita, em vez de quebrar a linha da descrição.
+                const resp = no.tipo === "atividade" ? no.responsavelNome : respAntes && ehItem ? no.depexeLabel : null;
                 const nota = numeroDaNota.get(no.id);
                 const dataCell = (valor: string | null | undefined, derivado: boolean) => (
                   <td
@@ -317,8 +319,9 @@ export function RelatorioCronograma() {
                         >
                           {no.nome}
                           {/* Departamento do item, sem coluna fixa: na Tabela alinhado à esquerda do card
-                              Excedente dos KPIs (6 cards em linha, na paisagem); com Gantt, logo após a descrição. */}
-                          {ehItem && no.depexeLabel && (
+                              Excedente dos KPIs; em "Tabela + Gantt" vai na coluna de responsável (ver `resp`); só no
+                              Gantt puro, sem essa coluna, fica logo após a descrição. */}
+                          {ehItem && no.depexeLabel && !respAntes && (
                             <span
                               className={`inline-block rounded border border-border px-1 align-middle font-mono text-[9px] font-medium uppercase tracking-wide text-muted ${mostraTabela ? "absolute whitespace-nowrap" : "ml-1.5"}`}
                               style={mostraTabela ? { left: "calc(50% + 6px)" } : undefined}
