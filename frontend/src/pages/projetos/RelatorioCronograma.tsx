@@ -15,7 +15,6 @@ import {
 import { Spinner } from "../../components/ui/Spinner";
 import { NoCronogramaCompleto, PropostaCronograma, montarNosCronograma } from "../../hooks/useCronograma";
 import {
-  StatusNo,
   achatarArvore,
   agregarHoras,
   agregarOrcado,
@@ -40,13 +39,6 @@ export type NivelRelatorio = "resumido" | "detalhado";
 const CHAVE = "caxhub-cronograma-relatorio";
 const ROTULOS_CONTEUDO: Record<ConteudoRelatorio, string> = { tabela: "Tabela", gantt: "Gantt", ambos: "Tabela + Gantt" };
 const ROTULOS_ESCALA: Record<EscalaPedida, string> = { auto: "Auto", semana: "Semana", mes: "Mês" };
-const ROTULOS_STATUS: Record<StatusNo, string> = {
-  nao_iniciada: "Não iniciada",
-  em_curso: "Em curso",
-  bloqueada: "Bloqueada",
-  concluida: "Concluída",
-};
-
 const dataHoraFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
 function hojeLocalIso(): string {
@@ -172,8 +164,6 @@ export function RelatorioCronograma() {
         { chave: "orcado", largura: "50px" },
         { chave: "realizado", largura: "50px" },
         { chave: "alocado", largura: "50px" },
-        { chave: "status", largura: "86px" },
-        { chave: "obs", largura: "24%" },
       ]
     : conteudo === "ambos"
       ? [{ chave: "estrutura" }, { chave: "resp", largura: "132px" }, { chave: "inicio", largura: "62px" }, { chave: "fim", largura: "62px" }, { chave: "gantt", largura: "40%" }]
@@ -277,8 +267,6 @@ export function RelatorioCronograma() {
                     <th className={`${cabecalho} text-right`}>Orçado</th>
                     <th className={`${cabecalho} text-right`}>Realiz.</th>
                     <th className={`${cabecalho} text-right`}>Alocado</th>
-                    <th className={cabecalho}>Status</th>
-                    <th className={cabecalho}>Observação</th>
                   </>
                 )}
                 {tem("gantt") && <th className="p-0 pb-0.5">{escala ? <CabecalhoGantt escala={escala} /> : null}</th>}
@@ -336,8 +324,6 @@ export function RelatorioCronograma() {
                           {formatHorasCompacto(agregado?.horasRealizadas ?? 0, calc.larguraHoras)}
                         </td>
                         <td className="px-1.5 py-[3px] text-right font-mono tabular-nums text-muted">{formatHorasCompacto(agregado?.horasPrevistas ?? 0, calc.larguraHoras)}</td>
-                        <td className={`px-1.5 py-[3px] ${atrasada ? "font-medium text-destructive" : "text-muted"}`}>{atrasada ? "Atrasada" : ROTULOS_STATUS[statusEfetivo]}</td>
-                        <td className="whitespace-pre-wrap break-words px-1.5 py-[3px] font-normal text-muted">{no.observacao}</td>
                       </>
                     )}
                     {tem("gantt") && (
