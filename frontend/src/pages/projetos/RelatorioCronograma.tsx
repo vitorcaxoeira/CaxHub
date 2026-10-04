@@ -218,7 +218,7 @@ export function RelatorioCronograma() {
             <p className="text-[11px] text-muted">Emitido em {emitidoEm}</p>
           </header>
 
-          <KpisCronograma totais={calc.totais} larguraHoras={calc.larguraHoras} />
+          <KpisCronograma totais={calc.totais} larguraHoras={calc.larguraHoras} emLinha />
 
           {semDatas && (
             <p className="rounded-md border border-border bg-surface p-3 text-sm text-muted">
@@ -252,6 +252,9 @@ export function RelatorioCronograma() {
             </div>
           )}
 
+          {/* Wrapper posicionado e com contenção de largura: o departamento do item (modo Tabela) se
+              alinha pela largura da tabela inteira, que é a mesma do grid dos KPIs acima. */}
+          <div className="relative [container-type:inline-size]">
           <table className="w-full table-fixed border-collapse text-[11px] leading-tight">
             <colgroup>
               {colunas.map((c) => (
@@ -307,11 +310,19 @@ export function RelatorioCronograma() {
                           </span>
                         )}
                         {ehItem && no.seqite != null && <span className="flex-none font-mono text-[10px] text-muted">{String(no.seqite).padStart(2, "0")}</span>}
-                        <span className="min-w-0 break-words">
+                        <span
+                          className="min-w-0 break-words"
+                          // Item no modo Tabela: a descrição não pode passar da coluna onde o departamento começa.
+                          style={ehItem && mostraTabela ? { maxWidth: `calc(50cqw - ${no.profundidade * 12 + 44}px)` } : undefined}
+                        >
                           {no.nome}
-                          {/* Departamento do item logo depois da descrição, sem coluna fixa. */}
+                          {/* Departamento do item, sem coluna fixa: na Tabela alinhado à esquerda do card
+                              Excedente dos KPIs (6 cards em linha, na paisagem); com Gantt, logo após a descrição. */}
                           {ehItem && no.depexeLabel && (
-                            <span className="ml-1.5 inline-block rounded border border-border px-1 align-middle font-mono text-[9px] font-medium uppercase tracking-wide text-muted">
+                            <span
+                              className={`inline-block rounded border border-border px-1 align-middle font-mono text-[9px] font-medium uppercase tracking-wide text-muted ${mostraTabela ? "absolute whitespace-nowrap" : "ml-1.5"}`}
+                              style={mostraTabela ? { left: "calc(50% + 6px)" } : undefined}
+                            >
                               {no.depexeLabel}
                             </span>
                           )}
@@ -319,7 +330,11 @@ export function RelatorioCronograma() {
                         </span>
                       </div>
                     </td>
-                    {respAntes && <td className="px-1.5 py-[3px] font-normal text-muted">{resp}</td>}
+                    {respAntes && (
+                      <td className="truncate px-1.5 py-[3px] font-normal text-muted" title={resp ?? undefined}>
+                        {resp}
+                      </td>
+                    )}
                     {dataCell(periodo?.inicio, periodo?.inicioDerivado ?? false)}
                     {dataCell(periodo?.fim, periodo?.fimDerivado ?? false)}
                     {tem("orcado") && (
@@ -335,7 +350,11 @@ export function RelatorioCronograma() {
                         <td className="px-1.5 py-[3px] text-right font-mono tabular-nums text-muted">{formatHorasCompacto(agregado?.horasPrevistas ?? 0, calc.larguraHoras)}</td>
                       </>
                     )}
-                    {!respAntes && tem("resp") && <td className="px-1.5 py-[3px] font-normal text-muted">{resp}</td>}
+                    {!respAntes && tem("resp") && (
+                      <td className="truncate px-1.5 py-[3px] font-normal text-muted" title={resp ?? undefined}>
+                        {resp}
+                      </td>
+                    )}
                     {tem("gantt") && (
                       <td className="p-0 align-middle">
                         {escala && (
@@ -358,6 +377,7 @@ export function RelatorioCronograma() {
               })}
             </tbody>
           </table>
+          </div>
 
           {notas.length > 0 && (
             <section className="break-inside-avoid">

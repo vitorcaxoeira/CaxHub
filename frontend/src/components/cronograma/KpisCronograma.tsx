@@ -12,7 +12,18 @@ import { OrcamentoItem, formatHorasCompacto } from "../../lib/cronograma";
 // — mesma cor (text-warning) e mesma leitura "vazio = nada fora do combinado" da coluna
 // Excedente da árvore, só que aqui sempre exibe o valor (mesmo 00:00) pra manter os cards
 // com a mesma cara.
-export function KpisCronograma({ totais, larguraHoras }: { totais: OrcamentoItem; larguraHoras: number }) {
+export function KpisCronograma({
+  totais,
+  larguraHoras,
+  emLinha = false,
+}: {
+  totais: OrcamentoItem;
+  larguraHoras: number;
+  // Sempre os 6 cards numa linha só, em qualquer largura — o relatório impresso alinha o departamento
+  // dos itens pela borda do card "Excedente", então a posição dele não pode depender do breakpoint
+  // (a largura da página impressa cai abaixo de lg e a grade viraria 3 colunas).
+  emLinha?: boolean;
+}) {
   const cards = [
     { label: "Orçado", valor: totais.horasContratadas, cor: "text-foreground" },
     { label: "Realizado", valor: totais.horasRealizadas, cor: "text-primary" },
@@ -23,7 +34,7 @@ export function KpisCronograma({ totais, larguraHoras }: { totais: OrcamentoItem
   ];
 
   return (
-    <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <div className={`mb-4 grid gap-3 ${emLinha ? "grid-cols-6" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"}`}>
       {cards.map((card) => (
         <div key={card.label} className="rounded-lg border border-border bg-surface p-3">
           <p className="font-mono text-[11px] font-medium uppercase tracking-wide text-muted">{card.label}</p>
