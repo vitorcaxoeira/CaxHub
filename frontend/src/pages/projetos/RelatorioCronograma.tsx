@@ -158,17 +158,19 @@ export function RelatorioCronograma() {
   const colunas: { chave: string; largura?: string }[] = mostraTabela
     ? [
         { chave: "estrutura" },
-        { chave: "resp", largura: "128px" },
         { chave: "inicio", largura: "62px" },
         { chave: "fim", largura: "62px" },
         { chave: "orcado", largura: "50px" },
         { chave: "realizado", largura: "50px" },
         { chave: "alocado", largura: "50px" },
+        { chave: "resp", largura: "140px" },
       ]
     : conteudo === "ambos"
       ? [{ chave: "estrutura" }, { chave: "resp", largura: "132px" }, { chave: "inicio", largura: "62px" }, { chave: "fim", largura: "62px" }, { chave: "gantt", largura: "40%" }]
       : [{ chave: "estrutura" }, { chave: "inicio", largura: "62px" }, { chave: "fim", largura: "62px" }, { chave: "gantt", largura: "62%" }];
   const tem = (chave: string) => colunas.some((c) => c.chave === chave);
+  // Na tabela o responsável é a última coluna (depois de Alocado); com Gantt segue logo após a Estrutura.
+  const respAntes = tem("resp") && !mostraTabela;
 
   const cabecalho = "px-1.5 py-1 font-mono text-[9.5px] font-medium uppercase tracking-wider text-muted";
 
@@ -259,7 +261,7 @@ export function RelatorioCronograma() {
             <thead className="[display:table-header-group]">
               <tr className="border-b-2 border-foreground text-left align-bottom">
                 <th className={cabecalho}>Estrutura</th>
-                {tem("resp") && <th className={cabecalho}>Depto. / Resp.</th>}
+                {respAntes && <th className={cabecalho}>Responsável</th>}
                 <th className={`${cabecalho} text-center`}>Início</th>
                 <th className={`${cabecalho} text-center`}>Fim</th>
                 {tem("orcado") && (
@@ -269,6 +271,7 @@ export function RelatorioCronograma() {
                     <th className={`${cabecalho} text-right`}>Alocado</th>
                   </>
                 )}
+                {!respAntes && tem("resp") && <th className={cabecalho}>Responsável</th>}
                 {tem("gantt") && <th className="p-0 pb-0.5">{escala ? <CabecalhoGantt escala={escala} /> : null}</th>}
               </tr>
             </thead>
@@ -281,7 +284,7 @@ export function RelatorioCronograma() {
                 const atrasada = no.tipo === "atividade" && !!periodo?.fim && periodo.fim < hoje && statusEfetivo !== "concluida";
                 const ehItem = no.tipo === "item";
                 const ehRaiz = no.tipo === "pasta" && no.seqite == null;
-                const resp = ehItem ? no.depexeLabel : no.tipo === "atividade" ? no.responsavelNome : null;
+                const resp = no.tipo === "atividade" ? no.responsavelNome : null;
                 const nota = numeroDaNota.get(no.id);
                 const dataCell = (valor: string | null | undefined, derivado: boolean) => (
                   <td
@@ -306,11 +309,17 @@ export function RelatorioCronograma() {
                         {ehItem && no.seqite != null && <span className="flex-none font-mono text-[10px] text-muted">{String(no.seqite).padStart(2, "0")}</span>}
                         <span className="min-w-0 break-words">
                           {no.nome}
+                          {/* Departamento do item logo depois da descrição, sem coluna fixa. */}
+                          {ehItem && no.depexeLabel && (
+                            <span className="ml-1.5 inline-block rounded border border-border px-1 align-middle font-mono text-[9px] font-medium uppercase tracking-wide text-muted">
+                              {no.depexeLabel}
+                            </span>
+                          )}
                           {nota != null && <sup className="ml-0.5 font-mono text-[8.5px] text-primary">[{nota}]</sup>}
                         </span>
                       </div>
                     </td>
-                    {tem("resp") && <td className="px-1.5 py-[3px] text-muted">{resp}</td>}
+                    {respAntes && <td className="px-1.5 py-[3px] font-normal text-muted">{resp}</td>}
                     {dataCell(periodo?.inicio, periodo?.inicioDerivado ?? false)}
                     {dataCell(periodo?.fim, periodo?.fimDerivado ?? false)}
                     {tem("orcado") && (
@@ -326,6 +335,7 @@ export function RelatorioCronograma() {
                         <td className="px-1.5 py-[3px] text-right font-mono tabular-nums text-muted">{formatHorasCompacto(agregado?.horasPrevistas ?? 0, calc.larguraHoras)}</td>
                       </>
                     )}
+                    {!respAntes && tem("resp") && <td className="px-1.5 py-[3px] font-normal text-muted">{resp}</td>}
                     {tem("gantt") && (
                       <td className="p-0 align-middle">
                         {escala && (
