@@ -35,6 +35,7 @@ import { CronogramaProposta } from "./pages/projetos/CronogramaProposta";
 import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
 import { RatVisualizacao } from "./pages/projetos/RatVisualizacao";
 import { RelatorioDespesasRat } from "./pages/projetos/RelatorioDespesasRat";
+import { RelatorioCronograma } from "./pages/projetos/RelatorioCronograma";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
@@ -87,6 +88,17 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <RelatorioDespesasRat />
+                </ProtectedRoute>
+              }
+            />
+            {/* Relatório impresso do Cronograma de uma proposta (botão Imprimir da tela do Cronograma) —
+                fora do AppShell pelo mesmo motivo das rotas acima. Sem Require5S: o acesso é o da própria
+                tela do Cronograma, e o backend (GET .../cronograma) decide o que o usuário enxerga. */}
+            <Route
+              path="/projetos/alocacao/:codemp/:codpro/cronograma/relatorio"
+              element={
+                <ProtectedRoute>
+                  <RelatorioCronograma />
                 </ProtectedRoute>
               }
             />

@@ -78,14 +78,11 @@ export function MenuAcoesNo({
       <DropdownMenu.Content>
         {!mostrarMover ? (
           <>
-            {!ehItem && (
-              <>
-                {/* "Renomear" saiu: o painel de edição já tem o campo de nome, então a
-                    edição inline era um segundo caminho pro mesmo campo. */}
-                {onEditar && <DropdownMenu.Item onSelect={onEditar}>Editar</DropdownMenu.Item>}
-                <DropdownMenu.Item onSelect={onDuplicar}>Duplicar</DropdownMenu.Item>
-              </>
-            )}
+            {/* "Renomear" saiu: o painel de edição já tem o campo de nome, então a
+                edição inline era um segundo caminho pro mesmo campo. No item o painel só edita o
+                período e a observação (a descrição vem do Senior). */}
+            {onEditar && <DropdownMenu.Item onSelect={onEditar}>{ehItem ? "Período e observação" : "Editar"}</DropdownMenu.Item>}
+            {!ehItem && <DropdownMenu.Item onSelect={onDuplicar}>Duplicar</DropdownMenu.Item>}
             {/* Só aparece com falha real de envio (badge vermelho de LinhaNo) — reenviar uma
                 alocação já sincronizada ou ainda pendente não faz sentido (o backend recusa
                 também, esta é só a primeira barreira). */}

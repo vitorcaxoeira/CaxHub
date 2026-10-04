@@ -5,16 +5,14 @@ import { AvaliacaoResumo5S, AvaliacoesDoMes } from "../../components/gestao5s/Av
 import { DetalheAvaliacaoImpressao, FalhaAvaliacao, contarFotos } from "../../components/gestao5s/DetalheAvaliacaoImpressao";
 import { ImagensRelatorioProvider, ProgressoImagens } from "../../components/gestao5s/ImagemRelatorio";
 import { DashboardResultado, DesempenhoPorSenso, EvolucaoMensalTabela, KpisResultado, RankingResultado } from "../../components/gestao5s/ResultadoSecoes";
+import { RelatorioShell, TemaRelatorio, OrientacaoRelatorio, baixarPdfDoServidor, usePreferencia } from "../../components/relatorio/relatorioComum";
 import { Spinner } from "../../components/ui/Spinner";
-import { cn } from "../../lib/cn";
 import { DetalheAvaliacao5S, ModoImpressao5S, TipoArea, mensagemDeErro, rotuloMes } from "../../utils/gestao5s";
 
 const dataHoraFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
 // Tema e orientação do relatório são independentes do app: padrão claro (economiza tinta) e retrato
-// (A4 em pé); a escolha feita na barra fica lembrada neste navegador.
-type TemaRelatorio = "claro" | "escuro";
-type OrientacaoRelatorio = "retrato" | "paisagem";
+// (A4 em pé); a escolha feita na barra fica lembrada neste navegador (ver relatorioComum.tsx).
 const CHAVE_TEMA = "caxhub-5s-relatorio-tema";
 const CHAVE_ORIENTACAO = "caxhub-5s-relatorio-orientacao";
 
@@ -85,48 +83,6 @@ async function buscarDetalhes(itens: AvaliacaoResumo5S[], aoProgredir: (p: Progr
   return mapa;
 }
 
-// `doParametro` (query string) vence o localStorage: o PDF gerado no servidor abre esta página num
-// navegador sem preferências e pede tema/orientação pela URL.
-function lerPreferencia<T extends string>(chave: string, validos: readonly T[], padrao: T, doParametro?: string | null): T {
-  const pedido = validos.find((x) => x === doParametro);
-  if (pedido) return pedido;
-  try {
-    const v = localStorage.getItem(chave);
-    return validos.find((x) => x === v) ?? padrao;
-  } catch {
-    return padrao;
-  }
-}
-
-function gravarPreferencia(chave: string, valor: string) {
-  try {
-    localStorage.setItem(chave, valor);
-  } catch {
-    /* sem storage: vale só nesta aba */
-  }
-}
-
-function Segmentado<T extends string>({ rotulo, opcoes, valor, onChange }: { rotulo: string; opcoes: readonly T[]; valor: T; onChange: (v: T) => void }) {
-  return (
-    <div role="group" aria-label={rotulo} className="inline-flex overflow-hidden rounded-md border border-border text-xs font-medium">
-      {opcoes.map((o) => (
-        <button
-          key={o}
-          type="button"
-          aria-pressed={valor === o}
-          onClick={() => onChange(o)}
-          className={cn(
-            "px-3 py-1.5 capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            valor === o ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground"
-          )}
-        >
-          {o}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // Relatório impresso do "Resultado geral 5S" (botão Imprimir do dashboard). Página própria, fora do
 // AppShell, aberta numa aba: window.print() imprime a aba inteira, então sem Sidebar/Topbar só o
 // relatório vai pro papel. Tema claro/escuro escolhido na barra (padrão claro), independente do tema do app. Reusa as
@@ -143,18 +99,8 @@ export function RelatorioResultado5S() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [emitidoEm] = useState(() => dataHoraFormatter.format(new Date()));
-  const [tema, setTema] = useState<TemaRelatorio>(() => lerPreferencia(CHAVE_TEMA, ["claro", "escuro"], "claro", params.get("tema")));
-  const [orientacao, setOrientacao] = useState<OrientacaoRelatorio>(() => lerPreferencia(CHAVE_ORIENTACAO, ["retrato", "paisagem"], "retrato", params.get("orientacao")));
-
-  function escolherTema(t: TemaRelatorio) {
-    setTema(t);
-    gravarPreferencia(CHAVE_TEMA, t);
-  }
-
-  function escolherOrientacao(o: OrientacaoRelatorio) {
-    setOrientacao(o);
-    gravarPreferencia(CHAVE_ORIENTACAO, o);
-  }
+  const [tema, escolherTema] = usePreferencia<TemaRelatorio>(CHAVE_TEMA, ["claro", "escuro"], "claro", params.get("tema"));
+  const [orientacao, escolherOrientacao] = usePreferencia<OrientacaoRelatorio>(CHAVE_ORIENTACAO, ["retrato", "paisagem"], "retrato", params.get("orientacao"));
 
   useEffect(() => {
     if (!/^\d{4}-\d{2}$/.test(de) || !/^\d{4}-\d{2}$/.test(ate) || de > ate) {
@@ -211,7 +157,6 @@ export function RelatorioResultado5S() {
     if (de && ate) document.title = `Resultado 5S ${de} a ${ate}`;
   }, [de, ate]);
 
-  const escuro = tema === "escuro";
   const semDados = !!dados && dados.areas.length === 0;
   const detalhado = modo === "detalhado";
   const lista = avaliacoes ?? [];
@@ -240,27 +185,9 @@ export function RelatorioResultado5S() {
     setBaixando(true);
     setErroPdf(null);
     try {
-      const { data } = await axios.post<Blob>("/api/5s/relatorio/pdf", { tipo, de, ate, modo, tema, orientacao }, { responseType: "blob", timeout: 180_000 });
-      const url = URL.createObjectURL(data);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `resultado-5s-${tipo}-${de}_a_${ate}-${modo}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      await baixarPdfDoServidor("/api/5s/relatorio/pdf", { tipo, de, ate, modo, tema, orientacao }, `resultado-5s-${tipo}-${de}_a_${ate}-${modo}.pdf`);
     } catch (err) {
-      // Com responseType blob o corpo do erro também chega como Blob: lê o JSON de dentro.
-      let mensagem = "Não foi possível gerar o PDF";
-      const corpo = (err as { response?: { data?: unknown } })?.response?.data;
-      if (corpo instanceof Blob) {
-        try {
-          mensagem = (JSON.parse(await corpo.text()) as { error?: string }).error ?? mensagem;
-        } catch {
-          /* corpo não era JSON */
-        }
-      }
-      setErroPdf(mensagem);
+      setErroPdf((err as Error).message);
     } finally {
       setBaixando(false);
     }
@@ -268,56 +195,25 @@ export function RelatorioResultado5S() {
   const periodo = de && ate ? (de === ate ? rotuloMes(de) : `${rotuloMes(de)} a ${rotuloMes(ate)}`) : "";
 
   return (
-    // `tema-claro` / `dark` redefinem os tokens de cor neste trecho, independente do tema do app.
-    <div
-      className={cn(
-        "min-h-screen bg-background px-4 py-4 text-foreground [-webkit-print-color-adjust:exact] [print-color-adjust:exact] sm:px-6 sm:py-5",
-        escuro ? "dark relatorio-escuro print:p-[10mm]" : "tema-claro relatorio-claro print:bg-white print:p-0"
-      )}
+    <RelatorioShell
+      titulo="Relatório · Resultado geral 5S"
+      tema={tema}
+      onTema={escolherTema}
+      orientacao={orientacao}
+      onOrientacao={escolherOrientacao}
+      controlesExtras={
+        preparando && (
+          <span className="mr-1 text-xs text-muted" role="status">
+            {!detalhesProntos ? `Carregando avaliações ${progressoDetalhes.feitos}/${progressoDetalhes.total}…` : `Carregando fotos ${Math.min(fotos.concluidas, fotosEsperadas)}/${fotosEsperadas}…`}
+          </span>
+        )
+      }
+      podeBaixar={!!dados && !semDados}
+      podeImprimir={!!dados && !semDados && !preparando}
+      baixandoPdf={baixando}
+      onBaixarPdf={baixarPdf}
+      erroPdf={erroPdf}
     >
-      {/* Orientação da folha vem da barra. No escuro a margem da folha é zerada e o respiro vem do
-          padding, pra o fundo escuro cobrir a página inteira. */}
-      <style>{`@page { size: A4 ${orientacao === "retrato" ? "portrait" : "landscape"}; margin: ${escuro ? "0" : "10mm"}; }`}</style>
-
-      {/* Barra de ação — some ao imprimir. */}
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 pb-4 print:hidden">
-        <h1 className="text-base font-semibold text-foreground">Relatório · Resultado geral 5S</h1>
-        <div className="flex items-center gap-2">
-          {preparando && (
-            <span className="mr-1 text-xs text-muted" role="status">
-              {!detalhesProntos ? `Carregando avaliações ${progressoDetalhes.feitos}/${progressoDetalhes.total}…` : `Carregando fotos ${Math.min(fotos.concluidas, fotosEsperadas)}/${fotosEsperadas}…`}
-            </span>
-          )}
-          <Segmentado rotulo="Orientação da folha" opcoes={["retrato", "paisagem"]} valor={orientacao} onChange={escolherOrientacao} />
-          <Segmentado rotulo="Tema do relatório" opcoes={["claro", "escuro"]} valor={tema} onChange={escolherTema} />
-          <button
-            type="button"
-            onClick={baixarPdf}
-            disabled={!dados || semDados || baixando}
-            className="rounded-md border border-border px-4 py-1.5 text-sm font-medium text-foreground hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {baixando ? "Gerando PDF…" : "Baixar PDF"}
-          </button>
-          <button
-            type="button"
-            onClick={() => window.print()}
-            disabled={!dados || semDados || preparando}
-            className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Imprimir
-          </button>
-          <button
-            type="button"
-            onClick={() => window.close()}
-            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Fechar
-          </button>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-6xl">
-        {erroPdf && <p className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive print:hidden">{erroPdf}</p>}
         {loading && (
           <div className="flex items-center justify-center py-10 print:hidden">
             <Spinner />
@@ -357,7 +253,6 @@ export function RelatorioResultado5S() {
             )}
           </div>
         )}
-      </div>
-    </div>
+    </RelatorioShell>
   );
 }

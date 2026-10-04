@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { HorasAgregadas, StatusNo, formatHorasCompacto, formatarAlocacoes, minimoAlocavel, projetarSaldo } from "../../lib/cronograma";
+import {
+  HorasAgregadas,
+  StatusNo,
+  formatHorasCompacto,
+  formatarAlocacoes,
+  formatarDataBr,
+  limitesDatasDoNo,
+  minimoAlocavel,
+  projetarSaldo,
+} from "../../lib/cronograma";
 import { NoCronogramaCompleto, PatchNo } from "../../hooks/useCronograma";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 
@@ -69,6 +78,16 @@ export function DrawerAtividade({
   const [observacao, setObservacao] = useState(no.observacao ?? "");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+
+  // Período permitido: o do ancestral mais próximo que tem data (cada lado separado). O servidor é
+  // quem barra de verdade — aqui só limita o calendário e explica de onde vem o limite.
+  const limites = limitesDatasDoNo(no, porId);
+  const textoLimites = [
+    limites.inicio && `início a partir de ${formatarDataBr(limites.inicio)} (${limites.origemInicio})`,
+    limites.fim && `fim até ${formatarDataBr(limites.fim)} (${limites.origemFim})`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   // Projeção em tempo real do saldo do item (roda a cada tecla, é O(1) — ver
   // projetarSaldo) — feedback antes de salvar, não depois. Só existe pra atividade
@@ -156,7 +175,15 @@ export function DrawerAtividade({
     }
     setSalvando(true);
     setErro(null);
-    const patch: PatchNo = { nome: nome.trim() };
+    if (inicio !== "" && fim !== "" && inicio > fim) {
+      setErro("Data de início não pode ser depois da data de fim");
+      setSalvando(false);
+      return;
+    }
+    const patch: PatchNo = no.tipo === "item" ? {} : { nome: nome.trim() };
+    patch.dataPrevistaInicio = inicio === "" ? null : inicio;
+    patch.dataPrevistaFim = fim === "" ? null : fim;
+    patch.observacao = observacao.trim() === "" ? null : observacao.trim();
     if (no.tipo === "atividade") {
       const horasPrevistas = horasParaMinutos(horasTexto);
       if (horasTexto.trim() !== "" && horasPrevistas == null) {
@@ -168,11 +195,8 @@ export function DrawerAtividade({
       patch.responsavelCodfor = responsavelCodfor === "" ? null : responsavelCodfor;
       patch.responsavelNome = responsavelCodfor === "" ? null : consultorSelecionado?.nome ?? null;
       patch.horasPrevistas = horasPrevistas;
-      patch.dataPrevistaInicio = inicio === "" ? null : inicio;
-      patch.dataPrevistaFim = fim === "" ? null : fim;
       patch.predecessoraId = predecessoraId === "" ? null : predecessoraId;
       patch.statusManual = status;
-      patch.observacao = observacao.trim() === "" ? null : observacao.trim();
       // Distribuição pode ser provisória — não bloqueia o salvamento quando estoura o
       // orçamento do item, só avisa (ver saldoProjetado acima) e manda essa confirmação
       // "leve" junto (o rótulo do botão já é o aviso; não pede um segundo clique). Exceto
@@ -203,6 +227,58 @@ export function DrawerAtividade({
     }
   }
 
+  const blocoPeriodo = (
+    <div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label htmlFor="drawer-inicio" className="mb-1 block text-[12.5px] font-medium text-muted">
+            Início previsto
+          </label>
+          <input
+            id="drawer-inicio"
+            type="date"
+            value={inicio}
+            min={limites.inicio ?? undefined}
+            max={fim || limites.fim || undefined}
+            onChange={(e) => setInicio(e.target.value)}
+            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+        <div>
+          <label htmlFor="drawer-fim" className="mb-1 block text-[12.5px] font-medium text-muted">
+            Fim previsto
+          </label>
+          <input
+            id="drawer-fim"
+            type="date"
+            value={fim}
+            min={inicio || limites.inicio || undefined}
+            max={limites.fim ?? undefined}
+            onChange={(e) => setFim(e.target.value)}
+            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+      </div>
+      {textoLimites && <p className="mt-1 text-[11.5px] text-muted">Limite do nível acima: {textoLimites}.</p>}
+    </div>
+  );
+
+  const blocoObservacao = (
+    <div>
+      <label htmlFor="drawer-observacao" className="mb-1 block text-[12.5px] font-medium text-muted">
+        Observação
+      </label>
+      <textarea
+        id="drawer-observacao"
+        value={observacao}
+        onChange={(e) => setObservacao(e.target.value)}
+        rows={3}
+        maxLength={1000}
+        className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-foreground/20" onClick={onFechar} />
@@ -210,7 +286,7 @@ export function DrawerAtividade({
         <div className="mb-4 flex items-start justify-between">
           <div>
             <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-              {no.tipo === "pasta" ? "Pasta" : "Atividade"}
+              {no.tipo === "pasta" ? "Pasta" : no.tipo === "item" ? "Item da proposta" : "Atividade"}
             </p>
             {/* Ids técnicos — EstruturaAtividade (o nó em si), AtividadeConsultor (a
                 alocação vinculada) e o seqati dela (identidade que o Senior atribui à
@@ -246,10 +322,20 @@ export function DrawerAtividade({
               id="drawer-nome"
               type="text"
               value={nome}
+              readOnly={no.tipo === "item"}
               onChange={(e) => setNome(e.target.value)}
-              className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring read-only:cursor-not-allowed read-only:bg-surface-2 read-only:text-muted"
             />
+            {no.tipo === "item" && <p className="mt-1 text-[11.5px] text-muted">A descrição do item vem do Senior — aqui só o período e a observação.</p>}
           </div>
+
+          {/* Pasta e item: só período e observação (atividade tem os dois mais abaixo, no lugar de sempre). */}
+          {no.tipo !== "atividade" && (
+            <>
+              {blocoPeriodo}
+              {blocoObservacao}
+            </>
+          )}
 
           {no.tipo === "atividade" && (
             <>
@@ -308,32 +394,7 @@ export function DrawerAtividade({
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="drawer-inicio" className="mb-1 block text-[12.5px] font-medium text-muted">
-                    Início previsto
-                  </label>
-                  <input
-                    id="drawer-inicio"
-                    type="date"
-                    value={inicio}
-                    onChange={(e) => setInicio(e.target.value)}
-                    className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="drawer-fim" className="mb-1 block text-[12.5px] font-medium text-muted">
-                    Fim previsto
-                  </label>
-                  <input
-                    id="drawer-fim"
-                    type="date"
-                    value={fim}
-                    onChange={(e) => setFim(e.target.value)}
-                    className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                </div>
-              </div>
+              {blocoPeriodo}
 
               <div>
                 <label htmlFor="drawer-predecessora" className="mb-1 block text-[12.5px] font-medium text-muted">
@@ -408,18 +469,7 @@ export function DrawerAtividade({
                   </div>
                 ))}
 
-              <div>
-                <label htmlFor="drawer-observacao" className="mb-1 block text-[12.5px] font-medium text-muted">
-                  Observação
-                </label>
-                <textarea
-                  id="drawer-observacao"
-                  value={observacao}
-                  onChange={(e) => setObservacao(e.target.value)}
-                  rows={3}
-                  className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </div>
+              {blocoObservacao}
             </>
           )}
         </div>

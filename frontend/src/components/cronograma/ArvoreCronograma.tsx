@@ -12,15 +12,21 @@ import {
   filtrarPreservandoAncestrais,
   larguraColunaHorasPx,
   OrcamentoItem,
+  periodosEfetivos,
   StatusNo,
 } from "../../lib/cronograma";
-import { NoCronogramaCompleto, PatchNo, NovoNo } from "../../hooks/useCronograma";
+import { ErroDatasForaDoPai, ImpactoDatas, NoCronogramaCompleto, PatchNo, NovoNo } from "../../hooks/useCronograma";
 import { BarraFerramentas, FiltrosCronograma } from "./BarraFerramentas";
 import { LinhaNo } from "./LinhaNo";
 import { LinhaNovaAtividade } from "./LinhaNovaAtividade";
 import { DrawerAtividade } from "./DrawerAtividade";
 import { DestinoMover } from "./MenuAcoesNo";
 import { ModalAlocarConsultores } from "./ModalAlocarConsultores";
+import { ModalAjusteDatasFilhos } from "./ModalAjusteDatasFilhos";
+
+// Quem cancelou o modal de ajuste de datas rejeita a promessa com esta mensagem — os pontos que
+// mostram erro no banner ignoram, porque cancelar é uma escolha e não uma falha.
+const AJUSTE_CANCELADO = "Alteração cancelada — nada foi salvo.";
 
 const FILTROS_VAZIOS: FiltrosCronograma = {
   status: [],
@@ -67,7 +73,7 @@ interface ArvoreCronogramaProps {
   criarNo: (novo: NovoNo) => Promise<NoCronogramaCompleto>;
   excluirNo: (id: number) => Promise<void>;
   duplicarNo: (no: NoCronogramaCompleto) => Promise<void>;
-  moverItem: (seqite: number, parentId: number | null) => Promise<void>;
+  moverItem: (seqite: number, parentId: number | null, ajustarFilhos?: boolean) => Promise<void>;
   // Cria pasta raiz (agrupa itens da proposta) — ação de nível de proposta inteira, não
   // de um item específico (ver backend podeGerenciarProposta).
   podeGerenciarProposta: boolean;
@@ -127,6 +133,14 @@ export function ArvoreCronograma({
   const [erroAcao, setErroAcao] = useState<string | null>(null);
   const [ghostAberto, setGhostAberto] = useState<number | null>(null);
   const [alocarConsultoresNoId, setAlocarConsultoresNoId] = useState<number | null>(null);
+  // Mexer nas datas de um pai (ou mover um nó) que deixaria nós abaixo fora do período: o servidor
+  // devolve a lista, e este modal pergunta se pode encaixar as datas deles. `aplicar` repete a
+  // operação original pedindo o ajuste; `cancelar` rejeita a promessa que a operação está esperando.
+  const [ajusteDatas, setAjusteDatas] = useState<{
+    impactos: ImpactoDatas[];
+    aplicar: () => Promise<void>;
+    cancelar: () => void;
+  } | null>(null);
 
   useEffect(() => {
     setExpandidos(carregarExpansaoSalva(projetoId));
@@ -141,6 +155,8 @@ export function ArvoreCronograma({
   // Horas contratadas do item, propagadas pra cima: pasta raiz soma os itens que agrupa.
   const orcadoPorId = useMemo(() => agregarOrcado(nos), [nos]);
   const statusPorId = useMemo(() => derivarStatus(nos), [nos]);
+  // Início/fim de cada linha: o próprio, ou (pasta/item sem data) o que os descendentes cobrem.
+  const periodosPorId = useMemo(() => periodosEfetivos(nos), [nos]);
 
   const porId = useMemo(() => new Map(nos.map((n) => [n.id, n])), [nos]);
   // Chave é `number | null` (null = raiz), nunca um sentinela numérico tipo -1 — os ids
@@ -338,6 +354,34 @@ export function ArvoreCronograma({
     setExpandidos(tudoExpandido ? new Set() : new Set(idsComFilhos));
   }
 
+  // Roda uma operação que muda datas/pai. Se o servidor avisar que ficaria nó abaixo fora do período
+  // (409), mostra o modal e, aceito o ajuste, repete a operação com `ajustarFilhos`. A promessa só
+  // termina quando o usuário decide — aplicou (resolve) ou cancelou (rejeita com AJUSTE_CANCELADO).
+  function comAjusteDeDatas(acao: (ajustarFilhos: boolean) => Promise<void>): Promise<void> {
+    return acao(false).catch((err) => {
+      if (!(err instanceof ErroDatasForaDoPai)) throw err;
+      return new Promise<void>((resolve, reject) => {
+        setAjusteDatas({
+          impactos: err.impactos,
+          aplicar: async () => {
+            await acao(true);
+            setAjusteDatas(null);
+            resolve();
+          },
+          cancelar: () => {
+            setAjusteDatas(null);
+            reject(new Error(AJUSTE_CANCELADO));
+          },
+        });
+      });
+    });
+  }
+
+  function mostrarErroAcao(err: unknown) {
+    const mensagem = (err as Error).message;
+    if (mensagem !== AJUSTE_CANCELADO) setErroAcao(mensagem);
+  }
+
   async function duplicar(no: NoCronogramaCompleto) {
     try {
       await duplicarNo(no);
@@ -349,14 +393,14 @@ export function ArvoreCronograma({
   async function moverPara(no: NoCronogramaCompleto, novoParentId: number) {
     try {
       if (no.tipo === "item") {
-        await moverItem(no.seqite!, novoParentId);
+        await comAjusteDeDatas((ajustar) => moverItem(no.seqite!, novoParentId, ajustar));
       } else {
         const irmaos = filhosDe.get(novoParentId) ?? [];
-        await atualizarNo(no.id, { parentId: novoParentId, ordem: irmaos.length });
+        await comAjusteDeDatas((ajustar) => atualizarNo(no.id, { parentId: novoParentId, ordem: irmaos.length, ajustarFilhos: ajustar }));
       }
       setExpandidos((atual) => new Set(atual).add(novoParentId));
     } catch (err) {
-      setErroAcao((err as Error).message);
+      mostrarErroAcao(err);
     }
   }
 
@@ -469,7 +513,7 @@ export function ArvoreCronograma({
     }
     const destino = filhosDe.get(novoPai.id) ?? [];
     setExpandidos((atual) => new Set(atual).add(novoPai.id));
-    atualizarNo(no.id, { parentId: novoPai.id, ordem: destino.length }).catch((err) => setErroAcao((err as Error).message));
+    comAjusteDeDatas((ajustar) => atualizarNo(no.id, { parentId: novoPai.id, ordem: destino.length, ajustarFilhos: ajustar })).catch(mostrarErroAcao);
   }
 
   function dedentar(no: NoCronogramaCompleto) {
@@ -483,7 +527,7 @@ export function ArvoreCronograma({
     if (avoId == null) return;
     const irmaosDestino = (filhosDe.get(avoId) ?? []).slice().sort((a, b) => a.ordem - b.ordem);
     const idxPai = irmaosDestino.findIndex((n) => n.id === pai.id);
-    atualizarNo(no.id, { parentId: avoId, ordem: idxPai + 1 }).catch((err) => setErroAcao((err as Error).message));
+    comAjusteDeDatas((ajustar) => atualizarNo(no.id, { parentId: avoId, ordem: idxPai + 1, ajustarFilhos: ajustar })).catch(mostrarErroAcao);
   }
 
   useEffect(() => {
@@ -544,9 +588,9 @@ export function ArvoreCronograma({
       setErroAcao(null);
       setExpandidos((atualExp) => new Set(atualExp).add(targetNo.id));
       try {
-        await moverItem(dragNo.seqite!, targetNo.id);
+        await comAjusteDeDatas((ajustar) => moverItem(dragNo.seqite!, targetNo.id, ajustar));
       } catch (err) {
-        setErroAcao((err as Error).message);
+        mostrarErroAcao(err);
       }
       return;
     }
@@ -613,15 +657,27 @@ export function ArvoreCronograma({
     setErroAcao(null);
     setExpandidos((atualExp) => (modo === "into" ? new Set(atualExp).add(novoParentId!) : atualExp));
     try {
-      await Promise.all(
-        novaLista.map((n, i) =>
-          n.ordem === i && n.parentId === novoParentId ? Promise.resolve() : atualizarNo(n.id, { ordem: i, parentId: novoParentId })
-        )
+      await comAjusteDeDatas((ajustar) =>
+        Promise.all(
+          novaLista.map((n, i) =>
+            n.ordem === i && n.parentId === novoParentId
+              ? Promise.resolve()
+              : atualizarNo(n.id, { ordem: i, parentId: novoParentId, ajustarFilhos: ajustar })
+          )
+        ).then(() => undefined)
       );
     } catch (err) {
-      setErroAcao((err as Error).message);
+      mostrarErroAcao(err);
+      // As demais reordenações já foram gravadas mesmo quando a do nó movido foi recusada/cancelada.
       onTentarNovamente();
     }
+  }
+
+  // Salvar pelo drawer: se as novas datas deixariam nó abaixo fora do período, o modal pergunta e a
+  // promessa só resolve quando o ajuste foi aplicado (o drawer fecha sozinho) — cancelar rejeita e o
+  // drawer segue aberto com a mensagem.
+  function salvarDoDrawer(id: number, patch: PatchNo): Promise<void> {
+    return comAjusteDeDatas((ajustar) => atualizarNo(id, { ...patch, ajustarFilhos: ajustar }));
   }
 
   const drawerNo = drawerNoId != null ? porId.get(drawerNoId) : undefined;
@@ -665,6 +721,7 @@ export function ArvoreCronograma({
         statusEfetivo={statusPorId.get(no.id) ?? "nao_iniciada"}
         agregado={agregados.get(no.id) ?? { horasPrevistas: 0, horasRealizadas: 0, horasExcedentes: 0, avanco: 0 }}
         orcado={orcadoPorId.get(no.id) ?? 0}
+        periodo={periodosPorId.get(no.id)}
         orcamento={orcamentosPorId.get(no.id)}
         contagemDescendentes={contagemDescendentesPorId.get(no.id) ?? 0}
         selecionado={selecionadoId === no.id}
@@ -788,6 +845,14 @@ export function ArvoreCronograma({
               <span className="hidden w-[168px] flex-none font-mono text-[11px] font-medium uppercase tracking-wider text-muted sm:block">
                 Depto. / Resp.
               </span>
+              {["Início", "Fim"].map((rotulo) => (
+                <span
+                  key={rotulo}
+                  className="hidden w-[64px] flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted xl:block"
+                >
+                  {rotulo}
+                </span>
+              ))}
               {["Orçado", "Realizado", "Alocado"].map((rotulo) => (
                 <span
                   key={rotulo}
@@ -834,11 +899,15 @@ export function ArvoreCronograma({
           agregados={agregados}
           candidatosPredecessora={candidatosPredecessora}
           onFechar={() => setDrawerNoId(null)}
-          onSalvar={atualizarNo}
+          onSalvar={salvarDoDrawer}
           larguraHoras={larguraHoras}
           bloqueiaExcedenteEstrutura={bloqueiaExcedenteEstrutura}
           atualizarConfigApontamentoAlocacao={atualizarConfigApontamentoAlocacao}
         />
+      )}
+
+      {ajusteDatas && (
+        <ModalAjusteDatasFilhos impactos={ajusteDatas.impactos} onAplicar={ajusteDatas.aplicar} onCancelar={ajusteDatas.cancelar} />
       )}
 
       {alocarConsultoresNoId != null &&

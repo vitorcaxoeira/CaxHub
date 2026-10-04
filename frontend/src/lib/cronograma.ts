@@ -510,3 +510,108 @@ export function projetarSaldo(
 export function minimoAlocavel(horasRealizadas: number, horasExcedentes: number): number {
   return Math.max(0, horasRealizadas - horasExcedentes);
 }
+
+// --- Hierarquia de datas ------------------------------------------------------------------
+// Espelha backend/src/domain/datasCronograma.ts: pasta raiz → item → pasta → atividade, cada nível
+// com período opcional, e o filho cabe no período do ancestral MAIS PRÓXIMO que tem data (cada lado,
+// início e fim, resolvido separadamente). O backend é quem barra de verdade; aqui serve pra limitar
+// os campos de data e mostrar o "período permitido" antes de o usuário bater no servidor.
+
+export interface NoComPeriodo {
+  id: number;
+  parentId: number | null;
+  nome: string;
+  dataPrevistaInicio?: string | null;
+  dataPrevistaFim?: string | null;
+}
+
+// A API manda a data como ISO completo ("2026-10-01T00:00:00.000Z") — o que vale é o dia.
+export function dataIso(valor: string | null | undefined): string | null {
+  return valor ? valor.slice(0, 10) : null;
+}
+
+export function formatarDataBr(iso: string | null | undefined): string {
+  const dia = dataIso(iso);
+  if (!dia) return "";
+  const [a, m, d] = dia.split("-");
+  return `${d}/${m}/${a}`;
+}
+
+export function formatarDataCurta(iso: string | null | undefined): string {
+  const dia = dataIso(iso);
+  if (!dia) return "";
+  const [a, m, d] = dia.split("-");
+  return `${d}/${m}/${a.slice(2)}`;
+}
+
+export interface LimitesDatas {
+  inicio: string | null;
+  fim: string | null;
+  origemInicio: string | null;
+  origemFim: string | null;
+}
+
+// Limite imposto pelos ANCESTRAIS de `no` (o próprio nó não conta).
+export function limitesDatasDoNo<T extends NoComPeriodo>(no: T, porId: Map<number, T>): LimitesDatas {
+  const limites: LimitesDatas = { inicio: null, fim: null, origemInicio: null, origemFim: null };
+  let atual = no.parentId != null ? porId.get(no.parentId) : undefined;
+  for (let passos = 0; atual && passos < 64; passos++) {
+    const inicio = dataIso(atual.dataPrevistaInicio);
+    const fim = dataIso(atual.dataPrevistaFim);
+    if (limites.inicio == null && inicio != null) {
+      limites.inicio = inicio;
+      limites.origemInicio = atual.nome;
+    }
+    if (limites.fim == null && fim != null) {
+      limites.fim = fim;
+      limites.origemFim = atual.nome;
+    }
+    if (limites.inicio != null && limites.fim != null) break;
+    atual = atual.parentId != null ? porId.get(atual.parentId) : undefined;
+  }
+  return limites;
+}
+
+export interface PeriodoEfetivo {
+  inicio: string | null;
+  fim: string | null;
+  // true = não é do próprio nó: vem do menor início / maior fim dos descendentes.
+  inicioDerivado: boolean;
+  fimDerivado: boolean;
+}
+
+// Período de cada nó pra exibição: o próprio, quando tem; senão (pasta/item sem data) o que os
+// descendentes cobrem — dá pra ler o cronograma mesmo quando só as atividades têm data.
+export function periodosEfetivos<T extends NoComPeriodo>(nos: T[]): Map<number, PeriodoEfetivo> {
+  const filhosDe = new Map<number | null, T[]>();
+  for (const n of nos) {
+    if (!filhosDe.has(n.parentId)) filhosDe.set(n.parentId, []);
+    filhosDe.get(n.parentId)!.push(n);
+  }
+  const resultado = new Map<number, PeriodoEfetivo>();
+
+  function calcular(no: T): PeriodoEfetivo {
+    const existente = resultado.get(no.id);
+    if (existente) return existente;
+    let menor: string | null = null;
+    let maior: string | null = null;
+    for (const filho of filhosDe.get(no.id) ?? []) {
+      const p = calcular(filho);
+      if (p.inicio != null && (menor == null || p.inicio < menor)) menor = p.inicio;
+      if (p.fim != null && (maior == null || p.fim > maior)) maior = p.fim;
+    }
+    const proprioInicio = dataIso(no.dataPrevistaInicio);
+    const proprioFim = dataIso(no.dataPrevistaFim);
+    const periodo: PeriodoEfetivo = {
+      inicio: proprioInicio ?? menor,
+      fim: proprioFim ?? maior,
+      inicioDerivado: proprioInicio == null && menor != null,
+      fimDerivado: proprioFim == null && maior != null,
+    };
+    resultado.set(no.id, periodo);
+    return periodo;
+  }
+
+  for (const n of nos) calcular(n);
+  return resultado;
+}

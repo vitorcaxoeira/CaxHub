@@ -873,6 +873,10 @@ model EstruturaAtividade {
 
   // Só preenchido em tipo="atividade":
   duracaoHoras        Int? // minutos, mesma convenção de AtividadeConsultor.qtdhor
+  // Período previsto — vale pra QUALQUER tipo (pasta raiz, pasta e atividade), e o item da
+  // proposta guarda o dele em PropostaItemPlanejamento. Opcional em todo nível; o filho
+  // precisa caber no período do ancestral mais próximo que tem data (ver
+  // domain/datasCronograma.ts).
   dataPrevistaInicio  DateTime? @db.Date
   dataPrevistaFim     DateTime? @db.Date
   // Referência informativa a outro nó da mesma árvore — sem motor de recálculo de
@@ -891,6 +895,7 @@ model EstruturaAtividade {
   // com o status efetivo da predecessora.
   status String? @db.VarChar(20) // "nao_iniciada" | "em_curso" | "concluida"
 
+  // Observação livre — vale pra qualquer tipo (pasta raiz, pasta e atividade).
   observacao String? @db.VarChar(1000)
 
   criadoEm  DateTime @default(now())
@@ -919,6 +924,27 @@ model PropostaItemPosicao {
 
   @@id([codemp, codpro, seqite])
   @@map("proposta_item_posicao")
+}
+
+// Período e observação de um item de proposta no Cronograma — dado 100% CaxHub, pelo mesmo
+// motivo de PropostaItemPosicao: PropostaItem é espelhado integralmente do Senior e não
+// recebe coluna própria. Ausência de linha = item sem período/observação. O item fica no
+// meio da hierarquia de datas (pasta raiz → item → pasta → atividade), ver
+// domain/datasCronograma.ts.
+model PropostaItemPlanejamento {
+  codemp Int
+  codpro Int
+  seqite Int
+
+  dataPrevistaInicio DateTime? @db.Date
+  dataPrevistaFim    DateTime? @db.Date
+  observacao         String?   @db.VarChar(1000)
+
+  atualizadoEm  DateTime @default(now()) @updatedAt
+  atualizadoPor Int? // codusu
+
+  @@id([codemp, codpro, seqite])
+  @@map("proposta_item_planejamento")
 }
 
 // Gate por proposta: decide se ela é alocada "por item" (fluxo direto, de sempre) ou
