@@ -17,6 +17,7 @@ import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { IconeIntegracaoErp } from "../../components/ui/IconeIntegracaoErp";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { diaCurtoDaJanela, textoJanelaRetroativa, useJanelaRetroativa } from "../../hooks/useJanelaRetroativa";
 import { useToast } from "../../components/ui/Toast";
 
 // Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
@@ -510,6 +511,8 @@ export function MeusApontamentos() {
     pendente: AjustePendente | null;
   } | null>(null);
   const [ajusteData, setAjusteData] = useState("");
+  // Só o dia corrente, salvo exceção do líder (ver domain/janelaRetroativa.ts no backend).
+  const janela = useJanelaRetroativa();
   const [ajusteInicio, setAjusteInicio] = useState("");
   const [ajusteFim, setAjusteFim] = useState("");
   const [ajusteMotivo, setAjusteMotivo] = useState("");
@@ -1283,6 +1286,11 @@ export function MeusApontamentos() {
       setErroAjuste("A hora final precisa ser depois da inicial.");
       return;
     }
+    // `min` do input não impede digitar uma data antiga à mão; o backend recusaria com o mesmo texto.
+    if (janela && ajusteData < janela.primeiroDiaPermitido) {
+      setErroAjuste(textoJanelaRetroativa(janela));
+      return;
+    }
     if (ajusteMotivo.trim() === "") {
       setErroAjuste("Informe o motivo da correção.");
       return;
@@ -1395,6 +1403,19 @@ export function MeusApontamentos() {
   // preexistente segue liberado mesmo com o bloqueio ligado, só "pedir ajuste" (que abre uma
   // solicitação NOVA) continua recusado.
   const MOTIVO_BLOQUEIO_APONTAMENTO = "Apontamento bloqueado nesta atividade/proposta pelo gestor.";
+
+  // Por que "Pedir ajuste" está indisponível pra uma sessão, ou undefined se está liberado — texto
+  // único pras duas linhas (plana e agrupada). Além do bloqueio, o ajuste confere o dia da sessão
+  // ORIGINAL contra a janela de retroatividade (o backend confere também o dia novo pedido): sessão
+  // antiga demais não se ajusta nem trazendo pra hoje. Pedido já pendente continua abrindo pra ver.
+  function motivoAjusteIndisponivel(s: SessaoPendente): string | undefined {
+    if (s.ajustePendente) return undefined;
+    if (s.bloqueadoApontamentoEfetivo) return MOTIVO_BLOQUEIO_APONTAMENTO;
+    if (janela && paraInputData(s.inicio) < janela.primeiroDiaPermitido) {
+      return `Este apontamento é anterior a ${diaCurtoDaJanela(janela.primeiroDiaPermitido)}, fora da janela de retroatividade. Peça ao seu líder para liberar dias retroativos.`;
+    }
+    return undefined;
+  }
 
   // Linha de uma sessão pendente na lista plana (consultor comum, sem acordeon) — mesmas
   // colunas responsivas do <thead> de fora.
@@ -1510,8 +1531,8 @@ export function MeusApontamentos() {
                         s.ajustePendente
                       )
                     }
-                    disabled={s.bloqueadoApontamentoEfetivo && !s.ajustePendente}
-                    title={s.bloqueadoApontamentoEfetivo && !s.ajustePendente ? MOTIVO_BLOQUEIO_APONTAMENTO : undefined}
+                    disabled={motivoAjusteIndisponivel(s) !== undefined}
+                    title={motivoAjusteIndisponivel(s)}
                   >
                     {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
                   </DropdownMenu.Item>
@@ -1620,8 +1641,8 @@ export function MeusApontamentos() {
                       s.ajustePendente
                     )
                   }
-                  disabled={s.bloqueadoApontamentoEfetivo && !s.ajustePendente}
-                  title={s.bloqueadoApontamentoEfetivo && !s.ajustePendente ? MOTIVO_BLOQUEIO_APONTAMENTO : undefined}
+                  disabled={motivoAjusteIndisponivel(s) !== undefined}
+                  title={motivoAjusteIndisponivel(s)}
                 >
                   {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
                 </DropdownMenu.Item>
@@ -2538,6 +2559,7 @@ export function MeusApontamentos() {
                 O envio deste apontamento ao Senior fica retido até o gestor decidir — o ERP só recebe o horário final.
               </p>
             )}
+            {!pedidoAjuste.pendente && janela && <p className="text-[11.5px] text-muted">{textoJanelaRetroativa(janela)}</p>}
             <div className="flex flex-wrap items-center gap-2">
               <label htmlFor="aj-data" className="text-[12px] text-muted">
                 Data
@@ -2545,6 +2567,7 @@ export function MeusApontamentos() {
               <input
                 id="aj-data"
                 type="date"
+                min={janela?.primeiroDiaPermitido}
                 value={ajusteData}
                 onChange={(e) => setAjusteData(e.target.value)}
                 disabled={pedidoAjuste.pendente != null}

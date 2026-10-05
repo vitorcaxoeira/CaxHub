@@ -4,7 +4,15 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel } from "../domain/propostasDominio";
 import { resolverContextoConsultor, ContextoConsultor, codforsDoTime, consultoresFiltraveis } from "../domain/contextoProjeto";
-import { diasDoPeriodo, horasRealizadasNoPeriodo, metaDoPeriodo, rdvDoConsultor, valorHoraVigente } from "../domain/resumoConsultor";
+import {
+  FATOR_HORA_DESLOCAMENTO,
+  deslocamentoNoPeriodo,
+  diasDoPeriodo,
+  horasRealizadasNoPeriodo,
+  metaDoPeriodo,
+  rdvDoConsultor,
+  valorHoraVigente,
+} from "../domain/resumoConsultor";
 import { parseIntListParam } from "../lib/queryParams";
 import { rdvConsultorEmAndamento, runSincronizacaoRdvConsultor, statusRdvConsultor } from "../sync/rdvConsultorSync";
 
@@ -237,13 +245,18 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
         // cobrar meta ainda; o gráfico por dia (porDia) continua indo até `ate` de propósito.
         const ateParaMeta = hojeUtc.getTime() < ate.getTime() ? hojeUtc : ate;
 
-        const [{ porDia, porProjeto, totalMinutos }, realizadoAteHoje, meta] = await Promise.all([
+        const [{ porDia, porProjeto, totalMinutos }, realizadoAteHoje, meta, deslocamento] = await Promise.all([
           horasRealizadasNoPeriodo(codemp, codfor, de, ate),
           horasRealizadasNoPeriodo(codemp, codfor, de, ateParaMeta),
           metaDoPeriodo(codemp, codfor, de, ateParaMeta),
+          deslocamentoNoPeriodo(codemp, codfor, de, ate),
         ]);
+        const deslocamentoMinutos = deslocamento.reduce((soma, d) => soma + d.minutos, 0);
+        const deslocamentoAteHojeMinutos = deslocamento
+          .filter((d) => d.data.getTime() <= ateParaMeta.getTime())
+          .reduce((soma, d) => soma + d.minutos, 0);
 
-        return { de, ate, ateParaMeta, porDia, porProjeto, totalMinutos, realizadoAteHoje, meta };
+        return { de, ate, ateParaMeta, porDia, porProjeto, totalMinutos, realizadoAteHoje, meta, deslocamentoMinutos, deslocamentoAteHojeMinutos };
       })
     );
 
@@ -295,6 +308,7 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
     let realizadoAteHojeTotal = 0;
     let metaTotalMinutos = 0;
     let diasComJornadaTotal = 0;
+    let deslocamentoMinutosTotal = 0;
     let ganhoAteAgora: number | null = valorHora ? 0 : null;
     let projecaoGanho: number | null = valorHora ? 0 : null;
     const porDiaLista: { data: string; minutos: number }[] = [];
@@ -305,6 +319,7 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       realizadoAteHojeTotal += combo.realizadoAteHoje.totalMinutos;
       metaTotalMinutos += combo.meta.metaTotalMinutos;
       diasComJornadaTotal += combo.meta.diasComJornada;
+      deslocamentoMinutosTotal += combo.deslocamentoMinutos;
 
       for (const dia of diasDoPeriodo(combo.de, combo.ate)) {
         porDiaLista.push({ data: dia, minutos: combo.porDia.get(dia) ?? 0 });
@@ -321,8 +336,16 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
         const diasUteisTotais = diasUteisEntre(combo.de, combo.ate);
         const mediaMinutosPorDiaUtil = diasUteisPassados > 0 ? combo.realizadoAteHoje.totalMinutos / diasUteisPassados : 0;
         const projecaoMinutos = mediaMinutosPorDiaUtil * diasUteisTotais;
-        ganhoAteAgora = (ganhoAteAgora ?? 0) + (valorHora.vlrhor * combo.realizadoAteHoje.totalMinutos) / 60;
-        projecaoGanho = (projecaoGanho ?? 0) + (valorHora.vlrhor * projecaoMinutos) / 60;
+        // Deslocamento vale metade do valor-hora e NÃO é extrapolado na projeção: viagem é
+        // pontual, então entra só o que já foi lançado (até hoje no ganho; o período inteiro
+        // na projeção, que inclui lançamento com data futura dentro do mês).
+        const valorHoraDeslocamento = valorHora.vlrhor * FATOR_HORA_DESLOCAMENTO;
+        ganhoAteAgora =
+          (ganhoAteAgora ?? 0) +
+          (valorHora.vlrhor * combo.realizadoAteHoje.totalMinutos) / 60 +
+          (valorHoraDeslocamento * combo.deslocamentoAteHojeMinutos) / 60;
+        projecaoGanho =
+          (projecaoGanho ?? 0) + (valorHora.vlrhor * projecaoMinutos) / 60 + (valorHoraDeslocamento * combo.deslocamentoMinutos) / 60;
       }
     }
 
@@ -348,6 +371,12 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       metaTotalMinutos,
       saldoMinutos: diasComJornadaTotal > 0 ? realizadoAteHojeTotal - metaTotalMinutos : null,
       valorHora: valorHora?.vlrhor ?? null,
+      // Horas de deslocamento do período (minutos) e quanto valem (metade do valor-hora; null
+      // sem contrato de valor-hora). Já estão somadas em ganhoAteAgora/projecaoGanho.
+      deslocamento: {
+        minutos: deslocamentoMinutosTotal,
+        valor: valorHora ? (valorHora.vlrhor * FATOR_HORA_DESLOCAMENTO * deslocamentoMinutosTotal) / 60 : null,
+      },
       ganhoAteAgora,
       projecaoGanho,
       sessoesPendentes,

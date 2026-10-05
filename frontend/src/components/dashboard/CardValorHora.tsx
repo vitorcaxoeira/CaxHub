@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatHorasCompacto } from "../../lib/cronograma";
 import { BotaoVisibilidade } from "./BotaoVisibilidade";
 
 const moeda = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -7,13 +8,17 @@ interface CardValorHoraProps {
   valorHora: number | null;
   ganhoAteAgora: number | null;
   projecaoGanho: number | null;
+  // Deslocamento do período: já está somado em ganhoAteAgora/projecaoGanho; aparece à parte só
+  // pra o consultor ver quanto do total vem dele (metade do valor-hora).
+  deslocamentoValor: number | null;
+  deslocamentoMinutos: number;
 }
 
 // Valor-hora vem pronto do Senior (ContratoConsultor) — NÃO é editável aqui, diferente do
 // dashboard de referência (psoffice-dashboard), onde o consultor digitava sua própria
 // tarifa. O botão de "olho" sobrevive só pela privacidade de tela (evita expor tarifa em
 // compartilhamento/print), estado puramente local — não persiste em lugar nenhum.
-export function CardValorHora({ valorHora, ganhoAteAgora, projecaoGanho }: CardValorHoraProps) {
+export function CardValorHora({ valorHora, ganhoAteAgora, projecaoGanho, deslocamentoValor, deslocamentoMinutos }: CardValorHoraProps) {
   const [visivel, setVisivel] = useState(false);
 
   if (valorHora == null) {
@@ -32,10 +37,15 @@ export function CardValorHora({ valorHora, ganhoAteAgora, projecaoGanho }: CardV
         <BotaoVisibilidade visivel={visivel} onAlternar={() => setVisivel((v) => !v)} />
       </div>
       {visivel ? (
-        <div className="mt-3 grid grid-cols-3 gap-4">
+        <div className="mt-3 grid grid-cols-2 gap-4 xl:grid-cols-4">
           <div>
             <p className="text-[11px] text-muted">Valor/hora</p>
             <p className="font-mono text-lg font-semibold text-foreground">{moeda.format(valorHora)}</p>
+          </div>
+          <div title="Horas de deslocamento pagas a 50% do valor-hora. Já estão incluídas no ganho e na projeção.">
+            <p className="text-[11px] text-muted">Deslocamento (50%)</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{moeda.format(deslocamentoValor ?? 0)}</p>
+            <p className="font-mono text-[11px] text-muted">{formatHorasCompacto(deslocamentoMinutos)} h</p>
           </div>
           <div>
             <p className="text-[11px] text-muted">Ganho até agora</p>

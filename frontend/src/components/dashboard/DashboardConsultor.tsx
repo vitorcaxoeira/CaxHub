@@ -173,8 +173,8 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
 
   if (loading) {
     return (
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7 2xl:gap-3">
-        {Array.from({ length: 7 }).map((_, i) => (
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8 2xl:gap-3">
+        {Array.from({ length: 8 }).map((_, i) => (
           <Skeleton key={i} className="h-20 rounded-lg" />
         ))}
       </div>
@@ -211,7 +211,7 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
         <p className="font-mono text-[11px] text-muted">{rotuloPeriodo}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7 2xl:gap-3">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8 2xl:gap-3">
         <Estatistica
           label="Total de horas"
           valor={`${formatHorasCompacto(resumo.totalMinutos)} h`}
@@ -247,6 +247,11 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
           destaque={resumo.saldoMinutos == null ? undefined : resumo.saldoMinutos >= 0 ? "success" : "warning"}
         />
         <Estatistica
+          label="Deslocamento"
+          valor={`${formatHorasCompacto(resumo.deslocamento.minutos)} h`}
+          detalhe="pago a 50% do valor-hora"
+        />
+        <Estatistica
           label="Sessões pendentes"
           valor={String(resumo.sessoesPendentes)}
           destaque={resumo.sessoesPendentes > 0 ? "warning" : undefined}
@@ -255,7 +260,13 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <CardValorHora valorHora={resumo.valorHora} ganhoAteAgora={resumo.ganhoAteAgora} projecaoGanho={resumo.projecaoGanho} />
+        <CardValorHora
+          valorHora={resumo.valorHora}
+          ganhoAteAgora={resumo.ganhoAteAgora}
+          projecaoGanho={resumo.projecaoGanho}
+          deslocamentoValor={resumo.deslocamento.valor}
+          deslocamentoMinutos={resumo.deslocamento.minutos}
+        />
 
         <section className="rounded-lg border border-border bg-surface p-5">
           <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Progresso da meta</p>

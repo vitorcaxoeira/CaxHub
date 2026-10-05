@@ -32,6 +32,10 @@ export function entidadeIdSolicitacaoViagem(id: number): string {
   return String(id);
 }
 
+export function entidadeIdConsultor(codemp: number, codfor: number): string {
+  return `${codemp}:${codfor}`;
+}
+
 export function entidadeIdAvaliacao5S(id: number): string {
   return String(id);
 }

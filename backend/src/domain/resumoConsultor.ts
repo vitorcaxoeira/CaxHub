@@ -1,6 +1,6 @@
 import { prisma } from "../db/prisma";
 import { SITRAT_CANCELADO, sitratLabel } from "./ratDominio";
-import { tipdesLabel } from "./rdvDominio";
+import { TIPDES_DESLOCAMENTO_ROTA, tipdesLabel } from "./rdvDominio";
 
 // Agregações do dashboard inicial do consultor (Home) — separadas da rota (routes/
 // dashboard.ts) porque a conta de "horas realizadas num período" é a mesma definição usada
@@ -141,6 +141,51 @@ export async function metaDoPeriodo(codemp: number, codfor: number, de: Date, at
     metaDiariaMinutos: diasComJornada > 0 ? Math.round(metaTotalMinutos / diasComJornada) : null,
     diasComJornada,
   };
+}
+
+// Hora de deslocamento é paga pela metade do valor-hora do consultor (regra do Vitor,
+// 05/10/2026). Fica aqui, e não no router, porque o "ganho até agora" e a projeção usam a mesma.
+export const FATOR_HORA_DESLOCAMENTO = 0.5;
+
+// Horas de deslocamento (RegistroDespesaViagem.hordes, minutos crus) de um consultor entre `de` e
+// `ate`, datadas pelo dia da despesa (datemi) — o dia da viagem, como as horas usam a data do item
+// da RAT. Só tipdes=7 (Deslocamento por Rota). Despesa excluída/removida no Senior e despesa de RAT
+// cancelada não contam, igual ao resto do painel. RDV liga na RAT só por valor (codemp+numrat).
+// Devolve as linhas (não o total) pra o chamador separar "até hoje" de "período inteiro".
+export async function deslocamentoNoPeriodo(
+  codemp: number,
+  codfor: number,
+  de: Date,
+  ate: Date
+): Promise<{ data: Date; minutos: number }[]> {
+  const despesas = await prisma.registroDespesaViagem.findMany({
+    where: {
+      codemp,
+      tipdes: TIPDES_DESLOCAMENTO_ROTA,
+      hordes: { gt: 0 },
+      datemi: { gte: de, lte: ate },
+      excluidaEm: null,
+      removidoEmSenior: null,
+    },
+    select: { numrat: true, datemi: true, hordes: true },
+  });
+  if (despesas.length === 0) return [];
+
+  const rats = await prisma.rat.findMany({
+    where: {
+      codemp,
+      codfor,
+      numrat: { in: [...new Set(despesas.map((d) => d.numrat))] },
+      sitrat: { not: SITRAT_CANCELADO },
+      removidoEmSenior: null,
+    },
+    select: { numrat: true },
+  });
+  const numratsDoConsultor = new Set(rats.map((r) => r.numrat));
+
+  return despesas
+    .filter((d) => d.datemi != null && numratsDoConsultor.has(d.numrat))
+    .map((d) => ({ data: d.datemi!, minutos: d.hordes! }));
 }
 
 export interface ValorHoraConsultor {

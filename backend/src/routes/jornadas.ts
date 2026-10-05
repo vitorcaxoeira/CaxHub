@@ -7,6 +7,10 @@ import {
   departamentosComTime,
   gerenciaDepartamento,
 } from "../domain/contextoProjeto";
+import { MAX_DIAS_RETROATIVOS, diasRetroativosDoConsultor, janelaDoConsultor } from "../domain/janelaRetroativa";
+import { criarEventoAuditoria, diffCampos } from "../audit/registrarEvento";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { entidadeIdConsultor } from "../audit/identidadeEntidade";
 
 // Jornada de trabalho por consultor e dia da semana ("Meta diária" na tela). Mantida pelo
 // gestor do departamento pra qualquer consultor do time, e por qualquer consultor pra si
@@ -51,6 +55,20 @@ async function consultoresGerenciados(role: string, contexto: Awaited<ReturnType
   return doTime;
 }
 
+// Quem pode mexer na janela de retroatividade de um consultor: admin, ou o líder do departamento
+// dele — e NUNCA o próprio consultor, mesmo sendo admin/líder (o consultor não libera os próprios
+// dias). Diferente da jornada, onde o próprio usuário edita o próprio registro.
+function podeEditarRetroativo(
+  ctx: NonNullable<Awaited<ReturnType<typeof contextoDoUsuario>>>,
+  alvo: { depexe: number | null },
+  codemp: number,
+  codfor: number
+): boolean {
+  const ehOProprio = ctx.contexto.consultor?.codemp === codemp && ctx.contexto.consultor?.codfor === codfor;
+  if (ehOProprio) return false;
+  return alvo.depexe != null ? gerenciaDepartamento(ctx.role, ctx.contexto, alvo.depexe) : ctx.role === "admin";
+}
+
 // Minutos desde a meia-noite, ou null. Aceita null/"" pra "não trabalha neste período".
 function lerMinutos(valor: unknown): number | null | undefined {
   if (valor === null || valor === "" || valor === undefined) return null;
@@ -84,6 +102,26 @@ jornadasRouter.get("/consultores", async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// GET /jornadas/minha-janela — a janela de retroatividade do consultor logado, pras telas de pedido
+// travarem o calendário (o backend recusa de qualquer jeito; isto só evita o 409).
+jornadasRouter.get("/minha-janela", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const consultor = ctx.contexto.consultor;
+    if (!consultor || consultor.codfor == null || consultor.codfor <= 0) {
+      res.status(404).json({ error: "Usuário sem consultor vinculado" });
+      return;
+    }
+    res.json(await janelaDoConsultor(consultor.codemp, consultor.codfor));
+  } catch (error) {
+    handleError(res, error, "minha-janela");
+  }
+});
+
 // GET /jornadas/:codemp/:codfor — os 7 dias, sempre completos. Dia sem linha no banco vem
 // com os quatro horários nulos, pra tela não precisar distinguir "não cadastrado" de
 // "folga" no desenho da grade. A distinção que importa é feita na varredura, que só olha
@@ -103,7 +141,8 @@ jornadasRouter.get("/:codemp/:codfor", async (req: AuthenticatedRequest, res) =>
       return;
     }
     const permitidos = await consultoresGerenciados(ctx.role, ctx.contexto);
-    if (!permitidos.some((c) => c.codfor === codfor)) {
+    const alvo = permitidos.find((c) => c.codfor === codfor);
+    if (!alvo) {
       res.status(403).json({ error: "Este consultor não está num departamento que você gerencia" });
       return;
     }
@@ -113,6 +152,10 @@ jornadasRouter.get("/:codemp/:codfor", async (req: AuthenticatedRequest, res) =>
     res.json({
       codemp,
       codfor,
+      // Janela de retroatividade dos pedidos de apontamento/ajuste. O próprio consultor vê o valor
+      // mas não edita: quem libera é o líder ou o admin (ver podeEditarRetroativo).
+      diasRetroativos: await diasRetroativosDoConsultor(codemp, codfor),
+      podeEditarRetroativo: podeEditarRetroativo(ctx, alvo, codemp, codfor),
       dias: DIAS_SEMANA.map((diaSemana) => {
         const l = porDia.get(diaSemana);
         return {
@@ -221,5 +264,71 @@ jornadasRouter.put("/:codemp/:codfor", async (req: AuthenticatedRequest, res) =>
     res.json({ codemp, codfor, dias: linhas.length });
   } catch (error) {
     handleError(res, error, "salvar");
+  }
+});
+
+// PUT /jornadas/:codemp/:codfor/dias-retroativos — quantos dias úteis antes de hoje o consultor
+// ainda pode pedir apontamento/ajuste (0 = só hoje). Exceção a uma ordem da Diretoria, então só
+// admin ou o líder do departamento do consultor, nunca ele mesmo, e fica na auditoria com de/para.
+jornadasRouter.put("/:codemp/:codfor/dias-retroativos", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codfor = Number(req.params.codfor);
+    if (!Number.isFinite(codemp) || !Number.isFinite(codfor)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+    const dias = Number(req.body?.diasRetroativos);
+    if (!Number.isInteger(dias) || dias < 0 || dias > MAX_DIAS_RETROATIVOS) {
+      res.status(400).json({ error: `diasRetroativos deve ser um inteiro de 0 a ${MAX_DIAS_RETROATIVOS}` });
+      return;
+    }
+
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const permitidos = await consultoresGerenciados(ctx.role, ctx.contexto);
+    const alvo = permitidos.find((c) => c.codfor === codfor);
+    if (!alvo) {
+      res.status(403).json({ error: "Este consultor não está num departamento que você gerencia" });
+      return;
+    }
+    if (!podeEditarRetroativo(ctx, alvo, codemp, codfor)) {
+      res.status(403).json({ error: "Só o líder do departamento ou o admin podem liberar dias retroativos — nunca o próprio consultor" });
+      return;
+    }
+
+    const antes = await diasRetroativosDoConsultor(codemp, codfor);
+    const diff = diffCampos({ diasRetroativos: "Dias retroativos" }, { diasRetroativos: antes }, { diasRetroativos: dias });
+    await prisma.$transaction(async (tx) => {
+      await tx.configuracaoApontamentoConsultor.upsert({
+        where: { codemp_codfor: { codemp, codfor } },
+        create: { codemp, codfor, diasRetroativos: dias, atualizadoPor: ctx.user.id },
+        update: { diasRetroativos: dias, atualizadoPor: ctx.user.id },
+      });
+      if (diff.algumaMudanca) {
+        await criarEventoAuditoria(
+          {
+            origem: "tela",
+            usuarioId: ctx.user.id,
+            codemp,
+            entidadeTipo: ENTIDADES_AUDITORIA.CONSULTOR,
+            entidadeId: entidadeIdConsultor(codemp, codfor),
+            entidadeRotulo: `Consultor — ${alvo.nomcom ?? alvo.nomfor ?? codfor}`,
+            eventoTipo: EVENTOS_AUDITORIA.APONTAMENTO_RETROATIVO_ALTERADO,
+            alteracoes: diff.alteracoes,
+            metadata: { codfor },
+            correlationId: req.correlationId!,
+          },
+          tx
+        );
+      }
+    });
+
+    res.json({ codemp, codfor, diasRetroativos: dias });
+  } catch (error) {
+    handleError(res, error, "dias-retroativos");
   }
 });

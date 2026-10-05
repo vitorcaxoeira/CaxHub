@@ -54,6 +54,15 @@ export function paraHoraBrasil(instante: Date): HoraParede {
   return { ano, mes, dia, minutosDoDia: hora * 60 + minuto, diaSemana };
 }
 
+// Dia brasileiro do instante, como meia-noite UTC — o formato que @db.Date espera. Mora aqui (e não
+// no router de apontamentos, de onde segue reexportada) porque a aprovação de ajuste de horário e a
+// janela de retroatividade precisam da MESMA conversão; duas cópias divergiriam, e já custou caro
+// uma vez (ver o comentário de fuso acima).
+export function diaBrasilComoData(data: Date): Date {
+  const { ano, mes, dia } = paraHoraBrasil(data);
+  return new Date(Date.UTC(ano, mes - 1, dia));
+}
+
 // Offset do fuso, em minutos, NAQUELE instante — calculado, e não constante, porque o
 // horário de verão brasileiro pode voltar e mudaria o valor conforme a data.
 function offsetMinutos(instante: Date): number {
