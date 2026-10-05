@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { formatHorasCompacto } from "../../lib/cronograma";
 import { tomConsumo } from "../../lib/consumoHoras";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
+import { textoJanelaRetroativa, useJanelaRetroativa } from "../../hooks/useJanelaRetroativa";
 import { HistoricoContextual } from "../auditoria/HistoricoContextual";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { HierarquiaAtividadeTooltip } from "../cronograma/HierarquiaAtividadeTooltip";
@@ -249,6 +250,8 @@ export function AtividadeDetalhe({
   // do excedente: pode haver vários pendentes na mesma atividade, um por dia esquecido.
   const [apontamentos, setApontamentos] = useState<SolicitacaoApontamento[]>([]);
   const [abrindoApontamento, setAbrindoApontamento] = useState(false);
+  // Só o dia corrente, salvo exceção do líder — o calendário nem oferece o que o backend recusaria.
+  const janela = useJanelaRetroativa();
   // Uma data só: um apontamento começa e termina no mesmo dia. Antes eram dois
   // datetime-local, o que deixava escolher datas diferentes sem querer.
   const [dataApontamento, setDataApontamento] = useState("");
@@ -266,6 +269,11 @@ export function AtividadeDetalhe({
     }
     if (horaFimApontamento <= horaInicioApontamento) {
       setErroApontamento("A hora final precisa ser depois da inicial.");
+      return;
+    }
+    // `min` do input não impede digitar uma data antiga à mão; o backend recusaria com o mesmo texto.
+    if (janela && dataApontamento < janela.primeiroDiaPermitido) {
+      setErroApontamento(textoJanelaRetroativa(janela));
       return;
     }
     if (motivoApontamento.trim() === "") {
@@ -656,6 +664,7 @@ export function AtividadeDetalhe({
                   <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5">
                     {abrindoApontamento ? (
                       <div className="space-y-2">
+                        {janela && <p className="text-[11.5px] text-muted">{textoJanelaRetroativa(janela)}</p>}
                         <div className="flex flex-wrap items-center gap-2">
                           <label htmlFor="apont-data" className="text-[12px] text-muted">
                             Data
@@ -663,6 +672,7 @@ export function AtividadeDetalhe({
                           <input
                             id="apont-data"
                             type="date"
+                            min={janela?.primeiroDiaPermitido}
                             value={dataApontamento}
                             onChange={(e) => setDataApontamento(e.target.value)}
                             className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"

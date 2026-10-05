@@ -449,6 +449,14 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeRemocao,
     resumo: (e) => `Reprovou o ajuste de horário — ${rotuloEntidade(e)}`,
   },
+  // Líder/admin liberou (ou fechou) dias retroativos pra um consultor pedir apontamento/ajuste —
+  // exceção à ordem da Diretoria, por isso aparece com tom de atenção. O de/para vai em `alteracoes`.
+  APONTAMENTO_RETROATIVO_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Apontamento retroativo",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou os dias retroativos permitidos — ${rotuloEntidade(e)}`,
+  },
   // Pedido de mudança nas 3 flags de configuração da proposta (Cronograma) e a decisão de
   // quem tem alçada — mesmo tom das outras 3 famílias de solicitação (warning/success/
   // destructive). A mudança da flag em si (aprovada) ainda gera o evento PRÓPRIO dela

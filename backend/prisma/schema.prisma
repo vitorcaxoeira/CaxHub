@@ -43,6 +43,7 @@ model User {
   observacoes5s          Observacao5S[]
   imagens5s              Imagem5S[]
   jornadasDefinidas      JornadaConsultor[]
+  configsRetroativoDefinidas ConfiguracaoApontamentoConsultor[]
   excedentesSolicitados  SolicitacaoHorasExcedentes[] @relation("excedenteSolicitante")
   excedentesDecididos    SolicitacaoHorasExcedentes[] @relation("excedenteDecisor")
   apontamentosSolicitados SolicitacaoApontamento[]    @relation("apontamentoSolicitante")
@@ -754,6 +755,29 @@ model JornadaConsultor {
 
   @@id([codemp, codfor, diaSemana])
   @@map("jornada_consultor")
+}
+
+// Janela de retroatividade dos PEDIDOS de apontamento avulso e de ajuste de horário. Por ordem da
+// Diretoria (05/10/2026) o consultor só pede para o dia corrente; esta tabela é a exceção, por
+// consultor, mantida pelo admin ou pelo líder do departamento dele (nunca pelo próprio consultor).
+//
+// Conceito só do CaxHub — tabela própria, e não coluna em Consultor, porque Consultor é espelho
+// sincronizado do Senior (ver o padrão "dado em vez de constante"). Mesma chave da
+// JornadaConsultor. Consultor SEM linha = 0 dias = só hoje, então a migration não semeia nada.
+//
+// `diasRetroativos` conta DIAS ÚTEIS (seg–sex, sem feriado) antes de hoje, no relógio de São Paulo.
+model ConfiguracaoApontamentoConsultor {
+  codemp Int
+  codfor Int
+
+  diasRetroativos Int @default(0)
+
+  atualizadoEm  DateTime @updatedAt
+  atualizadoPor Int?
+  usuario       User?    @relation(fields: [atualizadoPor], references: [id], onDelete: SetNull)
+
+  @@id([codemp, codfor])
+  @@map("configuracao_apontamento_consultor")
 }
 
 // Espelho local da tabela USU_TE077ATI do Senior ERP (Distribuição Atividades por

@@ -3,7 +3,7 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis, codforsDoTime } from "../domain/contextoProjeto";
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
-import { paraHoraBrasil } from "../domain/fusoBrasil";
+import { diaBrasilComoData, paraHoraBrasil } from "../domain/fusoBrasil";
 import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
 import { calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone } from "../domain/ratDominio";
 import { randomUUID } from "crypto";
@@ -43,14 +43,9 @@ function minutosDesdeMeiaNoite(data: Date): number {
   return paraHoraBrasil(data).minutosDoDia;
 }
 
-// Dia brasileiro do instante, como meia-noite UTC — o formato que @db.Date espera.
-// Exportada porque a aprovação de ajuste de horário (routes/solicitacoesAjuste.ts) reescreve
-// datati/horini/horfim do RatItem e precisa da MESMA conversão — duas cópias divergiriam, e
-// já custou caro uma vez (ver o comentário de fuso acima).
-export function diaBrasilComoData(data: Date): Date {
-  const { ano, mes, dia } = paraHoraBrasil(data);
-  return new Date(Date.UTC(ano, mes - 1, dia));
-}
+// Dia brasileiro do instante, como meia-noite UTC — o formato que @db.Date espera. Vive em
+// domain/fusoBrasil.ts; reexportada aqui porque routes/solicitacoesAjuste.ts importa daqui.
+export { diaBrasilComoData };
 
 // "07/08 09:00–10:30 (1:30)" — hora de parede brasileira, nunca o relógio do servidor.
 // Usado nas frases de histórico e notificação de exclusão e de ajuste.

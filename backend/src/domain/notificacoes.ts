@@ -138,7 +138,8 @@ export async function notificarAprovadoresViagem(
         : [];
     const emails = consultores.map((c) => c.email).filter((e): e is string => !!e);
     if (emails.length > 0) {
-      const usuarios = await prisma.user.findMany({ where: { email: { in: emails, mode: "insensitive" }, status: { not: "inativo" }, role: { name: { in: [...PAPEIS_MODULO_VIAGEM] } } } });
+      // Sem filtro de papel: o líder de departamento não é admin, mas entra no módulo (24/09 → 05/10/2026).
+      const usuarios = await prisma.user.findMany({ where: { email: { in: emails, mode: "insensitive" }, status: { not: "inativo" } } });
       for (const u of usuarios) ids.add(u.id);
     }
   }

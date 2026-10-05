@@ -24,9 +24,9 @@ export type StatusViagem = (typeof STATUS_VIAGEM)[number];
 
 export const STATUS_TERMINAIS: readonly StatusViagem[] = ["reprovada", "finalizada", "cancelada"];
 
-// Papéis que enxergam o módulo INTEIRO. Liberado só pro admin por enquanto (24/09/2026, pedido do
-// Vitor): backend (router), rotas, menu e notificações leem daqui/espelham isto. Para abrir o
-// módulo depois, é só ampliar esta lista e os `roles` do menu/rotas no frontend.
+// Papéis fixos que enxergam o módulo INTEIRO (só admin). Líder de departamento entra além disto,
+// por DepartamentoGestor (dinâmico, liberado em 05/10/2026): o router (exigirAdminOuGestor), o
+// RequireGestorOuAdmin e o `gestorOuAdmin` do menu no frontend espelham essa mesma regra.
 export const PAPEIS_MODULO_VIAGEM = ["admin"] as const;
 
 export const PAPEIS_ATENDIMENTO = ["admin", "administrativo"] as const;

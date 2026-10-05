@@ -19,7 +19,10 @@ interface DiaJornada {
   cadastrado: boolean;
 }
 
-const NOMES_DIA = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+// Mesmo teto do backend (MAX_DIAS_RETROATIVOS em domain/janelaRetroativa.ts).
+const MAX_DIAS_RETROATIVOS = 30;
+
+const NOMES_DIA =["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 // A jornada é guardada em MINUTOS desde a meia-noite (convenção de RatItem.horini) e o
 // <input type="time"> fala "HH:MM" — estas duas funções são a fronteira entre os dois.
@@ -59,6 +62,12 @@ export function Jornadas() {
   const [carregandoDias, setCarregandoDias] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  // Janela de retroatividade dos pedidos de apontamento/ajuste. Texto, e não número, pra o campo
+  // poder ficar vazio enquanto se digita; `diasRetroativosSalvo` é o que está gravado no servidor.
+  const [diasRetroativos, setDiasRetroativos] = useState("0");
+  const [diasRetroativosSalvo, setDiasRetroativosSalvo] = useState(0);
+  const [podeEditarRetroativo, setPodeEditarRetroativo] = useState(false);
+  const [salvandoRetroativo, setSalvandoRetroativo] = useState(false);
 
   useEffect(() => {
     axios
@@ -86,6 +95,9 @@ export function Jornadas() {
       .get(`/api/jornadas/${selecionado.codemp}/${selecionado.codfor}`)
       .then(({ data }) => {
         setDias(data.dias);
+        setDiasRetroativos(String(data.diasRetroativos ?? 0));
+        setDiasRetroativosSalvo(data.diasRetroativos ?? 0);
+        setPodeEditarRetroativo(data.podeEditarRetroativo === true);
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a jornada"))
@@ -118,6 +130,32 @@ export function Jornadas() {
       setErro(mensagem ?? "Falha ao salvar a jornada");
     } finally {
       setSalvando(false);
+    }
+  }
+
+  async function salvarRetroativo() {
+    if (!selecionado) return;
+    const valor = Number(diasRetroativos);
+    if (diasRetroativos.trim() === "" || !Number.isInteger(valor) || valor < 0 || valor > MAX_DIAS_RETROATIVOS) {
+      setErro(`Informe um número inteiro de 0 a ${MAX_DIAS_RETROATIVOS} dias úteis.`);
+      return;
+    }
+    setSalvandoRetroativo(true);
+    setErro(null);
+    try {
+      await axios.put(`/api/jornadas/${selecionado.codemp}/${selecionado.codfor}/dias-retroativos`, { diasRetroativos: valor });
+      setDiasRetroativosSalvo(valor);
+      toast.mostrar(
+        valor === 0
+          ? `${selecionado.nome} só poderá pedir apontamento e ajuste para o dia de hoje.`
+          : `${selecionado.nome} poderá pedir apontamento e ajuste até ${valor} ${valor === 1 ? "dia útil" : "dias úteis"} para trás.`,
+        "success"
+      );
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      setErro(mensagem ?? "Falha ao salvar os dias retroativos");
+    } finally {
+      setSalvandoRetroativo(false);
     }
   }
 
@@ -238,6 +276,48 @@ export function Jornadas() {
               {salvando ? "Salvando..." : "Salvar jornada"}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Janela de retroatividade: por ordem da Diretoria o consultor só pede apontamento/ajuste
+          para hoje; aqui o líder (ou o admin) abre uma exceção por consultor. O próprio consultor
+          vê o valor, mas não edita — o backend recusa com 403. Botão próprio, independente do
+          "Salvar jornada" acima: são duas configurações sem relação. */}
+      {selecionado && !carregandoDias && (
+        <div className="mt-4 rounded-lg border border-border bg-surface p-4">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Apontamento retroativo</p>
+          <p className="mt-1 text-sm text-muted">
+            Dias úteis (seg a sex) antes de hoje em que {selecionado.nome} ainda pode pedir apontamento avulso ou ajuste de
+            horário. <span className="text-foreground">0 = só o dia de hoje.</span>
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <input
+              type="number"
+              min={0}
+              max={MAX_DIAS_RETROATIVOS}
+              step={1}
+              value={diasRetroativos}
+              onChange={(e) => setDiasRetroativos(e.target.value)}
+              disabled={!podeEditarRetroativo}
+              aria-label="Dias úteis retroativos permitidos"
+              className="w-24 rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            />
+            <span className="text-sm text-muted">dias úteis</span>
+            {podeEditarRetroativo && (
+              <button
+                onClick={salvarRetroativo}
+                disabled={salvandoRetroativo || diasRetroativos === String(diasRetroativosSalvo)}
+                className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {salvandoRetroativo ? "Salvando..." : "Salvar"}
+              </button>
+            )}
+          </div>
+          {!podeEditarRetroativo && (
+            <p className="mt-2 text-[12px] text-muted">
+              Só o líder do seu departamento ou um administrador podem alterar este valor.
+            </p>
+          )}
         </div>
       )}
     </div>

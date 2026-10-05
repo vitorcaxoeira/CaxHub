@@ -22,6 +22,9 @@ export interface ResumoConsultor {
   // null = nenhum dia do período tem jornada cadastrada (sem meta pra falar de saldo).
   saldoMinutos: number | null;
   valorHora: number | null;
+  // Horas de deslocamento do período (minutos) e o valor delas (metade do valor-hora; null sem
+  // contrato). Já entram no ganho até agora e na projeção.
+  deslocamento: { minutos: number; valor: number | null };
   ganhoAteAgora: number | null;
   projecaoGanho: number | null;
   sessoesPendentes: number;

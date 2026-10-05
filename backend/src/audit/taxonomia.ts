@@ -12,6 +12,7 @@ export const ENTIDADES_AUDITORIA = {
   DESPESA: "despesa",
   SOLICITACAO_VIAGEM: "solicitacao_viagem",
   AVALIACAO_5S: "avaliacao_5s",
+  CONSULTOR: "consultor",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -87,6 +88,10 @@ export const EVENTOS_AUDITORIA = {
   AJUSTE_SOLICITADO: "AJUSTE_SOLICITADO",
   AJUSTE_APROVADO: "AJUSTE_APROVADO",
   AJUSTE_REPROVADO: "AJUSTE_REPROVADO",
+  // Exceção à ordem da Diretoria (05/10/2026): quantos dias úteis antes de hoje o consultor ainda
+  // pode pedir apontamento/ajuste. Entidade CONSULTOR (id `codemp:codfor`); `alteracoes` guarda
+  // de/para pra ficar rastreável quem liberou e quanto. Ver domain/janelaRetroativa.ts.
+  APONTAMENTO_RETROATIVO_ALTERADO: "APONTAMENTO_RETROATIVO_ALTERADO",
 
   // Módulo Gestão de Solicitações — Solicitações de Viagem. Entidade própria (SOLICITACAO_VIAGEM);
   // quando há proposta vinculada o evento também leva codemp/codpro e aparece no histórico dela.

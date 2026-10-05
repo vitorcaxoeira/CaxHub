@@ -5,6 +5,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
 import { Require5S } from "./auth/Require5S";
+import { RequireGestorOuAdmin } from "./auth/RequireGestorOuAdmin";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
@@ -151,10 +152,11 @@ export default function App() {
                   Aprovações/Jornadas/Auditoria acima. Reaberto em 28/08/2026 (tinha sido
                   movido pra dentro do bloco admin-only abaixo em 26/08/2026, commit 3398f74,
                   enquanto o mapeamento Departamento x Grupo Contábil era configurado). */}
-              {/* Gestão de Solicitações (viagens): só admin por enquanto (24/09/2026, pedido do Vitor).
-                  Em sincronia com o menu (Sidebar) e o requireRole do router no backend
-                  (PAPEIS_MODULO_VIAGEM). Ao abrir pra outros papéis, ampliar as três camadas. */}
-              <Route element={<RequireRole roles={["admin"]} />}>
+              {/* Gestão de Solicitações (viagens): admin ou líder de departamento (05/10/2026, pedido do
+                  Vitor). Líder não é Role (vem de DepartamentoGestor), então a guarda é dinâmica. Em
+                  sincronia com o menu (Sidebar, `gestorOuAdmin`) e o exigirAdminOuGestor do router no
+                  backend. Ao mudar quem entra, ampliar as três camadas. */}
+              <Route element={<RequireGestorOuAdmin />}>
                 <Route path="/solicitacoes/minhas" element={<SolicitacoesViagem escopo="minhas" />} />
                 <Route path="/solicitacoes/nova" element={<SolicitacaoViagemForm />} />
                 <Route path="/solicitacoes/aprovacoes" element={<SolicitacoesViagem escopo="aprovacao" />} />

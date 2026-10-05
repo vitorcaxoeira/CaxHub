@@ -77,17 +77,20 @@ const groups: NavGroup[] = [
   {
     label: "Gestão de Solicitações",
     items: [
-      { to: "/solicitacoes/nova", label: "Nova Solicitação" },
-      { to: "/solicitacoes/minhas", label: "Minhas Solicitações" },
-      // Atendimento cota e reserva: só administrativo e admin (o backend recusa o resto).
-      { to: "/solicitacoes/atendimento", label: "Atendimento", roles: ["admin", "administrativo"] },
+      { to: "/solicitacoes/nova", label: "Nova Solicitação", gestorOuAdmin: true },
+      { to: "/solicitacoes/minhas", label: "Minhas Solicitações", gestorOuAdmin: true },
+      // Atendimento cota e reserva: só administrativo e admin (o backend recusa o resto). Como
+      // `roles` e `gestorOuAdmin` valem juntos (E), segue a entrada do módulo: o administrativo
+      // só vê se também for líder.
+      { to: "/solicitacoes/atendimento", label: "Atendimento", roles: ["admin", "administrativo"], gestorOuAdmin: true },
       // Sem `roles`: quem aprova é o gestor do departamento do solicitante (dinâmico, via
       // DepartamentoGestor) — mesmo caso de Alocação. Admin também entra por gestorOuAdmin.
       { to: "/solicitacoes/aprovacoes", label: "Aprovações", gestorOuAdmin: true },
     ],
-    // Só admin por enquanto (pedido do Vitor, 24/09/2026) — em sincronia com o RequireRole em
-    // App.tsx e o requireRole do router no backend (PAPEIS_MODULO_VIAGEM).
-    roles: ["admin"],
+    // Admin e líderes de departamento (pedido do Vitor, 05/10/2026): o grupo é "*" e cada item
+    // traz `gestorOuAdmin`, que esconde o grupo inteiro de quem não é líder. Em sincronia com o
+    // RequireGestorOuAdmin em App.tsx e o exigirAdminOuGestor do router no backend.
+    roles: "*",
   },
   {
     label: "Gestão 5S",

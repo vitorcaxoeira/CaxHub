@@ -12,6 +12,7 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { criarSessaoManualPendente, recusarSeEstourarTeto } from "./apontamentos";
 import { depexeLabel, modproLabel } from "../domain/propostasDominio";
+import { recusarSeForaDaJanela } from "../domain/janelaRetroativa";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
 
 // Apontamento avulso: o consultor trabalhou e esqueceu de mover o card, então pede o tempo
@@ -155,6 +156,13 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
     const meuCodfor = contexto.consultor?.codfor;
     if (meuCodfor == null || meuCodfor <= 0 || meuCodfor !== atividade.codfor) {
       res.status(403).json({ error: "Só quem executa a atividade pode solicitar apontamento nela" });
+      return;
+    }
+
+    // Só o dia corrente, salvo exceção do líder pro consultor — ver domain/janelaRetroativa.ts.
+    const foraDaJanela = await recusarSeForaDaJanela(atividade.codemp, meuCodfor, [inicio]);
+    if (foraDaJanela) {
+      res.status(foraDaJanela.status).json(foraDaJanela.body);
       return;
     }
 

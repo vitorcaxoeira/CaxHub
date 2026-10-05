@@ -18,6 +18,7 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { processarFilaSincronizacao } from "../sync/outboxSenior";
 import { depexeLabel, modproLabel } from "../domain/propostasDominio";
+import { recusarSeForaDaJanela } from "../domain/janelaRetroativa";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
 import { diaBrasilComoData, recusarSeEstourarTeto } from "./apontamentos";
 
@@ -147,6 +148,15 @@ solicitacoesAjusteRouter.post("/", async (req: AuthenticatedRequest, res) => {
     const meuCodfor = contexto.consultor?.codfor;
     if (meuCodfor == null || meuCodfor <= 0 || meuCodfor !== atividade.codfor) {
       res.status(403).json({ error: "Só quem executou o apontamento pode pedir ajuste nele" });
+      return;
+    }
+
+    // Só o dia corrente, salvo exceção do líder pro consultor — ver domain/janelaRetroativa.ts. Confere
+    // o dia do apontamento original E o dia novo pedido: conferir só o novo deixaria "ajustar" uma
+    // sessão antiga trazendo-a pra hoje, que é o mesmo que lançar retroativo.
+    const foraDaJanela = await recusarSeForaDaJanela(atividade.codemp, meuCodfor, [sessao.inicio, inicio]);
+    if (foraDaJanela) {
+      res.status(foraDaJanela.status).json(foraDaJanela.body);
       return;
     }
 

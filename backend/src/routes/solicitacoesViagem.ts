@@ -1,10 +1,10 @@
-import { Router, Response } from "express";
+import { Router, Response, NextFunction } from "express";
 import { Prisma } from "@prisma/client";
 import multer from "multer";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
+import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { VIAGEM_DIR } from "../config/uploads";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
@@ -44,8 +44,21 @@ import {
 // (snapshot gravado na criação — ver resolverAprovador). Permissão decidida por handler, como
 // nos demais routers de solicitação; o frontend só esconde o que o backend recusaria.
 export const solicitacoesViagemRouter = Router();
-// Módulo restrito ao admin por enquanto — ver PAPEIS_MODULO_VIAGEM.
-solicitacoesViagemRouter.use(requireAuth, requireRole(...PAPEIS_MODULO_VIAGEM));
+// Entrada no módulo: admin ou líder de departamento (gestor em DepartamentoGestor — dinâmico, não
+// dá pra expressar com requireRole). Em sincronia com o menu e o RequireGestorOuAdmin do frontend.
+async function exigirAdminOuGestor(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if ((PAPEIS_MODULO_VIAGEM as readonly string[]).includes(req.user!.role)) return next();
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId }, select: { email: true } });
+    const contexto = user ? await resolverContextoConsultor(user.email) : null;
+    if (contexto && contexto.departamentosGerenciados.length > 0) return next();
+    res.status(403).json({ error: "Sem permissão para acessar este recurso" });
+  } catch (error) {
+    handleError(res, error, "acesso");
+  }
+}
+
+solicitacoesViagemRouter.use(requireAuth, exigirAdminOuGestor);
 
 // ---------- infraestrutura ----------
 
