@@ -1412,7 +1412,7 @@ export function MeusApontamentos() {
     if (s.ajustePendente) return undefined;
     if (s.bloqueadoApontamentoEfetivo) return MOTIVO_BLOQUEIO_APONTAMENTO;
     if (janela && paraInputData(s.inicio) < janela.primeiroDiaPermitido) {
-      return `Este apontamento é anterior a ${diaCurtoDaJanela(janela.primeiroDiaPermitido)}, fora da janela de retroatividade. Peça ao seu líder para liberar dias retroativos.`;
+      return `Este apontamento é anterior a ${diaCurtoDaJanela(janela.primeiroDiaPermitido)}, fora da janela de retroatividade.`;
     }
     return undefined;
   }

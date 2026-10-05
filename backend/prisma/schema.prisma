@@ -1523,6 +1523,9 @@ model Notificacao {
   atividade         AtividadeConsultor? @relation(fields: [atividadeId], references: [id], onDelete: SetNull)
   solicitacaoViagem SolicitacaoViagem?  @relation(fields: [solicitacaoViagemId], references: [id], onDelete: SetNull)
 
+  // O sino consulta por usuário a cada 45 s (lista das 50 mais recentes + contagem de não lidas). Sem
+  // índice eram 381 mil seq scans acumulados em 3 semanas (diagnóstico de CPU de 05/10/2026).
+  @@index([userId, criadoEm])
   @@map("notificacoes")
 }
 

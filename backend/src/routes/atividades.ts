@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { Prisma } from "@prisma/client";
+import { AtividadeConsultor, Prisma } from "@prisma/client";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -119,29 +119,79 @@ const upload = multer({
 // chamada logo depois (ex.: `carregar()` após mover um card) sempre recalcula do zero.
 const carregamentosEmAndamento = new Map<string, ReturnType<typeof carregarAtividadesVisiveisImpl>>();
 
-function carregarAtividadesVisiveis(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
+// Recorte do conjunto DECORADO (as linhas devolvidas), decidido no banco. Sem `foco` carrega e decora as
+// ~5 mil atividades ativas (~1 s de CPU, medido em 05/10/2026 — ver a nota do diagnóstico de CPU da VPS),
+// o que só se justifica quando o chamador precisa do escopo todo (KPIs, indicadores, lista). Quem quer UMA
+// atividade ou as de UM consultor passa o foco: o resultado das linhas é idêntico ao do filtro em memória
+// (os totais por item continuam somando as irmãs do item, ver `carregarIrmasDosItens`), só que decora
+// dezenas de linhas em vez de milhares.
+interface FocoAtividades {
+  codfors?: number[];
+  ids?: number[];
+  // Só as que ainda não estão na raia final (concluídas). Atividade sem coluna cai na primeira raia
+  // (colunaEfetiva), que não é final, então entra.
+  semConcluidas?: boolean;
+}
+
+function carregarAtividadesVisiveis(
+  role: string,
+  contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>,
+  foco: FocoAtividades | null = null
+) {
   const chave = JSON.stringify({
     role,
     codfor: contexto.consultor?.codfor ?? null,
     gerenciados: contexto.departamentosGerenciados,
     time: contexto.departamentosTime,
+    foco,
   });
   const existente = carregamentosEmAndamento.get(chave);
   if (existente) return existente;
-  const promessa = carregarAtividadesVisiveisImpl(role, contexto).finally(() => carregamentosEmAndamento.delete(chave));
+  const promessa = carregarAtividadesVisiveisImpl(role, contexto, foco).finally(() => carregamentosEmAndamento.delete(chave));
   carregamentosEmAndamento.set(chave, promessa);
   return promessa;
 }
 
-async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
+type AtividadeParaAgregado = Pick<AtividadeConsultor, "id" | "codemp" | "codpro" | "seqite" | "seqati" | "qtdhor">;
+
+// Orçamento e realizado POR ITEM somam as atividades de TODOS os consultores do item (itemAlocado/
+// itemRealizado). Com foco, o conjunto decorado é só uma fatia; sem estas irmãs esses dois totais
+// sairiam menores que os da lista completa. Busca o superset por codpro (IN, e não OR por chave
+// composta, pelo motivo do planning time explicado abaixo) e fica só com as chaves exatas do foco.
+async function carregarIrmasDosItens(atividades: AtividadeParaAgregado[]): Promise<AtividadeParaAgregado[]> {
+  if (atividades.length === 0) return [];
+  const candidatas = await prisma.atividadeConsultor.findMany({
+    where: {
+      sitreg: "A",
+      codemp: { in: [...new Set(atividades.map((a) => a.codemp))] },
+      codpro: { in: [...new Set(atividades.map((a) => a.codpro))] },
+    },
+    select: { id: true, codemp: true, codpro: true, seqite: true, seqati: true, qtdhor: true },
+  });
+  const chaves = new Set(atividades.map((a) => `${a.codemp}-${a.codpro}-${a.seqite}`));
+  return candidatas.filter((a) => chaves.has(`${a.codemp}-${a.codpro}-${a.seqite}`));
+}
+
+async function carregarAtividadesVisiveisImpl(
+  role: string,
+  contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>,
+  foco: FocoAtividades | null = null
+) {
+  const onde: Prisma.AtividadeConsultorWhereInput = { sitreg: "A" };
+  if (foco?.codfors) onde.codfor = { in: foco.codfors };
+  if (foco?.ids) onde.id = { in: foco.ids };
+  if (foco?.semConcluidas) onde.OR = [{ colunaId: null }, { coluna: { ehFinal: false } }];
+
   const [atividades, primeiraColuna] = await Promise.all([
     prisma.atividadeConsultor.findMany({
-      where: { sitreg: "A" },
+      where: onde,
       include: { coluna: true },
       orderBy: { id: "asc" },
     }),
     prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } }),
   ]);
+  // Sem foco as irmãs SÃO o conjunto todo (nenhuma query a mais); com foco, uma consulta enxuta.
+  const irmas: AtividadeParaAgregado[] = foco ? await carregarIrmasDosItens(atividades) : atividades;
 
   // Chaves derivadas só de `atividades` (sem I/O) — as 7 queries abaixo não dependem
   // umas das outras, só desse array, então disparam todas juntas num único Promise.all.
@@ -151,8 +201,11 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   // @unique, então só existe 1 linha zerada no sistema por vez, mas essa 1 linha já basta
   // pra "roubar" a soma de todo RatItem de seqati=0 do banco pra si — ver mesmo comentário
   // em routes/alocacao.ts.
-  const seqatisValidos = [...new Set(atividades.map((a) => a.seqati).filter((s): s is bigint => s != null && s > 0n))];
+  // O realizado (sessões não confirmadas + RatItem) é buscado pras IRMÃS, não só pras decoradas: é ele
+  // que alimenta o realizado por item. As sessões ABERTAS, ao contrário, só importam pras decoradas.
+  const seqatisValidos = [...new Set(irmas.map((a) => a.seqati).filter((s): s is bigint => s != null && s > 0n))];
   const atividadeIds = atividades.map((a) => a.id);
+  const atividadeIdsAgregado = irmas.map((a) => a.id);
   const idsEstrutura = [...new Set(atividades.map((a) => a.estruturaAtividadeId).filter((id): id is number => id != null))];
   const codforUnicos = [...new Set(atividades.map((a) => a.codfor))];
 
@@ -179,9 +232,9 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
           select: { seqati: true, horini: true, horfim: true },
         })
       : Promise.resolve([]),
-    atividadeIds.length > 0
+    atividadeIdsAgregado.length > 0
       ? prisma.atividadeSessaoExecucao.findMany({
-          where: { atividadeId: { in: atividadeIds }, confirmada: false, fim: { not: null }, excluidaEm: null },
+          where: { atividadeId: { in: atividadeIdsAgregado }, confirmada: false, fim: { not: null }, excluidaEm: null },
           select: { atividadeId: true, inicio: true, fim: true },
         })
       : Promise.resolve([]),
@@ -223,7 +276,7 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   // Total distribuído (soma de qtdhor de todas as atividades ativas) por item — usado
   // para mostrar orçamento contratado x distribuído sem precisar da árvore de EAP.
   const alocadoPorItem = new Map<string, number>();
-  for (const a of atividades) {
+  for (const a of irmas) {
     const chave = `${a.codemp}-${a.codpro}-${a.seqite}`;
     alocadoPorItem.set(chave, (alocadoPorItem.get(chave) ?? 0) + (a.qtdhor ?? 0));
   }
@@ -250,7 +303,7 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   }
   const minutosRealizadosPorAtividadeId = new Map<number, number>();
   for (const [id, ms] of msRealizadosPorAtividadeId) minutosRealizadosPorAtividadeId.set(id, Math.round(ms / 60000));
-  function horasRealizadasDaAtividade(a: (typeof atividades)[number]): number {
+  function horasRealizadasDaAtividade(a: Pick<AtividadeConsultor, "id" | "seqati">): number {
     return (
       (a.seqati != null && a.seqati > 0n ? minutosRealizadosPorSeqati.get(a.seqati) ?? 0 : 0) +
       (minutosRealizadosPorAtividadeId.get(a.id) ?? 0)
@@ -299,7 +352,7 @@ async function carregarAtividadesVisiveisImpl(role: string, contexto: Awaited<Re
   // diferente de `horasRealizadas` por atividade, exposto à parte pra uso futuro (ex.:
   // progresso individual do card).
   const realizadoPorItem = new Map<string, number>();
-  for (const a of atividades) {
+  for (const a of irmas) {
     const chave = `${a.codemp}-${a.codpro}-${a.seqite}`;
     realizadoPorItem.set(chave, (realizadoPorItem.get(chave) ?? 0) + horasRealizadasDaAtividade(a));
   }
@@ -596,6 +649,33 @@ atividadesRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) =>
   }
 });
 
+// As atividades do consultor LOGADO, no mesmo formato de linha de GET / — endpoint enxuto da janela
+// flutuante do CaxHub Desktop, que atualiza a cada poucos segundos o dia inteiro. Antes ela chamava
+// GET /?codfor=<eu>, que decora as ~5 mil atividades do escopo e só então filtra por codfor em memória
+// (~1 s de CPU por chamada num VPS de 1 vCPU; diagnóstico de 05/10/2026). Aqui o banco já entrega só as
+// do consultor, e as linhas saem idênticas às de GET /?codfor=<eu> — menos as concluídas (raia final),
+// que a janela nunca mostra e que são a maior parte do histórico de quem trabalha há meses. Sem consultor
+// vinculado: lista vazia.
+atividadesRouter.get("/minhas", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const meuCodfor = ctx.contexto.consultor?.codfor;
+    // `> 0`: codfor 0 circula como sentinela de "não se aplica a um consultor" (ver alocacao.ts).
+    if (meuCodfor == null || meuCodfor <= 0) {
+      res.json({ rows: [] });
+      return;
+    }
+    const rows = await carregarAtividadesVisiveis(ctx.role, ctx.contexto, { codfors: [meuCodfor], semConcluidas: true });
+    res.json({ rows });
+  } catch (error) {
+    handleError(res, error, "minhas");
+  }
+});
+
 atividadesRouter.get("/quadro-colunas", async (_req, res) => {
   try {
     const colunas = await prisma.quadroColuna.findMany({ orderBy: { ordem: "asc" } });
@@ -712,7 +792,9 @@ atividadesRouter.get("/:id/detalhe", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    const visiveis = await carregarAtividadesVisiveis(ctx.role, ctx.contexto);
+    // Foco na própria atividade: a regra de visibilidade segue valendo (uma atividade que o usuário não
+    // pode ver não volta nas linhas decoradas -> 404), mas sem decorar as ~5 mil do escopo todo.
+    const visiveis = await carregarAtividadesVisiveis(ctx.role, ctx.contexto, { ids: [id] });
     const atividade = visiveis.find((a) => a.id === id);
     if (!atividade) {
       res.status(404).json({ error: "Atividade não encontrada" });
@@ -754,7 +836,8 @@ atividadesRouter.get("/:id/hierarquia", async (req: AuthenticatedRequest, res) =
       return;
     }
 
-    const visiveis = await carregarAtividadesVisiveis(ctx.role, ctx.contexto);
+    // Foco na própria atividade (mesma razão de /:id/detalhe) — esta rota roda no hover do tooltip.
+    const visiveis = await carregarAtividadesVisiveis(ctx.role, ctx.contexto, { ids: [id] });
     const atividade = visiveis.find((a) => a.id === id);
     if (!atividade) {
       res.status(404).json({ error: "Atividade não encontrada" });
