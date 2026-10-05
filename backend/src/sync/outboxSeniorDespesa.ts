@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { randomUUID } from "crypto";
-import { RegistroDespesaViagem, SincronizacaoPendenteDespesa } from "@prisma/client";
+import { Prisma, RegistroDespesaViagem, SincronizacaoPendenteDespesa } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import {
   formatarDataSenior,
@@ -142,21 +142,57 @@ interface IdentidadeSeniorDespesa {
   seqrdv: number;
 }
 
-// Procura a despesa direto na origem, pelos mesmos campos que a identificam de forma única.
-// Mesmo motivo de procurarApontamentoNoSenior em outboxSenior.ts: o Senior pode ter gravado e a
-// resposta se perdido (timeout, queda de rede) — reenviar às cegas duplicaria a despesa no ERP.
-// Só usada na INCLUSÃO — editar/excluir já têm `seqRdv` confiável, não precisam adivinhar.
-// Mesma limitação aceita lá: duas despesas idênticas (mesmo tipo/valor/dia) na mesma RAT colidem
-// e esta busca não desempata — aceitável, é o mesmo risco já assumido no apontamento.
-async function procurarDespesaNoSenior(despesa: DespesaPronta): Promise<IdentidadeSeniorDespesa | null> {
-  const filtros = [
+// Filtros da busca "esta despesa já existe no Senior?". Função pura (sem SOAP) pra poder ser testada.
+//
+// `seqrdvsOcupados` são os seqrdv que JÁ pertencem a outra despesa local da mesma RAT: um item do
+// Senior vinculado a outro lançamento nosso não pode ser "este". Sem essa exclusão, duas despesas
+// idênticas na mesma RAT (mesmo tipo, dia, quantidade e valor — ex.: dois pedágios de R$ 10,80 lançados
+// com a mesma data) se confundiam: a busca achava a primeira, a segunda "reconciliava" com o seqrdv dela
+// e o write-back estourava a unique (codemp, numrat, seqrdv). Achado real em 05/10/2026: despesa 499607
+// (pedágio de 02/10) presa porque a 499593 (pedágio de 01/10) já era dona do seqrdv 3.
+export function filtrosBuscaDespesa(
+  despesa: Pick<DespesaPronta, "codemp" | "numrat" | "tipdes" | "datemi" | "qtdrdv" | "vlrunt">,
+  seqrdvsOcupados: number[]
+): string[] {
+  const ocupados = [...new Set(seqrdvsOcupados.filter((n) => Number.isInteger(n)))];
+  return [
     `USU_CODEMP = ${despesa.codemp}`,
     `USU_NUMRAT = ${despesa.numrat}`,
     `USU_TIPDES = ${despesa.tipdes}`,
     `USU_DATEMI = '${despesa.datemi.toISOString().slice(0, 10)}'`,
     `USU_QTDRDV = ${despesa.qtdrdv}`,
     `USU_VLRUNT = ${despesa.vlrunt}`,
+    ...(ocupados.length > 0 ? [`USU_SEQRDV NOT IN (${ocupados.join(", ")})`] : []),
   ];
+}
+
+// Violação da unique (codemp, numrat, seqrdv) do RegistroDespesaViagem (Prisma P2002 com `seqrdv` no alvo).
+// Pura, pra testar com um erro construído sem precisar de banco.
+export function ehColisaoDeSeqrdv(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002" &&
+    JSON.stringify(error.meta?.target ?? "").includes("seqrdv")
+  );
+}
+
+// Procura a despesa direto na origem, pelos mesmos campos que a identificam de forma única.
+// Mesmo motivo de procurarApontamentoNoSenior em outboxSenior.ts: o Senior pode ter gravado e a
+// resposta se perdido (timeout, queda de rede) — reenviar às cegas duplicaria a despesa no ERP.
+// Só usada na INCLUSÃO — editar/excluir já têm `seqRdv` confiável, não precisam adivinhar.
+// Itens do Senior cujo seqrdv já é de outra despesa local da RAT ficam fora (ver filtrosBuscaDespesa),
+// o que desempata o caso comum de despesas idênticas; o que a busca protege continua coberto, porque um
+// item gravado cuja resposta se perdeu ainda não tem dono local. Duas despesas idênticas AINDA não
+// enviadas continuam ambíguas (mais de um resultado -> envia), o mesmo risco já assumido no apontamento.
+async function procurarDespesaNoSenior(despesa: DespesaPronta): Promise<IdentidadeSeniorDespesa | null> {
+  const ocupadas = await prisma.registroDespesaViagem.findMany({
+    where: { codemp: despesa.codemp, numrat: despesa.numrat, seqrdv: { not: null }, id: { not: despesa.id } },
+    select: { seqrdv: true },
+  });
+  const filtros = filtrosBuscaDespesa(
+    despesa,
+    ocupadas.map((o) => o.seqrdv as number)
+  );
 
   const linhas = (await runSqlViaSoap(
     `SELECT USU_SEQRDV AS seqrdv FROM USU_TE777RDV WHERE ${filtros.join(" AND ")}`
@@ -350,13 +386,15 @@ export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasI
           ? EVENTOS_AUDITORIA.DESPESA_EXCLUIDA_SENIOR
           : EVENTOS_AUDITORIA.DESPESA_ENVIADA_SENIOR;
 
+    // Fora do `try` pra o `catch` saber se o Senior JÁ respondeu (o erro foi no write-back local).
+    let registrado: ResultadoEnvioDespesa | undefined;
     try {
       // Marca "enviando" ANTES da chamada — fecha a janela em que a despesa poderia ser
       // editada/excluída de novo com o envio em voo (ver pendenciaEmAndamento, checado pelas
       // rotas de editar/excluir antes de aceitar uma nova ação).
       await prisma.sincronizacaoPendenteDespesa.update({ where: { id: item.id }, data: { status: "enviando" } });
 
-      const registrado = await enviarDespesa(item);
+      registrado = await enviarDespesa(item);
       const duracaoMs = Date.now() - inicioEnvio;
 
       // Write-back na MESMA transação que baixa a fila — ou a despesa fica com o estado
@@ -443,8 +481,24 @@ export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasI
       enviados += 1;
     } catch (error) {
       const duracaoMs = Date.now() - inicioEnvio;
-      const message = error instanceof Error ? error.message : String(error);
+      let message = error instanceof Error ? error.message : String(error);
       const tentativas = item.tentativas + 1;
+
+      // Colisão de seqrdv no write-back de uma INCLUSÃO: o Senior devolveu um seqrdv que já é de outra
+      // despesa local da mesma RAT. Repetir não resolve (daria o mesmo erro 5 vezes e esconderia a causa
+      // atrás de um stack do Prisma), então bloqueia já, com o dado que o operador precisa pra conferir
+      // no ERP antes de reprocessar.
+      let bloqueioImediato = false;
+      if (registrado?.tipo === "incluida" && despesa && ehColisaoDeSeqrdv(error)) {
+        const dono = await prisma.registroDespesaViagem.findFirst({
+          where: { codemp: despesa.codemp, numrat: despesa.numrat, seqrdv: registrado.seqrdv, id: { not: despesa.id } },
+          select: { id: true },
+        });
+        message =
+          `O Senior devolveu o seqrdv ${registrado.seqrdv}, que já pertence à despesa local ${dono?.id ?? "?"} da RAT ${despesa.numrat} — ` +
+          "conferir no ERP (a despesa pode já existir lá) antes de reprocessar.";
+        bloqueioImediato = true;
+      }
 
       await prisma.$transaction([
         prisma.sincronizacaoPendenteDespesa.update({
@@ -452,7 +506,7 @@ export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasI
           data: {
             tentativas,
             ultimoErro: message,
-            status: tentativas >= MAX_TENTATIVAS ? "bloqueado" : "pendente",
+            status: bloqueioImediato || tentativas >= MAX_TENTATIVAS ? "bloqueado" : "pendente",
           },
         }),
         criarEventoAuditoria({
