@@ -13,6 +13,7 @@ import {
   rdvDoConsultor,
   valorHoraVigente,
 } from "../domain/resumoConsultor";
+import { produtividadeDoMes } from "../domain/relatorioProdutividade";
 import { parseIntListParam } from "../lib/queryParams";
 import { rdvConsultorEmAndamento, runSincronizacaoRdvConsultor, statusRdvConsultor } from "../sync/rdvConsultorSync";
 
@@ -425,6 +426,45 @@ dashboardRouter.get("/meu-rdv", requireAuth, async (req: AuthenticatedRequest, r
     res.json(await rdvDoConsultor(alvo.codemp, alvo.codfor, periodos, hoje));
   } catch (error) {
     handleError(res, error, "meu-rdv");
+  }
+});
+
+// Relatório "Produtividade por Fornecedor" (botão Imprimir da Home, 05/10/2026): um item por mês do filtro,
+// cada um no formato do FJPO910 do Senior (linhas de RAT, subtotal por semana, deslocamento e totais). Mesma
+// permissão da Home (resolverConsultorAlvo): o próprio consultor, ou gestor/admin vendo alguém do time.
+dashboardRouter.get("/produtividade", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const contexto = await resolverContextoConsultor(user.email);
+
+    const resolvido = await resolverConsultorAlvo(req, contexto);
+    if ("negado" in resolvido) {
+      res.status(403).json({ error: "Sem permissão para ver os dados deste consultor" });
+      return;
+    }
+    const alvo = resolvido.alvo;
+    if (!alvo || alvo.codfor == null) {
+      res.json({ semConsultor: true });
+      return;
+    }
+
+    const periodo = periodoDaQuery(req, new Date());
+    if (!periodo) {
+      res.status(400).json({ error: "Período inválido" });
+      return;
+    }
+
+    const valorHora = (await valorHoraVigente(alvo.codemp, alvo.codfor))?.vlrhor ?? null;
+    const meses = [];
+    for (const { ano, mes } of periodo.combos) meses.push(await produtividadeDoMes(alvo.codemp, alvo.codfor, ano, mes, valorHora));
+
+    res.json({ consultor: { codfor: alvo.codfor, nome: alvo.nomcom ?? alvo.nomfor ?? `Fornecedor ${alvo.codfor}` }, meses });
+  } catch (error) {
+    handleError(res, error, "produtividade");
   }
 });
 

@@ -37,6 +37,7 @@ import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
 import { RatVisualizacao } from "./pages/projetos/RatVisualizacao";
 import { RelatorioDespesasRat } from "./pages/projetos/RelatorioDespesasRat";
 import { RelatorioCronograma } from "./pages/projetos/RelatorioCronograma";
+import { RelatorioProdutividade } from "./pages/projetos/RelatorioProdutividade";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
@@ -100,6 +101,17 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <RelatorioCronograma />
+                </ProtectedRoute>
+              }
+            />
+            {/* Relatório "Produtividade por Fornecedor" (botão Imprimir da Home do consultor) — fora do
+                AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o acesso é o da própria Home, e o
+                backend (GET /dashboard/produtividade) decide de quem o usuário pode ver os dados. */}
+            <Route
+              path="/relatorio/produtividade"
+              element={
+                <ProtectedRoute>
+                  <RelatorioProdutividade />
                 </ProtectedRoute>
               }
             />
