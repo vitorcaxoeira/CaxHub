@@ -204,11 +204,30 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
   const combosRotulo = resumo.periodo.anos.flatMap((ano) => resumo.periodo.meses.map((mes) => rotuloMesAno(ano, mes)));
   const rotuloPeriodo = combosRotulo.length <= 4 ? combosRotulo.join(", ") : `${combosRotulo.length} meses selecionados`;
 
+  // Relatório "Produtividade por Fornecedor" em aba nova (página própria fora do AppShell, ver
+  // RelatorioProdutividade.tsx): leva o mesmo período do filtro e, quando gestor/admin olha outro consultor,
+  // o `codfor` dele — o backend confere a permissão. Um relatório por mês selecionado.
+  function imprimirProdutividade() {
+    const q = new URLSearchParams({ anos: resumo!.periodo.anos.join(","), meses: resumo!.periodo.meses.join(",") });
+    if (codfor != null) q.set("codfor", String(codfor));
+    window.open(`/relatorio/produtividade?${q.toString()}`, "_blank");
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-baseline justify-between">
         <h1 className="font-display text-xl font-bold text-foreground">{nomeExibido ? `Painel de ${nomeExibido}` : "Meu painel"}</h1>
-        <p className="font-mono text-[11px] text-muted">{rotuloPeriodo}</p>
+        <div className="flex items-center gap-3">
+          <p className="font-mono text-[11px] text-muted">{rotuloPeriodo}</p>
+          <button
+            type="button"
+            onClick={imprimirProdutividade}
+            title="Imprime o relatório Produtividade por Fornecedor, um por mês do filtro (mesmo formato do Senior)"
+            className="rounded-md border border-border px-3 py-1 text-[12.5px] font-medium text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Imprimir
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8 2xl:gap-3">

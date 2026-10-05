@@ -111,12 +111,14 @@ interface RelatorioShellProps {
   onOrientacao: (o: OrientacaoRelatorio) => void;
   // Antes dos controles de folha/tema: status de carregamento e controles próprios de cada relatório.
   controlesExtras?: ReactNode;
-  // Habilita "Baixar PDF" (há conteúdo) e "Imprimir" (há conteúdo e nada ainda carregando).
-  podeBaixar: boolean;
+  // Habilita "Baixar PDF" (há conteúdo) e "Imprimir" (há conteúdo e nada ainda carregando). "Baixar PDF" é
+  // opcional: só aparece quando o relatório passa `onBaixarPdf` (o de Produtividade só imprime, pra não abrir
+  // um Chromium no servidor — o imprimir do navegador já salva em PDF).
+  podeBaixar?: boolean;
   podeImprimir: boolean;
-  baixandoPdf: boolean;
-  onBaixarPdf: () => void;
-  erroPdf: string | null;
+  baixandoPdf?: boolean;
+  onBaixarPdf?: () => void;
+  erroPdf?: string | null;
   // Largura máxima do CONTEÚDO (Tailwind), 6xl como o do 5S; o cronograma usa a largura da folha pra prévia
   // ficar parecida com o papel (a barra de ações segue em 6xl).
   larguraMax?: string;
@@ -157,14 +159,16 @@ export function RelatorioShell({
           {controlesExtras}
           <Segmentado rotulo="Orientação da folha" opcoes={["retrato", "paisagem"] as const} valor={orientacao} onChange={onOrientacao} />
           <Segmentado rotulo="Tema do relatório" opcoes={["claro", "escuro"] as const} valor={tema} onChange={onTema} />
-          <button
-            type="button"
-            onClick={onBaixarPdf}
-            disabled={!podeBaixar || baixandoPdf}
-            className="rounded-md border border-border px-4 py-1.5 text-sm font-medium text-foreground hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {baixandoPdf ? "Gerando PDF…" : "Baixar PDF"}
-          </button>
+          {onBaixarPdf && (
+            <button
+              type="button"
+              onClick={onBaixarPdf}
+              disabled={!podeBaixar || baixandoPdf}
+              className="rounded-md border border-border px-4 py-1.5 text-sm font-medium text-foreground hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {baixandoPdf ? "Gerando PDF…" : "Baixar PDF"}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => window.print()}

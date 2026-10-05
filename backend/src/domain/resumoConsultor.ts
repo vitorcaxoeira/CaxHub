@@ -151,13 +151,14 @@ export const FATOR_HORA_DESLOCAMENTO = 0.5;
 // `ate`, datadas pelo dia da despesa (datemi) — o dia da viagem, como as horas usam a data do item
 // da RAT. Só tipdes=7 (Deslocamento por Rota). Despesa excluída/removida no Senior e despesa de RAT
 // cancelada não contam, igual ao resto do painel. RDV liga na RAT só por valor (codemp+numrat).
-// Devolve as linhas (não o total) pra o chamador separar "até hoje" de "período inteiro".
+// Devolve as linhas (não o total) pra o chamador separar "até hoje" de "período inteiro". `numrat` vai junto
+// pro relatório de produtividade citar de qual RAT veio cada deslocamento.
 export async function deslocamentoNoPeriodo(
   codemp: number,
   codfor: number,
   de: Date,
   ate: Date
-): Promise<{ data: Date; minutos: number }[]> {
+): Promise<{ data: Date; minutos: number; numrat: number }[]> {
   const despesas = await prisma.registroDespesaViagem.findMany({
     where: {
       codemp,
@@ -185,7 +186,7 @@ export async function deslocamentoNoPeriodo(
 
   return despesas
     .filter((d) => d.datemi != null && numratsDoConsultor.has(d.numrat))
-    .map((d) => ({ data: d.datemi!, minutos: d.hordes! }));
+    .map((d) => ({ data: d.datemi!, minutos: d.hordes!, numrat: d.numrat }));
 }
 
 export interface ValorHoraConsultor {
