@@ -66,7 +66,7 @@ export async function recusarSeForaDaJanela(
   return {
     status: 409,
     body: {
-      error: `Só é possível solicitar apontamento ou ajuste ${quando}. Para datas anteriores, peça ao seu líder para liberar dias retroativos.`,
+      error: `Só é possível solicitar apontamento ou ajuste ${quando}.`,
       diasRetroativos: janela.diasRetroativos,
       primeiroDiaPermitido: janela.primeiroDiaPermitido,
     },

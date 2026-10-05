@@ -38,5 +38,5 @@ export function textoJanelaRetroativa(janela: JanelaRetroativa): string {
     janela.diasRetroativos === 0
       ? `só para hoje (${diaCurtoDaJanela(janela.primeiroDiaPermitido)})`
       : `a partir de ${diaCurtoDaJanela(janela.primeiroDiaPermitido)}`;
-  return `Pedidos permitidos ${quando}. Para datas anteriores, peça ao seu líder para liberar dias retroativos.`;
+  return `Pedidos permitidos ${quando}.`;
 }

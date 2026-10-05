@@ -47,7 +47,9 @@ interface JornadaHoje {
 
 const CHAVE_MODO = "caxhub-flutuante-modo";
 // 15s: é o que torna rápido perceber uma atividade parada pelo navegador (ou pelo servidor).
-const INTERVALO_ATUALIZAR_MS = 15_000;
+// Era 15 s. A janela só precisa notar uma sessão parada/iniciada por fora, e quem age nela já atualiza na
+// hora (EVENTO_SESSAO_ALTERADA, visibilitychange); 60 s basta e divide por 4 as chamadas ao servidor.
+const INTERVALO_ATUALIZAR_MS = 60_000;
 const INTERVALO_JORNADA_MS = 30_000;
 // Depois de uma ação feita NESTA janela (iniciar/parar), não avisa "foi encerrada fora daqui": a
 // mudança que a próxima leitura vai trazer é a que a própria pessoa acabou de fazer.
@@ -351,7 +353,10 @@ export function JanelaFlutuante() {
   const carregar = useCallback(async () => {
     if (codfor == null) return;
     try {
-      const { data } = await axios.get("/api/atividades", { params: { codfor } });
+      // Endpoint próprio e enxuto (as atividades abertas do consultor logado). O GET /api/atividades
+      // decora as ~5 mil do escopo todo a cada chamada (~1 s de CPU no servidor) e esta janela chama o
+      // dia inteiro — foi o que saturou o único vCPU da VPS em 05/10/2026.
+      const { data } = await axios.get("/api/atividades/minhas");
       const lista = (data.rows as AtividadeKanban[]).filter(
         (a) => a.coluna?.nome === RAIA_EM_ANDAMENTO || a.coluna?.nome === RAIA_A_FAZER
       );
@@ -365,12 +370,15 @@ export function JanelaFlutuante() {
     }
   }, [codfor]);
 
-  // Atualiza ao abrir, a cada 30s, quando a janela volta ao primeiro plano e quando o vigia
-  // prorroga/encerra uma sessão (mesmo evento que a tela de Atividades já ouve).
+  // Atualiza ao abrir, a cada 60s (só com a janela visível), quando ela volta ao primeiro plano e quando o
+  // vigia prorroga/encerra uma sessão (mesmo evento que a tela de Atividades já ouve). Janela minimizada
+  // ou escondida não consulta: ao reaparecer, `visibilitychange` atualiza na hora.
   useEffect(() => {
     if (codfor == null) return;
     void carregar();
-    const intervalo = setInterval(carregar, INTERVALO_ATUALIZAR_MS);
+    const intervalo = setInterval(() => {
+      if (document.visibilityState === "visible") void carregar();
+    }, INTERVALO_ATUALIZAR_MS);
     const aoVoltar = () => {
       if (document.visibilityState === "visible") void carregar();
     };
