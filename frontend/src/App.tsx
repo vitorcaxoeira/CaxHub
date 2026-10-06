@@ -27,6 +27,7 @@ import { Jornadas } from "./pages/projetos/Jornadas";
 import { Aprovacoes } from "./pages/projetos/Aprovacoes";
 import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
+import { Eficiencia } from "./pages/projetos/Eficiencia";
 import { Auditoria } from "./pages/auditoria/Auditoria";
 import { SolicitacoesViagem } from "./pages/solicitacoes/SolicitacoesViagem";
 import { SolicitacaoViagemForm } from "./pages/solicitacoes/SolicitacaoViagemForm";
@@ -168,7 +169,11 @@ export default function App() {
                   Vitor). Líder não é Role (vem de DepartamentoGestor), então a guarda é dinâmica. Em
                   sincronia com o menu (Sidebar, `gestorOuAdmin`) e o exigirAdminOuGestor do router no
                   backend. Ao mudar quem entra, ampliar as três camadas. */}
+              {/* Painel de Eficiência (Gestão de Projetos): admin ou líder de departamento — mesma guarda
+                  das solicitações. Em sincronia com o item do menu (`gestorOuAdmin`) e o
+                  exigirAdminOuGestor de routes/eficiencia.ts no backend. */}
               <Route element={<RequireGestorOuAdmin />}>
+                <Route path="/projetos/eficiencia" element={<Eficiencia />} />
                 <Route path="/solicitacoes/minhas" element={<SolicitacoesViagem escopo="minhas" />} />
                 <Route path="/solicitacoes/nova" element={<SolicitacaoViagemForm />} />
                 <Route path="/solicitacoes/aprovacoes" element={<SolicitacoesViagem escopo="aprovacao" />} />

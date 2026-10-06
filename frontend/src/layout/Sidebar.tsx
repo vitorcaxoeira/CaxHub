@@ -69,6 +69,7 @@ const groups: NavGroup[] = [
       // pra decidir os do time. O recorte de quem vê o quê é do servidor.
       { to: "/projetos/aprovacoes", label: "Aprovações" },
       { to: "/projetos/alocacao", label: "Alocação", gestorOuAdmin: true },
+      { to: "/projetos/eficiencia", label: "Eficiência", gestorOuAdmin: true },
       { to: "/projetos/jornadas", label: "Meta diária", gestorOuAdmin: true, souConsultor: true },
       { to: "/projetos/auditoria", label: "Auditoria", gestorOuAdmin: true },
     ],

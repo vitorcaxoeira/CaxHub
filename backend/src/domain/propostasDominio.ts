@@ -131,6 +131,12 @@ export function depexeLabel(depexe: number | null): string {
 export const DEPEXE_DIRETORIA = 0;
 export const DEPEXE_COMERCIAL = 2;
 
+// Cliente (`clientes.codcli`) que representa a própria empresa: proposta com este cliente é
+// interna (trabalho da casa, não de cliente externo). Não existe flag no Senior pra isso —
+// decisão do Vitor (05/10/2026): interna = cliente da própria empresa. Medido no banco: codcli 1
+// é "SOELTECH DESENVOLVIMENTO". Usado pelo Painel de Eficiência (domain/eficienciaDados.ts).
+export const CODCLI_EMPRESA_PROPRIA = 1;
+
 // Domínio "USU_TRatForFat" do Senior (forma de faturamento).
 export const FORFAT_LABELS: Record<number, string> = {
   0: "Mediante RAT",
