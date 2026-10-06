@@ -92,6 +92,9 @@ export const EVENTOS_AUDITORIA = {
   // pode pedir apontamento/ajuste. Entidade CONSULTOR (id `codemp:codfor`); `alteracoes` guarda
   // de/para pra ficar rastreável quem liberou e quanto. Ver domain/janelaRetroativa.ts.
   APONTAMENTO_RETROATIVO_ALTERADO: "APONTAMENTO_RETROATIVO_ALTERADO",
+  // Tolerância (minutos) do teto na confirmação de sessões, por consultor. Mesma entidade e mesmo
+  // de/para do evento acima. Ver domain/toleranciaTeto.ts.
+  APONTAMENTO_TOLERANCIA_TETO_ALTERADA: "APONTAMENTO_TOLERANCIA_TETO_ALTERADA",
 
   // Módulo Gestão de Solicitações — Solicitações de Viagem. Entidade própria (SOLICITACAO_VIAGEM);
   // quando há proposta vinculada o evento também leva codemp/codpro e aparece no histórico dela.

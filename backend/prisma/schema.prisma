@@ -757,9 +757,10 @@ model JornadaConsultor {
   @@map("jornada_consultor")
 }
 
-// Janela de retroatividade dos PEDIDOS de apontamento avulso e de ajuste de horário. Por ordem da
-// Diretoria (05/10/2026) o consultor só pede para o dia corrente; esta tabela é a exceção, por
-// consultor, mantida pelo admin ou pelo líder do departamento dele (nunca pelo próprio consultor).
+// Configuração de apontamento por consultor, mantida pelo admin ou pelo líder do departamento dele
+// (nunca pelo próprio consultor): (1) janela de retroatividade dos PEDIDOS de apontamento avulso e
+// de ajuste de horário — por ordem da Diretoria (05/10/2026) o consultor só pede para o dia
+// corrente, e esta tabela é a exceção; (2) tolerância do teto na confirmação de sessões.
 //
 // Conceito só do CaxHub — tabela própria, e não coluna em Consultor, porque Consultor é espelho
 // sincronizado do Senior (ver o padrão "dado em vez de constante"). Mesma chave da
@@ -771,6 +772,11 @@ model ConfiguracaoApontamentoConsultor {
   codfor Int
 
   diasRetroativos Int @default(0)
+
+  // Minutos que o realizado de uma atividade pode passar do teto na hora de CONFIRMAR uma sessão
+  // já trabalhada — absorve a deriva de ~1 min por confirmação (horini/horfim truncam no minuto).
+  // Sem linha na tabela vale o mesmo 5 (domain/toleranciaTeto.ts).
+  toleranciaTetoMin Int @default(5)
 
   atualizadoEm  DateTime @updatedAt
   atualizadoPor Int?
