@@ -26,11 +26,11 @@ import {
   resumirCarteira,
 } from "../domain/eficienciaPropostas";
 import {
-  SISPRO_ORDER,
+  MODPRO_ORDER,
   SITPRO_ATIVIDADES_VISIVEIS,
   depexeLabel,
   fatserLabel,
-  sisproLabel,
+  modproLabel,
   sitproLabel,
 } from "../domain/propostasDominio";
 import { parseIntListParam } from "../lib/queryParams";
@@ -79,7 +79,7 @@ const escopoDe = (a: AcessoEficiencia): EscopoEficiencia => ({ departamentos: a.
 function lerFiltros(q: AuthenticatedRequest["query"]): FiltrosEficiencia {
   const tipo = q.tipo === "int" || q.tipo === "all" ? q.tipo : "cli";
   const sitpro = (parseIntListParam(q.sitpro) ?? []).filter((s) => SITPRO_ATIVIDADES_VISIVEIS.includes(s));
-  return { tipo, sitpro, sispro: parseIntListParam(q.sispro), depexe: parseIntListParam(q.depexe) };
+  return { tipo, sitpro, modpro: parseIntListParam(q.modpro), depexe: parseIntListParam(q.depexe) };
 }
 
 // Capacidade mensal em projeto, em horas. Parâmetro do usuário (a jornada cadastrada é a jornada
@@ -105,7 +105,7 @@ eficienciaRouter.get("/filtros", async (_req, res) => {
     const acesso = acessoDe(res);
     const deps = await carregarDepartamentosDoEscopo(escopoDe(acesso));
     res.json({
-      sistemas: SISPRO_ORDER.map((valor) => ({ valor, rotulo: sisproLabel(valor) })),
+      modalidades: MODPRO_ORDER.map((valor) => ({ valor, rotulo: modproLabel(valor) })),
       departamentos: deps.map((valor) => ({ valor, rotulo: depexeLabel(valor) })),
       situacoes: SITPRO_ATIVIDADES_VISIVEIS.map((valor) => ({ valor, rotulo: sitproLabel(valor) })),
     });
@@ -180,8 +180,8 @@ eficienciaRouter.get("/painel", async (req: AuthenticatedRequest, res) => {
         cliente: p.cliente,
         sitpro: p.sitpro,
         sitproRotulo: sitproLabel(p.sitpro),
-        sispro: p.sispro,
-        sisproRotulo: sisproLabel(p.sispro),
+        modpro: p.modpro,
+        modproRotulo: modproLabel(p.modpro),
         depexe: p.depexe,
         depexeRotulo: depexeLabel(p.depexe),
         interna: p.interna,
@@ -307,7 +307,7 @@ eficienciaRouter.get("/propostas/:codemp/:codpro", async (req: AuthenticatedRequ
       return;
     }
     const acesso = acessoDe(res);
-    const dados = await carregarDados({ tipo: "all", sitpro: [], sispro: null, depexe: null, proposta: { codemp, codpro } }, escopoDe(acesso));
+    const dados = await carregarDados({ tipo: "all", sitpro: [], modpro: null, depexe: null, proposta: { codemp, codpro } }, escopoDe(acesso));
     const { propostas } = await calcular(dados, acesso);
     const p = propostas[0];
     if (!p) {
@@ -320,7 +320,7 @@ eficienciaRouter.get("/propostas/:codemp/:codpro", async (req: AuthenticatedRequ
       codcli: p.codcli,
       cliente: p.cliente,
       sitproRotulo: sitproLabel(p.sitpro),
-      sisproRotulo: sisproLabel(p.sispro),
+      modproRotulo: modproLabel(p.modpro),
       depexeRotulo: depexeLabel(p.depexe),
       interna: p.interna,
       vendido: p.vendido,
@@ -374,7 +374,7 @@ eficienciaRouter.get("/consultores/:codfor", async (req: AuthenticatedRequest, r
       return;
     }
     const capacidadeMin = lerCapacidadeMin(req.query);
-    const dados = await carregarDados({ tipo: "all", sitpro: [], sispro: null, depexe: null }, escopoDe(acesso));
+    const dados = await carregarDados({ tipo: "all", sitpro: [], modpro: null, depexe: null }, escopoDe(acesso));
     const { propostas } = await calcular(dados, acesso);
     const c = calcularConsultores(propostas, capacidadeMin).find((x) => x.codfor === codfor);
     if (!c) {

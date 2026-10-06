@@ -167,8 +167,8 @@ export function AbaPropostas({
           <BotaoCopiar
             montar={() =>
               paraTsv(
-                ["Proposta", "Cliente", "Sistema", "Situação", "Status", "Vendido (h)", "Executado (h)", "Consumo %", "Estouro (h)", "Impacto (R$)", "Saldo (h)", "Eficiência %", "Sem alocação (h)"],
-                linhas.map((p) => [p.codpro, p.cliente, p.sisproRotulo, p.sitproRotulo, ROTULO_PROPOSTA[p.situacao], (p.vendido / 60).toFixed(1), (p.executado / 60).toFixed(1), p.consumo == null ? "" : Math.round(p.consumo * 100), (p.acima / 60).toFixed(1), Math.round(p.impacto), (p.saldo / 60).toFixed(1), p.eficiencia == null ? "" : Math.round(p.eficiencia * 100), (p.semAlocacao / 60).toFixed(1)])
+                ["Proposta", "Cliente", "Modalidade", "Situação", "Status", "Vendido (h)", "Executado (h)", "Consumo %", "Estouro (h)", "Impacto (R$)", "Saldo (h)", "Eficiência %", "Sem alocação (h)"],
+                linhas.map((p) => [p.codpro, p.cliente, p.modproRotulo, p.sitproRotulo, ROTULO_PROPOSTA[p.situacao], (p.vendido / 60).toFixed(1), (p.executado / 60).toFixed(1), p.consumo == null ? "" : Math.round(p.consumo * 100), (p.acima / 60).toFixed(1), Math.round(p.impacto), (p.saldo / 60).toFixed(1), p.eficiencia == null ? "" : Math.round(p.eficiencia * 100), (p.semAlocacao / 60).toFixed(1)])
               )
             }
           />
@@ -207,7 +207,7 @@ export function AbaPropostas({
                 >
                   <td className="px-2.5 py-2">
                     <span className="block max-w-[340px] truncate font-medium text-foreground" title={p.cliente}>{p.cliente}</span>
-                    <span className="block text-[11.5px] text-muted">PS {p.codpro} · {p.sisproRotulo} · {p.sitproRotulo}{p.interna ? " · interna" : ""}</span>
+                    <span className="block text-[11.5px] text-muted">PS {p.codpro} · {p.modproRotulo} · {p.sitproRotulo}{p.interna ? " · interna" : ""}</span>
                   </td>
                   <td className="px-2.5 py-2"><Chip tom={p.situacao}>{ROTULO_PROPOSTA[p.situacao]}{p.critico ? " crítico" : ""}</Chip></td>
                   <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(p.vendido)}</td>

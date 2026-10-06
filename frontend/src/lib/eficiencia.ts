@@ -87,8 +87,8 @@ export interface PropostaLinha {
   cliente: string;
   sitpro: number | null;
   sitproRotulo: string;
-  sispro: number | null;
-  sisproRotulo: string;
+  modpro: number | null;
+  modproRotulo: string;
   depexe: number | null;
   depexeRotulo: string;
   interna: boolean;
@@ -183,7 +183,7 @@ export interface PainelEficiencia {
 }
 
 export interface FiltrosOpcoes {
-  sistemas: { valor: number; rotulo: string }[];
+  modalidades: { valor: number; rotulo: string }[];
   departamentos: { valor: number; rotulo: string }[];
   situacoes: { valor: number; rotulo: string }[];
 }
@@ -191,7 +191,7 @@ export interface FiltrosOpcoes {
 export interface FiltrosEficiencia {
   tipo: "cli" | "int" | "all";
   sitpro: number[];
-  sispro: number[];
+  modpro: number[];
   depexe: number[];
 }
 
@@ -220,7 +220,7 @@ export interface PropostaDetalhe {
   codcli: number;
   cliente: string;
   sitproRotulo: string;
-  sisproRotulo: string;
+  modproRotulo: string;
   depexeRotulo: string;
   interna: boolean;
   vendido: number;

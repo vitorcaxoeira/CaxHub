@@ -18,7 +18,7 @@ export interface FiltrosEficiencia {
   // cli = propostas de clientes, int = internas (cliente da própria empresa), all = todas
   tipo: "cli" | "int" | "all";
   sitpro: number[]; // subconjunto de SITPRO_ATIVIDADES_VISIVEIS (4 Aprovada, 7 Em Execução)
-  sispro: number[] | null;
+  modpro: number[] | null;
   depexe: number[] | null; // filtro escolhido na tela; vale pro depexe da proposta OU de algum item
   // Uma proposta só (gaveta de detalhe): evita recalcular a carteira inteira pra abrir uma.
   proposta?: { codemp: number; codpro: number };
@@ -46,7 +46,7 @@ function condicoesDePropostas(f: FiltrosEficiencia, esc: EscopoEficiencia): Pris
   ];
   if (f.tipo === "cli") partes.push(Prisma.sql`p.codcli <> ${CODCLI_EMPRESA_PROPRIA}`);
   if (f.tipo === "int") partes.push(Prisma.sql`p.codcli = ${CODCLI_EMPRESA_PROPRIA}`);
-  if (f.sispro && f.sispro.length > 0) partes.push(Prisma.sql`p.sispro = ANY(${f.sispro}::int[])`);
+  if (f.modpro && f.modpro.length > 0) partes.push(Prisma.sql`p.modpro = ANY(${f.modpro}::int[])`);
   if (f.depexe && f.depexe.length > 0) partes.push(ITENS_DOS_DEPARTAMENTOS(f.depexe));
   if (f.proposta) partes.push(Prisma.sql`p.codemp = ${f.proposta.codemp} AND p.codpro = ${f.proposta.codpro}`);
   if (esc.departamentos != null) {
@@ -61,7 +61,7 @@ interface LinhaItem {
   codcli: number;
   cliente: string | null;
   sitpro: number | null;
-  sispro: number | null;
+  modpro: number | null;
   depexe_prop: number | null;
   seqite: number;
   desser: string | null;
@@ -96,7 +96,7 @@ export async function carregarDados(f: FiltrosEficiencia, esc: EscopoEficiencia)
     prisma.$queryRaw<LinhaItem[]>`
       SELECT p.codemp, p.codpro, p.codcli,
              COALESCE(NULLIF(TRIM(c.apecli), ''), c.nomcli) AS cliente,
-             p.sitpro, p.sispro, p.depexe AS depexe_prop,
+             p.sitpro, p.modpro, p.depexe AS depexe_prop,
              pi.seqite, s.desser, pi.despro, pi.qtdhor, pi.valhor::float8 AS valhor, pi.fatser,
              pi.depexe AS depexe_item,
              COALESCE(rat.minutos, 0)::int AS exec_rat,
@@ -143,7 +143,7 @@ export async function carregarDados(f: FiltrosEficiencia, esc: EscopoEficiencia)
         codcli: l.codcli,
         cliente: l.cliente ?? `Cliente ${l.codcli}`,
         sitpro: l.sitpro,
-        sispro: l.sispro,
+        modpro: l.modpro,
         depexe: l.depexe_prop,
         interna: l.codcli === CODCLI_EMPRESA_PROPRIA,
         itens: [],
