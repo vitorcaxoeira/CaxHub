@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { OrientacaoRelatorio, RelatorioShell, TemaRelatorio, usePreferencia } from "../../components/relatorio/relatorioComum";
 import { Spinner } from "../../components/ui/Spinner";
 import { formatHorasCompacto, formatarDataBr } from "../../lib/cronograma";
+import { DadosProdutividade, MesProdutividade, hhmm, milhar } from "../../lib/produtividade";
 
 // Relatório "Produtividade por Fornecedor" (FJPO910 do Senior) de um consultor, impresso a partir do botão
 // Imprimir da Home. Mesmo modelo dos outros relatórios impressos: página própria fora do AppShell, aberta em
@@ -14,61 +15,9 @@ import { formatHorasCompacto, formatarDataBr } from "../../lib/cronograma";
 const CHAVE = "caxhub-produtividade-relatorio";
 const numero = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const reais = (v: number) => numero.format(v);
-// Código de RAT/proposta com ponto de milhar, como o Senior imprime (851.254).
-const milhar = new Intl.NumberFormat("pt-BR", { useGrouping: true });
-
-interface Item {
-  tipo: "item";
-  data: string;
-  horini: number;
-  horfim: number;
-  minutos: number;
-  codpro: number | null;
-  numrat: number | null;
-  cliente: string | null;
-  sitrat: number | null;
-  sitratLabel: string;
-  fatser: string | null;
-}
-interface Deslocamento {
-  tipo: "deslocamento";
-  data: string;
-  minutos: number;
-  numrats: number[];
-}
-interface Subtotal {
-  tipo: "subtotal";
-  data: string;
-  rotulo: "Domingo" | "Data fim do mês";
-  minutos: number;
-}
-type Bloco = Item | Deslocamento | Subtotal;
-
-interface Mes {
-  ano: number;
-  mes: number;
-  inicio: string;
-  fim: string;
-  blocos: Bloco[];
-  totais: {
-    minutosTrabalhados: number;
-    minutosDeslocamento: number;
-    valorHora: number | null;
-    valorTrabalhadas: number | null;
-    valorDeslocamento: number | null;
-    valorNota: number | null;
-  };
-}
-
-interface Dados {
-  consultor: { codfor: number; nome: string };
-  meses: Mes[];
-}
-
-const hhmm = (minutos: number) => {
-  const h = String(Math.floor(minutos / 60)).padStart(2, "0");
-  return `${h}:${String(minutos % 60).padStart(2, "0")}`;
-};
+// Tipos, `hhmm` e `milhar` vivem em lib/produtividade.ts, compartilhados com o detalhe do dia da Home.
+type Mes = MesProdutividade;
+type Dados = DadosProdutividade;
 
 const COLUNAS = [
   { chave: "data", largura: "74px" },

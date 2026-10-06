@@ -1,16 +1,21 @@
-import { useEffect, useState } from "react";
+import axios from "axios";
+import { useEffect, useRef, useState } from "react";
 import { useDashboardConsultor, ResumoConsultor } from "../../hooks/useDashboardConsultor";
 import { formatHorasCompacto } from "../../lib/cronograma";
 import { carregarFeriados, Feriado } from "../../lib/feriados";
 import { rotuloMesAno } from "../../lib/periodos";
+import { BlocoProdutividade, MesProdutividade } from "../../lib/produtividade";
 import { DonutChart, DonutItem } from "../ui/DonutChart";
 import { SerieTemporalBarra, SeriePonto } from "../ui/SerieTemporalBarra";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { Skeleton } from "../ui/Skeleton";
+import { Spinner } from "../ui/Spinner";
 import { CardValorHora } from "./CardValorHora";
 import { CardRdv } from "./CardRdv";
+import { DetalheDiaProdutividade } from "./DetalheDiaProdutividade";
 
 const dateFormatterCurto = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
+const dateFormatterDiaSemana = new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "UTC" });
 const dateFormatterLongo = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "long", timeZone: "UTC" });
 
 function formatarDiaCurto(iso: string): string {
@@ -75,7 +80,51 @@ function inicioDaSemana(dataIso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-function AcordeaoSemanal({ porDia }: { porDia: ResumoConsultor["porDia"] }) {
+interface FiltroDetalheDia {
+  anos: number[];
+  meses: number[];
+  codfor?: number;
+}
+
+type DetalheDias =
+  | { estado: "ocioso" | "carregando" }
+  | { estado: "ok"; blocos: BlocoProdutividade[] }
+  | { estado: "erro"; mensagem: string };
+
+// Cada semana abre e mostra os dias; cada dia também abre e mostra as linhas do relatório de produtividade
+// (ver DetalheDiaProdutividade). Os dados vêm de GET /dashboard/produtividade — o mesmo do relatório impresso —
+// e só são buscados quando a pessoa abre o primeiro dia, uma vez por filtro: quem só olha os totais não paga a
+// consulta (uma por mês do período).
+function AcordeaoSemanal({ porDia, filtro }: { porDia: ResumoConsultor["porDia"]; filtro: FiltroDetalheDia }) {
+  const chaveFiltro = `${filtro.anos.join(",")}|${filtro.meses.join(",")}|${filtro.codfor ?? ""}`;
+  const chaveAtual = useRef(chaveFiltro);
+  const [detalhe, setDetalhe] = useState<DetalheDias>({ estado: "ocioso" });
+
+  // Mudou o período ou o consultor: o que estava carregado já não vale.
+  useEffect(() => {
+    chaveAtual.current = chaveFiltro;
+    setDetalhe({ estado: "ocioso" });
+  }, [chaveFiltro]);
+
+  function carregarDetalhe() {
+    if (detalhe.estado !== "ocioso") return;
+    const chaveDaChamada = chaveFiltro;
+    setDetalhe({ estado: "carregando" });
+    axios
+      .get("/api/dashboard/produtividade", {
+        params: { anos: filtro.anos.join(","), meses: filtro.meses.join(","), codfor: filtro.codfor },
+      })
+      .then(({ data }) => {
+        if (chaveAtual.current !== chaveDaChamada) return; // resposta de um filtro que já foi trocado
+        const meses: MesProdutividade[] = data.meses ?? [];
+        setDetalhe({ estado: "ok", blocos: meses.flatMap((m) => m.blocos) });
+      })
+      .catch((err) => {
+        if (chaveAtual.current !== chaveDaChamada) return;
+        setDetalhe({ estado: "erro", mensagem: err.response?.data?.error ?? "Não foi possível carregar o detalhe do dia" });
+      });
+  }
+
   const semanas = new Map<string, { total: number; dias: { data: string; minutos: number }[] }>();
   for (const ponto of porDia) {
     if (ponto.minutos <= 0) continue;
@@ -104,10 +153,35 @@ function AcordeaoSemanal({ porDia }: { porDia: ResumoConsultor["porDia"] }) {
                 {semana.dias
                   .sort((a, b) => (a.data < b.data ? -1 : 1))
                   .map((dia) => (
-                    <div key={dia.data} className="flex items-center justify-between text-[12.5px]">
-                      <span className="text-muted">{formatarDiaCurto(dia.data)}</span>
-                      <span className="font-mono tabular-nums text-foreground">{formatHorasCompacto(dia.minutos)} h</span>
-                    </div>
+                    <details
+                      key={dia.data}
+                      className="group rounded"
+                      onToggle={(e) => {
+                        if (e.currentTarget.open) carregarDetalhe();
+                      }}
+                    >
+                      <summary className="flex cursor-pointer list-none items-center justify-between rounded px-1.5 py-1 text-[12.5px] hover:bg-surface-2">
+                        <span className="flex items-center gap-2 text-muted">
+                          <span aria-hidden className="inline-block text-[9px] transition-transform group-open:rotate-90">
+                            ▶
+                          </span>
+                          <span className="w-8 capitalize">{dateFormatterDiaSemana.format(new Date(`${dia.data}T00:00:00Z`)).replace(".", "")}</span>
+                          {formatarDiaCurto(dia.data)}
+                        </span>
+                        <span className="font-mono tabular-nums text-foreground">{formatHorasCompacto(dia.minutos)} h</span>
+                      </summary>
+                      <div className="px-1.5 pb-2 pt-1">
+                        {detalhe.estado === "ok" ? (
+                          <DetalheDiaProdutividade data={dia.data} minutosDoDia={dia.minutos} blocos={detalhe.blocos} />
+                        ) : detalhe.estado === "erro" ? (
+                          <p className="text-[12.5px] text-destructive">{detalhe.mensagem}</p>
+                        ) : (
+                          <div className="flex items-center gap-2 py-2 text-[12.5px] text-muted">
+                            <Spinner /> Carregando…
+                          </div>
+                        )}
+                      </div>
+                    </details>
                   ))}
               </div>
             </details>
@@ -307,22 +381,19 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
 
       <CardRdv filtro={{ anos, meses, codfor }} rotuloPeriodo={rotuloPeriodo} />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <SerieTemporalBarra
-            titulo="Horas por dia"
-            pontos={pontosSerieDia}
-            series={[{ nome: "Horas", cor: "primary" }]}
-            formatarValor={(v) => `${formatHorasCompacto(v)} h`}
-          />
-        </div>
-        <DonutChart titulo="Horas por projeto" itens={itensDonut} formatarValor={(v) => `${formatHorasCompacto(v)} h`} />
-      </div>
+      {/* Horas por dia e por semana ocupam a largura toda, alinhadas ao card de RDV logo acima. */}
+      <SerieTemporalBarra
+        titulo="Horas por dia"
+        pontos={pontosSerieDia}
+        series={[{ nome: "Horas", cor: "primary" }]}
+        formatarValor={(v) => `${formatHorasCompacto(v)} h`}
+      />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <AcordeaoSemanal porDia={resumo.porDia} />
-        </div>
+      <AcordeaoSemanal porDia={resumo.porDia} filtro={{ anos: resumo.periodo.anos, meses: resumo.periodo.meses, codfor }} />
+
+      {/* Fim da página, lado a lado: o resumo por projeto e os feriados do período. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <DonutChart titulo="Horas por projeto" itens={itensDonut} formatarValor={(v) => `${formatHorasCompacto(v)} h`} />
         <ListaFeriados feriados={feriados} />
       </div>
     </div>
