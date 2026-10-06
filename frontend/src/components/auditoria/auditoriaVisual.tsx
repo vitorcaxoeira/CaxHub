@@ -457,6 +457,14 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeEdicao,
     resumo: (e) => `Alterou os dias retroativos permitidos — ${rotuloEntidade(e)}`,
   },
+  // Líder/admin mudou a tolerância do teto na confirmação de sessões de um consultor. De/para em
+  // `alteracoes`. Mesmo tom do evento de retroatividade: ambos afrouxam uma trava.
+  APONTAMENTO_TOLERANCIA_TETO_ALTERADA: {
+    tone: "warning",
+    rotuloGrupo: "Tolerância do teto",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou a tolerância do teto na confirmação — ${rotuloEntidade(e)}`,
+  },
   // Pedido de mudança nas 3 flags de configuração da proposta (Cronograma) e a decisão de
   // quem tem alçada — mesmo tom das outras 3 famílias de solicitação (warning/success/
   // destructive). A mudança da flag em si (aprovada) ainda gera o evento PRÓPRIO dela

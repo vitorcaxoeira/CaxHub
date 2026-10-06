@@ -8,6 +8,7 @@ import {
   gerenciaDepartamento,
 } from "../domain/contextoProjeto";
 import { MAX_DIAS_RETROATIVOS, diasRetroativosDoConsultor, janelaDoConsultor } from "../domain/janelaRetroativa";
+import { MAX_TOLERANCIA_TETO_MIN, toleranciaTetoDoConsultor } from "../domain/toleranciaTeto";
 import { criarEventoAuditoria, diffCampos } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdConsultor } from "../audit/identidadeEntidade";
@@ -55,7 +56,17 @@ async function consultoresGerenciados(role: string, contexto: Awaited<ReturnType
   return doTime;
 }
 
-// Quem pode mexer na janela de retroatividade de um consultor: admin, ou o líder do departamento
+// Quem pode VER a configuração de apontamento (retroatividade + tolerância do teto) de um consultor:
+// admin ou o líder do departamento dele. Diferente de podeEditarRetroativo, vale também pro próprio
+// registro (um líder olhando o próprio vê o valor, mas não edita). O consultor comum não vê nada.
+function podeVerConfiguracao(
+  ctx: NonNullable<Awaited<ReturnType<typeof contextoDoUsuario>>>,
+  alvo: { depexe: number | null }
+): boolean {
+  return alvo.depexe != null ? gerenciaDepartamento(ctx.role, ctx.contexto, alvo.depexe) : ctx.role === "admin";
+}
+
+// Quem pode mexer na configuração de apontamento de um consultor: admin, ou o líder do departamento
 // dele — e NUNCA o próprio consultor, mesmo sendo admin/líder (o consultor não libera os próprios
 // dias). Diferente da jornada, onde o próprio usuário edita o próprio registro.
 function podeEditarRetroativo(
@@ -149,13 +160,21 @@ jornadasRouter.get("/:codemp/:codfor", async (req: AuthenticatedRequest, res) =>
 
     const linhas = await prisma.jornadaConsultor.findMany({ where: { codemp, codfor } });
     const porDia = new Map(linhas.map((l) => [l.diaSemana, l]));
+    // Configuração de apontamento (retroatividade + tolerância do teto): só admin ou líder do
+    // departamento VÊEM — pro consultor comum os campos nem saem da API. Editar é mais estreito
+    // ainda (podeEditarRetroativo: nunca o próprio consultor).
+    const veConfiguracao = podeVerConfiguracao(ctx, alvo);
     res.json({
       codemp,
       codfor,
-      // Janela de retroatividade dos pedidos de apontamento/ajuste. O próprio consultor vê o valor
-      // mas não edita: quem libera é o líder ou o admin (ver podeEditarRetroativo).
-      diasRetroativos: await diasRetroativosDoConsultor(codemp, codfor),
-      podeEditarRetroativo: podeEditarRetroativo(ctx, alvo, codemp, codfor),
+      podeVerConfiguracao: veConfiguracao,
+      podeEditarConfiguracao: podeEditarRetroativo(ctx, alvo, codemp, codfor),
+      ...(veConfiguracao
+        ? {
+            diasRetroativos: await diasRetroativosDoConsultor(codemp, codfor),
+            toleranciaTetoMin: await toleranciaTetoDoConsultor(codemp, codfor),
+          }
+        : {}),
       dias: DIAS_SEMANA.map((diaSemana) => {
         const l = porDia.get(diaSemana);
         return {
@@ -267,10 +286,12 @@ jornadasRouter.put("/:codemp/:codfor", async (req: AuthenticatedRequest, res) =>
   }
 });
 
-// PUT /jornadas/:codemp/:codfor/dias-retroativos — quantos dias úteis antes de hoje o consultor
-// ainda pode pedir apontamento/ajuste (0 = só hoje). Exceção a uma ordem da Diretoria, então só
-// admin ou o líder do departamento do consultor, nunca ele mesmo, e fica na auditoria com de/para.
-jornadasRouter.put("/:codemp/:codfor/dias-retroativos", async (req: AuthenticatedRequest, res) => {
+// PUT /jornadas/:codemp/:codfor/configuracao-apontamento — configuração de apontamento do consultor:
+// `diasRetroativos` (quantos dias úteis antes de hoje ele ainda pode pedir apontamento/ajuste; 0 =
+// só hoje) e `toleranciaTetoMin` (folga do teto na confirmação de sessão). Os dois são opcionais,
+// mas ao menos um é obrigatório. Exceção a uma ordem da Diretoria, então só admin ou o líder do
+// departamento do consultor, nunca ele mesmo, e fica na auditoria com de/para.
+jornadasRouter.put("/:codemp/:codfor/configuracao-apontamento", async (req: AuthenticatedRequest, res) => {
   try {
     const codemp = Number(req.params.codemp);
     const codfor = Number(req.params.codfor);
@@ -278,9 +299,18 @@ jornadasRouter.put("/:codemp/:codfor/dias-retroativos", async (req: Authenticate
       res.status(400).json({ error: "Parâmetros inválidos" });
       return;
     }
-    const dias = Number(req.body?.diasRetroativos);
-    if (!Number.isInteger(dias) || dias < 0 || dias > MAX_DIAS_RETROATIVOS) {
+    const dias = req.body?.diasRetroativos === undefined ? undefined : Number(req.body.diasRetroativos);
+    const tolerancia = req.body?.toleranciaTetoMin === undefined ? undefined : Number(req.body.toleranciaTetoMin);
+    if (dias === undefined && tolerancia === undefined) {
+      res.status(400).json({ error: "Informe diasRetroativos e/ou toleranciaTetoMin" });
+      return;
+    }
+    if (dias !== undefined && (!Number.isInteger(dias) || dias < 0 || dias > MAX_DIAS_RETROATIVOS)) {
       res.status(400).json({ error: `diasRetroativos deve ser um inteiro de 0 a ${MAX_DIAS_RETROATIVOS}` });
+      return;
+    }
+    if (tolerancia !== undefined && (!Number.isInteger(tolerancia) || tolerancia < 0 || tolerancia > MAX_TOLERANCIA_TETO_MIN)) {
+      res.status(400).json({ error: `toleranciaTetoMin deve ser um inteiro de 0 a ${MAX_TOLERANCIA_TETO_MIN}` });
       return;
     }
 
@@ -296,19 +326,35 @@ jornadasRouter.put("/:codemp/:codfor/dias-retroativos", async (req: Authenticate
       return;
     }
     if (!podeEditarRetroativo(ctx, alvo, codemp, codfor)) {
-      res.status(403).json({ error: "Só o líder do departamento ou o admin podem liberar dias retroativos — nunca o próprio consultor" });
+      res.status(403).json({ error: "Só o líder do departamento ou o admin podem alterar esta configuração — nunca o próprio consultor" });
       return;
     }
 
-    const antes = await diasRetroativosDoConsultor(codemp, codfor);
-    const diff = diffCampos({ diasRetroativos: "Dias retroativos" }, { diasRetroativos: antes }, { diasRetroativos: dias });
+    const [diasAntes, toleranciaAntes] = await Promise.all([
+      diasRetroativosDoConsultor(codemp, codfor),
+      toleranciaTetoDoConsultor(codemp, codfor),
+    ]);
+    const diasDepois = dias ?? diasAntes;
+    const toleranciaDepois = tolerancia ?? toleranciaAntes;
+    const diffDias = diffCampos({ diasRetroativos: "Dias retroativos" }, { diasRetroativos: diasAntes }, { diasRetroativos: diasDepois });
+    const diffTolerancia = diffCampos(
+      { toleranciaTetoMin: "Tolerância do teto (min)" },
+      { toleranciaTetoMin: toleranciaAntes },
+      { toleranciaTetoMin: toleranciaDepois }
+    );
+    const rotulo = `Consultor — ${alvo.nomcom ?? alvo.nomfor ?? codfor}`;
     await prisma.$transaction(async (tx) => {
       await tx.configuracaoApontamentoConsultor.upsert({
         where: { codemp_codfor: { codemp, codfor } },
-        create: { codemp, codfor, diasRetroativos: dias, atualizadoPor: ctx.user.id },
-        update: { diasRetroativos: dias, atualizadoPor: ctx.user.id },
+        create: { codemp, codfor, diasRetroativos: diasDepois, toleranciaTetoMin: toleranciaDepois, atualizadoPor: ctx.user.id },
+        update: { diasRetroativos: diasDepois, toleranciaTetoMin: toleranciaDepois, atualizadoPor: ctx.user.id },
       });
-      if (diff.algumaMudanca) {
+      // Um evento por assunto alterado, cada um com o seu de/para.
+      for (const [diff, eventoTipo] of [
+        [diffDias, EVENTOS_AUDITORIA.APONTAMENTO_RETROATIVO_ALTERADO],
+        [diffTolerancia, EVENTOS_AUDITORIA.APONTAMENTO_TOLERANCIA_TETO_ALTERADA],
+      ] as const) {
+        if (!diff.algumaMudanca) continue;
         await criarEventoAuditoria(
           {
             origem: "tela",
@@ -316,8 +362,8 @@ jornadasRouter.put("/:codemp/:codfor/dias-retroativos", async (req: Authenticate
             codemp,
             entidadeTipo: ENTIDADES_AUDITORIA.CONSULTOR,
             entidadeId: entidadeIdConsultor(codemp, codfor),
-            entidadeRotulo: `Consultor — ${alvo.nomcom ?? alvo.nomfor ?? codfor}`,
-            eventoTipo: EVENTOS_AUDITORIA.APONTAMENTO_RETROATIVO_ALTERADO,
+            entidadeRotulo: rotulo,
+            eventoTipo,
             alteracoes: diff.alteracoes,
             metadata: { codfor },
             correlationId: req.correlationId!,
@@ -327,8 +373,8 @@ jornadasRouter.put("/:codemp/:codfor/dias-retroativos", async (req: Authenticate
       }
     });
 
-    res.json({ codemp, codfor, diasRetroativos: dias });
+    res.json({ codemp, codfor, diasRetroativos: diasDepois, toleranciaTetoMin: toleranciaDepois });
   } catch (error) {
-    handleError(res, error, "dias-retroativos");
+    handleError(res, error, "configuracao-apontamento");
   }
 });

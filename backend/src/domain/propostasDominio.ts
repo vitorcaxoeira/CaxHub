@@ -55,6 +55,7 @@ export const MODPRO_LABELS: Record<number, string> = {
   1: "Levantamento",
   2: "DRM",
 };
+export const MODPRO_ORDER = [0, 1, 2];
 
 export function modproLabel(modpro: number | null): string {
   if (modpro === null) return "—";

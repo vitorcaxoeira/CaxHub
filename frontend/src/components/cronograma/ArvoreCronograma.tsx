@@ -10,14 +10,20 @@ import {
   estadoAlertaItem,
   FaixaAninhamento,
   filtrarPreservandoAncestrais,
+  COLUNA_HORAS_MIN_PX,
   larguraColunaHorasPx,
   OrcamentoItem,
-  periodosEfetivos,
   StatusNo,
 } from "../../lib/cronograma";
 import { ErroDatasForaDoPai, ImpactoDatas, NoCronogramaCompleto, PatchNo, NovoNo } from "../../hooks/useCronograma";
 import { BarraFerramentas, FiltrosCronograma } from "./BarraFerramentas";
-import { LinhaNo } from "./LinhaNo";
+import {
+  CLASSES_ESPACAMENTO_LINHA,
+  LARGURA_COLUNA_BLOQ_APTO_PX,
+  LARGURA_COLUNA_BLOQ_EXCE_PX,
+  LARGURA_COLUNA_RESP_PX,
+  LinhaNo,
+} from "./LinhaNo";
 import { LinhaNovaAtividade } from "./LinhaNovaAtividade";
 import { DrawerAtividade } from "./DrawerAtividade";
 import { DestinoMover } from "./MenuAcoesNo";
@@ -155,8 +161,6 @@ export function ArvoreCronograma({
   // Horas contratadas do item, propagadas pra cima: pasta raiz soma os itens que agrupa.
   const orcadoPorId = useMemo(() => agregarOrcado(nos), [nos]);
   const statusPorId = useMemo(() => derivarStatus(nos), [nos]);
-  // Início/fim de cada linha: o próprio, ou (pasta/item sem data) o que os descendentes cobrem.
-  const periodosPorId = useMemo(() => periodosEfetivos(nos), [nos]);
 
   const porId = useMemo(() => new Map(nos.map((n) => [n.id, n])), [nos]);
   // Chave é `number | null` (null = raiz), nunca um sentinela numérico tipo -1 — os ids
@@ -721,7 +725,6 @@ export function ArvoreCronograma({
         statusEfetivo={statusPorId.get(no.id) ?? "nao_iniciada"}
         agregado={agregados.get(no.id) ?? { horasPrevistas: 0, horasRealizadas: 0, horasExcedentes: 0, avanco: 0 }}
         orcado={orcadoPorId.get(no.id) ?? 0}
-        periodo={periodosPorId.get(no.id)}
         orcamento={orcamentosPorId.get(no.id)}
         contagemDescendentes={contagemDescendentesPorId.get(no.id) ?? 0}
         selecionado={selecionadoId === no.id}
@@ -835,29 +838,30 @@ export function ArvoreCronograma({
           </div>
         ) : (
           <div>
-            <div className="flex items-center gap-2 border-b border-border bg-surface-2 py-2 pl-[14px] pr-3">
+            {/* Cabeçalho com o MESMO espaçamento (gap/pr) e as MESMAS larguras da linha (LinhaNo.tsx):
+                qualquer diferença aqui desloca o rótulo de cada coluna em relação ao valor. */}
+            <div className={`flex items-center ${CLASSES_ESPACAMENTO_LINHA} border-b border-border bg-surface-2 py-2 pl-[14px]`}>
               <span className="w-4 flex-none" />
               <span className="flex-1 font-mono text-[11px] font-medium uppercase tracking-wider text-muted">Estrutura</span>
-              {/* Rótulos das colunas estáticas da linha de item — as larguras têm que
-                  bater com as de LinhaNo, senão o cabeçalho descola do conteúdo. */}
               {/* Um rótulo pra vaga compartilhada: item mostra o departamento executor,
                   atividade mostra o responsável. */}
-              <span className="hidden w-[168px] flex-none font-mono text-[11px] font-medium uppercase tracking-wider text-muted sm:block">
+              <span
+                className="hidden flex-none font-mono text-[11px] font-medium uppercase tracking-wider text-muted sm:block"
+                style={{ width: LARGURA_COLUNA_RESP_PX }}
+              >
                 Depto. / Resp.
               </span>
-              {["Início", "Fim"].map((rotulo) => (
-                <span
-                  key={rotulo}
-                  className="hidden w-[64px] flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted xl:block"
-                >
-                  {rotulo}
-                </span>
-              ))}
-              {["Orçado", "Realizado", "Alocado"].map((rotulo) => (
+              {(
+                [
+                  ["Orçado", COLUNA_HORAS_MIN_PX.orcado],
+                  ["Realizado", COLUNA_HORAS_MIN_PX.realizado],
+                  ["Alocado", COLUNA_HORAS_MIN_PX.alocado],
+                ] as const
+              ).map(([rotulo, minimo]) => (
                 <span
                   key={rotulo}
                   className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
-                  style={{ width: larguraColunaHorasPx(larguraHoras) }}
+                  style={{ width: larguraColunaHorasPx(larguraHoras, minimo) }}
                 >
                   {rotulo}
                 </span>
@@ -865,16 +869,22 @@ export function ArvoreCronograma({
               {/* Bloq. Exce. / Hrs. Exce. / Bloq. Apto. — trio fixo, nesta ordem exata (ver
                   LinhaNo: checkbox, valor/input, checkbox, todos operando na mesma alocação
                   quando o nó tem exatamente 1). */}
-              <span className="hidden w-[104px] flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block">
+              <span
+                className="hidden flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
+                style={{ width: LARGURA_COLUNA_BLOQ_EXCE_PX }}
+              >
                 Bloq. Exce.
               </span>
               <span
                 className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
-                style={{ width: larguraColunaHorasPx(larguraHoras) }}
+                style={{ width: larguraColunaHorasPx(larguraHoras, COLUNA_HORAS_MIN_PX.excedente) }}
               >
                 Hrs. Exce.
               </span>
-              <span className="hidden w-[84px] flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block">
+              <span
+                className="hidden flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
+                style={{ width: LARGURA_COLUNA_BLOQ_APTO_PX }}
+              >
                 Bloq. Apto.
               </span>
               <span className="w-6 flex-none" />

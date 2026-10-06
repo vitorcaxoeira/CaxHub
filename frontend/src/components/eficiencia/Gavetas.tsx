@@ -108,7 +108,7 @@ export function GavetaProposta({ codemp, codpro, limiares, onFechar }: { codemp:
     <Moldura
       rotulo="Proposta"
       titulo={p ? p.cliente : `PS ${codpro}`}
-      subtitulo={p ? `PS ${p.codpro} · ${p.sisproRotulo} · ${p.sitproRotulo} · ${p.depexeRotulo}${p.interna ? " · interna" : ""}` : undefined}
+      subtitulo={p ? `PS ${p.codpro} · ${p.modproRotulo} · ${p.sitproRotulo} · ${p.depexeRotulo}${p.interna ? " · interna" : ""}` : undefined}
       selo={p && <Chip tom={p.situacao}>{ROTULO_PROPOSTA[p.situacao]}{p.critico ? " crítico" : ""}</Chip>}
       onFechar={onFechar}
     >

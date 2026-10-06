@@ -57,7 +57,7 @@ export function Eficiencia() {
     [setParams]
   );
 
-  const [filtros, setFiltros] = useState<FiltrosEficiencia>({ tipo: "cli", sitpro: [], sispro: [], depexe: [] });
+  const [filtros, setFiltros] = useState<FiltrosEficiencia>({ tipo: "cli", sitpro: [], modpro: [], depexe: [] });
   const [capacidade, setCapacidade] = useState<number>(lerCapacidade);
   const [capRascunho, setCapRascunho] = useState<string>(String(lerCapacidade()));
   const [parametrosAbertos, setParametrosAbertos] = useState(false);
@@ -90,7 +90,7 @@ export function Eficiencia() {
         params: {
           tipo: filtros.tipo,
           sitpro: filtros.sitpro.join(",") || undefined,
-          sispro: filtros.sispro.join(",") || undefined,
+          modpro: filtros.modpro.join(",") || undefined,
           depexe: filtros.depexe.join(",") || undefined,
           cap: capacidade,
         },
@@ -242,11 +242,11 @@ export function Eficiencia() {
               labelSufixo="situações"
             />
             <MultiSelectDropdown
-              opcoes={opcoes.sistemas.map((s) => ({ value: s.valor, label: s.rotulo }))}
-              selecionados={filtros.sispro}
-              onChange={(sispro) => setFiltros((f) => ({ ...f, sispro }))}
-              labelTodos="Todos os sistemas"
-              labelSufixo="sistemas"
+              opcoes={opcoes.modalidades.map((s) => ({ value: s.valor, label: s.rotulo }))}
+              selecionados={filtros.modpro}
+              onChange={(modpro) => setFiltros((f) => ({ ...f, modpro }))}
+              labelTodos="Todas as modalidades"
+              labelSufixo="modalidades"
             />
             {opcoes.departamentos.length > 1 && (
               <MultiSelectDropdown

@@ -35,7 +35,7 @@ function item(vendidoH: number, executadoH: number, extra: Partial<ItemEntrada> 
   return { codemp: 1, codpro: 100, seqite: ++seq, descricao: "i", servico: null, depexe: 1, fatser: "S", vendido: h(vendidoH), valhor: 100, executado: h(executadoH), ...extra };
 }
 function proposta(itens: ItemEntrada[], extra: Partial<PropostaEntrada> = {}): PropostaEntrada {
-  return { codemp: 1, codpro: 100, codcli: 10, cliente: "Cliente", sitpro: 7, sispro: 1, depexe: 1, interna: false, itens, ...extra };
+  return { codemp: 1, codpro: 100, codcli: 10, cliente: "Cliente", sitpro: 7, modpro: 1, depexe: 1, interna: false, itens, ...extra };
 }
 const aloc = (it: ItemEntrada, codfor: number, alocadoH: number, executadoH: number): AlocacaoEntrada => ({
   codemp: it.codemp, codpro: it.codpro, seqite: it.seqite, codfor, alocado: h(alocadoH), executado: h(executadoH),

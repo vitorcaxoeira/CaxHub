@@ -3,6 +3,7 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis, codforsDoTime } from "../domain/contextoProjeto";
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
+import { toleranciaTetoDoConsultor } from "../domain/toleranciaTeto";
 import { diaBrasilComoData, paraHoraBrasil } from "../domain/fusoBrasil";
 import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
 import { calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone } from "../domain/ratDominio";
@@ -202,12 +203,15 @@ async function resolverRatDaConfirmacao(
 //     passa de propósito (executar numa atividade ainda não dimensionada), mas um PEDIDO
 //     sem teto não tem contra o que o gestor conferir.
 //   - `reservadoPendente`: minutos que outros pedidos pendentes da atividade já reservam.
+//   - `toleranciaMin`: folga, em minutos, sobre o TOTAL acima do teto. Só a confirmação de sessão
+//     já trabalhada passa isto (ver toleranciaTeto.ts); mensagem e campos da resposta continuam
+//     sobre o teto real — a tolerância é folga silenciosa, não saldo anunciado.
 export async function recusarSeEstourarTeto(
   atividade: Parameters<typeof saldoDaAtividade>[0],
   inicio: Date,
   fim: Date,
   descontarMinutos = 0,
-  opcoes: { exigirTeto?: boolean; reservadoPendente?: number } = {}
+  opcoes: { exigirTeto?: boolean; reservadoPendente?: number; toleranciaMin?: number } = {}
 ): Promise<{ status: number; body: Record<string, unknown> } | null> {
   const duracao = Math.round((fim.getTime() - inicio.getTime()) / 60000);
   const { teto, realizado } = await saldoDaAtividade(atividade);
@@ -226,7 +230,7 @@ export async function recusarSeEstourarTeto(
 
   const reservado = opcoes.reservadoPendente ?? 0;
   const realizadoBase = realizado - descontarMinutos + reservado;
-  if (realizadoBase + duracao <= teto) return null;
+  if (realizadoBase + duracao <= teto + (opcoes.toleranciaMin ?? 0)) return null;
 
   const disponivel = teto - realizadoBase;
   const sufixoReserva = reservado > 0 ? ` (já descontados ${formatarMinutos(reservado)} de pedidos pendentes)` : "";
@@ -383,7 +387,13 @@ async function confirmarSessao(
   // duração atual dela — senão a mesma hora contaria duas vezes e o bloqueio dispararia
   // com metade do saldo consumido.
   const duracaoAtualDaSessao = Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000);
-  const recusa = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao);
+
+  // Tolerância só pra sessão PREEXISTENTE (tempo já trabalhado: card movido, Start/Stop,
+  // solicitação aprovada) e a do consultor DONO da atividade, não a de quem confirma. O /manual
+  // ("recem-criada") é tempo novo declarado na hora, não deriva de arredondamento: teto exato.
+  const toleranciaMin =
+    origemSessao === "preexistente" ? await toleranciaTetoDoConsultor(atividade.codemp, atividade.codfor) : 0;
+  const recusa = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao, { toleranciaMin });
   if (recusa) return recusa;
 
   // O check de `fim > inicio` logo acima (linha 234) é em MILISSEGUNDOS; horini/horfim são

@@ -49,7 +49,7 @@ export interface PropostaEntrada {
   codcli: number;
   cliente: string;
   sitpro: number | null;
-  sispro: number | null;
+  modpro: number | null;
   depexe: number | null;
   interna: boolean;
   itens: ItemEntrada[];
@@ -102,7 +102,7 @@ export interface PropostaCalculada {
   codcli: number;
   cliente: string;
   sitpro: number | null;
-  sispro: number | null;
+  modpro: number | null;
   depexe: number | null;
   interna: boolean;
   vendido: number;
@@ -237,7 +237,7 @@ export function calcularProposta(
     codcli: proposta.codcli,
     cliente: proposta.cliente,
     sitpro: proposta.sitpro,
-    sispro: proposta.sispro,
+    modpro: proposta.modpro,
     depexe: proposta.depexe,
     interna: proposta.interna,
     vendido,

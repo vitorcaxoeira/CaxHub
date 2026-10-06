@@ -3,13 +3,11 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   HorasAgregadas,
   OrcamentoItem,
-  PeriodoEfetivo,
   StatusNo,
   estadoAlertaItem,
   formatHorasCompacto,
   formatarAlocacoes,
-  formatarDataBr,
-  formatarDataCurta,
+  COLUNA_HORAS_MIN_PX,
   larguraColunaHorasPx,
 } from "../../lib/cronograma";
 import { NoCronogramaCompleto } from "../../hooks/useCronograma";
@@ -46,6 +44,27 @@ const CIRCULO_STATUS: Record<StatusNo, string> = {
   concluida: "border-success bg-success",
 };
 
+// Recuo da hierarquia, compartilhado com a linha "＋ Nova atividade" (LinhaNovaAtividade.tsx), que
+// precisa casar com as atividades irmãs. 6px por nível (eram 24, reduzido 75% quando a linha
+// ficou espremida); a margem base de 14px não mudou.
+export const RECUO_BASE_PX = 14;
+export const RECUO_NIVEL_PX = 6;
+// Largura da seta de expandir (w-4 = 16px) + gap-1.5 (6px): onde começa o ícone do nó dentro da linha.
+export const RECUO_ATE_ICONE_PX = 22;
+// Largura da coluna Depto. / Resp.: avatar (22px) + gap (6px) + "Graciele Rodrigues" em 12px (106px
+// medidos no navegador) = 134px, mais 6px de folga pra variação de fonte. Nome maior trunca com
+// "…" (o nome inteiro fica no title). Cabeçalho (ArvoreCronograma.tsx) e linhas usam esta mesma
+// constante, senão o rótulo descola do conteúdo.
+export const LARGURA_COLUNA_RESP_PX = 140;
+// Colunas de checkbox: rótulo "BLOQ. EXCE."/"BLOQ. APTO." tem ~79px (11px mono, tracking-wider), e
+// a coluna fica centrada, então a folga é só metade de cada lado.
+export const LARGURA_COLUNA_BLOQ_EXCE_PX = 92;
+export const LARGURA_COLUNA_BLOQ_APTO_PX = 84;
+// Espaço entre colunas e margem direita da linha. O cabeçalho (ArvoreCronograma.tsx) usa ESTAS
+// classes — com gap/padding diferentes dos da linha, o rótulo de cada coluna descolava do valor
+// (2px por coluna, acumulando da direita pra esquerda, até ~18px em Depto./Resp.).
+export const CLASSES_ESPACAMENTO_LINHA = "gap-1.5 pr-2";
+
 export function IconeStatusAtividade({ status }: { status: StatusNo }) {
   return (
     <span className={`flex h-3.5 w-3.5 flex-none items-center justify-center rounded-full border-2 ${CIRCULO_STATUS[status]}`}>
@@ -74,9 +93,6 @@ interface LinhaNoProps {
   agregado: HorasAgregadas;
   // Horas contratadas do item da proposta, já somadas pra cima (ver agregarOrcado).
   orcado: number;
-  // Início/fim exibidos: o próprio do nó ou, quando ele não tem, o que os descendentes cobrem
-  // (ver periodosEfetivos) — o derivado aparece em itálico/cinza.
-  periodo?: PeriodoEfetivo;
   // Só presente pra tipo="item". Não alimenta mais coluna nenhuma — sobrou pra decidir o
   // estado de alerta da linha (borda, fundo e os chips de estouro).
   orcamento?: OrcamentoItem;
@@ -121,7 +137,6 @@ export function LinhaNo({
   statusEfetivo,
   agregado,
   orcado,
-  periodo,
   orcamento,
   contagemDescendentes,
   selecionado,
@@ -141,7 +156,7 @@ export function LinhaNo({
   onMudarConfigApontamentoAlocacao,
   onSalvarExcedenteAlocacao,
 }: LinhaNoProps) {
-  const paddingEsquerda = 14 + profundidade * 24;
+  const paddingEsquerda = RECUO_BASE_PX + profundidade * RECUO_NIVEL_PX;
 
   // Caso comum do lote novo: 1 consultor por atividade-folha (nó com 0 ou >1 alocações não
   // ganha os controles inline — 0 não tem o que configurar, >1 seria ambíguo qual alocação
@@ -226,7 +241,10 @@ export function LinhaNo({
   const excedenteReal = orcamento ? orcamento.horasRealizadas - orcamento.horasContratadas : 0;
 
   // Mesma função usada pelo cabeçalho da árvore — é o que garante que os dois alinhem.
-  const larguraColunaNumero = larguraColunaHorasPx(larguraHoras);
+  const larguraOrcado = larguraColunaHorasPx(larguraHoras, COLUNA_HORAS_MIN_PX.orcado);
+  const larguraRealizado = larguraColunaHorasPx(larguraHoras, COLUNA_HORAS_MIN_PX.realizado);
+  const larguraAlocado = larguraColunaHorasPx(larguraHoras, COLUNA_HORAS_MIN_PX.alocado);
+  const larguraExcedente = larguraColunaHorasPx(larguraHoras, COLUNA_HORAS_MIN_PX.excedente);
 
   // Tooltip do badge de integração ERP: falha mostra o erro de verdade que o Senior devolveu
   // (integracaoErpErro, ver mapNo no backend); sincronizado mostra os MESMOS ids técnicos já
@@ -294,7 +312,7 @@ export function LinhaNo({
         // morto como os 46px de antes.
         className={`flex ${
           no.tipo === "item" ? "min-h-[32px]" : "min-h-7"
-        } cursor-pointer items-center gap-1.5 py-1 pr-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${classeFundoEBordaEsquerda} ${classeBordaDireita} ${classeBordaTopo} ${classeBordaBaixo} ${
+        } cursor-pointer items-center ${CLASSES_ESPACAMENTO_LINHA} py-1 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${classeFundoEBordaEsquerda} ${classeBordaDireita} ${classeBordaTopo} ${classeBordaBaixo} ${
           selecionado ? "ring-1 ring-inset ring-primary/50" : ""
         } ${isDragging ? "opacity-40" : ""} ${isOverCorpo && no.tipo !== "atividade" ? "ring-2 ring-inset ring-primary/40" : ""}`}
         style={style}
@@ -317,21 +335,21 @@ export function LinhaNo({
             {temFilhos ? (expandido ? "▾" : "▸") : "·"}
           </button>
 
-          {podeArrastar && (
-            <span
-              {...listeners}
-              {...attributes}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-none cursor-grab text-[11px] text-muted opacity-0 group-hover:opacity-100 active:cursor-grabbing"
-              title="Arrastar"
-            >
-              ⠿
-            </span>
-          )}
-
-          <span className="flex-none text-[13px]">{no.tipo === "item" ? "📦" : no.tipo === "pasta" ? "📁" : null}</span>
-
-          {no.tipo === "atividade" && <IconeStatusAtividade status={statusEfetivo} />}
+          {/* O próprio ícone do nó (📦 item, 📁 pasta, círculo de status da atividade) é a alça de
+              arrastar — antes havia um ⠿ à parte, que reservava espaço na linha mesmo invisível.
+              Sem permissão pra arrastar o ícone fica como era, sem listeners. O clique NÃO é
+              interceptado: sem arrasto ele sobe pra linha (expandir/abrir), e o dnd-kit já engole
+              o clique que sucede um arrasto de verdade (PointerSensor, distância de 6px). */}
+          <span
+            {...(podeArrastar ? { ...listeners, ...attributes } : {})}
+            // Só há PointerSensor (sem teclado), então o tabIndex=0 que o dnd-kit injeta só
+            // criaria uma parada de Tab por linha, com anel de foco em cima do ícone.
+            tabIndex={-1}
+            className={`flex flex-none items-center text-[13px] outline-none ${podeArrastar ? "cursor-grab active:cursor-grabbing" : ""}`}
+            title={podeArrastar ? "Arraste para mover" : undefined}
+          >
+            {no.tipo === "item" ? "📦" : no.tipo === "pasta" ? "📁" : <IconeStatusAtividade status={statusEfetivo} />}
+          </span>
 
               {/* Nº do item como prefixo, com 2 dígitos. `flex-none` e largura fixa: assim
                   não disputa o orçamento do truncate e as descrições começam todas no mesmo
@@ -425,7 +443,7 @@ export function LinhaNo({
             mesmo x — antes o responsável vivia dentro da coluna flexível, encostado à
             direita da descrição, e por isso a borda esquerda dele variava com o tamanho de
             cada nome. */}
-        <div className="hidden w-[168px] flex-none sm:block">
+        <div className="hidden flex-none sm:block" style={{ width: LARGURA_COLUNA_RESP_PX }}>
           {no.tipo === "item" && no.depexeLabel && (
             <span
               className="block truncate rounded bg-surface-2 px-1.5 py-0.5 text-center font-mono text-[9.5px] font-medium text-muted"
@@ -446,28 +464,6 @@ export function LinhaNo({
           )}
         </div>
 
-        {/* Início / Fim — o próprio período do nó; em cinza itálico quando é derivado dos
-            descendentes (pasta/item sem data própria). Só de xl pra cima: abaixo disso a linha já
-            está apertada e o período fica no painel de edição. */}
-        {([
-          { chave: "inicio", valor: periodo?.inicio ?? null, derivado: periodo?.inicioDerivado ?? false, rotulo: "Início" },
-          { chave: "fim", valor: periodo?.fim ?? null, derivado: periodo?.fimDerivado ?? false, rotulo: "Fim" },
-        ] as const).map((c) => (
-          <div
-            key={c.chave}
-            className={`hidden w-[64px] flex-none text-center font-mono text-[11px] tabular-nums xl:block ${
-              c.derivado ? "italic text-muted/70" : "text-muted"
-            }`}
-            title={
-              c.valor
-                ? `${c.rotulo} previsto: ${formatarDataBr(c.valor)}${c.derivado ? " (calculado pelas atividades abaixo)" : ""}`
-                : `${c.rotulo} previsto: não definido`
-            }
-          >
-            {formatarDataCurta(c.valor)}
-          </div>
-        ))}
-
         {/* Colunas numéricas — Orçado, Realizado e Alocado. Todas com a MESMA largura,
             `flex-none` e presentes em toda linha, inclusive quando vazias: é isso que faz
             os números caírem sempre no mesmo x, seja pasta, item ou atividade. Antes as
@@ -483,7 +479,7 @@ export function LinhaNo({
             também fica, porque somaria zero e "000:00" ali sugeriria contrato zerado. */}
         <div
           className="hidden flex-none text-right font-mono text-[12px] tabular-nums text-muted md:block"
-          style={{ width: larguraColunaNumero }}
+          style={{ width: larguraOrcado }}
           title="Orçado"
         >
           {no.tipo === "item" || (no.tipo === "pasta" && orcado > 0) ? formatHorasCompacto(orcado, larguraHoras) : ""}
@@ -493,7 +489,7 @@ export function LinhaNo({
           className={`hidden flex-none text-right font-mono text-[12px] tabular-nums md:block ${
             agregado.horasRealizadas > agregado.horasPrevistas ? "text-warning" : "text-primary"
           }`}
-          style={{ width: larguraColunaNumero }}
+          style={{ width: larguraRealizado }}
           title="Realizado"
         >
           {formatHorasCompacto(agregado.horasRealizadas, larguraHoras)}
@@ -501,7 +497,7 @@ export function LinhaNo({
 
         <div
           className="hidden flex-none text-right font-mono text-[12px] tabular-nums text-muted md:block"
-          style={{ width: larguraColunaNumero }}
+          style={{ width: larguraAlocado }}
           title={tituloAlocado(agregado.horasPrevistas, agregado.horasExcedentes, larguraHoras)}
         >
           {formatHorasCompacto(agregado.horasPrevistas, larguraHoras)}
@@ -510,7 +506,7 @@ export function LinhaNo({
         {/* Blq. Excedente — checkbox por alocação, só quando há exatamente 1 (ver
             alocacaoUnica acima); nó com 0 ou >1 alocações fica em branco, mesma convenção
             de "vazio = não aplicável" das colunas numéricas. */}
-        <div className="hidden w-[104px] flex-none text-center md:block" onClick={(e) => e.stopPropagation()}>
+        <div className="hidden flex-none text-center md:block" style={{ width: LARGURA_COLUNA_BLOQ_EXCE_PX }} onClick={(e) => e.stopPropagation()}>
           {podeConfigurarInline && (
             <input
               type="checkbox"
@@ -530,7 +526,7 @@ export function LinhaNo({
             (bloqueadoExcedenteEfetivo já resolvido no servidor, proposta+atividade). */}
         <div
           className="hidden flex-none text-right font-mono text-[12px] tabular-nums text-warning md:block"
-          style={{ width: larguraColunaNumero }}
+          style={{ width: larguraExcedente }}
           title="Horas excedentes"
         >
           {podeConfigurarInline && !alocacaoUnica!.bloqueadoExcedenteEfetivo ? (
@@ -580,7 +576,7 @@ export function LinhaNo({
         </div>
 
         {/* Bloq. Apto. — mesmo padrão do Blq. Excedente acima, logo depois do Excedente. */}
-        <div className="hidden w-[84px] flex-none text-center md:block" onClick={(e) => e.stopPropagation()}>
+        <div className="hidden flex-none text-center md:block" style={{ width: LARGURA_COLUNA_BLOQ_APTO_PX }} onClick={(e) => e.stopPropagation()}>
           {podeConfigurarInline && (
             <input
               type="checkbox"
