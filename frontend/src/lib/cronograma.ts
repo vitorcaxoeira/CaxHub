@@ -353,15 +353,24 @@ function derivarOrcamento(
 // Só faz sentido pra nó tipo="item" (é o único nível com horasContratadas próprio —
 // pasta nunca tem teto, só soma). O chamador decide quando chamar; a função não valida
 // o tipo pra não duplicar a checagem que já existe em quem monta a árvore.
-// Largura das três colunas numéricas do cronograma (Orçado/Realizado/Alocado), em px.
+// Largura das colunas numéricas do cronograma (Orçado/Realizado/Alocado/Hrs. Exce.), em px.
 //
 // Em px, e não em "ch" como antes: o cabeçalho é 11px e as linhas são 12px, então o mesmo
-// número de "ch" dava larguras diferentes nos dois e as colunas não alinhavam. O piso de
-// 96px vem do maior RÓTULO ("Realizado" em 11px mono com tracking-wider), que na prática
-// é sempre maior que o número — sem ele os rótulos se sobrepunham no cabeçalho. O termo
-// com `larguraHoras` só entra em cena numa proposta com muitos dígitos de hora.
-export function larguraColunaHorasPx(larguraHoras: number): number {
-  return Math.max(96, (larguraHoras + 4) * 8);
+// número de "ch" dava larguras diferentes nos dois e as colunas não alinhavam. O piso vem do
+// RÓTULO da própria coluna (11px mono com tracking-wider ≈ 7,15px por caractere, ver
+// COLUNA_HORAS_MIN_PX) — sem ele os rótulos se sobrepunham no cabeçalho. Antes era um piso
+// único de 96px, o do maior rótulo ("Realizado"), e as colunas de rótulo curto ficavam com
+// um vazio enorme à esquerda dos números. O termo com `larguraHoras` só entra em cena numa
+// proposta com muitos dígitos de hora.
+export const COLUNA_HORAS_MIN_PX = {
+  orcado: 56, // "ORÇADO" 43px
+  realizado: 72, // "REALIZADO" 64px
+  alocado: 60, // "ALOCADO" 50px
+  excedente: 72, // "HRS. EXCE." 72px (e o input + "×" inline cabem em ~63px)
+} as const;
+
+export function larguraColunaHorasPx(larguraHoras: number, minimo: number): number {
+  return Math.max(minimo, (larguraHoras + 4) * 8);
 }
 
 // Orçado = horas contratadas do item da proposta (PropostaItem.qtdhor, que chega no nó
