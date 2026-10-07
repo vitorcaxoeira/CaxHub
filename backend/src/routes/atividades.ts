@@ -152,6 +152,134 @@ function carregarAtividadesVisiveis(
   return promessa;
 }
 
+// Propostas cujas atividades aparecem na tela (SITPRO_ATIVIDADES_VISIVEIS). Decidido no banco, antes de
+// carregar as atividades: ~40% das ativas pertencem a proposta fora desse recorte e eram carregadas,
+// decoradas (realizado em 22 mil RatItems, sessões, estrutura...) e só então descartadas.
+function propostasComAtividadesVisiveis() {
+  return prisma.proposta.findMany({
+    where: { sitpro: { in: SITPRO_ATIVIDADES_VISIVEIS } },
+    select: { codemp: true, codpro: true, pripro: true, codcli: true },
+  });
+}
+
+// Mesma regra do card em qualquer caminho (completo ou leve): sem isto as duas derivações poderiam divergir.
+function estaAtrasada(coluna: ReturnType<typeof colunaEfetiva>, dataPrevistaFim: Date | string | null): boolean {
+  const hoje = new Date(new Date().toDateString());
+  // Atraso é medido pela data prevista de fim DA ATIVIDADE (planejamento manual do CaxHub), não pelo
+  // prazo contratual da proposta inteira (datval, do Senior) — atividade sem dataPrevistaFim nunca atrasa.
+  return !coluna?.ehFinal && dataPrevistaFim != null && new Date(dataPrevistaFim) < hoje;
+}
+
+function nomeDoConsultor(consultor: { nomcom: string | null; nomfor: string | null } | undefined, codfor: number): string {
+  return consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${codfor}`;
+}
+
+// ESCOPO LEVE: o conjunto visível ao usuário com SÓ os campos de que KPIs, filtros, `/indicadores` e a lista
+// de consultores precisam (id, cliente, depto, prioridade, consultor, coluna, atraso, horas previstas).
+// Aplica exatamente as mesmas regras de descarte de `carregarAtividadesVisiveisImpl` (proposta/item
+// existente, situação da proposta, permissão de visualizar), mas sem o que é caro e só serve às linhas
+// exibidas: realizado por RatItem, sessões, estrutura, bloqueios, foto. As linhas completas de uma página
+// ou filtro saem de `carregarAtividadesVisiveis` com foco por `ids` (ver `decorarLinhas`).
+const escoposEmAndamento = new Map<string, ReturnType<typeof carregarEscopoLeveImpl>>();
+
+function carregarEscopoLeve(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
+  // Coalescência, como em `carregarAtividadesVisiveis`: `/`, `/indicadores` e `/opcoes-filtro` chegam juntos.
+  const chave = JSON.stringify({
+    role,
+    codfor: contexto.consultor?.codfor ?? null,
+    gerenciados: contexto.departamentosGerenciados,
+    time: contexto.departamentosTime,
+  });
+  const existente = escoposEmAndamento.get(chave);
+  if (existente) return existente;
+  const promessa = carregarEscopoLeveImpl(role, contexto).finally(() => escoposEmAndamento.delete(chave));
+  escoposEmAndamento.set(chave, promessa);
+  return promessa;
+}
+
+async function carregarEscopoLeveImpl(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>) {
+  const [propostas, primeiraColuna] = await Promise.all([
+    propostasComAtividadesVisiveis(),
+    prisma.quadroColuna.findFirst({ orderBy: { ordem: "asc" } }),
+  ]);
+  if (propostas.length === 0) return [];
+  const codemps = [...new Set(propostas.map((p) => p.codemp))];
+  const codpros = [...new Set(propostas.map((p) => p.codpro))];
+
+  const [atividades, itens] = await Promise.all([
+    prisma.atividadeConsultor.findMany({
+      where: { sitreg: "A", codemp: { in: codemps }, codpro: { in: codpros } },
+      select: { id: true, codemp: true, codpro: true, seqite: true, codfor: true, qtdhor: true, dataPrevistaFim: true, coluna: true },
+      orderBy: { id: "asc" },
+    }),
+    // `IN` em vez de `OR` por chave composta, pelo motivo do planning time explicado em `carregarAtividadesVisiveisImpl`.
+    prisma.propostaItem.findMany({
+      where: { codemp: { in: codemps }, codpro: { in: codpros } },
+      select: { codemp: true, codpro: true, seqite: true, depexe: true },
+    }),
+  ]);
+
+  const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
+  const depexePorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i.depexe]));
+
+  const permitidas: { a: (typeof atividades)[number]; depexe: number; proposta: (typeof propostas)[number] }[] = [];
+  for (const a of atividades) {
+    const depexe = depexePorChave.get(`${a.codemp}-${a.codpro}-${a.seqite}`);
+    const proposta = propostaPorChave.get(`${a.codemp}-${a.codpro}`);
+    // Sem item/proposta correspondente (órfão) — não dá pra saber departamento/cliente, não exibe.
+    if (depexe == null || !proposta) continue;
+    if (!podeExecutarAcao(role, contexto, "visualizar", { depexe, codfor: a.codfor })) continue;
+    permitidas.push({ a, depexe, proposta });
+  }
+  if (permitidas.length === 0) return [];
+
+  // Cliente e consultor só de quem sobrou da permissão (para quem não é admin, uma fração do total).
+  const [clientes, consultores] = await Promise.all([
+    prisma.cliente.findMany({
+      where: { codcli: { in: [...new Set(permitidas.map((p) => p.proposta.codcli))] } },
+      select: { codcli: true, nomcli: true },
+    }),
+    prisma.consultor.findMany({
+      where: { codfor: { in: [...new Set(permitidas.map((p) => p.a.codfor))] } },
+      select: { codfor: true, nomcom: true, nomfor: true },
+    }),
+  ]);
+  const clientePorCodcli = new Map(clientes.map((c) => [c.codcli, c]));
+  const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
+
+  return permitidas.map(({ a, depexe, proposta }) => {
+    const coluna = colunaEfetiva(a.coluna, primeiraColuna);
+    return {
+      id: a.id,
+      codpro: a.codpro,
+      codfor: a.codfor,
+      depexe,
+      depexeLabel: depexeLabel(depexe),
+      pripro: proposta.pripro,
+      cliente: `${proposta.codcli} - ${clientePorCodcli.get(proposta.codcli)?.nomcli}`,
+      consultorNome: nomeDoConsultor(consultorPorCodfor.get(a.codfor), a.codfor),
+      colunaId: coluna?.id ?? null,
+      coluna,
+      atrasada: estaAtrasada(coluna, a.dataPrevistaFim),
+      qtdhorPrevisto: a.qtdhor,
+      dataPrevistaFim: a.dataPrevistaFim,
+    };
+  });
+}
+
+// Acima disto o foco por `ids` (IN + irmãs do item) deixa de compensar e vale carregar o escopo todo e
+// filtrar em memória. Medido em 07/10/2026: ~450 linhas = ~180 ms com foco contra ~450 ms sem; perto de
+// 3 mil (admin sem filtro) empatam. Por isso o limite fica bem acima do que um consultor ou gestor vê.
+const LIMITE_FOCO_POR_IDS = 1500;
+
+// Linhas completas (decoradas) das atividades `ids`, na ordem de `id`, idênticas às de `carregarAtividadesVisiveis()`.
+async function decorarLinhas(role: string, contexto: Awaited<ReturnType<typeof resolverContextoConsultor>>, ids: number[]) {
+  if (ids.length === 0) return [];
+  if (ids.length <= LIMITE_FOCO_POR_IDS) return carregarAtividadesVisiveis(role, contexto, { ids });
+  const quer = new Set(ids);
+  return (await carregarAtividadesVisiveis(role, contexto)).filter((v) => quer.has(v.id));
+}
+
 type AtividadeParaAgregado = Pick<AtividadeConsultor, "id" | "codemp" | "codpro" | "seqite" | "seqati" | "qtdhor">;
 
 // Orçamento e realizado POR ITEM somam as atividades de TODOS os consultores do item (itemAlocado/
@@ -178,6 +306,13 @@ async function carregarAtividadesVisiveisImpl(
   foco: FocoAtividades | null = null
 ) {
   const onde: Prisma.AtividadeConsultorWhereInput = { sitreg: "A" };
+  // Sem foco o recorte por situação da proposta já sai do banco (ver `propostasComAtividadesVisiveis`); a
+  // checagem por linha mais abaixo continua e é a que vale (aqui é um superset por codemp/codpro).
+  if (!foco) {
+    const propostasVisiveis = await propostasComAtividadesVisiveis();
+    onde.codemp = { in: [...new Set(propostasVisiveis.map((p) => p.codemp))] };
+    onde.codpro = { in: [...new Set(propostasVisiveis.map((p) => p.codpro))] };
+  }
   if (foco?.codfors) onde.codfor = { in: foco.codfors };
   if (foco?.ids) onde.id = { in: foco.ids };
   if (foco?.semConcluidas) onde.OR = [{ colunaId: null }, { coluna: { ehFinal: false } }];
@@ -381,11 +516,7 @@ async function carregarAtividadesVisiveisImpl(
 
       const consultor = consultorPorCodfor.get(a.codfor);
       const coluna = colunaEfetiva(a.coluna, primeiraColuna);
-      const hoje = new Date(new Date().toDateString());
-      // Atraso é medido pela data prevista de fim DA ATIVIDADE (planejamento manual do
-      // CaxHub), não pelo prazo contratual da proposta inteira (datval, do Senior) — uma
-      // atividade sem dataPrevistaFim definida nunca conta como atrasada.
-      const atrasada = !coluna?.ehFinal && a.dataPrevistaFim != null && new Date(a.dataPrevistaFim) < hoje;
+      const atrasada = estaAtrasada(coluna, a.dataPrevistaFim);
       const chaveItem = `${a.codemp}-${a.codpro}-${a.seqite}`;
       const item = itemPorChave.get(chaveItem);
       const noEstrutura = a.estruturaAtividadeId != null ? nosEstruturaPorId.get(a.estruturaAtividadeId) : null;
@@ -411,7 +542,7 @@ async function carregarAtividadesVisiveisImpl(
         // `itemDescricao` abaixo, que é PropostaItem.despro (VarChar(2000), descrição do
         // item dentro da proposta).
         propostaDespro: proposta.despro?.trim() || null,
-        consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${a.codfor}`,
+        consultorNome: nomeDoConsultor(consultor, a.codfor),
         // Vínculo opcional Consultor -> User (ver schema.prisma) — só existe foto quando o
         // consultor também tem uma conta CaxHub com avatar próprio configurado.
         consultorFotoUrl: consultor?.usuariosCaxHub[0]?.fotoUrl ?? null,
@@ -500,7 +631,8 @@ atividadesRouter.get("/indicadores", async (req: AuthenticatedRequest, res) => {
     }
     const { contexto, role } = ctx;
 
-    const visiveis = await carregarAtividadesVisiveis(role, contexto);
+    // Escopo leve: nada aqui usa realizado, sessões, estrutura nem bloqueios.
+    const visiveis = await carregarEscopoLeve(role, contexto);
     const backlog = visiveis.filter((v) => !v.coluna?.ehFinal);
     const concluidas = visiveis.filter((v) => v.coluna?.ehFinal);
 
@@ -630,7 +762,7 @@ atividadesRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) =>
     // a lista volta a ser derivada das atividades visíveis (todo `visiveis`, não só o
     // backlog, pra incluir quem só tem atividade concluída).
     if (consultoresPorCodfor.size === 0) {
-      const visiveis = await carregarAtividadesVisiveis(role, contexto);
+      const visiveis = await carregarEscopoLeve(role, contexto);
       for (const v of visiveis) consultoresPorCodfor.set(v.codfor, v.consultorNome);
     }
 
@@ -714,7 +846,8 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
       ? (situacaoRaw as (typeof situacoesValidas)[number])
       : null;
 
-    const visiveis = await carregarAtividadesVisiveis(role, contexto);
+    // Escopo leve (só o que KPIs e filtros leem); as linhas completas vêm no fim, só das que serão devolvidas.
+    const visiveis = await carregarEscopoLeve(role, contexto);
 
     // KPIs calculados sobre o escopo total (visível pro usuário), antes de aplicar os
     // filtros transitórios abaixo — mesmo padrão da Alocação (alocacao.ts). Horas em
@@ -730,7 +863,7 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
       concluidas: { quantidade: concluidasKpi.length, horas: somaHoras(concluidasKpi) },
     };
 
-    const rows = visiveis
+    const filtradas = visiveis
       .filter((item) => filtroDepexes.length === 0 || filtroDepexes.includes(item.depexe))
       .filter((item) => filtroColunaIds.length === 0 || (item.colunaId != null && filtroColunaIds.includes(item.colunaId)))
       .filter((item) => filtroPripros.length === 0 || (item.pripro != null && filtroPripros.includes(item.pripro)))
@@ -750,13 +883,63 @@ atividadesRouter.get("/", async (req: AuthenticatedRequest, res) => {
         return true;
       });
 
-    const total = rows.length;
-    const rowsPagina =
-      page !== null && pageSize !== null ? rows.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize) : rows;
+    const total = filtradas.length;
+    // Quantas cabem em cada raia depois dos filtros: o Quadro mostra "10 de 2.918" mesmo carregando só 10.
+    const totaisPorRaia: Record<string, number> = {};
+    for (const item of filtradas) totaisPorRaia[String(item.colunaId)] = (totaisPorRaia[String(item.colunaId)] ?? 0) + 1;
+
+    // Quadro paginado por raia (a Lista, o Calendário e a Timeline continuam pedindo tudo):
+    //  - `porRaia=10`: as 10 primeiras de cada raia; `limites=3:50,5:todos` sobrescreve a quantidade de
+    //    raias que o usuário já expandiu, pra um recarregamento não encolher o que ele pediu pra ver.
+    //  - `raia=3&depois=120&limite=25` ("carregar mais"): as próximas 25 da raia 3 com id > 120 (por id e não
+    //    por deslocamento: o quadro muda entre os cliques); sem `limite`, todas as restantes.
+    // "Em Andamento" nunca é cortada: é a raia operacional (cronômetros, encerramento automático) e pequena.
+    const porRaia = parseIntParam(req.query.porRaia);
+    const raiaPedida = parseIntParam(req.query.raia);
+    const depois = parseIntParam(req.query.depois) ?? 0;
+    const limite = parseIntParam(req.query.limite);
+    const limitesPorRaia = new Map<number, number>();
+    if (typeof req.query.limites === "string") {
+      for (const par of req.query.limites.split(",")) {
+        const [raia, valor] = par.split(":");
+        const idRaia = Number(raia);
+        const quantidade = valor === "todos" ? Infinity : Number(valor);
+        if (Number.isFinite(idRaia) && quantidade > 0) limitesPorRaia.set(idRaia, quantidade);
+      }
+    }
+
+    // `ids=1,2,3` pede só essas linhas (já sujeitas aos filtros da chamada) — a tela atualiza o card que
+    // acabou de mudar em vez de recarregar o quadro inteiro. Sem `ids`, vale a paginação de sempre.
+    const idsPedidos = new Set(parseListaIntParam(req.query.ids));
+    let alvo: typeof filtradas;
+    if (idsPedidos.size > 0) {
+      alvo = filtradas.filter((item) => idsPedidos.has(item.id));
+    } else if (raiaPedida !== null) {
+      const restantes = filtradas.filter((item) => item.colunaId === raiaPedida && item.id > depois);
+      alvo = limite !== null && limite > 0 ? restantes.slice(0, limite) : restantes;
+    } else if (porRaia !== null && porRaia > 0) {
+      const mostradas = new Map<number | null, number>();
+      alvo = filtradas.filter((item) => {
+        if (item.coluna?.nome === RAIA_EM_ANDAMENTO) return true;
+        const jaMostradas = (mostradas.get(item.colunaId) ?? 0) + 1;
+        mostradas.set(item.colunaId, jaMostradas);
+        return jaMostradas <= (item.colunaId != null ? limitesPorRaia.get(item.colunaId) ?? porRaia : porRaia);
+      });
+    } else if (page !== null && pageSize !== null) {
+      alvo = filtradas.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
+    } else {
+      alvo = filtradas;
+    }
+    const rowsPagina = await decorarLinhas(
+      role,
+      contexto,
+      alvo.map((item) => item.id)
+    );
 
     res.json({
       rows: rowsPagina,
       total,
+      totaisPorRaia,
       kpis,
       contexto: {
         role,

@@ -576,18 +576,23 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
       where: { codfor, sitreg: "A", seqati: { not: null } },
       orderBy: { id: "desc" },
     });
-    const chavesItem = atividades.map((a) => ({ codemp: a.codemp, codpro: a.codpro, seqite: a.seqite }));
-    const chavesProposta = [...new Set(atividades.map((a) => `${a.codemp}-${a.codpro}`))].map((chave) => {
-      const [codemp, codpro] = chave.split("-").map(Number);
-      return { codemp, codpro };
-    });
+    // `IN` por codemp/codpro (superconjunto), e não um `OR` com uma cláusula por atividade: com centenas de
+    // atividades o planejamento do Postgres explode (ver routes/alocacao.ts). Quem consome busca por chave
+    // exata (`itemPorChave`/`propostaPorChave`), então o que sobra do superconjunto é ignorado.
+    const codempsDasAtividades = [...new Set(atividades.map((a) => a.codemp))];
+    const codprosDasAtividades = [...new Set(atividades.map((a) => a.codpro))];
 
     const [itens, propostas] = await Promise.all([
-      chavesItem.length > 0 ? prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : Promise.resolve([]),
+      atividades.length > 0
+        ? prisma.propostaItem.findMany({ where: { codemp: { in: codempsDasAtividades }, codpro: { in: codprosDasAtividades } } })
+        : Promise.resolve([]),
       // Cliente é o que dá sentido ao agrupamento por proposta no seletor da tela —
       // número de proposta sozinho não identifica o projeto pra quem lança pelo time.
-      chavesProposta.length > 0
-        ? prisma.proposta.findMany({ where: { OR: chavesProposta }, include: { cliente: true } })
+      atividades.length > 0
+        ? prisma.proposta.findMany({
+            where: { codemp: { in: codempsDasAtividades }, codpro: { in: codprosDasAtividades } },
+            include: { cliente: true },
+          })
         : Promise.resolve([]),
     ]);
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
@@ -673,14 +678,25 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     const propostas =
       chavesProposta.length > 0
         ? await prisma.proposta.findMany({
-            where: { OR: chavesProposta.map((c) => ({ codemp: Number(c.split("-")[0]), codpro: Number(c.split("-")[1]) })) },
+            // `IN` (superconjunto) em vez de `OR` por proposta — o consumo é por chave exata.
+            where: {
+              codemp: { in: [...new Set(chavesProposta.map((c) => Number(c.split("-")[0])))] },
+              codpro: { in: [...new Set(chavesProposta.map((c) => Number(c.split("-")[1])))] },
+            },
             include: { cliente: true },
           })
         : [];
     const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
 
-    const chavesItem = sessoes.map((s) => ({ codemp: s.atividade.codemp, codpro: s.atividade.codpro, seqite: s.atividade.seqite }));
-    const itens = chavesItem.length > 0 ? await prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : [];
+    const itens =
+      sessoes.length > 0
+        ? await prisma.propostaItem.findMany({
+            where: {
+              codemp: { in: [...new Set(sessoes.map((s) => s.atividade.codemp))] },
+              codpro: { in: [...new Set(sessoes.map((s) => s.atividade.codpro))] },
+            },
+          })
+        : [];
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
 
     // Nome do consultor de cada sessão — só usado quando `mostrarConsultor` (a lista do

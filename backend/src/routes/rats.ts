@@ -102,16 +102,84 @@ const RAT_SELECT_LEVE = {
 
 // RATs que o usuário pode ver: as próprias (por codfor) + as dos departamentos que
 // gerencia (por Rat.depexe) — admin vê tudo, sem filtro.
-async function ratsVisiveis<S extends Prisma.RatSelect>(role: string, contexto: Contexto, select: S) {
+//
+// `filtro` (opcional) é somado ao recorte de visibilidade e resolvido no banco: filtrar por consultor ou
+// situação antes trazia as 25 mil RATs do admin só para descartar quase todas em memória.
+async function ratsVisiveis<S extends Prisma.RatSelect>(
+  role: string,
+  contexto: Contexto,
+  select: S,
+  filtro: Prisma.RatWhereInput = {}
+) {
   if (role === "admin") {
-    return prisma.rat.findMany({ orderBy: { id: "desc" }, select });
+    return prisma.rat.findMany({ where: filtro, orderBy: { id: "desc" }, select });
   }
   const meuCodfor = contexto.consultor?.codfor ?? null;
   const or: Array<Record<string, unknown>> = [];
   if (meuCodfor != null) or.push({ codfor: meuCodfor });
   if (contexto.departamentosGerenciados.length > 0) or.push({ depexe: { in: contexto.departamentosGerenciados } });
   if (or.length === 0) return [];
-  return prisma.rat.findMany({ where: { OR: or }, orderBy: { id: "desc" }, select });
+  return prisma.rat.findMany({ where: { AND: [{ OR: or }, filtro] }, orderBy: { id: "desc" }, select });
+}
+
+// Lista separada por vírgula ("134,207") dos seletores multi-seleção. Number("") é 0, não NaN, então sem a
+// guarda de zero um filtro ausente viraria [0] e esconderia todas as RATs.
+function listaDeInteirosNaoZero(valor: unknown): number[] {
+  return (typeof valor === "string" ? valor : "")
+    .split(",")
+    .map((v) => Number(v.trim()))
+    .filter((v) => Number.isFinite(v) && v !== 0);
+}
+
+function filtroRatsNoBanco(codfors: number[], sitrats: number[]): Prisma.RatWhereInput {
+  return {
+    ...(codfors.length > 0 ? { codfor: { in: codfors } } : {}),
+    // RAT sem situação (sitrat null) fica de fora sempre que o filtro está ativo — `in` já exclui NULL.
+    ...(sitrats.length > 0 ? { sitrat: { in: sitrats } } : {}),
+  };
+}
+
+// Uma PÁGINA da lista de RATs resolvida no banco (COUNT + ids ordenados com LIMIT/OFFSET), para o caso comum
+// em que nenhum filtro precisa olhar dentro das RATs (busca por cliente/proposta, por item ou por integração).
+// Antes o admin carregava as 25 mil RATs em memória, ordenava e fatiava 20 (~300 ms local, medido em
+// 07/10/2026). A ordem reproduz EXATAMENTE a de GET / (ver o `sort` lá): 1) Digitado (sitrat 9) primeiro,
+// 2) data de emissão mais recente primeiro (sem data por último), 3) número da proposta crescente (sem
+// proposta conta como 0) e, no empate, `id` decrescente — que era a ordem de entrada do sort estável.
+async function paginaDeRatsNoBanco(
+  role: string,
+  contexto: Contexto,
+  filtros: { codfors: number[]; sitrats: number[] },
+  page: number,
+  pageSize: number
+) {
+  const condicoes: Prisma.Sql[] = [];
+  if (role !== "admin") {
+    const meuCodfor = contexto.consultor?.codfor ?? null;
+    const visibilidade: Prisma.Sql[] = [];
+    if (meuCodfor != null) visibilidade.push(Prisma.sql`codfor = ${meuCodfor}`);
+    if (contexto.departamentosGerenciados.length > 0) {
+      visibilidade.push(Prisma.sql`depexe IN (${Prisma.join(contexto.departamentosGerenciados)})`);
+    }
+    if (visibilidade.length === 0) return { rats: [], total: 0 };
+    condicoes.push(Prisma.sql`(${Prisma.join(visibilidade, " OR ")})`);
+  }
+  if (filtros.codfors.length > 0) condicoes.push(Prisma.sql`codfor IN (${Prisma.join(filtros.codfors)})`);
+  if (filtros.sitrats.length > 0) condicoes.push(Prisma.sql`sitrat IN (${Prisma.join(filtros.sitrats)})`);
+  const onde = condicoes.length > 0 ? Prisma.sql`WHERE ${Prisma.join(condicoes, " AND ")}` : Prisma.empty;
+
+  const [contagem, idsDaPagina] = await Promise.all([
+    prisma.$queryRaw<{ n: number }[]>(Prisma.sql`SELECT COUNT(*)::int AS n FROM rats ${onde}`),
+    prisma.$queryRaw<{ id: number }[]>(Prisma.sql`
+      SELECT id FROM rats ${onde}
+      ORDER BY (CASE WHEN sitrat = 9 THEN 0 ELSE 1 END), datemi DESC NULLS LAST, COALESCE(codpro, 0), id DESC
+      LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`),
+  ]);
+  const total = contagem[0]?.n ?? 0;
+  if (idsDaPagina.length === 0) return { rats: [], total };
+
+  const linhas = await prisma.rat.findMany({ where: { id: { in: idsDaPagina.map((r) => r.id) } }, select: RAT_SELECT_LISTA });
+  const porId = new Map(linhas.map((r) => [r.id, r]));
+  return { rats: idsDaPagina.map((r) => porId.get(r.id)).filter((r): r is NonNullable<typeof r> => r != null), total };
 }
 
 // Só os `codfor` distintos entre as RATs visíveis — usado pelo seletor de consultor em
@@ -120,7 +188,8 @@ async function ratsVisiveis<S extends Prisma.RatSelect>(role: string, contexto: 
 // jogar tudo fora e ficar só com um número por linha.
 async function codforsVisiveis(role: string, contexto: Contexto): Promise<number[]> {
   if (role === "admin") {
-    const rows = await prisma.rat.findMany({ select: { codfor: true }, distinct: ["codfor"] });
+    // `groupBy` (DISTINCT no banco): o `distinct` do Prisma traz as 25 mil linhas e deduplica em memória.
+    const rows = await prisma.rat.groupBy({ by: ["codfor"] });
     return rows.map((r) => r.codfor);
   }
   const meuCodfor = contexto.consultor?.codfor ?? null;
@@ -128,7 +197,7 @@ async function codforsVisiveis(role: string, contexto: Contexto): Promise<number
   if (meuCodfor != null) or.push({ codfor: meuCodfor });
   if (contexto.departamentosGerenciados.length > 0) or.push({ depexe: { in: contexto.departamentosGerenciados } });
   if (or.length === 0) return [];
-  const rows = await prisma.rat.findMany({ where: { OR: or }, select: { codfor: true }, distinct: ["codfor"] });
+  const rows = await prisma.rat.groupBy({ by: ["codfor"], where: { OR: or } });
   return rows.map((r) => r.codfor);
 }
 
@@ -138,17 +207,20 @@ async function codforsVisiveis(role: string, contexto: Contexto): Promise<number
 // pontos. Também reaproveitado por ratsElegiveisFechamentoFiltradas.
 async function buscarPropostasPorChave(rats: { codemp: number; codpro: number | null }[]) {
   const chaves = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
+  // `IN` por codemp/codpro (superconjunto) + filtro exato pela chave, e não um `OR` com uma cláusula por RAT:
+  // com milhares de pares o planejamento do Postgres explode (ver o mesmo ajuste em routes/alocacao.ts).
+  const chavesSet = new Set(chaves);
   const propostas =
     chaves.length > 0
-      ? await prisma.proposta.findMany({
-          where: {
-            OR: chaves.map((chave) => {
-              const [codemp, codpro] = chave.split("-").map(Number);
-              return { codemp, codpro };
-            }),
-          },
-          include: { cliente: true },
-        })
+      ? (
+          await prisma.proposta.findMany({
+            where: {
+              codemp: { in: [...new Set(chaves.map((c) => Number(c.split("-")[0])))] },
+              codpro: { in: [...new Set(chaves.map((c) => Number(c.split("-")[1])))] },
+            },
+            include: { cliente: true },
+          })
+        ).filter((p) => chavesSet.has(`${p.codemp}-${p.codpro}`))
       : [];
   return new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
 }
@@ -238,7 +310,15 @@ async function buscarItensEIntegracao(rats: { id: number; codemp: number; numrat
       ? await prisma.sincronizacaoPendenteDespesa.findMany({
           where: {
             status: { in: ["pendente", "enviando", "bloqueado"] },
-            despesa: { OR: paresRat.map((r) => ({ codemp: r.codemp, numrat: r.numrat })), excluidaEm: null },
+            // `IN` e não um `OR` de pares: com as 25 mil RATs do admin o `OR` passava do limite de parâmetros
+            // do Prisma e a lista inteira dava 500 ao filtrar por integração. O `IN` traz um superconjunto de
+            // despesas; o casamento exato por (codemp,numrat) continua em `ratIdPorChave` logo abaixo, que
+            // ignora o que não for de uma RAT da lista.
+            despesa: {
+              codemp: { in: [...new Set(paresRat.map((r) => r.codemp))] },
+              numrat: { in: [...new Set(paresRat.map((r) => r.numrat))] },
+              excluidaEm: null,
+            },
           },
           select: { status: true, ultimoErro: true, despesa: { select: { codemp: true, numrat: true } } },
         })
@@ -277,30 +357,29 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     }
     const { contexto, role } = ctx;
 
-    let rats = await ratsVisiveis(role, contexto, RAT_SELECT_LISTA);
+    // Filtros de consultor (codfor) e de situação (sitrat) vão para o banco: a lista de 25 mil RATs do admin
+    // não precisa ser carregada para descartar quase tudo em memória.
+    const codforsFiltro = listaDeInteirosNaoZero(req.query.codfor);
+    const sitratFiltro = listaDeInteirosNaoZero(req.query.sitrat);
 
-    // Lista separada por vírgula ("134,207") — o seletor da tela é multi-seleção. Number("")
-    // é 0, não NaN, então sem a guarda de string vazia um filtro ausente viraria [0] e
-    // esconderia todas as RATs. Mesmo padrão dos filtros de Mercado > Pedidos.
-    const codforsFiltro = (typeof req.query.codfor === "string" ? req.query.codfor : "")
-      .split(",")
-      .map((v) => Number(v.trim()))
-      .filter((v) => Number.isFinite(v) && v !== 0);
-    if (codforsFiltro.length > 0) {
-      rats = rats.filter((r) => codforsFiltro.includes(r.codfor));
-    }
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
 
-    // Filtro por situação da RAT (Rat.sitrat) — lista separada por vírgula, mesmo idioma
-    // dos outros filtros multi-seleção. Sem custo nenhum: sitrat já vem no próprio `rat`,
-    // nenhum join/query a mais. RAT sem situação (sitrat null) fica de fora sempre que o
-    // filtro está ativo.
-    const sitratFiltro = (typeof req.query.sitrat === "string" ? req.query.sitrat : "")
+    // Caminho rápido: sem busca (cliente/proposta/RAT), sem busca em itens e sem filtro de integração nada
+    // precisa olhar dentro das RATs, então o banco já devolve só a página e o total.
+    const temBusca = typeof req.query.busca === "string" && req.query.busca.trim() !== "";
+    const temBuscaItem = typeof req.query.buscaItem === "string" && req.query.buscaItem.trim() !== "";
+    const temIntegracao = (typeof req.query.integracao === "string" ? req.query.integracao : "")
       .split(",")
-      .map((v) => Number(v.trim()))
-      .filter((v) => Number.isFinite(v) && v !== 0);
-    if (sitratFiltro.length > 0) {
-      rats = rats.filter((r) => r.sitrat != null && sitratFiltro.includes(r.sitrat));
-    }
+      .some((v) => ["sincronizado", "enviando", "falha", "pendente"].includes(v));
+    const paginaRapida =
+      !temBusca && !temBuscaItem && !temIntegracao
+        ? await paginaDeRatsNoBanco(role, contexto, { codfors: codforsFiltro, sitrats: sitratFiltro }, page, pageSize)
+        : null;
+
+    let rats = paginaRapida
+      ? paginaRapida.rats
+      : await ratsVisiveis(role, contexto, RAT_SELECT_LISTA, filtroRatsNoBanco(codforsFiltro, sitratFiltro));
 
     // Busca livre: cliente (nome), número da proposta (codpro) ou número da RAT no
     // Senior (numrat) — mesmo padrão de busca por substring já usado em
@@ -397,11 +476,12 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       return (a.codpro ?? 0) - (b.codpro ?? 0);
     });
 
-    const total = rats.length;
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
-    const inicioPagina = (page - 1) * pageSize;
-    rats = rats.slice(inicioPagina, inicioPagina + pageSize);
+    // No caminho rápido o banco já devolveu a página (e o total); nos demais, fatia aqui.
+    const total = paginaRapida ? paginaRapida.total : rats.length;
+    if (!paginaRapida) {
+      const inicioPagina = (page - 1) * pageSize;
+      rats = rats.slice(inicioPagina, inicioPagina + pageSize);
+    }
 
     if (rats.length === 0) {
       res.json({ rats: [], total });
@@ -1380,7 +1460,9 @@ ratsRouter.post("/fechar-lote", async (req: AuthenticatedRequest, res) => {
 // substituição — fechar só faz sentido pra Digitado, então filtrar a tela por qualquer outra
 // situação (sem incluir Digitado) zera o resultado de propósito, em vez de ignorar o filtro.
 async function ratsElegiveisFechamentoFiltradas(role: string, contexto: Contexto, query: AuthenticatedRequest["query"]) {
-  let rats = await ratsVisiveis(role, contexto, RAT_SELECT_LEVE);
+  // Só `sitrat = 9` e não removida no Senior é elegível: resolvido no banco (~25 RATs), em vez de carregar as
+  // 25 mil do admin para descartar quase todas em memória (a contagem do "Fechar Todos" abre a tela).
+  let rats = await ratsVisiveis(role, contexto, RAT_SELECT_LEVE, { sitrat: 9, removidoEmSenior: null });
   // `removidoEmSenior == null`: RAT excluída no Senior fica com sitrat=9 congelado (última
   // situação real conhecida antes de sumir), mas não é elegível pra fechar — mesma checagem
   // de prepararFechamentoRat.

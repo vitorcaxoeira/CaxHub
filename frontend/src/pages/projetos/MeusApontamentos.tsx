@@ -580,12 +580,15 @@ export function MeusApontamentos() {
 
   function carregar() {
     setLoading(true);
-    Promise.all([axios.get("/api/apontamentos/sessoes-pendentes"), axios.get("/api/apontamentos/minhas-atividades")])
-      .then(([sessoesRes, atividadesRes]) => {
+    // As atividades do consultor (`minhas-atividades`) NÃO carregam aqui: só alimentam o seletor do modal de
+    // apontamento manual, que existe só para gestor/admin. Carregam ao abrir o modal (abrirModalManual) —
+    // antes todo consultor pagava a chamada (até 75 KB) em toda abertura e recarga da tela sem usá-la.
+    axios
+      .get("/api/apontamentos/sessoes-pendentes")
+      .then((sessoesRes) => {
         setSessoes(sessoesRes.data.sessoes);
         setMostrarConsultor(Boolean(sessoesRes.data.mostrarConsultor));
         setRatsDestino(sessoesRes.data.ratsDestino ?? {});
-        setAtividades(atividadesRes.data.atividades);
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar apontamentos"))
@@ -601,6 +604,13 @@ export function MeusApontamentos() {
       .then(({ data }) => setAtividades(data.atividades))
       .catch((err) => setErroManual(err.response?.data?.error ?? "Falha ao carregar as atividades do consultor"))
       .finally(() => setCarregandoAtividadesManual(false));
+  }
+
+  function abrirModalManual() {
+    setModalManual(true);
+    // Lista fresca a cada abertura (a alocação de atividades muda ao longo do dia); o consultor escolhido
+    // antes continua valendo se o modal foi fechado sem limpar o formulário.
+    carregarAtividadesManual(manualCodfor);
   }
 
   function onMudarConsultorManual(codfor: string) {
@@ -1679,7 +1689,7 @@ export function MeusApontamentos() {
             POST) — consultor comum aponta pelo quadro, que gera sessão rastreada. */}
         {podeLancarManual && (
           <button
-            onClick={() => setModalManual(true)}
+            onClick={abrirModalManual}
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           >
             + Apontamento manual

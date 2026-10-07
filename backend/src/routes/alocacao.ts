@@ -118,9 +118,11 @@ async function auditarEEnviarDatasAlocacoes(alocacoes: AlocacaoReajustada[], usu
 // admin enxerga. Função à parte porque tem um segundo consumidor: a exceção do Comercial em
 // departamentosAlocaveisNoItem (ver lá).
 async function departamentosEmUso(): Promise<number[]> {
+  // `groupBy` (DISTINCT no banco) e não `findMany({ distinct })`: o `distinct` do Prisma traz TODAS as linhas
+  // (~10,8 mil itens) e deduplica em memória — ~40 ms em toda requisição de admin desta tela.
   const [deItens, dePropostas] = await Promise.all([
-    prisma.propostaItem.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
-    prisma.proposta.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
+    prisma.propostaItem.groupBy({ by: ["depexe"], where: { depexe: { not: null } } }),
+    prisma.proposta.groupBy({ by: ["depexe"], where: { depexe: { not: null } } }),
   ]);
   return [...new Set([...deItens, ...dePropostas].map((d) => d.depexe as number))];
 }
@@ -331,11 +333,20 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
 
     // TODOS os itens dessas propostas, sem recorte de departamento: quem decide se a
     // proposta entra é o classificador abaixo; uma vez dentro, ela entra inteira.
-    const itens = propostas.length
+    //
+    // `IN` por codemp/codpro (superconjunto) + filtro exato pela chave em memória, e não um `OR` com uma
+    // cláusula por proposta/item: o planejamento do Postgres explode com centenas de cláusulas (medido em
+    // 07/10/2026: ~325 ms só de planejamento para as 937 trincas de item, contra ~2 ms com `IN`). Mesmo
+    // motivo e mesma solução de `carregarAtividadesVisiveisImpl` (routes/atividades.ts).
+    const itensCandidatos = propostas.length
       ? await prisma.propostaItem.findMany({
-          where: { OR: propostas.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
+          where: {
+            codemp: { in: [...new Set(propostas.map((p) => p.codemp))] },
+            codpro: { in: [...new Set(propostas.map((p) => p.codpro))] },
+          },
         })
       : [];
+    const itens = itensCandidatos.filter((i) => propostaPorChave.has(`${i.codemp}-${i.codpro}`));
 
     const depexesPorProposta = new Map<string, Set<number>>();
     for (const item of itens) {
@@ -369,9 +380,23 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    const alocacoes = await prisma.atividadeConsultor.findMany({
-      where: { sitreg: "A", OR: itens.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })) },
-    });
+    // Alocações e estrutura só das propostas que entraram no escopo de quem está olhando: o gestor do
+    // Administrativo enxerga 1 de 284 e não precisa somar as outras 283. A classificação acima precisou dos
+    // itens de todas as propostas alocáveis (um item meu faz a proposta de outro departamento entrar), mas a
+    // soma abaixo, não.
+    const itensDoEscopo = itens.filter((i) => origemPorProposta.has(`${i.codemp}-${i.codpro}`));
+    const chavesItensDoEscopo = new Set(itensDoEscopo.map((i) => `${i.codemp}-${i.codpro}-${i.seqite}`));
+    const alocacoes = (
+      await prisma.atividadeConsultor.findMany({
+        where: {
+          sitreg: "A",
+          codemp: { in: [...new Set(itensDoEscopo.map((i) => i.codemp))] },
+          codpro: { in: [...new Set(itensDoEscopo.map((i) => i.codpro))] },
+        },
+        // Só o que a soma e o filtro por consultor leem: o `select *` da tabela custava 100–150 ms para 3 mil linhas.
+        select: { codemp: true, codpro: true, seqite: true, qtdhor: true, codfor: true, estruturaAtividadeId: true },
+      })
+    ).filter((a) => chavesItensDoEscopo.has(`${a.codemp}-${a.codpro}-${a.seqite}`));
     const alocadoPorItem = new Map<string, number>();
     const alocadoPorEstrutura = new Map<number, number>();
     for (const a of alocacoes) {
@@ -388,15 +413,18 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     // sentido contrário quando a fila de saída ainda não confirmou ou quando o Senior recusa a
     // edição. `duracaoHoras == null` fica de fora de propósito (mesma leitura da SQL original:
     // NULL não é "divergente", é "nunca definido").
-    const nosComResponsavel = itens.length
-      ? await prisma.estruturaAtividade.findMany({
-          where: {
-            tipo: "atividade",
-            responsavelCodfor: { not: null },
-            OR: itens.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })),
-          },
-          select: { id: true, codemp: true, codpro: true, duracaoHoras: true },
-        })
+    const nosComResponsavel = itensDoEscopo.length
+      ? (
+          await prisma.estruturaAtividade.findMany({
+            where: {
+              tipo: "atividade",
+              responsavelCodfor: { not: null },
+              codemp: { in: [...new Set(itensDoEscopo.map((i) => i.codemp))] },
+              codpro: { in: [...new Set(itensDoEscopo.map((i) => i.codpro))] },
+            },
+            select: { id: true, codemp: true, codpro: true, seqite: true, duracaoHoras: true },
+          })
+        ).filter((no) => chavesItensDoEscopo.has(`${no.codemp}-${no.codpro}-${no.seqite}`))
       : [];
     const divergenciaSomaPorProposta = new Map<string, number>();
     for (const no of nosComResponsavel) {
@@ -593,14 +621,27 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
         include: { cliente: true },
       });
       if (foraDoRecorte.length > 0) {
-        const itensFora = await prisma.propostaItem.findMany({
-          where: { OR: foraDoRecorte.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
-        });
+        const chavesForaDoRecorte = new Set(foraDoRecorte.map((p) => `${p.codemp}-${p.codpro}`));
+        const itensFora = (
+          await prisma.propostaItem.findMany({
+            where: {
+              codemp: { in: [...new Set(foraDoRecorte.map((p) => p.codemp))] },
+              codpro: { in: [...new Set(foraDoRecorte.map((p) => p.codpro))] },
+            },
+          })
+        ).filter((i) => chavesForaDoRecorte.has(`${i.codemp}-${i.codpro}`));
+        const chavesItensFora = new Set(itensFora.map((i) => `${i.codemp}-${i.codpro}-${i.seqite}`));
         const alocacoesFora = itensFora.length
-          ? await prisma.atividadeConsultor.findMany({
-              where: { sitreg: "A", OR: itensFora.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })) },
-              select: { codemp: true, codpro: true, qtdhor: true },
-            })
+          ? (
+              await prisma.atividadeConsultor.findMany({
+                where: {
+                  sitreg: "A",
+                  codemp: { in: [...new Set(itensFora.map((i) => i.codemp))] },
+                  codpro: { in: [...new Set(itensFora.map((i) => i.codpro))] },
+                },
+                select: { codemp: true, codpro: true, seqite: true, qtdhor: true },
+              })
+            ).filter((a) => chavesItensFora.has(`${a.codemp}-${a.codpro}-${a.seqite}`))
           : [];
         for (const p of foraDoRecorte) {
           const itensDaProposta = itensFora.filter((i) => i.codemp === p.codemp && i.codpro === p.codpro);
