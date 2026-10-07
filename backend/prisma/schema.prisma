@@ -2767,7 +2767,7 @@ model SolicitacaoViagem {
   precisaHospedagem        Boolean   @default(false)
   precisaAereo             Boolean   @default(false)
   precisaCarro             Boolean   @default(false)
-  /// solicitada | em_cotacao | aguardando_aprovacao | aprovada | reprovada | reservada | finalizada | cancelada
+  /// solicitada | em_cotacao | aguardando_aceite | aguardando_aprovacao | aprovada | reprovada | reservada | finalizada | cancelada
   status                   String    @default("solicitada") @db.VarChar(30)
   responsavelAtendimentoId Int?
   // Snapshot do departamento cujo gestor aprova (Consultor.codemp/depexe do solicitante na criação).
@@ -2777,6 +2777,10 @@ model SolicitacaoViagem {
   aprovadoPorId            Int?
   aprovadoEm               DateTime?
   observacaoDecisao        String?   @db.VarChar(1000)
+  /// Última resposta do solicitante à cotação sugerida: aceita | recusada. O histórico completo fica na auditoria.
+  aceiteDecisao            String?   @db.VarChar(10)
+  aceiteObservacao         String?   @db.VarChar(1000)
+  aceiteEm                 DateTime?
   motivoCancelamento       String?   @db.VarChar(1000)
   criadoEm                 DateTime  @default(now())
   atualizadoEm             DateTime  @updatedAt

@@ -34,8 +34,10 @@ import {
   resolverAprovador,
   resolverVinculo,
   soDigitos,
+  temViagemComoViajante,
   validarCpf,
   validarItem,
+  whereViajanteVisivel,
 } from "../domain/solicitacoesViagem";
 
 // Módulo Gestão de Solicitações — Solicitações de Viagem (hospedagem, passagem aérea, carro).
@@ -46,12 +48,26 @@ import {
 export const solicitacoesViagemRouter = Router();
 // Entrada no módulo: admin ou líder de departamento (gestor em DepartamentoGestor — dinâmico, não
 // dá pra expressar com requireRole). Em sincronia com o menu e o RequireGestorOuAdmin do frontend.
+//
+// Exceção SÓ LEITURA: quem viaja numa solicitação reservada/finalizada (ver ehViajanteVisivel) entra
+// pra consultar a própria viagem — lista "minhas", detalhe, download de anexo e o apoio de clientes
+// do filtro. Qualquer outro método ou rota continua 403. Em sincronia com o menu (`souViajante`) e
+// o RequireGestorOuAdmin (`permitirViajante`) no frontend.
+const LEITURA_VIAJANTE = [/^\/$/, /^\/\d+$/, /^\/\d+\/anexos\/\d+\/download$/, /^\/apoio\/clientes$/];
+// Requisições liberadas só pela exceção do viajante: contextoDoUsuario rebaixa o papel delas, pra que
+// nem um papel de atendimento (administrativo) dê a ele mais do que a visão de viajante.
+const soViajante = new WeakSet<object>();
+
 async function exigirAdminOuGestor(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
   try {
     if ((PAPEIS_MODULO_VIAGEM as readonly string[]).includes(req.user!.role)) return next();
     const user = await prisma.user.findUnique({ where: { id: req.user!.userId }, select: { email: true } });
     const contexto = user ? await resolverContextoConsultor(user.email) : null;
     if (contexto && contexto.departamentosGerenciados.length > 0) return next();
+    if (req.method === "GET" && LEITURA_VIAJANTE.some((re) => re.test(req.path)) && (await temViagemComoViajante(req.user!.userId))) {
+      soViajante.add(req);
+      return next();
+    }
     res.status(403).json({ error: "Sem permissão para acessar este recurso" });
   } catch (error) {
     handleError(res, error, "acesso");
@@ -105,7 +121,7 @@ async function contextoDoUsuario(req: AuthenticatedRequest): Promise<Ctx | null>
   const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
   if (!user) return null;
   const contexto = await resolverContextoConsultor(user.email);
-  return { userId: user.id, role: req.user!.role, contexto, nome: user.nome };
+  return { userId: user.id, role: soViajante.has(req) ? "viajante" : req.user!.role, contexto, nome: user.nome };
 }
 
 const num = (v: unknown): number | null => (v === null || v === undefined || v === "" ? null : Number(v));
@@ -117,6 +133,8 @@ const txt = (v: unknown, max: number): string | null => {
 const dia = (v: string | null | undefined): Date | null => (v ? new Date(`${v}T00:00:00.000Z`) : null);
 const dec = (v: Prisma.Decimal | null | undefined): number | null => (v == null ? null : Number(v));
 const isoDia = (d: Date | null): string | null => (d ? d.toISOString().slice(0, 10) : null);
+const diaMes = (d: Date) => `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+const formatarPeriodoCurto = (ini: Date, fim: Date) => (ini.getTime() === fim.getTime() ? diaMes(ini) : `${diaMes(ini)} a ${diaMes(fim)}`);
 
 function idDaRota(req: AuthenticatedRequest, chave = "id"): number | null {
   const n = Number(req.params[chave]);
@@ -144,6 +162,20 @@ function rotuloProposta(v: { codemp: number | null; codpro: number | null }): st
   return v.codpro != null ? `Proposta ${v.codpro}` : null;
 }
 
+// Até a aprovação o solicitante ainda pode desistir; depois disso quem cancela é o atendimento.
+// Avisa quem viaja (usuários do CaxHub; externos não têm login). Pula o solicitante, que já recebe o
+// aviso dele, e quem executou a ação. `link: false` grava sem destino — cancelada não é visível ao
+// viajante, então o clique no sino levaria a um 403.
+async function avisarViajantes(v: ViagemDetalhe, ctx: Ctx, tipo: string, mensagem: string, link: boolean): Promise<void> {
+  const ids = new Set<number>();
+  for (const p of v.viajantes) if (p.userId != null) ids.add(p.userId);
+  if (v.solicitanteId != null) ids.delete(v.solicitanteId);
+  ids.delete(ctx.userId);
+  for (const id of ids) await criarNotificacao(id, tipo, mensagem, undefined, link ? v.id : undefined);
+}
+
+const STATUS_CANCELAVEL_PELO_SOLICITANTE = ["solicitada", "em_cotacao", "aguardando_aceite", "aguardando_aprovacao"];
+
 function somaSelecionadas(v: ViagemDetalhe): number {
   return v.cotacoes.filter((c) => c.selecionada).reduce((acc, c) => acc + Number(c.valor), 0);
 }
@@ -160,7 +192,7 @@ function serializar(v: ViagemDetalhe, ctx: Ctx) {
   const cpfCompleto = podeVerCpfCompleto(ctx, perm);
   const terminal = ehTerminal(v.status);
   const souSolicitante = ehSolicitante(ctx, perm);
-  const editavel = !terminal && ((souSolicitante && v.status === "solicitada") || (atende && v.status !== "aguardando_aprovacao"));
+  const editavel = !terminal && ((souSolicitante && v.status === "solicitada") || (atende && v.status !== "aguardando_aprovacao" && v.status !== "aguardando_aceite"));
 
   return {
     id: v.id,
@@ -189,6 +221,9 @@ function serializar(v: ViagemDetalhe, ctx: Ctx) {
     valorReservado: somaReservado(v),
     aprovadoEm: v.aprovadoEm,
     observacaoDecisao: v.observacaoDecisao,
+    aceiteDecisao: v.aceiteDecisao,
+    aceiteObservacao: v.aceiteObservacao,
+    aceiteEm: v.aceiteEm,
     motivoCancelamento: v.motivoCancelamento,
     criadoEm: v.criadoEm,
     atualizadoEm: v.atualizadoEm,
@@ -196,7 +231,7 @@ function serializar(v: ViagemDetalhe, ctx: Ctx) {
       id: p.id,
       userId: p.userId,
       nome: p.nome,
-      cpf: cpfCompleto ? p.cpf : mascararCpf(p.cpf),
+      cpf: cpfCompleto || (p.userId != null && p.userId === ctx.userId) ? p.cpf : mascararCpf(p.cpf),
     })),
     itens: v.itens.map((i) => ({
       id: i.id,
@@ -250,11 +285,14 @@ function serializar(v: ViagemDetalhe, ctx: Ctx) {
       editar: editavel,
       assumir: atende && podeTransicionar("assumir", v.status),
       cotar: atende && v.status === "em_cotacao",
+      // Só faz sentido mandar pro solicitante quando existe um e não é quem está enviando.
+      enviarAceite: atende && podeTransicionar("enviar_aceite", v.status) && v.solicitanteId != null && v.solicitanteId !== ctx.userId,
+      responderAceite: souSolicitante && podeTransicionar("responder_aceite", v.status),
       enviarAprovacao: atende && podeTransicionar("enviar_aprovacao", v.status),
       decidir: podeTransicionar("decidir", v.status) && podeAprovarViagem(ctx, perm),
       reservar: atende && (v.status === "aprovada" || v.status === "reservada"),
       finalizar: atende && podeTransicionar("finalizar", v.status),
-      cancelar: !terminal && (atende || (souSolicitante && ["solicitada", "em_cotacao", "aguardando_aprovacao"].includes(v.status))),
+      cancelar: !terminal && (atende || (souSolicitante && STATUS_CANCELAVEL_PELO_SOLICITANTE.includes(v.status))),
       anexar: !!(atende || souSolicitante),
     },
   };
@@ -506,7 +544,8 @@ solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
         base = { aprovacaoDepexe: { in: ctx.contexto.departamentosGerenciados }, NOT: { solicitanteId: ctx.userId } };
       else return void res.status(403).json({ error: "Sem permissão para aprovações" });
     } else {
-      base = { solicitanteId: ctx.userId };
+      // O que a pessoa pediu + as viagens em que ela viaja e que já estão reservadas/finalizadas.
+      base = { OR: [{ solicitanteId: ctx.userId }, whereViajanteVisivel(ctx.userId)] };
     }
 
     const status = lista(req.query.status).filter((s) => (STATUS_VIAGEM as readonly string[]).includes(s));
@@ -814,7 +853,7 @@ async function mudarStatus(
     label: string;
     permitido: (ctx: Ctx, v: ViagemDetalhe) => boolean | string;
     origem: (v: ViagemDetalhe) => boolean;
-    validar?: (v: ViagemDetalhe) => string | null;
+    validar?: (v: ViagemDetalhe, ctx: Ctx) => string | null;
     dados: (v: ViagemDetalhe, ctx: Ctx) => Prisma.SolicitacaoViagemUncheckedUpdateInput;
     evento: EventoAuditoriaTipo;
     metadata?: (v: ViagemDetalhe) => Record<string, unknown>;
@@ -827,7 +866,7 @@ async function mudarStatus(
   const perm = opts.permitido(ctx, v);
   if (perm !== true) return void res.status(403).json({ error: typeof perm === "string" ? perm : "Sem permissão" });
   if (!opts.origem(v)) return void res.status(409).json({ error: `Não é possível fazer isso com a solicitação em "${v.status}"` });
-  const erro = opts.validar?.(v);
+  const erro = opts.validar?.(v, ctx);
   if (erro) return void res.status(400).json({ error: erro });
 
   const resultado = await prisma.$transaction(async (tx) => {
@@ -866,6 +905,73 @@ solicitacoesViagemRouter.post("/:id/assumir", async (req: AuthenticatedRequest, 
   }
 });
 
+const avisarAprovadores = (v: ViagemDetalhe, ctx: Ctx) =>
+  notificarAprovadoresViagem({ codemp: v.aprovacaoCodemp, depexe: v.aprovacaoDepexe }, `Viagem #${v.id} aguarda sua aprovação (${v.cidadesDestino})`, v.id, ctx.userId);
+
+// O atendimento sugere a cotação e o solicitante confirma antes de ir pro gestor. É opcional: o
+// atendente escolhe entre esta rota e /enviar-aprovacao a cada envio.
+solicitacoesViagemRouter.post("/:id/enviar-aceite", async (req: AuthenticatedRequest, res) => {
+  try {
+    await mudarStatus(req, res, {
+      label: "enviar-aceite",
+      permitido: soAtendimento,
+      origem: (v) => podeTransicionar("enviar_aceite", v.status),
+      validar: (v, ctx) => {
+        if (!v.cotacoes.some((c) => c.selecionada)) return "Selecione ao menos uma cotação antes de enviar ao solicitante";
+        if (v.solicitanteId == null) return "A solicitação não tem solicitante — envie direto para aprovação";
+        if (v.solicitanteId === ctx.userId) return "Você é o solicitante — envie direto para aprovação";
+        return null;
+      },
+      dados: () => ({ status: "aguardando_aceite", observacaoDecisao: null, aceiteDecisao: null, aceiteObservacao: null, aceiteEm: null }),
+      evento: EVENTOS_AUDITORIA.VIAGEM_ENVIADA_ACEITE,
+      metadata: (v) => ({ valorProposto: somaSelecionadas(v) }),
+      depois: async (v, ctx) => {
+        if (v.solicitanteId && v.solicitanteId !== ctx.userId) {
+          await criarNotificacao(v.solicitanteId, "viagem_aguardando_aceite", `A cotação da viagem #${v.id} aguarda a sua confirmação`, undefined, v.id);
+        }
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "enviar-aceite");
+  }
+});
+
+// Resposta do solicitante ao pacote cotado. Só ele responde (é a confirmação pessoal dele, nem o
+// admin responde por ele). Aceitar manda pro gestor; recusar volta pra cotação, com motivo.
+solicitacoesViagemRouter.post("/:id/responder-aceite", async (req: AuthenticatedRequest, res) => {
+  try {
+    const acao = String(req.body?.acao ?? "");
+    if (!["aceitar", "recusar"].includes(acao)) return void res.status(400).json({ error: "Ação inválida" });
+    const observacao = txt(req.body?.observacao, 1000);
+    if (acao === "recusar" && !observacao) return void res.status(400).json({ error: "Informe o motivo da recusa" });
+
+    await mudarStatus(req, res, {
+      label: "responder-aceite",
+      permitido: (ctx, v) => ehSolicitante(ctx, v) || "Apenas o solicitante pode responder à cotação",
+      origem: (v) => podeTransicionar("responder_aceite", v.status),
+      dados: () => ({
+        status: acao === "aceitar" ? "aguardando_aprovacao" : "em_cotacao",
+        aceiteDecisao: acao === "aceitar" ? "aceita" : "recusada",
+        aceiteObservacao: observacao,
+        aceiteEm: new Date(),
+      }),
+      evento: acao === "aceitar" ? EVENTOS_AUDITORIA.VIAGEM_ACEITA_SOLICITANTE : EVENTOS_AUDITORIA.VIAGEM_RECUSADA_SOLICITANTE,
+      metadata: () => ({ acao, observacao }),
+      depois: async (v, ctx) => {
+        if (acao === "aceitar") await avisarAprovadores(v, ctx);
+        const texto = `${ctx.nome} ${acao === "aceitar" ? "aceitou" : "recusou"} a cotação da viagem #${v.id}`;
+        if (v.responsavelAtendimentoId) {
+          if (v.responsavelAtendimentoId !== ctx.userId) await criarNotificacao(v.responsavelAtendimentoId, `viagem_${acao === "aceitar" ? "aceita" : "recusada"}`, texto, undefined, v.id);
+        } else if (acao === "recusar") {
+          await notificarAtendimentoViagem("viagem_recusada", texto, v.id, ctx.userId);
+        }
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "responder-aceite");
+  }
+});
+
 solicitacoesViagemRouter.post("/:id/enviar-aprovacao", async (req: AuthenticatedRequest, res) => {
   try {
     await mudarStatus(req, res, {
@@ -876,14 +982,7 @@ solicitacoesViagemRouter.post("/:id/enviar-aprovacao", async (req: Authenticated
       dados: () => ({ status: "aguardando_aprovacao", observacaoDecisao: null }),
       evento: EVENTOS_AUDITORIA.VIAGEM_ENVIADA_APROVACAO,
       metadata: (v) => ({ valorProposto: somaSelecionadas(v) }),
-      depois: async (v, ctx) => {
-        await notificarAprovadoresViagem(
-          { codemp: v.aprovacaoCodemp, depexe: v.aprovacaoDepexe },
-          `Viagem #${v.id} aguarda sua aprovação (${v.cidadesDestino})`,
-          v.id,
-          ctx.userId
-        );
-      },
+      depois: avisarAprovadores,
     });
   } catch (error) {
     handleError(res, error, "enviar-aprovacao");
@@ -916,7 +1015,7 @@ solicitacoesViagemRouter.post("/:id/decidir", async (req: AuthenticatedRequest, 
           ? { status: "aprovada", valorAprovado, aprovadoPorId: ctx.userId, aprovadoEm: new Date(), observacaoDecisao: observacao }
           : acao === "reprovar"
             ? { status: "reprovada", aprovadoPorId: ctx.userId, aprovadoEm: new Date(), observacaoDecisao: observacao }
-            : { status: "em_cotacao", observacaoDecisao: observacao },
+            : { status: "em_cotacao", observacaoDecisao: observacao, aceiteDecisao: null, aceiteObservacao: null, aceiteEm: null },
       evento,
       metadata: () => ({ acao, valorAprovado, observacao }),
       depois: async (v, ctx) => {
@@ -960,6 +1059,7 @@ solicitacoesViagemRouter.post("/:id/reservar", async (req: AuthenticatedRequest,
     } else if (v.solicitanteId && v.solicitanteId !== ctx.userId) {
       await criarNotificacao(v.solicitanteId, "viagem_reservada", `A viagem #${v.id} foi reservada`, undefined, v.id);
     }
+    if (!estoura) await avisarViajantes(v, ctx, "viagem_reservada_viajante", `Sua viagem #${v.id} (${v.cidadesDestino}, ${formatarPeriodoCurto(v.dataInicio, v.dataFim)}) foi reservada`, true);
     res.json({ solicitacao: serializar((await carregar(v.id))!, ctx), revalidacao: estoura });
   } catch (error) {
     handleError(res, error, "reservar");
@@ -988,7 +1088,7 @@ solicitacoesViagemRouter.post("/:id/cancelar", async (req: AuthenticatedRequest,
       label: "cancelar",
       permitido: (ctx, v) => {
         if (podeAtenderViagem(ctx)) return true;
-        if (ehSolicitante(ctx, v) && ["solicitada", "em_cotacao", "aguardando_aprovacao"].includes(v.status)) return true;
+        if (ehSolicitante(ctx, v) && STATUS_CANCELAVEL_PELO_SOLICITANTE.includes(v.status)) return true;
         return "Você não pode cancelar esta solicitação neste status";
       },
       origem: (v) => !ehTerminal(v.status),
@@ -1001,6 +1101,8 @@ solicitacoesViagemRouter.post("/:id/cancelar", async (req: AuthenticatedRequest,
         if (v.responsavelAtendimentoId) avisar.add(v.responsavelAtendimentoId);
         avisar.delete(ctx.userId);
         for (const id of avisar) await criarNotificacao(id, "viagem_cancelada", `A viagem #${v.id} foi cancelada por ${ctx.nome}`, undefined, v.id);
+        // O viajante só tinha acesso depois da reserva; antes disso não sabia da viagem, então não há o que desfazer.
+        if (v.status === "reservada") await avisarViajantes(v, ctx, "viagem_cancelada_viajante", `Sua viagem #${v.id} (${v.cidadesDestino}) foi cancelada: ${motivo}`, false);
       },
     });
   } catch (error) {

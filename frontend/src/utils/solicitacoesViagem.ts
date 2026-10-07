@@ -6,6 +6,7 @@ import type { Tone } from "../components/ui/badges";
 export type StatusViagem =
   | "solicitada"
   | "em_cotacao"
+  | "aguardando_aceite"
   | "aguardando_aprovacao"
   | "aprovada"
   | "reprovada"
@@ -16,6 +17,7 @@ export type StatusViagem =
 export const STATUS_ROTULO: Record<StatusViagem, string> = {
   solicitada: "Solicitada",
   em_cotacao: "Em cotação",
+  aguardando_aceite: "Aguardando solicitante",
   aguardando_aprovacao: "Aguardando aprovação",
   aprovada: "Aprovada",
   reprovada: "Reprovada",
@@ -27,6 +29,7 @@ export const STATUS_ROTULO: Record<StatusViagem, string> = {
 export const STATUS_TOM: Record<StatusViagem, Tone> = {
   solicitada: "neutral",
   em_cotacao: "warning",
+  aguardando_aceite: "warning",
   aguardando_aprovacao: "warning",
   aprovada: "success",
   reprovada: "destructive",
@@ -37,6 +40,10 @@ export const STATUS_TOM: Record<StatusViagem, Tone> = {
 
 // Ordem do fluxo feliz, pro stepper do detalhe.
 export const FLUXO: StatusViagem[] = ["solicitada", "em_cotacao", "aguardando_aprovacao", "aprovada", "reservada", "finalizada"];
+
+// A confirmação do solicitante é opcional (o atendente escolhe), então o passo só entra no stepper
+// quando a solicitação está nele ou já passou por ele.
+export const FLUXO_COM_ACEITE: StatusViagem[] = ["solicitada", "em_cotacao", "aguardando_aceite", "aguardando_aprovacao", "aprovada", "reservada", "finalizada"];
 
 export type Finalidade = "projeto" | "comercial" | "interna" | "treinamento" | "outro";
 
