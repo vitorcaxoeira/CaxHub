@@ -17,7 +17,8 @@ import {
   FINALIDADE_ROTULO,
   FLUXO,
   FLUXO_COM_ACEITE,
-  STATUS_ROTULO,
+  FLUXO_OUTROS,
+  rotuloStatus,
   TIPO_ROTULO,
   formatarCpfExibicao,
   formatarDia,
@@ -56,6 +57,8 @@ interface ItemDet {
   localDevolucao: string | null;
   categoriaVeiculo: string | null;
   observacoes: string | null;
+  descricao: string | null;
+  quantidade: number | null;
   fornecedor: string | null;
   localizador: string | null;
   valorReservado: number | null;
@@ -81,6 +84,7 @@ interface AnexoDet {
 }
 interface Detalhe {
   id: number;
+  tipo: "viagem" | "outros";
   status: StatusViagem;
   finalidade: Finalidade;
   motivo: string;
@@ -118,6 +122,7 @@ interface Detalhe {
     decidir: boolean;
     reservar: boolean;
     finalizar: boolean;
+    concluir: boolean;
     cancelar: boolean;
     anexar: boolean;
   };
@@ -208,18 +213,20 @@ export function SolicitacaoViagemDetalhe() {
 
   const nomeViajante = (vid: number) => s.viajantes.find((v) => v.id === vid)?.nome ?? "—";
   const comAceite = s.status === "aguardando_aceite" || s.aceiteEm !== null;
-  const fluxo = comAceite ? FLUXO_COM_ACEITE : FLUXO;
+  // "Outros" (material, equipamento): só solicitada → em atendimento → concluída; sem valores, cotação nem roteiro.
+  const outros = s.tipo === "outros";
+  const fluxo = outros ? FLUXO_OUTROS : comAceite ? FLUXO_COM_ACEITE : FLUXO;
   const indiceFluxo = fluxo.indexOf(s.status);
   const encerradaFora = s.status === "reprovada" || s.status === "cancelada";
 
   return (
     <div className="space-y-4">
       <div>
-        <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Gestão de Solicitações · Viagens</p>
+        <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Gestão de Solicitações · {outros ? "Outros" : "Viagens"}</p>
         <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="font-display text-2xl font-bold text-foreground">Solicitação #{s.id}</h1>
-            <StatusViagemBadge status={s.status} />
+            <StatusViagemBadge status={s.status} tipo={s.tipo} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Link to="/solicitacoes/minhas" className={classeBotaoSecundario}>
@@ -232,7 +239,7 @@ export function SolicitacaoViagemDetalhe() {
             )}
             {s.pode.assumir && (
               <button disabled={ocupado} onClick={() => acao(() => axios.post(`${base}/assumir`), "Solicitação assumida")} className={classeBotaoPrimario}>
-                Assumir cotação
+                {outros ? "Assumir atendimento" : "Assumir cotação"}
               </button>
             )}
             {s.pode.enviarAceite && (
@@ -286,6 +293,11 @@ export function SolicitacaoViagemDetalhe() {
                 Finalizar
               </button>
             )}
+            {s.pode.concluir && (
+              <button disabled={ocupado} onClick={() => acao(() => axios.post(`${base}/concluir`), "Pedido concluído")} className={classeBotaoPrimario}>
+                Concluir
+              </button>
+            )}
             {s.pode.cancelar && (
               <button disabled={ocupado} onClick={() => { setTextoModal(""); setModalCancelar(true); }} className={classeBotaoPerigo}>
                 Cancelar
@@ -303,7 +315,7 @@ export function SolicitacaoViagemDetalhe() {
                     ix === indiceFluxo ? "bg-primary text-primary-foreground" : ix < indiceFluxo ? "bg-success/15 text-success" : "border border-border text-muted"
                   }`}
                 >
-                  {STATUS_ROTULO[f]}
+                  {rotuloStatus(f, s.tipo)}
                 </span>
                 {ix < fluxo.length - 1 && <span className="text-muted">›</span>}
               </li>
@@ -339,34 +351,45 @@ export function SolicitacaoViagemDetalhe() {
           <Campo rotulo="Cliente" valor={s.cliente ? s.cliente.apecli || s.cliente.nomcli : null} />
           <Campo rotulo="Proposta" valor={s.propostaRotulo} />
           <Campo rotulo="Solicitada em" valor={dataHora.format(new Date(s.criadoEm))} />
-          <Campo rotulo="Período" valor={formatarPeriodo(s.dataInicio, s.dataFim)} />
-          <Campo rotulo="Destino(s)" valor={s.cidadesDestino} />
-          <Campo rotulo="Viajantes" valor={s.viajantes.length} />
+          {outros ? (
+            <>
+              <Campo rotulo="Necessário até" valor={formatarDia(s.dataFim)} />
+              <Campo rotulo="Para quem" valor={s.viajantes.length} />
+            </>
+          ) : (
+            <>
+              <Campo rotulo="Período" valor={formatarPeriodo(s.dataInicio, s.dataFim)} />
+              <Campo rotulo="Destino(s)" valor={s.cidadesDestino} />
+              <Campo rotulo="Viajantes" valor={s.viajantes.length} />
+            </>
+          )}
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <Campo rotulo="Motivo" valor={s.motivo} />
+          <Campo rotulo={outros ? "Justificativa" : "Motivo"} valor={s.motivo} />
           <Campo rotulo="Observações" valor={s.observacoes} />
         </div>
-        <div className="mt-4 grid gap-4 sm:grid-cols-3">
-          <Campo rotulo="Valor cotado (selecionadas)" valor={formatarMoeda(s.valorProposto)} />
-          <Campo rotulo={`Valor aprovado${s.aprovador ? ` por ${s.aprovador.nome}` : ""}`} valor={formatarMoeda(s.valorAprovado)} />
-          <Campo rotulo="Valor reservado" valor={formatarMoeda(s.valorReservado || null)} />
-        </div>
+        {!outros && (
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <Campo rotulo="Valor cotado (selecionadas)" valor={formatarMoeda(s.valorProposto)} />
+            <Campo rotulo={`Valor aprovado${s.aprovador ? ` por ${s.aprovador.nome}` : ""}`} valor={formatarMoeda(s.valorAprovado)} />
+            <Campo rotulo="Valor reservado" valor={formatarMoeda(s.valorReservado || null)} />
+          </div>
+        )}
       </Secao>
 
-      <Secao titulo="Viajantes">
+      <Secao titulo={outros ? "Para quem" : "Viajantes"}>
         <ul className="grid gap-2 sm:grid-cols-2">
           {s.viajantes.map((v) => (
             <li key={v.id} className="rounded-md border border-border px-3 py-2 text-sm">
               <span className="text-foreground">{v.nome}</span>
-              <span className="ml-2 font-mono text-[12px] text-muted">{formatarCpfExibicao(v.cpf)}</span>
+              {!outros && <span className="ml-2 font-mono text-[12px] text-muted">{formatarCpfExibicao(v.cpf)}</span>}
               {v.userId != null && <span className="ml-2 text-[11px] text-muted">(usuário CaxHub)</span>}
             </li>
           ))}
         </ul>
       </Secao>
 
-      <Secao titulo="Serviços">
+      <Secao titulo={outros ? "Itens" : "Serviços"}>
         <div className="space-y-3">
           {s.itens.map((i) => (
             <ItemCard key={i.id} item={i} nomeViajante={nomeViajante} podeReservar={s.pode.reservar} ocupado={ocupado} onSalvarReserva={(dados) => acao(() => axios.put(`${base}/itens/${i.id}/reserva`, dados), "Reserva registrada")} />
@@ -374,10 +397,12 @@ export function SolicitacaoViagemDetalhe() {
         </div>
       </Secao>
 
-      <Secao titulo="Roteiro">
-        <RoteiroViagem viajantes={s.viajantes.map((v) => ({ chave: v.id, nome: v.nome }))} itens={s.itens} />
-        {s.roteiroObservacao && <p className="mt-3 whitespace-pre-wrap text-sm text-muted">{s.roteiroObservacao}</p>}
-      </Secao>
+      {!outros && (
+        <Secao titulo="Roteiro">
+          <RoteiroViagem viajantes={s.viajantes.map((v) => ({ chave: v.id, nome: v.nome }))} itens={s.itens} />
+          {s.roteiroObservacao && <p className="mt-3 whitespace-pre-wrap text-sm text-muted">{s.roteiroObservacao}</p>}
+        </Secao>
+      )}
 
       <Cotacoes s={s} ocupado={ocupado} base={base} acao={acao} />
 
@@ -538,7 +563,12 @@ function ItemCard({
             ["Bagagem", item.bagagem],
             ["Companhia", item.companhiaPreferencia],
           ]
-        : [
+        : item.tipo === "outro"
+          ? [
+              ["O que", item.descricao],
+              ["Quantidade", String(item.quantidade ?? 1)],
+            ]
+          : [
             ["Retirada", `${item.localRetirada ?? "?"} · ${formatarDia(item.dataInicio)}${item.horaInicio ? ` ${item.horaInicio}` : ""}`],
             ["Devolução", `${item.localDevolucao ?? "?"} · ${formatarDia(item.dataFim)}${item.horaFim ? ` ${item.horaFim}` : ""}`],
             ["Categoria", item.categoriaVeiculo],
@@ -547,7 +577,7 @@ function ItemCard({
   return (
     <div className="rounded-md border border-border p-4">
       <p className="text-sm font-semibold text-foreground">
-        {TIPO_ROTULO[item.tipo]} <span className="font-normal text-muted">· {item.viajantes.map(nomeViajante).join(", ")}</span>
+        {item.tipo === "outro" ? "Item" : TIPO_ROTULO[item.tipo]} <span className="font-normal text-muted">· {item.viajantes.map(nomeViajante).join(", ")}</span>
       </p>
       <dl className="mt-2 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
         {linhas

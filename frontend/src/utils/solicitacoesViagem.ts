@@ -64,12 +64,31 @@ export const FINALIDADE_DICA: Record<Finalidade, string> = {
   outro: "Cliente e proposta são opcionais.",
 };
 
-export type TipoItem = "hospedagem" | "aereo" | "carro";
+export type TipoItem = "hospedagem" | "aereo" | "carro" | "outro";
+
+// "outros" = pedido simples de material/equipamento (teclado, monitor, expediente): sem cotação, aceite,
+// aprovação nem reserva. Nunca se mistura com viagem.
+export type TipoSolicitacao = "viagem" | "outros";
+
+// No pedido "Outros" o atendimento assume (status em_cotacao) e conclui (status finalizada); a tela
+// troca só o rótulo desses dois.
+const ROTULO_STATUS_OUTROS: Partial<Record<StatusViagem, string>> = {
+  em_cotacao: "Em atendimento",
+  finalizada: "Concluída",
+};
+
+export function rotuloStatus(status: string, tipo?: string): string {
+  if (tipo === "outros") return ROTULO_STATUS_OUTROS[status as StatusViagem] ?? STATUS_ROTULO[status as StatusViagem] ?? status;
+  return STATUS_ROTULO[status as StatusViagem] ?? status;
+}
+
+export const FLUXO_OUTROS: StatusViagem[] = ["solicitada", "em_cotacao", "finalizada"];
 
 export const TIPO_ROTULO: Record<TipoItem, string> = {
   hospedagem: "Hospedagem",
   aereo: "Passagem aérea",
   carro: "Aluguel de carro",
+  outro: "Outros",
 };
 
 export interface Viajante {
@@ -101,6 +120,9 @@ export interface ItemViagem {
   localDevolucao: string;
   categoriaVeiculo: string;
   observacoes: string;
+  // Só no tipo "outro": o que é pedido e quantas unidades (texto, vem de um input).
+  descricao: string;
+  quantidade: string;
   fornecedor?: string | null;
   localizador?: string | null;
   valorReservado?: number | null;
@@ -127,6 +149,8 @@ export function itemVazio(tipo: TipoItem): ItemViagem {
     localDevolucao: "",
     categoriaVeiculo: "",
     observacoes: "",
+    descricao: "",
+    quantidade: "1",
   };
 }
 
@@ -202,7 +226,7 @@ export function montarRoteiro(
     .map((v) => {
       const linhas: LinhaRoteiro[] = [];
       for (const i of itens) {
-        if (!i.viajantes.includes(v.chave) || !i.dataInicio) continue;
+        if (i.tipo === "outro" || !i.viajantes.includes(v.chave) || !i.dataInicio) continue;
         const ini = diaMes(i.dataInicio);
         const fim = i.dataFim && i.dataFim !== i.dataInicio ? ` a ${diaMes(i.dataFim)}` : "";
         if (i.tipo === "aereo") {

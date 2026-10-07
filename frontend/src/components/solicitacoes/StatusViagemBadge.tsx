@@ -1,11 +1,12 @@
 import { toneBadge } from "../ui/badges";
-import { STATUS_ROTULO, STATUS_TOM, type StatusViagem } from "../../utils/solicitacoesViagem";
+import { STATUS_TOM, rotuloStatus, type StatusViagem } from "../../utils/solicitacoesViagem";
 
-export function StatusViagemBadge({ status }: { status: string }) {
+// `tipo` só troca o rótulo do pedido "Outros" (Em atendimento / Concluída); sem ele, é o rótulo da viagem.
+export function StatusViagemBadge({ status, tipo }: { status: string; tipo?: string }) {
   const s = status as StatusViagem;
   return (
     <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11.5px] font-medium ${toneBadge[STATUS_TOM[s] ?? "neutral"]}`}>
-      {STATUS_ROTULO[s] ?? status}
+      {rotuloStatus(status, tipo)}
     </span>
   );
 }

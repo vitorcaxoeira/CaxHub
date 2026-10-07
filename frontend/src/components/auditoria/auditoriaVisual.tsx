@@ -121,6 +121,28 @@ function rotuloEntidade(evento: EventoAuditoria): string {
   return evento.entidadeRotulo ?? `${evento.entidadeTipo} ${evento.entidadeId}`;
 }
 
+// O pedido "Outros" (material, equipamento) usa os mesmos eventos VIAGEM_*, mas o backend grava o rótulo da
+// entidade como "Pedido #N" (routes/solicitacoesViagem.ts, auditar). É por ele que o texto troca "a viagem" por
+// "o pedido" — vale também pros eventos já gravados, sem migrar nada.
+export function ehPedido(evento: EventoAuditoria): boolean {
+  return evento.entidadeRotulo?.startsWith("Pedido ") ?? false;
+}
+
+// Selo com o código do evento. No pedido "Outros" o código da viagem (VIAGEM_*) não faz sentido, então o selo
+// mostra o equivalente do pedido; o código gravado no banco continua o mesmo.
+const TAG_PEDIDO: Record<string, string> = {
+  VIAGEM_SOLICITADA: "PEDIDO_ABERTO",
+  VIAGEM_ALTERADA: "PEDIDO_ALTERADO",
+  VIAGEM_ASSUMIDA: "PEDIDO_ASSUMIDO",
+  VIAGEM_FINALIZADA: "PEDIDO_CONCLUIDO",
+  VIAGEM_CANCELADA: "PEDIDO_CANCELADO",
+};
+
+export function tagEvento(evento: EventoAuditoria): string {
+  if (!ehPedido(evento) || !evento.eventoTipo.startsWith("VIAGEM_")) return evento.eventoTipo;
+  return TAG_PEDIDO[evento.eventoTipo] ?? evento.eventoTipo.replace("VIAGEM_", "PEDIDO_");
+}
+
 function contarAlteracoes(evento: EventoAuditoria): number {
   return evento.alteracoes ? Object.keys(evento.alteracoes).length : 0;
 }
@@ -148,19 +170,19 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     tone: "success",
     rotuloGrupo: "Viagem",
     icone: IconeCriacao,
-    resumo: (e) => `Solicitou a viagem — ${rotuloEntidade(e)}`,
+    resumo: (e) => (ehPedido(e) ? `Abriu o ${rotuloEntidade(e)}` : `Solicitou a viagem — ${rotuloEntidade(e)}`),
   },
   VIAGEM_ALTERADA: {
     tone: "neutral",
     rotuloGrupo: "Viagem",
     icone: IconeEdicao,
-    resumo: (e) => `Alterou a ${rotuloEntidade(e)}`,
+    resumo: (e) => `Alterou ${ehPedido(e) ? "o" : "a"} ${rotuloEntidade(e)}`,
   },
   VIAGEM_ASSUMIDA: {
     tone: "primary",
     rotuloGrupo: "Viagem",
     icone: IconeStatus,
-    resumo: (e) => `Assumiu a cotação da ${rotuloEntidade(e)}`,
+    resumo: (e) => (ehPedido(e) ? `Assumiu o atendimento do ${rotuloEntidade(e)}` : `Assumiu a cotação da ${rotuloEntidade(e)}`),
   },
   VIAGEM_COTACAO_ADICIONADA: {
     tone: "neutral",
@@ -244,13 +266,13 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     tone: "success",
     rotuloGrupo: "Viagem",
     icone: IconeStatus,
-    resumo: (e) => `Finalizou a ${rotuloEntidade(e)}`,
+    resumo: (e) => (ehPedido(e) ? `Concluiu o ${rotuloEntidade(e)}` : `Finalizou a ${rotuloEntidade(e)}`),
   },
   VIAGEM_CANCELADA: {
     tone: "destructive",
     rotuloGrupo: "Viagem",
     icone: IconeStatus,
-    resumo: (e) => `Cancelou a ${rotuloEntidade(e)}: ${e.metadata?.motivo ?? "—"}`,
+    resumo: (e) => `Cancelou ${ehPedido(e) ? "o" : "a"} ${rotuloEntidade(e)}: ${e.metadata?.motivo ?? "—"}`,
   },
   VIAGEM_ANEXO_ADICIONADO: {
     tone: "neutral",

@@ -42,8 +42,11 @@ interface UsuarioOpcao {
   nome: string;
 }
 
-const ETAPAS = ["Serviços", "Dados gerais", "Viajantes", "Detalhes", "Revisão"] as const;
-const TIPOS: TipoItem[] = ["hospedagem", "aereo", "carro"];
+const ETAPAS_VIAGEM = ["Serviços", "Dados gerais", "Viajantes", "Detalhes", "Revisão"] as const;
+// Pedido "Outros" (material, equipamento): as mesmas 5 etapas, com os nomes do que cada uma faz ali.
+const ETAPAS_OUTROS = ["Serviços", "Dados gerais", "Para quem", "Itens", "Revisão"] as const;
+const TIPOS_VIAGEM: TipoItem[] = ["hospedagem", "aereo", "carro"];
+const TIPOS: TipoItem[] = [...TIPOS_VIAGEM, "outro"];
 const FINALIDADES = Object.keys(FINALIDADE_ROTULO) as Finalidade[];
 
 // Quando a viagem já foi aprovada, a estrutura (quem, o quê, onde) fica travada: só datas,
@@ -77,6 +80,9 @@ export function SolicitacaoViagemForm() {
 
   const modoAjuste = statusAtual !== null && STATUS_AJUSTE.includes(statusAtual);
   const servicos = useMemo(() => Object.fromEntries(TIPOS.map((t) => [t, itens.some((i) => i.tipo === t)])) as Record<TipoItem, boolean>, [itens]);
+  // "Outros" é um pedido à parte (sem período, destino, cotação nem reserva): nunca se mistura com viagem.
+  const outros = servicos.outro;
+  const ETAPAS: readonly string[] = outros ? ETAPAS_OUTROS : ETAPAS_VIAGEM;
 
   // Edição: carrega a solicitação e converte os ids de viajante dos itens em índices da lista.
   useEffect(() => {
@@ -112,6 +118,7 @@ export function SolicitacaoViagemForm() {
             ...itemVazio(i.tipo as TipoItem),
             ...Object.fromEntries(Object.entries(i).map(([k, v]) => [k, v ?? ""])),
             viajantes: i.viajantes.map((vid) => vs.findIndex((v) => v.id === vid)).filter((ix) => ix >= 0),
+            quantidade: String((i as { quantidade?: number | null }).quantidade ?? 1),
           }))
         );
       })
@@ -122,11 +129,19 @@ export function SolicitacaoViagemForm() {
   // ---------- serviços ----------
 
   function alternarServico(tipo: TipoItem) {
+    if (servicoBloqueado(tipo)) return;
     if (servicos[tipo]) {
       setItens((atual) => atual.filter((i) => i.tipo !== tipo));
     } else {
       setItens((atual) => [...atual, novoItem(tipo)]);
+      // "Projeto" exige proposta e é a finalidade padrão da viagem; um pedido de material quase sempre é interno.
+      if (tipo === "outro" && finalidade === "projeto") setFinalidade("interna");
     }
+  }
+
+  // Outros não combina com viagem (e vice-versa): o lado oposto fica desabilitado enquanto houver o outro marcado.
+  function servicoBloqueado(tipo: TipoItem): boolean {
+    return tipo === "outro" ? TIPOS_VIAGEM.some((t) => servicos[t]) : servicos.outro;
   }
 
   function novoItem(tipo: TipoItem): ItemViagem {
@@ -136,7 +151,7 @@ export function SolicitacaoViagemForm() {
     if (tipo === "hospedagem" || tipo === "carro") {
       base.dataInicio = dataInicio;
       base.dataFim = dataFim;
-    } else {
+    } else if (tipo === "aereo") {
       base.dataInicio = dataInicio;
     }
     return base;
@@ -180,14 +195,18 @@ export function SolicitacaoViagemForm() {
   // ---------- validação (espelha o backend; ele continua sendo quem decide) ----------
 
   function validarEtapa(alvo: number): string | null {
-    if (alvo >= 0 && itens.length === 0) return "Marque ao menos um serviço (hospedagem, passagem aérea ou carro)";
+    if (alvo >= 0 && itens.length === 0) return "Marque ao menos um serviço (hospedagem, passagem aérea, carro ou outros)";
     if (alvo >= 1) {
-      if (!motivo.trim()) return "Informe o motivo da viagem";
-      if (finalidade === "projeto" && !proposta) return "Para viagem de projeto, informe a proposta";
-      if (finalidade === "comercial" && !proposta && !cliente) return "Para visita comercial, informe o cliente";
-      if (!dataInicio || !dataFim) return "Informe o período da viagem";
-      if (dataFim < dataInicio) return "O término da viagem é anterior ao início";
-      if (!cidadesDestino.trim()) return "Informe a(s) cidade(s) de destino";
+      if (!motivo.trim()) return outros ? "Informe a justificativa do pedido" : "Informe o motivo da viagem";
+      if (finalidade === "projeto" && !proposta) return outros ? "Para finalidade Projeto, informe a proposta" : "Para viagem de projeto, informe a proposta";
+      if (finalidade === "comercial" && !proposta && !cliente) return outros ? "Para finalidade Comercial, informe o cliente" : "Para visita comercial, informe o cliente";
+      if (outros) {
+        if (!dataFim) return "Informe até quando você precisa";
+      } else {
+        if (!dataInicio || !dataFim) return "Informe o período da viagem";
+        if (dataFim < dataInicio) return "O término da viagem é anterior ao início";
+        if (!cidadesDestino.trim()) return "Informe a(s) cidade(s) de destino";
+      }
     }
     if (alvo >= 2) {
       for (const [ix, v] of viajantes.entries()) {
@@ -197,8 +216,14 @@ export function SolicitacaoViagemForm() {
     }
     if (alvo >= 3) {
       for (const i of itens) {
-        const rot = `${TIPO_ROTULO[i.tipo]} ${itens.filter((x) => x.tipo === i.tipo).indexOf(i) + 1}`;
-        if (i.viajantes.length === 0) return `${rot}: escolha quem viaja`;
+        const rot = i.tipo === "outro" ? `Item ${itens.indexOf(i) + 1}` : `${TIPO_ROTULO[i.tipo]} ${itens.filter((x) => x.tipo === i.tipo).indexOf(i) + 1}`;
+        if (i.viajantes.length === 0) return i.tipo === "outro" ? `${rot}: escolha para quem é` : `${rot}: escolha quem viaja`;
+        if (i.tipo === "outro") {
+          if (!i.descricao.trim()) return `${rot}: descreva o que você precisa`;
+          const q = Number(i.quantidade);
+          if (!Number.isInteger(q) || q < 1 || q > 9999) return `${rot}: quantidade inválida (de 1 a 9999)`;
+          continue;
+        }
         if (i.dataFim && i.dataInicio && i.dataFim < i.dataInicio) return `${rot}: a data final é anterior à inicial`;
         if (i.tipo === "hospedagem" && (!i.cidade.trim() || !i.dataInicio || !i.dataFim)) return `${rot}: informe cidade, check-in e check-out`;
         if (i.tipo === "aereo" && (!i.origem.trim() || !i.destino.trim() || !i.dataInicio)) return `${rot}: informe origem, destino e data de ida`;
@@ -234,11 +259,12 @@ export function SolicitacaoViagemForm() {
         codcli: proposta ? proposta.codcli : cliente?.codcli,
         codemp: proposta?.codemp,
         codpro: proposta?.codpro,
-        dataInicio,
+        // Pedido "Outros" não tem período nem destino: só o prazo (dataFim); o resto o servidor normaliza.
+        dataInicio: outros ? dataFim : dataInicio,
         dataFim,
-        cidadesDestino,
+        cidadesDestino: outros ? "" : cidadesDestino,
         observacoes,
-        roteiroObservacao,
+        roteiroObservacao: outros ? "" : roteiroObservacao,
         viajantes: viajantes.map((v) => ({ id: v.id, userId: v.userId, nome: v.nome, cpf: soDigitos(v.cpf) })),
         itens,
       };
@@ -265,8 +291,8 @@ export function SolicitacaoViagemForm() {
 
   return (
     <div className="max-w-4xl">
-      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Gestão de Solicitações · Viagens</p>
-      <h1 className="mt-1 font-display text-2xl font-bold text-foreground">{editando ? `Editar solicitação #${id}` : "Nova solicitação de viagem"}</h1>
+      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Gestão de Solicitações</p>
+      <h1 className="mt-1 font-display text-2xl font-bold text-foreground">{editando ? `Editar solicitação #${id}` : "Nova solicitação"}</h1>
       {modoAjuste && (
         <p className="mt-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px] text-foreground">
           Esta solicitação já foi aprovada: só é possível ajustar datas, horários e observações dos itens existentes. Para mudar quem viaja ou o tipo de serviço, cancele e abra uma nova.
@@ -303,14 +329,14 @@ export function SolicitacaoViagemForm() {
         {!modoAjuste && etapa === 0 && (
           <section>
             <p className="text-base font-semibold text-foreground">O que você precisa reservar?</p>
-            <p className="mt-1 text-sm text-muted">Só os campos dos serviços marcados aparecem nas próximas etapas.</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <p className="mt-1 text-sm text-muted">Só os campos dos serviços marcados aparecem nas próximas etapas. &quot;Outros&quot; (material de expediente, teclado, monitor etc.) é um pedido à parte e não combina com hospedagem, passagem ou carro.</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {TIPOS.map((t) => (
                 <label
                   key={t}
-                  className={`flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-3 text-sm ${servicos[t] ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted hover:bg-surface-2"}`}
+                  className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-sm ${servicoBloqueado(t) ? "cursor-not-allowed border-border text-muted opacity-50" : servicos[t] ? "cursor-pointer border-primary bg-primary/10 text-foreground" : "cursor-pointer border-border text-muted hover:bg-surface-2"}`}
                 >
-                  <input type="checkbox" checked={servicos[t]} onChange={() => alternarServico(t)} className="h-4 w-4" />
+                  <input type="checkbox" checked={servicos[t]} disabled={servicoBloqueado(t)} onChange={() => alternarServico(t)} className="h-4 w-4" />
                   {TIPO_ROTULO[t]}
                 </label>
               ))}
@@ -323,7 +349,7 @@ export function SolicitacaoViagemForm() {
           <section className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className={classeRotulo}>Finalidade da viagem</label>
+                <label className={classeRotulo}>{outros ? "Finalidade do pedido" : "Finalidade da viagem"}</label>
                 <select value={finalidade} onChange={(e) => setFinalidade(e.target.value as Finalidade)} className={classeCampo}>
                   {FINALIDADES.map((f) => (
                     <option key={f} value={f}>
@@ -333,10 +359,12 @@ export function SolicitacaoViagemForm() {
                 </select>
                 <p className="mt-1 text-[11.5px] text-muted">{FINALIDADE_DICA[finalidade]}</p>
               </div>
-              <div>
-                <label className={classeRotulo}>Cidade(s) de destino</label>
-                <input value={cidadesDestino} onChange={(e) => setCidadesDestino(e.target.value)} className={classeCampo} maxLength={500} placeholder="Ex.: São Paulo, Curitiba" />
-              </div>
+              {!outros && (
+                <div>
+                  <label className={classeRotulo}>Cidade(s) de destino</label>
+                  <input value={cidadesDestino} onChange={(e) => setCidadesDestino(e.target.value)} className={classeCampo} maxLength={500} placeholder="Ex.: São Paulo, Curitiba" />
+                </div>
+              )}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -375,20 +403,27 @@ export function SolicitacaoViagemForm() {
             </div>
 
             <div>
-              <label className={classeRotulo}>Motivo da viagem</label>
+              <label className={classeRotulo}>{outros ? "Justificativa do pedido" : "Motivo da viagem"}</label>
               <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={2} maxLength={1000} className={`${classeCampo} resize-none`} />
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className={classeRotulo}>Início da viagem (chegada)</label>
-                <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} className={classeCampo} />
-              </div>
-              <div>
-                <label className={classeRotulo}>Término da viagem (saída)</label>
+            {outros ? (
+              <div className="sm:max-w-xs">
+                <label className={classeRotulo}>Necessário até</label>
                 <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} className={classeCampo} />
               </div>
-            </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className={classeRotulo}>Início da viagem (chegada)</label>
+                  <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} className={classeCampo} />
+                </div>
+                <div>
+                  <label className={classeRotulo}>Término da viagem (saída)</label>
+                  <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} className={classeCampo} />
+                </div>
+              </div>
+            )}
 
             <div>
               <label className={classeRotulo}>Observações gerais</label>
@@ -400,18 +435,18 @@ export function SolicitacaoViagemForm() {
         {/* ---------- 3. Viajantes ---------- */}
         {!modoAjuste && etapa === 2 && (
           <section className="space-y-3">
-            <p className="text-sm text-muted">Quem vai viajar. Escolha alguém do CaxHub ou informe uma pessoa externa (convidado, cliente).</p>
+            <p className="text-sm text-muted">{outros ? "Para quem é o pedido. Escolha o colaborador no CaxHub ou informe o nome. Quem for usuário do CaxHub acompanha o pedido, só leitura." : "Quem vai viajar. Escolha alguém do CaxHub ou informe uma pessoa externa (convidado, cliente)."}</p>
             {viajantes.map((v, ix) => (
               <div key={ix} className="rounded-md border border-border bg-surface-2/40 p-3">
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="text-[12.5px] font-medium text-foreground">Viajante {ix + 1}</p>
+                  <p className="text-[12.5px] font-medium text-foreground">{outros ? "Colaborador" : "Viajante"} {ix + 1}</p>
                   {viajantes.length > 1 && (
                     <button type="button" onClick={() => removerViajante(ix)} className="text-[12px] text-destructive hover:underline">
                       Remover
                     </button>
                   )}
                 </div>
-                <div className="grid gap-3 sm:grid-cols-[1fr_1fr_11rem]">
+                <div className={`grid gap-3 ${outros ? "sm:grid-cols-2" : "sm:grid-cols-[1fr_1fr_11rem]"}`}>
                   <div>
                     <label className={classeRotulo}>Usuário do CaxHub (opcional)</label>
                     <AutocompleteRemoto<UsuarioOpcao>
@@ -428,6 +463,7 @@ export function SolicitacaoViagemForm() {
                     <label className={classeRotulo}>Nome completo</label>
                     <input value={v.nome} onChange={(e) => atualizarViajante(ix, { nome: e.target.value, userId: null })} maxLength={150} className={classeCampo} />
                   </div>
+                  {!outros && (
                   <div>
                     <label className={classeRotulo}>CPF (opcional)</label>
                     <input
@@ -438,11 +474,12 @@ export function SolicitacaoViagemForm() {
                       className={`${classeCampo} font-mono ${v.cpf && !v.cpf.includes("*") && soDigitos(v.cpf).length === 11 && !cpfValido(v.cpf) ? "border-destructive" : ""}`}
                     />
                   </div>
+                  )}
                 </div>
               </div>
             ))}
             <button type="button" onClick={adicionarViajante} className={classeBotaoSecundario}>
-              + Adicionar viajante
+              {outros ? "+ Adicionar colaborador" : "+ Adicionar viajante"}
             </button>
           </section>
         )}
@@ -466,16 +503,18 @@ export function SolicitacaoViagemForm() {
               <div className="flex flex-wrap gap-2">
                 {TIPOS.filter((t) => servicos[t]).map((t) => (
                   <button key={t} type="button" onClick={() => setItens((a) => [...a, novoItem(t)])} className={classeBotaoSecundario}>
-                    + Outra {t === "aereo" ? "passagem" : t === "carro" ? "locação de carro" : "hospedagem"}
+                    {t === "outro" ? "+ Outro item" : `+ Outra ${t === "aereo" ? "passagem" : t === "carro" ? "locação de carro" : "hospedagem"}`}
                   </button>
                 ))}
               </div>
             )}
-            <div>
-              <p className="mb-1 font-mono text-[10px] uppercase tracking-widest text-muted">Roteiro por viajante</p>
-              <RoteiroViagem viajantes={roteiroViajantes} itens={itens} />
-            </div>
-            {!modoAjuste && (
+            {!outros && (
+              <div>
+                <p className="mb-1 font-mono text-[10px] uppercase tracking-widest text-muted">Roteiro por viajante</p>
+                <RoteiroViagem viajantes={roteiroViajantes} itens={itens} />
+              </div>
+            )}
+            {!modoAjuste && !outros && (
               <div>
                 <label className={classeRotulo}>Observações sobre o roteiro (opcional)</label>
                 <textarea value={roteiroObservacao} onChange={(e) => setRoteiroObservacao(e.target.value)} rows={3} className={`${classeCampo} resize-none`} placeholder="Ex.: João volta de Curitiba de carro; Maria segue para Florianópolis." />
@@ -490,15 +529,35 @@ export function SolicitacaoViagemForm() {
             <Linha rotulo="Finalidade" valor={FINALIDADE_ROTULO[finalidade]} />
             <Linha rotulo="Cliente" valor={proposta ? proposta.clienteNome : cliente ? cliente.apecli || cliente.nomcli : "—"} />
             <Linha rotulo="Proposta" valor={proposta ? `Proposta ${proposta.codpro}` : "—"} />
-            <Linha rotulo="Motivo" valor={motivo} />
-            <Linha rotulo="Período" valor={`${dataInicio.split("-").reverse().join("/")} a ${dataFim.split("-").reverse().join("/")}`} />
-            <Linha rotulo="Destino(s)" valor={cidadesDestino} />
-            <Linha rotulo="Viajantes" valor={viajantes.map((v) => v.nome).join(", ")} />
-            <Linha rotulo="Serviços" valor={TIPOS.filter((t) => servicos[t]).map((t) => `${TIPO_ROTULO[t]} (${itens.filter((i) => i.tipo === t).length})`).join(" · ")} />
-            <div>
-              <p className="mb-1 font-mono text-[10px] uppercase tracking-widest text-muted">Roteiro</p>
-              <RoteiroViagem viajantes={roteiroViajantes} itens={itens} />
-            </div>
+            <Linha rotulo={outros ? "Justificativa" : "Motivo"} valor={motivo} />
+            {outros ? (
+              <>
+                <Linha rotulo="Necessário até" valor={dataFim.split("-").reverse().join("/")} />
+                <Linha rotulo="Para quem" valor={viajantes.map((v) => v.nome).join(", ")} />
+                <div>
+                  <p className="mb-1 font-mono text-[10px] uppercase tracking-widest text-muted">Itens</p>
+                  <ul className="space-y-0.5">
+                    {itens.map((i, ix) => (
+                      <li key={ix} className="text-foreground">
+                        {i.descricao} <span className="text-muted">× {i.quantidade || 1}</span>
+                        <span className="ml-2 text-[11.5px] text-muted">{i.viajantes.map((vix) => viajantes[vix]?.nome).filter(Boolean).join(", ")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            ) : (
+              <>
+                <Linha rotulo="Período" valor={`${dataInicio.split("-").reverse().join("/")} a ${dataFim.split("-").reverse().join("/")}`} />
+                <Linha rotulo="Destino(s)" valor={cidadesDestino} />
+                <Linha rotulo="Viajantes" valor={viajantes.map((v) => v.nome).join(", ")} />
+                <Linha rotulo="Serviços" valor={TIPOS.filter((t) => servicos[t]).map((t) => `${TIPO_ROTULO[t]} (${itens.filter((i) => i.tipo === t).length})`).join(" · ")} />
+                <div>
+                  <p className="mb-1 font-mono text-[10px] uppercase tracking-widest text-muted">Roteiro</p>
+                  <RoteiroViagem viajantes={roteiroViajantes} itens={itens} />
+                </div>
+              </>
+            )}
           </section>
         )}
       </div>
@@ -532,7 +591,7 @@ export function SolicitacaoViagemForm() {
 function Linha({ rotulo, valor }: { rotulo: string; valor: string }) {
   return (
     <p className="flex gap-3">
-      <span className="w-24 flex-none text-muted">{rotulo}</span>
+      <span className="w-32 flex-none text-muted">{rotulo}</span>
       <span className="text-foreground">{valor || "—"}</span>
     </p>
   );
@@ -569,7 +628,7 @@ function BlocoItem({ item, numero, viajantes, somenteAjuste, onChange, onAlterna
     <div className="rounded-md border border-border bg-surface-2/40 p-4">
       <div className="mb-3 flex items-center justify-between">
         <p className="text-sm font-semibold text-foreground">
-          {TIPO_ROTULO[item.tipo]} {numero}
+          {item.tipo === "outro" ? "Item" : TIPO_ROTULO[item.tipo]} {numero}
         </p>
         {onRemover && !somenteAjuste && (
           <button type="button" onClick={onRemover} className="text-[12px] text-destructive hover:underline">
@@ -579,12 +638,12 @@ function BlocoItem({ item, numero, viajantes, somenteAjuste, onChange, onAlterna
       </div>
 
       <div className="mb-3">
-        <p className={classeRotulo}>{unico ? "Responsável pela reserva" : item.tipo === "aereo" ? "Passageiros" : "Hóspedes"}</p>
+        <p className={classeRotulo}>{unico ? "Responsável pela reserva" : item.tipo === "aereo" ? "Passageiros" : item.tipo === "outro" ? "Para quem" : "Hóspedes"}</p>
         <div className="flex flex-wrap gap-2">
           {viajantes.map((v, vix) => (
             <label key={vix} className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[12.5px] ${dis ? "opacity-60" : "cursor-pointer"} ${item.viajantes.includes(vix) ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted"}`}>
               <input type={unico ? "radio" : "checkbox"} checked={item.viajantes.includes(vix)} disabled={dis} onChange={() => onAlternarViajante(vix)} />
-              {v.nome || `Viajante ${vix + 1}`}
+              {v.nome || `${item.tipo === "outro" ? "Colaborador" : "Viajante"} ${vix + 1}`}
             </label>
           ))}
         </div>
@@ -630,6 +689,13 @@ function BlocoItem({ item, numero, viajantes, somenteAjuste, onChange, onAlterna
           {campo("Data de devolução", "dataFim", { type: "date", travar: false })}
           {campo("Horário de devolução", "horaFim", { type: "time", travar: false })}
           <div className="sm:col-span-3">{campo("Categoria / tipo de veículo", "categoriaVeiculo", { placeholder: "Ex.: econômico, SUV" })}</div>
+        </div>
+      )}
+
+      {item.tipo === "outro" && (
+        <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
+          {campo("O que você precisa", "descricao", { placeholder: "Ex.: Teclado ABNT2 sem fio" })}
+          {campo("Quantidade", "quantidade", { type: "number" })}
         </div>
       )}
 

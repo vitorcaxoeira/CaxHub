@@ -20,6 +20,7 @@ import {
   ItemEntrada,
   STATUS_VIAGEM,
   ViajanteEntrada,
+  TipoSolicitacao,
   ViagemPermissao,
   ehAtendimento,
   ehDataIso,
@@ -35,6 +36,7 @@ import {
   resolverVinculo,
   soDigitos,
   temViagemComoViajante,
+  tipoDosItens,
   validarCpf,
   validarItem,
   whereViajanteVisivel,
@@ -176,6 +178,17 @@ async function avisarViajantes(v: ViagemDetalhe, ctx: Ctx, tipo: string, mensage
 
 const STATUS_CANCELAVEL_PELO_SOLICITANTE = ["solicitada", "em_cotacao", "aguardando_aceite", "aguardando_aprovacao"];
 
+// "viagem #5 (São Paulo)" ou "pedido #5 (Teclado ABNT2 ×1 +1)" — pra mensagens de notificação.
+function resumoItensOutros(itens: { descricao: string | null; quantidade: number | null }[]): string {
+  const [primeiro, ...resto] = itens;
+  if (!primeiro) return "sem itens";
+  return `${primeiro.descricao ?? "item"} ×${primeiro.quantidade ?? 1}${resto.length ? ` +${resto.length}` : ""}`;
+}
+function descreverPedido(v: { id: number; tipo: string; cidadesDestino: string; itens: { descricao: string | null; quantidade: number | null }[] }): string {
+  return v.tipo === "outros" ? `pedido #${v.id} (${resumoItensOutros(v.itens)})` : `viagem #${v.id} (${v.cidadesDestino})`;
+}
+const MSG_SO_VIAGEM = "Não se aplica a solicitações do tipo Outros";
+
 function somaSelecionadas(v: ViagemDetalhe): number {
   return v.cotacoes.filter((c) => c.selecionada).reduce((acc, c) => acc + Number(c.valor), 0);
 }
@@ -193,9 +206,12 @@ function serializar(v: ViagemDetalhe, ctx: Ctx) {
   const terminal = ehTerminal(v.status);
   const souSolicitante = ehSolicitante(ctx, perm);
   const editavel = !terminal && ((souSolicitante && v.status === "solicitada") || (atende && v.status !== "aguardando_aprovacao" && v.status !== "aguardando_aceite"));
+  // "Outros" não tem cotação, aceite, aprovação nem reserva: o atendimento assume e conclui.
+  const viagem = v.tipo !== "outros";
 
   return {
     id: v.id,
+    tipo: v.tipo,
     status: v.status,
     finalidade: v.finalidade,
     motivo: v.motivo,
@@ -255,6 +271,8 @@ function serializar(v: ViagemDetalhe, ctx: Ctx) {
       localDevolucao: i.localDevolucao,
       categoriaVeiculo: i.categoriaVeiculo,
       observacoes: i.observacoes,
+      descricao: i.descricao,
+      quantidade: i.quantidade,
       fornecedor: i.fornecedor,
       localizador: i.localizador,
       valorReservado: dec(i.valorReservado),
@@ -284,14 +302,15 @@ function serializar(v: ViagemDetalhe, ctx: Ctx) {
     pode: {
       editar: editavel,
       assumir: atende && podeTransicionar("assumir", v.status),
-      cotar: atende && v.status === "em_cotacao",
+      cotar: viagem && atende && v.status === "em_cotacao",
       // Só faz sentido mandar pro solicitante quando existe um e não é quem está enviando.
-      enviarAceite: atende && podeTransicionar("enviar_aceite", v.status) && v.solicitanteId != null && v.solicitanteId !== ctx.userId,
-      responderAceite: souSolicitante && podeTransicionar("responder_aceite", v.status),
-      enviarAprovacao: atende && podeTransicionar("enviar_aprovacao", v.status),
-      decidir: podeTransicionar("decidir", v.status) && podeAprovarViagem(ctx, perm),
-      reservar: atende && (v.status === "aprovada" || v.status === "reservada"),
-      finalizar: atende && podeTransicionar("finalizar", v.status),
+      enviarAceite: viagem && atende && podeTransicionar("enviar_aceite", v.status) && v.solicitanteId != null && v.solicitanteId !== ctx.userId,
+      responderAceite: viagem && souSolicitante && podeTransicionar("responder_aceite", v.status),
+      enviarAprovacao: viagem && atende && podeTransicionar("enviar_aprovacao", v.status),
+      decidir: viagem && podeTransicionar("decidir", v.status) && podeAprovarViagem(ctx, perm),
+      reservar: viagem && atende && (v.status === "aprovada" || v.status === "reservada"),
+      finalizar: viagem && atende && podeTransicionar("finalizar", v.status),
+      concluir: !viagem && atende && podeTransicionar("concluir", v.status),
       cancelar: !terminal && (atende || (souSolicitante && STATUS_CANCELAVEL_PELO_SOLICITANTE.includes(v.status))),
       anexar: !!(atende || souSolicitante),
     },
@@ -302,7 +321,7 @@ function serializar(v: ViagemDetalhe, ctx: Ctx) {
 function auditar(
   tx: Prisma.TransactionClient,
   req: AuthenticatedRequest,
-  v: { id: number; codemp: number | null; codpro: number | null },
+  v: { id: number; codemp: number | null; codpro: number | null; tipo?: string },
   eventoTipo: EventoAuditoriaTipo,
   extra: { alteracoes?: ReturnType<typeof diffCampos>["alteracoes"]; metadata?: Record<string, unknown> } = {}
 ) {
@@ -314,7 +333,7 @@ function auditar(
       codpro: v.codpro,
       entidadeTipo: ENTIDADES_AUDITORIA.SOLICITACAO_VIAGEM,
       entidadeId: entidadeIdSolicitacaoViagem(v.id),
-      entidadeRotulo: `Viagem #${v.id}`,
+      entidadeRotulo: `${v.tipo === "outros" ? "Pedido" : "Viagem"} #${v.id}`,
       eventoTipo,
       alteracoes: extra.alteracoes ?? null,
       metadata: extra.metadata ?? null,
@@ -340,6 +359,7 @@ const CAMPOS_CABECALHO: Record<string, string> = {
 // ---------- validação de entrada (criação/edição) ----------
 
 interface EntradaViagem {
+  tipo: TipoSolicitacao;
   finalidade: Finalidade;
   motivo: string;
   dataInicio: string;
@@ -355,15 +375,29 @@ interface EntradaViagem {
 async function validarEntrada(body: Record<string, unknown>): Promise<{ erro: string } | { dados: EntradaViagem }> {
   const finalidade = body.finalidade as Finalidade;
   if (!(FINALIDADES as readonly string[]).includes(finalidade)) return { erro: "Finalidade inválida" };
+
+  // O tipo vem dos serviços marcados: "outro" (material/equipamento) nunca se mistura com viagem.
+  const brutosItens = Array.isArray(body.itens) ? (body.itens as Record<string, unknown>[]) : [];
+  const deduzido = tipoDosItens(brutosItens.map((b) => String(b.tipo)));
+  if ("erro" in deduzido) return { erro: deduzido.erro };
+  const tipo = deduzido.tipo;
+  const pedido = tipo === "outros";
+
   const motivo = txt(body.motivo, 1000);
-  if (!motivo) return { erro: "Informe o motivo da viagem" };
-  const cidadesDestino = txt(body.cidadesDestino, 500);
-  if (!cidadesDestino) return { erro: "Informe a(s) cidade(s) de destino" };
+  if (!motivo) return { erro: pedido ? "Informe a justificativa do pedido" : "Informe o motivo da viagem" };
+  // Pedido "Outros" não tem destino nem período: só o prazo ("necessário até"), guardado em dataFim; o
+  // dataInicio acompanha pra o intervalo ficar coerente (a data de abertura é o criadoEm).
+  const cidadesDestino = pedido ? "" : txt(body.cidadesDestino, 500);
+  if (cidadesDestino === null) return { erro: "Informe a(s) cidade(s) de destino" };
+  if (pedido) {
+    if (!ehDataIso(body.dataFim)) return { erro: "Informe até quando você precisa" };
+    body.dataInicio = body.dataFim;
+  }
   if (!ehDataIso(body.dataInicio) || !ehDataIso(body.dataFim)) return { erro: "Informe o período da viagem" };
   if (body.dataFim < body.dataInicio) return { erro: "O término da viagem é anterior ao início" };
 
   const brutosViajantes = Array.isArray(body.viajantes) ? (body.viajantes as Record<string, unknown>[]) : [];
-  if (brutosViajantes.length === 0) return { erro: "Informe ao menos um viajante" };
+  if (brutosViajantes.length === 0) return { erro: pedido ? "Informe para quem é o pedido" : "Informe ao menos um viajante" };
   const viajantes: EntradaViagem["viajantes"] = [];
   for (const [i, b] of brutosViajantes.entries()) {
     const nome = txt(b.nome, 150);
@@ -374,8 +408,7 @@ async function validarEntrada(body: Record<string, unknown>): Promise<{ erro: st
     viajantes.push({ id: num(b.id) ?? undefined, userId, nome, cpf: soDigitos(b.cpf) });
   }
 
-  const brutosItens = Array.isArray(body.itens) ? (body.itens as Record<string, unknown>[]) : [];
-  if (brutosItens.length === 0) return { erro: "Informe ao menos um serviço (hospedagem, passagem ou carro)" };
+  if (brutosItens.length === 0) return { erro: "Informe ao menos um serviço (hospedagem, passagem, carro ou outros)" };
   const itens: EntradaViagem["itens"] = [];
   for (const [i, b] of brutosItens.entries()) {
     const item: ItemEntrada & { id?: number } = {
@@ -399,6 +432,8 @@ async function validarEntrada(body: Record<string, unknown>): Promise<{ erro: st
       localDevolucao: txt(b.localDevolucao, 200),
       categoriaVeiculo: txt(b.categoriaVeiculo, 100),
       observacoes: txt(b.observacoes, 1000),
+      descricao: txt(b.descricao, 500),
+      quantidade: num(b.quantidade),
     };
     const erroItem = validarItem(item, viajantes.length, i);
     if (erroItem) return { erro: erroItem };
@@ -410,6 +445,7 @@ async function validarEntrada(body: Record<string, unknown>): Promise<{ erro: st
 
   return {
     dados: {
+      tipo,
       finalidade,
       motivo,
       dataInicio: body.dataInicio,
@@ -445,7 +481,14 @@ function dadosItem(i: ItemEntrada, ordem: number) {
     localDevolucao: i.localDevolucao ?? null,
     categoriaVeiculo: i.categoriaVeiculo ?? null,
     observacoes: i.observacoes ?? null,
+    descricao: i.descricao ?? null,
+    quantidade: i.tipo === "outro" ? (i.quantidade ?? 1) : null,
   };
+}
+
+// Pedido "Outros": o histórico guarda o que foi pedido ("Teclado ×1"), não só o tipo do item. Viagem não usa.
+function descricoesOutros(d: EntradaViagem): { descricoes?: string[] } {
+  return d.tipo === "outros" ? { descricoes: d.itens.map((i) => `${i.descricao} ×${i.quantidade ?? 1}`) } : {};
 }
 
 function flagsDosItens(itens: ItemEntrada[]) {
@@ -558,7 +601,8 @@ solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
     const filtros: Prisma.SolicitacaoViagemWhereInput[] = [];
     if (finalidades.length) filtros.push({ finalidade: { in: finalidades } });
     if (codcli) filtros.push({ codcli });
-    if (de) filtros.push({ dataFim: { gte: dia(de)! } });
+    // Pedido "Outros" ainda pendente nunca sai da tela por causa do prazo: o filtro de término só esconde o que já acabou.
+    if (de) filtros.push({ OR: [{ dataFim: { gte: dia(de)! } }, { tipo: "outros", status: { notIn: ["finalizada", "cancelada"] } }] });
     if (ate) filtros.push({ dataInicio: { lte: dia(ate)! } });
     if (q) {
       const or: Prisma.SolicitacaoViagemWhereInput[] = [
@@ -566,6 +610,7 @@ solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
         { cidadesDestino: { contains: q, mode: "insensitive" } },
         { solicitante: { nome: { contains: q, mode: "insensitive" } } },
         { cliente: { nomcli: { contains: q, mode: "insensitive" } } },
+        { itens: { some: { descricao: { contains: q, mode: "insensitive" } } } },
       ];
       if (/^#?\d+$/.test(q)) or.push({ id: Number(q.replace("#", "")) });
       filtros.push({ OR: or });
@@ -587,6 +632,7 @@ solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
           solicitante: { select: { nome: true } },
           atendimento: { select: { nome: true } },
           cliente: { select: { nomcli: true, apecli: true } },
+          itens: { select: { descricao: true, quantidade: true }, orderBy: [{ ordem: "asc" }, { id: "asc" }], take: 3 },
         },
       }),
       // KPIs sem o filtro de status (senão o card do status escolhido zeraria os demais).
@@ -600,6 +646,8 @@ solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
       kpis: Object.fromEntries(porStatus.map((s) => [s.status, s._count._all])),
       solicitacoes: linhas.map((v) => ({
         id: v.id,
+        tipo: v.tipo,
+        resumoItens: v.tipo === "outros" ? v.itens.map((i) => ({ descricao: i.descricao, quantidade: i.quantidade })) : [],
         status: v.status,
         finalidade: v.finalidade,
         motivo: v.motivo,
@@ -675,6 +723,7 @@ solicitacoesViagemRouter.post("/", async (req: AuthenticatedRequest, res) => {
       const v = await tx.solicitacaoViagem.create({
         data: {
           solicitanteId: ctx.userId,
+          tipo: d.tipo,
           finalidade: d.finalidade,
           motivo: d.motivo,
           ...d.vinculo,
@@ -706,12 +755,15 @@ solicitacoesViagemRouter.post("/", async (req: AuthenticatedRequest, res) => {
         });
       }
       await auditar(tx, req, v, EVENTOS_AUDITORIA.VIAGEM_SOLICITADA, {
-        metadata: { finalidade: d.finalidade, itens: d.itens.map((i) => i.tipo), viajantes: d.viajantes.length },
+        metadata: { finalidade: d.finalidade, itens: d.itens.map((i) => i.tipo), viajantes: d.viajantes.length, ...descricoesOutros(d) },
       });
       return v;
     });
 
-    await notificarAtendimentoViagem("viagem_solicitada", `${ctx.nome} solicitou a viagem #${criada.id} (${d.cidadesDestino})`, criada.id, ctx.userId);
+    const detalhe = (await carregar(criada.id))!;
+    await notificarAtendimentoViagem("viagem_solicitada", `${ctx.nome} solicitou ${d.tipo === "outros" ? "o" : "a"} ${descreverPedido(detalhe)}`, criada.id, ctx.userId);
+    // No pedido "Outros" o colaborador acompanha desde a abertura, então é avisado de que alguém pediu algo pra ele.
+    if (d.tipo === "outros") await avisarViajantes(detalhe, ctx, "viagem_pedido_para_voce", `${ctx.nome} abriu o ${descreverPedido(detalhe)} para você`, true);
     res.status(201).json({ id: criada.id });
   } catch (error) {
     handleError(res, error, "criar");
@@ -778,6 +830,7 @@ solicitacoesViagemRouter.put("/:id", async (req: AuthenticatedRequest, res) => {
       await tx.solicitacaoViagem.update({
         where: { id: v.id },
         data: {
+          tipo: d.tipo,
           finalidade: d.finalidade,
           motivo: d.motivo,
           ...d.vinculo,
@@ -830,9 +883,9 @@ solicitacoesViagemRouter.put("/:id", async (req: AuthenticatedRequest, res) => {
       const removerItens = [...itensExistentes].filter((id) => !itensMantidos.has(id));
       if (removerItens.length) await tx.solicitacaoViagemItem.deleteMany({ where: { id: { in: removerItens } } });
 
-      await auditar(tx, req, { id: v.id, codemp: d.vinculo.codemp, codpro: d.vinculo.codpro }, EVENTOS_AUDITORIA.VIAGEM_ALTERADA, {
+      await auditar(tx, req, { id: v.id, codemp: d.vinculo.codemp, codpro: d.vinculo.codpro, tipo: d.tipo }, EVENTOS_AUDITORIA.VIAGEM_ALTERADA, {
         alteracoes: diff.alteracoes,
-        metadata: { itens: d.itens.map((i) => i.tipo), viajantes: d.viajantes.length, itensRemovidos: removerItens.length },
+        metadata: { itens: d.itens.map((i) => i.tipo), viajantes: d.viajantes.length, itensRemovidos: removerItens.length, ...descricoesOutros(d) },
       });
     });
 
@@ -851,6 +904,8 @@ async function mudarStatus(
   res: Response,
   opts: {
     label: string;
+    // Rotas que só existem na viagem (cotação, aceite, aprovação): "Outros" recebe 409.
+    soViagem?: boolean;
     permitido: (ctx: Ctx, v: ViagemDetalhe) => boolean | string;
     origem: (v: ViagemDetalhe) => boolean;
     validar?: (v: ViagemDetalhe, ctx: Ctx) => string | null;
@@ -865,6 +920,7 @@ async function mudarStatus(
   const { v, ctx } = r;
   const perm = opts.permitido(ctx, v);
   if (perm !== true) return void res.status(403).json({ error: typeof perm === "string" ? perm : "Sem permissão" });
+  if (opts.soViagem && v.tipo === "outros") return void res.status(409).json({ error: MSG_SO_VIAGEM });
   if (!opts.origem(v)) return void res.status(409).json({ error: `Não é possível fazer isso com a solicitação em "${v.status}"` });
   const erro = opts.validar?.(v, ctx);
   if (erro) return void res.status(400).json({ error: erro });
@@ -896,7 +952,7 @@ solicitacoesViagemRouter.post("/:id/assumir", async (req: AuthenticatedRequest, 
       evento: EVENTOS_AUDITORIA.VIAGEM_ASSUMIDA,
       depois: async (v, ctx) => {
         if (v.solicitanteId && v.solicitanteId !== ctx.userId) {
-          await criarNotificacao(v.solicitanteId, "viagem_em_cotacao", `${ctx.nome} assumiu a cotação da viagem #${v.id}`, undefined, v.id);
+          await criarNotificacao(v.solicitanteId, "viagem_em_cotacao", `${ctx.nome} assumiu ${v.tipo === "outros" ? "o atendimento do" : "a cotação da"} ${descreverPedido(v)}`, undefined, v.id);
         }
       },
     });
@@ -914,6 +970,7 @@ solicitacoesViagemRouter.post("/:id/enviar-aceite", async (req: AuthenticatedReq
   try {
     await mudarStatus(req, res, {
       label: "enviar-aceite",
+      soViagem: true,
       permitido: soAtendimento,
       origem: (v) => podeTransicionar("enviar_aceite", v.status),
       validar: (v, ctx) => {
@@ -976,6 +1033,7 @@ solicitacoesViagemRouter.post("/:id/enviar-aprovacao", async (req: Authenticated
   try {
     await mudarStatus(req, res, {
       label: "enviar-aprovacao",
+      soViagem: true,
       permitido: soAtendimento,
       origem: (v) => podeTransicionar("enviar_aprovacao", v.status),
       validar: (v) => (v.cotacoes.some((c) => c.selecionada) ? null : "Selecione ao menos uma cotação antes de enviar para aprovação"),
@@ -1002,6 +1060,7 @@ solicitacoesViagemRouter.post("/:id/decidir", async (req: AuthenticatedRequest, 
 
     await mudarStatus(req, res, {
       label: "decidir",
+      soViagem: true,
       permitido: (ctx, v) => podeAprovarViagem(ctx, v) || "Sem permissão para decidir esta solicitação",
       origem: (v) => podeTransicionar("decidir", v.status),
       validar: (v) => {
@@ -1039,6 +1098,7 @@ solicitacoesViagemRouter.post("/:id/reservar", async (req: AuthenticatedRequest,
     if (!r) return;
     const { v, ctx } = r;
     if (!podeAtenderViagem(ctx)) return void res.status(403).json({ error: "Apenas o atendimento pode fazer isso" });
+    if (v.tipo === "outros") return void res.status(409).json({ error: MSG_SO_VIAGEM });
     if (!podeTransicionar("reservar", v.status)) return void res.status(409).json({ error: `Não é possível reservar com a solicitação em "${v.status}"` });
     if (v.itens.some((i) => !i.localizador)) return void res.status(400).json({ error: "Registre o localizador de todos os itens antes de concluir a reserva" });
 
@@ -1080,6 +1140,28 @@ solicitacoesViagemRouter.post("/:id/finalizar", async (req: AuthenticatedRequest
   }
 });
 
+// "Outros": o atendimento (que já assumiu, status em_cotacao rotulado "Em atendimento") conclui direto — sem
+// cotação, aprovação nem reserva. Mesmo status final da viagem (finalizada), rotulado "Concluída" na tela.
+solicitacoesViagemRouter.post("/:id/concluir", async (req: AuthenticatedRequest, res) => {
+  try {
+    await mudarStatus(req, res, {
+      label: "concluir",
+      permitido: soAtendimento,
+      origem: (v) => v.tipo === "outros" && podeTransicionar("concluir", v.status),
+      dados: () => ({ status: "finalizada" }),
+      evento: EVENTOS_AUDITORIA.VIAGEM_FINALIZADA,
+      metadata: () => ({ tipo: "outros" }),
+      depois: async (v, ctx) => {
+        const msg = `O ${descreverPedido(v)} foi concluído`;
+        if (v.solicitanteId && v.solicitanteId !== ctx.userId) await criarNotificacao(v.solicitanteId, "viagem_concluida", msg, undefined, v.id);
+        await avisarViajantes(v, ctx, "viagem_concluida", msg, true);
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "concluir");
+  }
+});
+
 solicitacoesViagemRouter.post("/:id/cancelar", async (req: AuthenticatedRequest, res) => {
   try {
     const motivo = txt(req.body?.motivo, 1000);
@@ -1100,9 +1182,9 @@ solicitacoesViagemRouter.post("/:id/cancelar", async (req: AuthenticatedRequest,
         if (v.solicitanteId) avisar.add(v.solicitanteId);
         if (v.responsavelAtendimentoId) avisar.add(v.responsavelAtendimentoId);
         avisar.delete(ctx.userId);
-        for (const id of avisar) await criarNotificacao(id, "viagem_cancelada", `A viagem #${v.id} foi cancelada por ${ctx.nome}`, undefined, v.id);
+        for (const id of avisar) await criarNotificacao(id, "viagem_cancelada", `${v.tipo === "outros" ? "O pedido" : "A viagem"} #${v.id} foi cancelad${v.tipo === "outros" ? "o" : "a"} por ${ctx.nome}`, undefined, v.id);
         // O viajante só tinha acesso depois da reserva; antes disso não sabia da viagem, então não há o que desfazer.
-        if (v.status === "reservada") await avisarViajantes(v, ctx, "viagem_cancelada_viajante", `Sua viagem #${v.id} (${v.cidadesDestino}) foi cancelada: ${motivo}`, false);
+        if (v.status === "reservada" || v.tipo === "outros") await avisarViajantes(v, ctx, "viagem_cancelada_viajante", `${v.tipo === "outros" ? "Seu" : "Sua"} ${descreverPedido(v)} foi cancelad${v.tipo === "outros" ? "o" : "a"}: ${motivo}`, false);
       },
     });
   } catch (error) {
@@ -1128,6 +1210,7 @@ async function abrirParaCotar(req: AuthenticatedRequest, res: Response) {
   const r = await abrir(req, res);
   if (!r) return null;
   if (!podeAtenderViagem(r.ctx)) return void res.status(403).json({ error: "Apenas o atendimento pode fazer isso" }) as never;
+  if (r.v.tipo === "outros") return void res.status(409).json({ error: MSG_SO_VIAGEM }) as never;
   if (r.v.status !== "em_cotacao") return void res.status(409).json({ error: "As cotações só podem ser alteradas com a solicitação em cotação" }) as never;
   return r;
 }
@@ -1210,6 +1293,7 @@ solicitacoesViagemRouter.put("/:id/itens/:itemId/reserva", async (req: Authentic
     if (!r) return;
     const { v, ctx } = r;
     if (!podeAtenderViagem(ctx)) return void res.status(403).json({ error: "Apenas o atendimento pode fazer isso" });
+    if (v.tipo === "outros") return void res.status(409).json({ error: MSG_SO_VIAGEM });
     if (v.status !== "aprovada" && v.status !== "reservada") return void res.status(409).json({ error: "A reserva só é registrada depois da aprovação" });
     const item = v.itens.find((i) => i.id === idDaRota(req, "itemId"));
     if (!item) return void res.status(404).json({ error: "Item não encontrado" });

@@ -40,6 +40,9 @@ interface LinhaViagem {
   precisaAereo: boolean;
   precisaCarro: boolean;
   valorAprovado: number | null;
+  tipo: "viagem" | "outros";
+  // Só no pedido "Outros": os primeiros itens (o que e quantos).
+  resumoItens: { descricao: string | null; quantidade: number | null }[];
 }
 
 interface ClienteOpcao {
@@ -52,7 +55,7 @@ const TEXTOS: Record<EscopoViagem, { secao: string; titulo: string; descricao: s
   minhas: {
     secao: "Gestão de Solicitações · Viagens",
     titulo: "Minhas Solicitações",
-    descricao: "Hospedagem, passagens e carro que você pediu ou em que você vai viajar — acompanhe cotação, aprovação e reserva.",
+    descricao: "Viagens e pedidos (material, equipamento) que você abriu ou que foram feitos para você — acompanhe cotação, aprovação e reserva.",
     vazio: "Você ainda não tem solicitações de viagem.",
   },
   atendimento: {
@@ -71,10 +74,6 @@ const TEXTOS: Record<EscopoViagem, { secao: string; titulo: string; descricao: s
 
 const STATUS_OPCOES = (Object.keys(STATUS_ROTULO) as StatusViagem[]).map((s) => ({ value: s, label: STATUS_ROTULO[s] }));
 const FINALIDADE_OPCOES = (Object.keys(FINALIDADE_ROTULO) as Finalidade[]).map((f) => ({ value: f, label: FINALIDADE_ROTULO[f] }));
-
-// Quem só viaja (não é admin nem líder) abre já com o que lhe diz respeito: as viagens reservadas e as
-// concluídas. O backend só devolve essas mesmo, o filtro marcado deixa isso explícito na tela.
-const STATUS_DO_VIAJANTE: StatusViagem[] = ["reservada", "finalizada"];
 
 const PADRAO_STATUS: Record<EscopoViagem, StatusViagem[]> = {
   minhas: [],
@@ -134,8 +133,9 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
         const lider = (data.departamentosGerenciados ?? []).length > 0;
         setSomenteViajante(!lider);
         if (!lider) {
-          setStatus([...STATUS_DO_VIAJANTE]);
-          // Viagem que já terminou fica de fora; "Ver histórico" limpa a data.
+          // Viagem/pedido que já terminou fica de fora; "Ver histórico" limpa a data. Sem status marcado de
+          // propósito: quem recebe um pedido "Outros" acompanha desde a abertura, e é o servidor que limita
+          // o que cada um enxerga (viagem só Reservada/Finalizada; pedido tudo, menos Cancelado).
           setTerminoDe(hojeIso());
         }
       })
@@ -196,7 +196,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
         )}
       </div>
       <p className="mt-1 text-sm text-muted">
-        {somenteViajante ? "Viagens em que você está como viajante — reservas confirmadas e já concluídas." : texto.descricao}
+        {somenteViajante ? "Viagens em que você viaja e pedidos feitos para você." : texto.descricao}
       </p>
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -225,7 +225,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
         <input
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar por nº, motivo, destino, solicitante ou cliente"
+          placeholder="Buscar por nº, motivo, destino, item, solicitante ou cliente"
           className={`${classeCampo} max-w-sm`}
         />
         <label className="flex items-center gap-2 text-[12.5px] text-muted">
@@ -273,7 +273,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
               <tr key={v.id} onClick={() => navigate(`/solicitacoes/${v.id}`)} className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-2">
                 <td className="px-4 py-2.5 font-mono text-[12.5px] text-foreground">#{v.id}</td>
                 <td className="px-4 py-2.5">
-                  <StatusViagemBadge status={v.status} />
+                  <StatusViagemBadge status={v.status} tipo={v.tipo} />
                 </td>
                 <td className="px-4 py-2.5 text-foreground">
                   {v.solicitanteNome}
@@ -285,13 +285,16 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
                   {v.propostaRotulo && <span className="block text-[11.5px] text-muted">{v.propostaRotulo}</span>}
                 </td>
                 <td className="px-4 py-2.5 text-foreground">
-                  {formatarPeriodo(v.dataInicio, v.dataFim)}
+                  {v.tipo === "outros" ? `Até ${formatarDia(v.dataFim)}` : formatarPeriodo(v.dataInicio, v.dataFim)}
                   <span className="block max-w-[16rem] truncate text-[11.5px] text-muted">
-                    {v.cidadesDestino} · {v.qtdPessoas} {v.qtdPessoas === 1 ? "pessoa" : "pessoas"}
+                    {v.tipo === "outros"
+                      ? v.resumoItens.map((i) => `${i.descricao} ×${i.quantidade ?? 1}`).join(", ")
+                      : `${v.cidadesDestino} · ${v.qtdPessoas} ${v.qtdPessoas === 1 ? "pessoa" : "pessoas"}`}
                   </span>
                 </td>
                 <td className="px-4 py-2.5">
                   <div className="flex flex-wrap gap-1">
+                    {v.tipo === "outros" && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Outros</span>}
                     {v.precisaHospedagem && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Hotel</span>}
                     {v.precisaAereo && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Aéreo</span>}
                     {v.precisaCarro && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Carro</span>}

@@ -2769,6 +2769,8 @@ model SolicitacaoViagem {
   precisaCarro             Boolean   @default(false)
   /// solicitada | em_cotacao | aguardando_aceite | aguardando_aprovacao | aprovada | reprovada | reservada | finalizada | cancelada
   status                   String    @default("solicitada") @db.VarChar(30)
+  /// viagem | outros. "outros" = pedido simples de material/equipamento: sem cotação, aceite, aprovação nem reserva.
+  tipo                     String    @default("viagem") @db.VarChar(10)
   responsavelAtendimentoId Int?
   // Snapshot do departamento cujo gestor aprova (Consultor.codemp/depexe do solicitante na criação).
   aprovacaoCodemp          Int?
@@ -2822,7 +2824,7 @@ model SolicitacaoViagemViajante {
 model SolicitacaoViagemItem {
   id            Int    @id @default(autoincrement())
   solicitacaoId Int
-  /// hospedagem | aereo | carro
+  /// hospedagem | aereo | carro | outro
   tipo          String @db.VarChar(15)
   ordem         Int    @default(0)
 
@@ -2844,6 +2846,9 @@ model SolicitacaoViagemItem {
   localDevolucao       String?   @db.VarChar(200)
   categoriaVeiculo     String?   @db.VarChar(100)
   observacoes          String?   @db.VarChar(1000)
+  // Só no tipo "outro" (material, equipamento): o que é pedido e quantas unidades.
+  descricao            String?   @db.VarChar(500)
+  quantidade           Int?
 
   // Reserva (preenchida pelo atendimento).
   fornecedor     String?   @db.VarChar(150)
