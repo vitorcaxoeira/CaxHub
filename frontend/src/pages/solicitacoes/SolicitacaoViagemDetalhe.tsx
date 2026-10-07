@@ -16,6 +16,7 @@ import {
 import {
   FINALIDADE_ROTULO,
   FLUXO,
+  FLUXO_COM_ACEITE,
   STATUS_ROTULO,
   TIPO_ROTULO,
   formatarCpfExibicao,
@@ -98,6 +99,9 @@ interface Detalhe {
   valorReservado: number;
   aprovadoEm: string | null;
   observacaoDecisao: string | null;
+  aceiteDecisao: "aceita" | "recusada" | null;
+  aceiteObservacao: string | null;
+  aceiteEm: string | null;
   motivoCancelamento: string | null;
   criadoEm: string;
   viajantes: ViajanteDet[];
@@ -108,6 +112,8 @@ interface Detalhe {
     editar: boolean;
     assumir: boolean;
     cotar: boolean;
+    enviarAceite: boolean;
+    responderAceite: boolean;
     enviarAprovacao: boolean;
     decidir: boolean;
     reservar: boolean;
@@ -160,6 +166,7 @@ export function SolicitacaoViagemDetalhe() {
   const [versaoHistorico, setVersaoHistorico] = useState(0);
 
   const [modalDecisao, setModalDecisao] = useState<"aprovar" | "reprovar" | "devolver" | null>(null);
+  const [modalAceite, setModalAceite] = useState<"aceitar" | "recusar" | null>(null);
   const [modalCancelar, setModalCancelar] = useState(false);
   const [textoModal, setTextoModal] = useState("");
   const [valorModal, setValorModal] = useState("");
@@ -200,7 +207,9 @@ export function SolicitacaoViagemDetalhe() {
   if (!s) return <p className="text-sm text-muted">Carregando...</p>;
 
   const nomeViajante = (vid: number) => s.viajantes.find((v) => v.id === vid)?.nome ?? "—";
-  const indiceFluxo = FLUXO.indexOf(s.status);
+  const comAceite = s.status === "aguardando_aceite" || s.aceiteEm !== null;
+  const fluxo = comAceite ? FLUXO_COM_ACEITE : FLUXO;
+  const indiceFluxo = fluxo.indexOf(s.status);
   const encerradaFora = s.status === "reprovada" || s.status === "cancelada";
 
   return (
@@ -226,10 +235,25 @@ export function SolicitacaoViagemDetalhe() {
                 Assumir cotação
               </button>
             )}
+            {s.pode.enviarAceite && (
+              <button disabled={ocupado} onClick={() => acao(() => axios.post(`${base}/enviar-aceite`), "Cotação enviada ao solicitante")} className={classeBotaoSecundario}>
+                Enviar ao solicitante
+              </button>
+            )}
             {s.pode.enviarAprovacao && (
               <button disabled={ocupado} onClick={() => acao(() => axios.post(`${base}/enviar-aprovacao`), "Enviada para aprovação")} className={classeBotaoPrimario}>
                 Enviar para aprovação
               </button>
+            )}
+            {s.pode.responderAceite && (
+              <>
+                <button disabled={ocupado} onClick={() => { setTextoModal(""); setModalAceite("aceitar"); }} className={classeBotaoPrimario}>
+                  Aceitar cotação
+                </button>
+                <button disabled={ocupado} onClick={() => { setTextoModal(""); setModalAceite("recusar"); }} className={classeBotaoPerigo}>
+                  Recusar
+                </button>
+              </>
             )}
             {s.pode.decidir && (
               <>
@@ -272,7 +296,7 @@ export function SolicitacaoViagemDetalhe() {
 
         {!encerradaFora && (
           <ol className="mt-4 flex flex-wrap items-center gap-1.5">
-            {FLUXO.map((f, ix) => (
+            {fluxo.map((f, ix) => (
               <li key={f} className="flex items-center gap-1.5">
                 <span
                   className={`rounded-full px-2.5 py-0.5 text-[11.5px] font-medium ${
@@ -281,7 +305,7 @@ export function SolicitacaoViagemDetalhe() {
                 >
                   {STATUS_ROTULO[f]}
                 </span>
-                {ix < FLUXO.length - 1 && <span className="text-muted">›</span>}
+                {ix < fluxo.length - 1 && <span className="text-muted">›</span>}
               </li>
             ))}
           </ol>
@@ -289,6 +313,22 @@ export function SolicitacaoViagemDetalhe() {
         {s.status === "reprovada" && s.observacaoDecisao && <p className="mt-3 text-sm text-destructive">Reprovada: {s.observacaoDecisao}</p>}
         {s.status === "cancelada" && s.motivoCancelamento && <p className="mt-3 text-sm text-destructive">Cancelada: {s.motivoCancelamento}</p>}
         {s.status === "em_cotacao" && s.observacaoDecisao && <p className="mt-3 text-sm text-warning">Devolvida pelo aprovador: {s.observacaoDecisao}</p>}
+        {s.status === "aguardando_aceite" && (
+          <p className="mt-3 text-sm text-warning">
+            {s.pode.responderAceite
+              ? "O atendimento sugeriu a cotação abaixo (hospedagem, passagens e carro). Confira e aceite ou recuse."
+              : `Aguardando ${s.solicitante?.nome ?? "o solicitante"} confirmar a cotação sugerida.`}
+          </p>
+        )}
+        {s.aceiteDecisao === "recusada" && s.status === "em_cotacao" && (
+          <p className="mt-3 text-sm text-warning">Recusada pelo solicitante: {s.aceiteObservacao}</p>
+        )}
+        {s.aceiteDecisao && s.status === "aguardando_aprovacao" && (
+          <p className={`mt-3 text-sm ${s.aceiteDecisao === "aceita" ? "text-success" : "text-warning"}`}>
+            {s.aceiteDecisao === "aceita" ? "Cotação aceita pelo solicitante" : "Cotação recusada pelo solicitante antes de ser refeita"}
+            {s.aceiteObservacao ? `: ${s.aceiteObservacao}` : "."}
+          </p>
+        )}
       </div>
 
       <Secao titulo="Dados gerais">
@@ -387,6 +427,45 @@ export function SolicitacaoViagemDetalhe() {
                   decisao === "aprovar" ? "Solicitação aprovada" : decisao === "reprovar" ? "Solicitação reprovada" : "Devolvida para cotação"
                 );
                 setModalDecisao(null);
+              }}
+            >
+              Confirmar
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={modalAceite !== null}
+        onClose={() => setModalAceite(null)}
+        fecharPorFora={false}
+        title={modalAceite === "aceitar" ? "Aceitar cotação" : "Recusar cotação"}
+        subtitulo={`Solicitação #${s.id}`}
+      >
+        <div className="space-y-3 p-4">
+          <p className="text-[12.5px] text-muted">
+            {modalAceite === "aceitar"
+              ? `Total sugerido: ${formatarMoeda(s.valorProposto)}. Ao aceitar, a solicitação segue para a aprovação do gestor.`
+              : "Ao recusar, a solicitação volta para o atendimento refazer a cotação."}
+          </p>
+          <div>
+            <label className={classeRotulo}>{modalAceite === "aceitar" ? "Observação (opcional)" : "Motivo da recusa"}</label>
+            <textarea value={textoModal} onChange={(e) => setTextoModal(e.target.value)} rows={3} maxLength={1000} className={`${classeCampo} resize-none`} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button className={classeBotaoSecundario} onClick={() => setModalAceite(null)}>
+              Voltar
+            </button>
+            <button
+              disabled={ocupado || (modalAceite === "recusar" && !textoModal.trim())}
+              className={modalAceite === "recusar" ? classeBotaoPerigo : classeBotaoPrimario}
+              onClick={async () => {
+                const decisao = modalAceite!;
+                await acao(
+                  () => axios.post(`${base}/responder-aceite`, { acao: decisao, observacao: textoModal }),
+                  decisao === "aceitar" ? "Cotação aceita — enviada para aprovação" : "Cotação recusada — voltou para o atendimento"
+                );
+                setModalAceite(null);
               }}
             >
               Confirmar

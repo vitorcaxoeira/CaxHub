@@ -198,6 +198,24 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeStatus,
     resumo: (e) => `Reprovou a ${rotuloEntidade(e)}: ${e.metadata?.observacao ?? "—"}`,
   },
+  VIAGEM_ENVIADA_ACEITE: {
+    tone: "warning",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Enviou a cotação da ${rotuloEntidade(e)} para o solicitante confirmar (R$ ${e.metadata?.valorProposto ?? "—"})`,
+  },
+  VIAGEM_ACEITA_SOLICITANTE: {
+    tone: "success",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Aceitou a cotação da ${rotuloEntidade(e)}${e.metadata?.observacao ? `: ${e.metadata.observacao}` : ""}`,
+  },
+  VIAGEM_RECUSADA_SOLICITANTE: {
+    tone: "warning",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Recusou a cotação da ${rotuloEntidade(e)}: ${e.metadata?.observacao ?? "—"}`,
+  },
   VIAGEM_DEVOLVIDA: {
     tone: "warning",
     rotuloGrupo: "Viagem",

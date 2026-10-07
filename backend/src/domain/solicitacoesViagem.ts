@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { ContextoConsultor } from "./contextoProjeto";
 
@@ -13,6 +14,7 @@ export type TipoItem = (typeof TIPOS_ITEM)[number];
 export const STATUS_VIAGEM = [
   "solicitada",
   "em_cotacao",
+  "aguardando_aceite",
   "aguardando_aprovacao",
   "aprovada",
   "reprovada",
@@ -75,6 +77,22 @@ export interface ViagemPermissao {
   solicitanteId: number | null;
   aprovacaoCodemp: number | null;
   aprovacaoDepexe: number | null;
+  // Só pra quem checa a visão do viajante (ver ehViajanteVisivel); sem eles, o viajante não enxerga.
+  status?: string;
+  viajantes?: { userId: number | null }[];
+}
+
+// O viajante só enxerga a viagem quando ela já está de pé: reservada (pode embarcar) ou finalizada
+// (histórico). Antes disso é cotação/aprovação, assunto de quem pede e de quem decide.
+export const STATUS_VISIVEL_AO_VIAJANTE: readonly StatusViagem[] = ["reservada", "finalizada"];
+
+// Recorte Prisma das viagens em que este usuário (com login no CaxHub) viaja e que já são visíveis a ele.
+export function whereViajanteVisivel(userId: number): Prisma.SolicitacaoViagemWhereInput {
+  return { status: { in: [...STATUS_VISIVEL_AO_VIAJANTE] }, viajantes: { some: { userId } } };
+}
+
+export async function temViagemComoViajante(userId: number): Promise<boolean> {
+  return (await prisma.solicitacaoViagem.count({ where: whereViajanteVisivel(userId) })) > 0;
 }
 
 export function ehAtendimento(role: string): boolean {
@@ -91,8 +109,16 @@ export function ehSolicitante(ctx: ContextoViagem, v: ViagemPermissao): boolean 
   return v.solicitanteId != null && v.solicitanteId === ctx.userId;
 }
 
+export function ehViajanteVisivel(ctx: ContextoViagem, v: ViagemPermissao): boolean {
+  return (
+    v.status != null &&
+    (STATUS_VISIVEL_AO_VIAJANTE as readonly string[]).includes(v.status) &&
+    (v.viajantes ?? []).some((p) => p.userId === ctx.userId)
+  );
+}
+
 export function podeVerViagem(ctx: ContextoViagem, v: ViagemPermissao): boolean {
-  return ehSolicitante(ctx, v) || ehAtendimento(ctx.role) || ehGestorDoSnapshot(ctx, v);
+  return ehSolicitante(ctx, v) || ehAtendimento(ctx.role) || ehGestorDoSnapshot(ctx, v) || ehViajanteVisivel(ctx, v);
 }
 
 export function podeAtenderViagem(ctx: ContextoViagem): boolean {
@@ -128,6 +154,8 @@ export async function resolverAprovador(userId: number): Promise<{ codemp: numbe
 
 export const TRANSICOES: Record<string, readonly StatusViagem[]> = {
   assumir: ["solicitada"],
+  enviar_aceite: ["em_cotacao"],
+  responder_aceite: ["aguardando_aceite"],
   enviar_aprovacao: ["em_cotacao"],
   decidir: ["aguardando_aprovacao"],
   reservar: ["aprovada"],

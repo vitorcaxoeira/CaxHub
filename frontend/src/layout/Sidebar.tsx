@@ -14,6 +14,10 @@ interface NavLeaf {
   // expressar com `roles`). Hoje só a Meta diária usa isto — acesso liberado ao consultor
   // comum, mas restrito ao próprio registro dele no backend (ver routes/jornadas.ts).
   souConsultor?: boolean;
+  // Também aparece pra quem VIAJA numa solicitação reservada/finalizada (dinâmico, via
+  // `viajante` do /meu-perfil). Combina em OU com `gestorOuAdmin`, como `souConsultor`. Só
+  // "Minhas Solicitações" usa — o viajante só consulta a própria viagem.
+  souViajante?: boolean;
   // Restringe ESTE item a papéis específicos dentro de um grupo aberto a todos (ex.: Atendimento
   // de viagens). Mantido em sincronia com o RequireRole em App.tsx e o backend.
   roles?: string[];
@@ -79,7 +83,7 @@ const groups: NavGroup[] = [
     label: "Gestão de Solicitações",
     items: [
       { to: "/solicitacoes/nova", label: "Nova Solicitação", gestorOuAdmin: true },
-      { to: "/solicitacoes/minhas", label: "Minhas Solicitações", gestorOuAdmin: true },
+      { to: "/solicitacoes/minhas", label: "Minhas Solicitações", gestorOuAdmin: true, souViajante: true },
       // Atendimento cota e reserva: só administrativo e admin (o backend recusa o resto). Como
       // `roles` e `gestorOuAdmin` valem juntos (E), segue a entrada do módulo: o administrativo
       // só vê se também for líder.
@@ -231,6 +235,8 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   // Tem Consultor próprio (Consultor.email == o dele) — dinâmico, igual ehGestorOuAdmin,
   // mas admin não precisa disto pra ver nada (já entra por ehGestorOuAdmin).
   const [souConsultor, setSouConsultor] = useState(false);
+  // Viaja em alguma solicitação já reservada/finalizada (vem do mesmo /meu-perfil).
+  const [souViajante, setSouViajante] = useState(false);
   // Papel no módulo 5S (null = não é participante). Mesma guarda de efeito superado do /meu-perfil.
   const [papel5s, setPapel5s] = useState<string | null>(null);
 
@@ -251,6 +257,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     if (user.role === "admin") {
       setEhGestorOuAdmin(true);
       setSouConsultor(false);
+      setSouViajante(false);
       return;
     }
     // Guarda de "efeito superado" (28/08/2026) — mesma classe de corrida já corrigida em
@@ -267,11 +274,13 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
         if (cancelado) return;
         setEhGestorOuAdmin((data.departamentosGerenciados ?? []).length > 0);
         setSouConsultor(data.consultor != null);
+        setSouViajante(data.viajante === true);
       })
       .catch(() => {
         if (!cancelado) {
           setEhGestorOuAdmin(false);
           setSouConsultor(false);
+          setSouViajante(false);
         }
       });
     return () => {
@@ -285,9 +294,10 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     if (item.roles && !(user && item.roles.includes(user.role))) return false;
     if (item.papel5s) return !!papel5s && (item.papel5s as string[]).includes(papel5s);
     return (
-      (!item.gestorOuAdmin && !item.souConsultor) ||
+      (!item.gestorOuAdmin && !item.souConsultor && !item.souViajante) ||
       !!(item.gestorOuAdmin && ehGestorOuAdmin) ||
-      !!(item.souConsultor && souConsultor)
+      !!(item.souConsultor && souConsultor) ||
+      !!(item.souViajante && souViajante)
     );
   }
 

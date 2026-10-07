@@ -174,12 +174,17 @@ export default function App() {
                   exigirAdminOuGestor de routes/eficiencia.ts no backend. */}
               <Route element={<RequireGestorOuAdmin />}>
                 <Route path="/projetos/eficiencia" element={<Eficiencia />} />
-                <Route path="/solicitacoes/minhas" element={<SolicitacoesViagem escopo="minhas" />} />
                 <Route path="/solicitacoes/nova" element={<SolicitacaoViagemForm />} />
                 <Route path="/solicitacoes/aprovacoes" element={<SolicitacoesViagem escopo="aprovacao" />} />
                 <Route path="/solicitacoes/atendimento" element={<SolicitacoesViagem escopo="atendimento" />} />
-                <Route path="/solicitacoes/:id" element={<SolicitacaoViagemDetalhe />} />
                 <Route path="/solicitacoes/:id/editar" element={<SolicitacaoViagemForm />} />
+              </Route>
+              {/* Leitura da própria viagem: além de admin e líder, entra quem VIAJA numa solicitação
+                  reservada/finalizada (07/10/2026). Só estas duas rotas; o backend só libera GET de lista
+                  "minhas", detalhe e download de anexo pra esse perfil. */}
+              <Route element={<RequireGestorOuAdmin permitirViajante />}>
+                <Route path="/solicitacoes/minhas" element={<SolicitacoesViagem escopo="minhas" />} />
+                <Route path="/solicitacoes/:id" element={<SolicitacaoViagemDetalhe />} />
               </Route>
               <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
               {/* Gestão 5S: acesso pelo cadastro de participantes do módulo (Require5S), não pelo

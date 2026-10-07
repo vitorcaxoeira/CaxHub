@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../../auth/AuthContext";
 import { AutocompleteRemoto } from "../../components/ui/AutocompleteRemoto";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
@@ -8,9 +9,11 @@ import { toneBadge } from "../../components/ui/badges";
 import { StatusViagemBadge } from "../../components/solicitacoes/StatusViagemBadge";
 import { classeBotaoPrimario, classeCampo } from "../../components/solicitacoes/campos";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { hojeIso } from "../../utils/gestao5s";
 import {
   FINALIDADE_ROTULO,
   STATUS_ROTULO,
+  formatarDia,
   formatarMoeda,
   formatarPeriodo,
   mensagemDeErro,
@@ -49,7 +52,7 @@ const TEXTOS: Record<EscopoViagem, { secao: string; titulo: string; descricao: s
   minhas: {
     secao: "Gestão de Solicitações · Viagens",
     titulo: "Minhas Solicitações",
-    descricao: "Hospedagem, passagens e carro que você pediu — acompanhe cotação, aprovação e reserva.",
+    descricao: "Hospedagem, passagens e carro que você pediu ou em que você vai viajar — acompanhe cotação, aprovação e reserva.",
     vazio: "Você ainda não tem solicitações de viagem.",
   },
   atendimento: {
@@ -69,6 +72,10 @@ const TEXTOS: Record<EscopoViagem, { secao: string; titulo: string; descricao: s
 const STATUS_OPCOES = (Object.keys(STATUS_ROTULO) as StatusViagem[]).map((s) => ({ value: s, label: STATUS_ROTULO[s] }));
 const FINALIDADE_OPCOES = (Object.keys(FINALIDADE_ROTULO) as Finalidade[]).map((f) => ({ value: f, label: FINALIDADE_ROTULO[f] }));
 
+// Quem só viaja (não é admin nem líder) abre já com o que lhe diz respeito: as viagens reservadas e as
+// concluídas. O backend só devolve essas mesmo, o filtro marcado deixa isso explícito na tela.
+const STATUS_DO_VIAJANTE: StatusViagem[] = ["reservada", "finalizada"];
+
 const PADRAO_STATUS: Record<EscopoViagem, StatusViagem[]> = {
   minhas: [],
   atendimento: ["solicitada", "em_cotacao"],
@@ -77,10 +84,17 @@ const PADRAO_STATUS: Record<EscopoViagem, StatusViagem[]> = {
 
 export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const texto = TEXTOS[escopo];
+  // Em "minhas", quem não é admin nem líder só entra como viajante: precisa saber disso ANTES do primeiro
+  // carregamento, senão a lista abriria sem o filtro e piscaria (admin e líder não precisam esperar).
+  const [pronto, setPronto] = useState(escopo !== "minhas" || user?.role === "admin");
+  const [somenteViajante, setSomenteViajante] = useState(false);
   const [status, setStatus] = useState<StatusViagem[]>(PADRAO_STATUS[escopo]);
   const [finalidades, setFinalidades] = useState<Finalidade[]>([]);
   const [cliente, setCliente] = useState<ClienteOpcao | null>(null);
+  // Só entram viagens cujo término é esta data ou depois (o backend já aceita `de`). Vazio = histórico inteiro.
+  const [terminoDe, setTerminoDe] = useState("");
   const [busca, setBusca] = useState("");
   const buscaDebounced = useDebouncedValue(busca, 300);
   const [pagina, setPagina] = useState(1);
@@ -96,11 +110,44 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
     setStatus(PADRAO_STATUS[escopo]);
     setFinalidades([]);
     setCliente(null);
+    setTerminoDe("");
     setBusca("");
     setPagina(1);
   }, [escopo]);
 
+  // Chaveado em id/papel (não no objeto `user`): se o objeto for recriado, o filtro que a pessoa já
+  // mexeu na tela não pode voltar ao padrão.
+  const usuarioId = user?.id;
+  const usuarioRole = user?.role;
+  useEffect(() => {
+    if (escopo !== "minhas" || usuarioId == null || usuarioRole === "admin") {
+      setSomenteViajante(false);
+      setPronto(true);
+      return;
+    }
+    let cancelado = false;
+    setPronto(false);
+    axios
+      .get("/api/dashboard/meu-perfil")
+      .then(({ data }) => {
+        if (cancelado) return;
+        const lider = (data.departamentosGerenciados ?? []).length > 0;
+        setSomenteViajante(!lider);
+        if (!lider) {
+          setStatus([...STATUS_DO_VIAJANTE]);
+          // Viagem que já terminou fica de fora; "Ver histórico" limpa a data.
+          setTerminoDe(hojeIso());
+        }
+      })
+      .catch(() => {})
+      .finally(() => !cancelado && setPronto(true));
+    return () => {
+      cancelado = true;
+    };
+  }, [escopo, usuarioId, usuarioRole]);
+
   const carregar = useCallback(async () => {
+    if (!pronto) return;
     setCarregando(true);
     setErro(null);
     try {
@@ -110,6 +157,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
           status: status.join(",") || undefined,
           finalidade: finalidades.join(",") || undefined,
           codcli: cliente?.codcli,
+          de: terminoDe || undefined,
           q: buscaDebounced || undefined,
           pagina,
           tamanho,
@@ -123,7 +171,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
     } finally {
       setCarregando(false);
     }
-  }, [escopo, status, finalidades, cliente, buscaDebounced, pagina]);
+  }, [pronto, escopo, status, finalidades, cliente, terminoDe, buscaDebounced, pagina]);
 
   useEffect(() => {
     carregar();
@@ -132,7 +180,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
   // Qualquer filtro novo volta pra primeira página.
   useEffect(() => {
     setPagina(1);
-  }, [status, finalidades, cliente, buscaDebounced]);
+  }, [status, finalidades, cliente, terminoDe, buscaDebounced]);
 
   const totalGeral = useMemo(() => Object.values(kpis).reduce((a, b) => a + b, 0), [kpis]);
 
@@ -141,11 +189,15 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
       <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{texto.secao}</p>
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-bold text-foreground">{texto.titulo}</h1>
-        <Link to="/solicitacoes/nova" className={classeBotaoPrimario}>
-          Nova solicitação
-        </Link>
+        {!somenteViajante && (
+          <Link to="/solicitacoes/nova" className={classeBotaoPrimario}>
+            Nova solicitação
+          </Link>
+        )}
       </div>
-      <p className="mt-1 text-sm text-muted">{texto.descricao}</p>
+      <p className="mt-1 text-sm text-muted">
+        {somenteViajante ? "Viagens em que você está como viajante — reservas confirmadas e já concluídas." : texto.descricao}
+      </p>
 
       <div className="mt-4 flex flex-wrap gap-2">
         {STATUS_OPCOES.map((s) => {
@@ -176,6 +228,15 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
           placeholder="Buscar por nº, motivo, destino, solicitante ou cliente"
           className={`${classeCampo} max-w-sm`}
         />
+        <label className="flex items-center gap-2 text-[12.5px] text-muted">
+          Término a partir de
+          <input type="date" value={terminoDe} onChange={(e) => setTerminoDe(e.target.value)} className={`${classeCampo} w-auto`} />
+        </label>
+        {terminoDe && (
+          <button onClick={() => setTerminoDe("")} className="text-[12.5px] text-primary hover:underline" title="Viagens já encerradas ficam fora; limpe a data para ver o histórico.">
+            Ver histórico
+          </button>
+        )}
         <MultiSelectDropdown opcoes={FINALIDADE_OPCOES} selecionados={finalidades} onChange={setFinalidades} labelTodos="Todas as finalidades" labelSufixo="finalidade(s)" />
         <div className="w-64">
           <AutocompleteRemoto<ClienteOpcao>
@@ -242,7 +303,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
             {!carregando && linhas.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">
-                  {texto.vazio}
+                  {terminoDe ? `Nenhuma viagem com término a partir de ${formatarDia(terminoDe)}. Use "Ver histórico" para ver as anteriores.` : texto.vazio}
                 </td>
               </tr>
             )}

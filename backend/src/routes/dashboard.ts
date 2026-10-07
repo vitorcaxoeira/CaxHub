@@ -3,6 +3,7 @@ import { Consultor } from "@prisma/client";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel } from "../domain/propostasDominio";
+import { temViagemComoViajante } from "../domain/solicitacoesViagem";
 import { resolverContextoConsultor, ContextoConsultor, codforsDoTime, consultoresFiltraveis } from "../domain/contextoProjeto";
 import {
   FATOR_HORA_DESLOCAMENTO,
@@ -42,9 +43,11 @@ dashboardRouter.get("/meu-perfil", requireAuth, async (req: AuthenticatedRequest
 
     const contexto = await resolverContextoConsultor(user.email);
     const { consultor } = contexto;
+    // Viaja em alguma solicitação já reservada/finalizada — libera, só pra leitura, o menu "Minhas Solicitações".
+    const viajante = await temViagemComoViajante(user.id);
 
     if (!consultor) {
-      res.json({ consultor: null, departamentosGerenciados: [] });
+      res.json({ consultor: null, departamentosGerenciados: [], viajante });
       return;
     }
 
@@ -82,6 +85,7 @@ dashboardRouter.get("/meu-perfil", requireAuth, async (req: AuthenticatedRequest
         depexeLabel: depexeLabel(consultor.depexe),
       },
       departamentosGerenciados,
+      viajante,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
