@@ -72,7 +72,7 @@ async function podeVerEntidade(req: AuthenticatedRequest, entidadeTipo: string, 
     if (!Number.isInteger(viagemId)) return false;
     const viagem = await prisma.solicitacaoViagem.findUnique({
       where: { id: viagemId },
-      select: { solicitanteId: true, aprovacaoCodemp: true, aprovacaoDepexe: true, status: true, viajantes: { select: { userId: true } } },
+      select: { solicitanteId: true, aprovacaoCodemp: true, aprovacaoDepexe: true, status: true, tipo: true, viajantes: { select: { userId: true } } },
     });
     if (!viagem) return false;
     return podeVerViagem({ userId: user.id, role: req.user!.role, contexto }, viagem);

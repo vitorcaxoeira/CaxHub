@@ -8,8 +8,19 @@ import { ContextoConsultor } from "./contextoProjeto";
 export const FINALIDADES = ["projeto", "comercial", "interna", "treinamento", "outro"] as const;
 export type Finalidade = (typeof FINALIDADES)[number];
 
-export const TIPOS_ITEM = ["hospedagem", "aereo", "carro"] as const;
+export const TIPOS_ITEM = ["hospedagem", "aereo", "carro", "outro"] as const;
 export type TipoItem = (typeof TIPOS_ITEM)[number];
+
+// Tipo da solicitação. "outros" é o pedido simples de material/equipamento (teclado, monitor, expediente):
+// sem cotação, aceite, aprovação nem reserva — o atendimento assume e conclui. Nunca mistura com viagem.
+export type TipoSolicitacao = "viagem" | "outros";
+
+export function tipoDosItens(tipos: string[]): { tipo: TipoSolicitacao } | { erro: string } {
+  const temOutro = tipos.some((t) => t === "outro");
+  const temViagem = tipos.some((t) => t !== "outro");
+  if (temOutro && temViagem) return { erro: "Outros não pode ser combinado com hospedagem, passagem aérea ou carro" };
+  return { tipo: temOutro ? "outros" : "viagem" };
+}
 
 export const STATUS_VIAGEM = [
   "solicitada",
@@ -79,6 +90,7 @@ export interface ViagemPermissao {
   aprovacaoDepexe: number | null;
   // Só pra quem checa a visão do viajante (ver ehViajanteVisivel); sem eles, o viajante não enxerga.
   status?: string;
+  tipo?: string;
   viajantes?: { userId: number | null }[];
 }
 
@@ -86,9 +98,22 @@ export interface ViagemPermissao {
 // (histórico). Antes disso é cotação/aprovação, assunto de quem pede e de quem decide.
 export const STATUS_VISIVEL_AO_VIAJANTE: readonly StatusViagem[] = ["reservada", "finalizada"];
 
-// Recorte Prisma das viagens em que este usuário (com login no CaxHub) viaja e que já são visíveis a ele.
+// Quem recebe o item ("para quem") de um pedido "Outros" acompanha desde a abertura (só leitura); só some se
+// o pedido for cancelado. Viagem segue a regra acima.
+export function visivelAoViajante(tipo: string | undefined, status: string): boolean {
+  return tipo === "outros" ? status !== "cancelada" : (STATUS_VISIVEL_AO_VIAJANTE as readonly string[]).includes(status);
+}
+
+// Recorte Prisma das solicitações em que este usuário (com login no CaxHub) é viajante/"para quem" e que já
+// são visíveis a ele.
 export function whereViajanteVisivel(userId: number): Prisma.SolicitacaoViagemWhereInput {
-  return { status: { in: [...STATUS_VISIVEL_AO_VIAJANTE] }, viajantes: { some: { userId } } };
+  return {
+    viajantes: { some: { userId } },
+    OR: [
+      { tipo: { not: "outros" }, status: { in: [...STATUS_VISIVEL_AO_VIAJANTE] } },
+      { tipo: "outros", status: { not: "cancelada" } },
+    ],
+  };
 }
 
 export async function temViagemComoViajante(userId: number): Promise<boolean> {
@@ -112,7 +137,7 @@ export function ehSolicitante(ctx: ContextoViagem, v: ViagemPermissao): boolean 
 export function ehViajanteVisivel(ctx: ContextoViagem, v: ViagemPermissao): boolean {
   return (
     v.status != null &&
-    (STATUS_VISIVEL_AO_VIAJANTE as readonly string[]).includes(v.status) &&
+    visivelAoViajante(v.tipo, v.status) &&
     (v.viajantes ?? []).some((p) => p.userId === ctx.userId)
   );
 }
@@ -160,6 +185,8 @@ export const TRANSICOES: Record<string, readonly StatusViagem[]> = {
   decidir: ["aguardando_aprovacao"],
   reservar: ["aprovada"],
   finalizar: ["reservada"],
+  // "Outros": o atendimento assume (status em_cotacao, rotulado "Em atendimento") e conclui direto.
+  concluir: ["em_cotacao"],
 };
 
 export function podeTransicionar(acao: keyof typeof TRANSICOES, status: string): boolean {
@@ -194,6 +221,8 @@ export interface ItemEntrada {
   localDevolucao?: string | null;
   categoriaVeiculo?: string | null;
   observacoes?: string | null;
+  descricao?: string | null;
+  quantidade?: number | null;
 }
 
 const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
@@ -227,6 +256,10 @@ export function validarItem(item: ItemEntrada, nViajantes: number, indice: numbe
     if (!preenchido(item.origem) || !preenchido(item.destino)) return `${rot}: informe origem e destino`;
     if (!item.dataInicio) return `${rot}: informe a data de ida`;
     if (item.viajantes.length < 1) return `${rot}: informe ao menos um passageiro`;
+  } else if (item.tipo === "outro") {
+    if (!preenchido(item.descricao)) return `${rot}: descreva o que você precisa`;
+    const q = item.quantidade ?? 1;
+    if (!Number.isInteger(q) || q < 1 || q > 9999) return `${rot}: quantidade inválida (de 1 a 9999)`;
   } else {
     if (item.viajantes.length !== 1) return `${rot}: o carro tem um único responsável pela reserva`;
     if (!preenchido(item.localRetirada) || !preenchido(item.localDevolucao)) return `${rot}: informe retirada e devolução`;

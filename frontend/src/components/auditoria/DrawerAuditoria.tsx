@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Avatar } from "../ui/Avatar";
-import { GrupoAuditoria, configEvento, toneBadgeAuditoria } from "./auditoriaVisual";
+import { GrupoAuditoria, configEvento, ehPedido, tagEvento, toneBadgeAuditoria } from "./auditoriaVisual";
+import { FINALIDADE_ROTULO, type Finalidade } from "../../utils/solicitacoesViagem";
 import { formatHoras } from "../../utils/horas";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "medium" });
@@ -84,7 +85,7 @@ export function DrawerAuditoria({ grupo, onFechar }: DrawerAuditoriaProps) {
                 <div className="mb-2 flex items-center gap-2">
                   <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${toneBadgeAuditoria[config.tone]}`}>
                     <Icone />
-                    {evento.eventoTipo}
+                    {tagEvento(evento)}
                   </span>
                 </div>
                 <p className="text-sm text-foreground">{config.resumo(evento)}</p>
@@ -122,7 +123,7 @@ export function DrawerAuditoria({ grupo, onFechar }: DrawerAuditoriaProps) {
                   </div>
                 )}
 
-                {evento.metadata && <MetadataEvento eventoTipo={evento.eventoTipo} metadata={evento.metadata} />}
+                {evento.metadata && <MetadataEvento eventoTipo={evento.eventoTipo} metadata={evento.metadata} pedido={ehPedido(evento)} />}
               </div>
             );
           })}
@@ -144,7 +145,64 @@ export function DrawerAuditoria({ grupo, onFechar }: DrawerAuditoriaProps) {
   );
 }
 
-function MetadataEvento({ eventoTipo, metadata }: { eventoTipo: string; metadata: Record<string, unknown> }) {
+// Pedido "Outros": em vez de "itens: 0: outro, 1: outro", mostra o que foi pedido e para quem. Os eventos
+// criados antes de o histórico guardar as descrições só trazem a contagem de itens.
+function MetadataPedido({ metadata }: { metadata: Record<string, unknown> }) {
+  const descricoes = Array.isArray(metadata.descricoes) ? (metadata.descricoes as unknown[]).map(String) : null;
+  const qtdItens = Array.isArray(metadata.itens) ? metadata.itens.length : null;
+  const finalidade = typeof metadata.finalidade === "string" ? (FINALIDADE_ROTULO[metadata.finalidade as Finalidade] ?? metadata.finalidade) : null;
+  const tratadas = ["descricoes", "itens", "viajantes", "finalidade", "tipo"];
+  const resto = Object.entries(metadata).filter(([k, v]) => !tratadas.includes(k) && v !== null && v !== undefined && v !== "" && typeof v !== "object");
+  const paraQuem = typeof metadata.viajantes === "number" ? metadata.viajantes : null;
+  if (!finalidade && !descricoes && qtdItens === null && paraQuem === null && resto.length === 0) return null;
+  return (
+    <div className="mt-3 space-y-1 rounded-md bg-surface-2 p-2.5 text-[12px]">
+      {finalidade && (
+        <p>
+          <span className="text-muted">Finalidade: </span>
+          <span className="text-foreground">{finalidade}</span>
+        </p>
+      )}
+      {descricoes ? (
+        <div>
+          <span className="text-muted">Itens:</span>
+          <ul className="mt-0.5 space-y-0.5 pl-3">
+            {descricoes.map((d, ix) => (
+              <li key={ix} className="text-foreground">
+                {d}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        qtdItens !== null && (
+          <p>
+            <span className="text-muted">Itens: </span>
+            <span className="text-foreground">{qtdItens}</span>
+          </p>
+        )
+      )}
+      {paraQuem !== null && (
+        <p>
+          <span className="text-muted">Para quem: </span>
+          <span className="text-foreground">
+            {paraQuem} {paraQuem === 1 ? "colaborador" : "colaboradores"}
+          </span>
+        </p>
+      )}
+      {resto.map(([chave, valor]) => (
+        <p key={chave}>
+          <span className="text-muted">{chave}: </span>
+          <span className="text-foreground">{formatarValorCampo(valor, chave)}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function MetadataEvento({ eventoTipo, metadata, pedido = false }: { eventoTipo: string; metadata: Record<string, unknown>; pedido?: boolean }) {
+  if (pedido && eventoTipo.startsWith("VIAGEM_")) return <MetadataPedido metadata={metadata} />;
+
   if (eventoTipo === "ATIVIDADE_ENVIADA_SENIOR") {
     const sucesso = metadata.sucesso === true;
     return (
