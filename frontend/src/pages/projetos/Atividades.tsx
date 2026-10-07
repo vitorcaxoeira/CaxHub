@@ -18,6 +18,9 @@ import { EVENTO_SESSAO_ALTERADA, avisarSessaoAlterada } from "../../components/p
 type Visao = "quadro" | "lista" | "calendario" | "timeline" | "workload";
 const VISOES: Visao[] = ["quadro", "lista", "calendario", "timeline", "workload"];
 const SITUACOES_VALIDAS: SituacaoKpi[] = ["backlog", "atrasadas", "concluidas"];
+// O Quadro baixa só as primeiras N atividades de cada raia (menos "Em Andamento", sempre completa): o admin
+// tem milhares em "A Fazer", e renderizar todas deixava a tela lenta. O usuário pede mais por raia.
+const QUADRO_POR_RAIA = 10;
 
 interface OpcaoFiltro {
   value: number;
@@ -95,7 +98,10 @@ export function Atividades() {
   // junto das opções — é lá que mora a definição de "gestor". Enquanto ele não chega o
   // GET /api/atividades fica segurado: disparar antes traria o quadro de todo mundo por
   // uma fração de segundo, pra logo depois encolher pro meu.
-  const [padraoResolvido, setPadraoResolvido] = useState(false);
+  //
+  // Se a URL já traz `codfor` (link compartilhado, voltar de um detalhe, janela flutuante) não há padrão a
+  // esperar: o filtro já está decidido e a lista dispara junto com as opções, sem a cascata.
+  const [padraoResolvido, setPadraoResolvido] = useState(searchParams.get("codfor") !== null);
   // A URL manda no padrão: chegar em /projetos/atividades?codfor=... (link compartilhado,
   // voltar de um detalhe) tem que preservar a seleção. Lido uma vez, na montagem.
   const urlTinhaCodfor = useRef(searchParams.get("codfor") !== null);
@@ -104,6 +110,15 @@ export function Atividades() {
   const [kpis, setKpis] = useState<KpisAtividades | null>(null);
   const [indicadores, setIndicadores] = useState<IndicadoresProjetosData | null>(null);
   const [loading, setLoading] = useState(true);
+  // Total de cada raia no servidor (depois dos filtros) — o Quadro baixa só parte dela.
+  const [totaisPorRaia, setTotaisPorRaia] = useState<Record<string, number>>({});
+  // Quanto o usuário já pediu pra ver de cada raia ("todos" ou uma quantidade). Vai junto de todo
+  // recarregamento, senão um refresh (nota salva, sessão alterada...) encolheria de volta pra QUADRO_POR_RAIA.
+  const [limiteRaia, setLimiteRaia] = useState<Record<number, number | "todos">>({});
+  const [carregandoRaia, setCarregandoRaia] = useState<number | null>(null);
+  // Último id baixado de cada raia na leitura sequencial (carga inicial + "carregar mais"). É o cursor do
+  // próximo "carregar mais"; cards que entram na raia por arraste não mexem nele.
+  const cursorRaia = useRef<Record<number, number>>({});
   const [erro, setErro] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<DetalheSelecionado | null>(null);
   const [processando, setProcessando] = useState<Set<number>>(new Set());
@@ -182,6 +197,8 @@ export function Atividades() {
     if (proximo.situacao) params.set("situacao", proximo.situacao);
     if (proximo.page > 1) params.set("page", String(proximo.page));
     setSearchParams(params, { replace: true });
+    // Outro recorte, outras raias: o que foi expandido antes não vale mais.
+    if (mudouFiltro) setLimiteRaia({});
   }
 
   // Clicar num KPI vira o único critério de "situação" da lista/quadro; clicar de novo
@@ -195,27 +212,102 @@ export function Atividades() {
     atualizarFiltros({ situacao: tipo, atrasada: false });
   }
 
+  function parametrosDosFiltros() {
+    return {
+      busca: buscaDebounced || undefined,
+      depexe: depexe || undefined,
+      colunaId: colunaId || undefined,
+      pripro: pripro || undefined,
+      codfor: codfor || undefined,
+      atrasada: atrasada || undefined,
+      situacao: situacao || undefined,
+      // Só o Quadro corta por raia; as outras visões desenham o conjunto inteiro.
+      porRaia: visao === "quadro" ? QUADRO_POR_RAIA : undefined,
+      limites:
+        visao === "quadro"
+          ? Object.entries(limiteRaia)
+              .map(([raia, quantidade]) => `${raia}:${quantidade}`)
+              .join(",") || undefined
+          : undefined,
+      // Nenhuma visão pagina no servidor: a Lista agrupa por proposta + consultor e
+      // pagina por GRUPO, então precisa do conjunto completo — paginar por atividade
+      // partiria um grupo ao meio entre duas páginas. As demais visões sempre
+      // precisaram do conjunto inteiro.
+    };
+  }
+
+  // Atualiza SÓ as linhas que uma ação acabou de mudar (iniciar, parar, mover, salvar nota), em vez de
+  // recarregar o quadro todo: o servidor devolve as linhas pedidas (já sujeitas aos filtros atuais) e os KPIs.
+  // Entram também as irmãs do mesmo item que estão na tela — `itemAlocado`/`itemRealizado` somam todas as
+  // atividades do item, então mudam junto — e a atividade que foi pausada para esta iniciar. Quem deixou de
+  // atender aos filtros sai da lista (não vem na resposta). Falhou? Cai no carregamento completo.
+  async function atualizarLinhas(idsAlterados: Array<number | null | undefined>) {
+    const ids = new Set(idsAlterados.filter((id): id is number => id != null));
+    const chavesDoItem = new Set(
+      atividades.filter((a) => ids.has(a.id)).map((a) => `${a.codemp}-${a.codpro}-${a.seqite}`)
+    );
+    for (const a of atividades) {
+      if (chavesDoItem.has(`${a.codemp}-${a.codpro}-${a.seqite}`)) ids.add(a.id);
+    }
+    try {
+      const { data } = await axios.get("/api/atividades", {
+        params: { ...parametrosDosFiltros(), ids: [...ids].join(",") },
+      });
+      setAtividades((atual) => [...atual.filter((a) => !ids.has(a.id)), ...data.rows].sort((a, b) => a.id - b.id));
+      setTotal(data.total);
+      setTotaisPorRaia(data.totaisPorRaia ?? {});
+      setKpis(data.kpis);
+      setErro(null);
+    } catch {
+      carregar();
+    }
+  }
+
+  // "Carregar mais" de uma raia do Quadro: as próximas `quantidade` depois do cursor da raia, ou todas as que
+  // faltam. Soma ao que já está na tela e guarda o novo tamanho em `limiteRaia` pros recarregamentos.
+  async function carregarMaisDaRaia(colunaId: number, quantidade: number | "todos") {
+    if (carregandoRaia !== null) return;
+    setCarregandoRaia(colunaId);
+    try {
+      const { data } = await axios.get("/api/atividades", {
+        params: {
+          ...parametrosDosFiltros(),
+          porRaia: undefined,
+          limites: undefined,
+          raia: colunaId,
+          depois: cursorRaia.current[colunaId] ?? 0,
+          limite: quantidade === "todos" ? undefined : quantidade,
+        },
+      });
+      const novas: AtividadeKanban[] = data.rows;
+      const idsNovos = new Set(novas.map((a) => a.id));
+      setAtividades((atual) => [...atual.filter((a) => !idsNovos.has(a.id)), ...novas].sort((a, b) => a.id - b.id));
+      setTotaisPorRaia(data.totaisPorRaia ?? {});
+      cursorRaia.current[colunaId] = novas.reduce((maior, a) => Math.max(maior, a.id), cursorRaia.current[colunaId] ?? 0);
+      setLimiteRaia((atual) => {
+        const anterior = atual[colunaId] ?? QUADRO_POR_RAIA;
+        return { ...atual, [colunaId]: quantidade === "todos" || anterior === "todos" ? "todos" : anterior + quantidade };
+      });
+    } catch (err: any) {
+      toast.mostrar(err.response?.data?.error ?? "Não foi possível carregar mais atividades", "destructive");
+    } finally {
+      setCarregandoRaia(null);
+    }
+  }
+
   function carregar() {
     setLoading(true);
     axios
-      .get("/api/atividades", {
-        params: {
-          busca: buscaDebounced || undefined,
-          depexe: depexe || undefined,
-          colunaId: colunaId || undefined,
-          pripro: pripro || undefined,
-          codfor: codfor || undefined,
-          atrasada: atrasada || undefined,
-          situacao: situacao || undefined,
-          // Nenhuma visão pagina no servidor: a Lista agrupa por proposta + consultor e
-          // pagina por GRUPO, então precisa do conjunto completo — paginar por atividade
-          // partiria um grupo ao meio entre duas páginas. As demais visões sempre
-          // precisaram do conjunto inteiro.
-        },
-      })
+      .get("/api/atividades", { params: parametrosDosFiltros() })
       .then(({ data }) => {
         setAtividades(data.rows);
         setTotal(data.total);
+        setTotaisPorRaia(data.totaisPorRaia ?? {});
+        const cursores: Record<number, number> = {};
+        for (const a of data.rows as AtividadeKanban[]) {
+          if (a.colunaId != null) cursores[a.colunaId] = Math.max(cursores[a.colunaId] ?? 0, a.id);
+        }
+        cursorRaia.current = cursores;
         setKpis(data.kpis);
         setErro(null);
       })
@@ -274,8 +366,12 @@ export function Atividades() {
   carregarRef.current = carregar;
   const carregarIndicadoresRef = useRef(carregarIndicadores);
   carregarIndicadoresRef.current = carregarIndicadores;
+  // `iniciarAtividade` dispara o mesmo evento (pro vigia consultar na hora) mas já atualiza a própria
+  // linha; sem este sinal o ouvinte abaixo recarregaria o quadro inteiro por cima, desfazendo o ganho.
+  const eventoDestaTela = useRef(false);
   useEffect(() => {
     function recarregar() {
+      if (eventoDestaTela.current) return;
       carregarRef.current();
       carregarIndicadoresRef.current();
     }
@@ -358,7 +454,7 @@ export function Atividades() {
       // Saiu de execução DEPOIS do limite: o servidor cortou o fim no teto/expediente e o
       // tempo além disso não foi registrado — sem este aviso ele sumiria sem explicação.
       if (data?.fimCortado) toast.mostrar(data.fimCortado, "warning");
-      carregar();
+      atualizarLinhas([atividadeId, data?.pausada?.id]);
       carregarIndicadores();
     } catch (err: any) {
       setAtividades(anterior);
@@ -417,8 +513,13 @@ export function Atividades() {
       if (data.aviso) toast.mostrar(data.aviso, "warning");
       // Iniciar fora do expediente cria uma sessao cujo limite ja nasce vencido: o vigia
       // precisa consultar AGORA pra abrir o alerta, em vez de so no proximo tique de 30s.
-      avisarSessaoAlterada();
-      carregar();
+      eventoDestaTela.current = true;
+      try {
+        avisarSessaoAlterada();
+      } finally {
+        eventoDestaTela.current = false;
+      }
+      atualizarLinhas([atividadeId, data.pausada?.id]);
       carregarIndicadores();
     } catch (err: any) {
       setAtividades(anterior);
@@ -448,7 +549,7 @@ export function Atividades() {
       // Parou depois do limite: o servidor cortou o fim no teto/expediente. Avisar é o que
       // impede o consultor de achar que o tempo todo foi registrado.
       if (data?.fimCortado) toast.mostrar(data.fimCortado, "warning");
-      carregar();
+      atualizarLinhas([atividadeId]);
       carregarIndicadores();
     } catch (err: any) {
       setAtividades(anterior);
@@ -493,7 +594,7 @@ export function Atividades() {
       await axios.patch(`/api/atividades/${atividadeId}/observacao`, { observacao: texto });
       // Recarrega pra já vir com o texto fresco do servidor — reabrir o lápis (mesmo depois
       // de F5) precisa mostrar o que acabou de ser salvo, não a descrição genérica.
-      carregar();
+      atualizarLinhas([atividadeId]);
     } catch (err: any) {
       toast.mostrar(err.response?.data?.error ?? "Falha ao salvar a observação", "destructive");
     } finally {
@@ -608,6 +709,9 @@ export function Atividades() {
             onParar={pararAtividade}
             onEditarNota={editarNotaEmAndamento}
             processando={processando}
+            totaisPorRaia={totaisPorRaia}
+            onCarregarMais={carregarMaisDaRaia}
+            carregandoRaia={carregandoRaia}
           />
         </div>
       ) : visao === "calendario" ? (
