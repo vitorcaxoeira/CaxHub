@@ -1,5 +1,5 @@
 // Consulta dos dados JÁ SINCRONIZADOS de qualquer tabela espelhada do Senior (tela
-// "Ver dados" em Administração > Importados do Senior). Somente leitura — o espelho nunca é
+// "Ver dados" em Administração > Importados do ERP). Somente leitura — o espelho nunca é
 // editado por aqui. Genérico: o model Prisma certo, as colunas e a ordenação saem de
 // `Prisma.dmmf` a partir da `tabelaLocal` do job (mesmo truque de recorteRetroativo.ts), então
 // um job novo em registry.ts ganha a tela sem nenhum código específico.

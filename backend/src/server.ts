@@ -23,7 +23,8 @@ import { ratVisualizacaoRouter } from "./routes/ratVisualizacao";
 import { notificacoesRouter } from "./routes/notificacoes";
 import { usersRouter } from "./routes/users";
 import { sincronizacaoRouter } from "./routes/sincronizacao";
-import { syncErpRouter } from "./routes/syncErp";
+import { syncErpRouter, syncHcmRouter } from "./routes/syncErp";
+import { rhRouter } from "./routes/rh";
 import { syncKyriaRouter } from "./routes/syncKyria";
 import { syncKyriaMappingRouter } from "./routes/syncKyriaMapping";
 import { syncKyriaDadosRouter } from "./routes/syncKyriaDados";
@@ -101,7 +102,8 @@ import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
 import { carregarModosVarreduraAtivos } from "./sync/politicaVarredura";
 import { carregarTamanhosLoteAtivos } from "./sync/politicaLote";
-import { SYNC_JOBS } from "./sync/registry";
+import { TODOS_OS_SYNC_JOBS } from "./sync/registry";
+import { agendarSyncHcm } from "./sync/agendamentoHcm";
 
 garantirDiretorioUploads();
 
@@ -157,6 +159,8 @@ app.use("/notificacoes", notificacoesRouter);
 app.use("/users", usersRouter);
 app.use("/sincronizacao", sincronizacaoRouter);
 app.use("/sync-erp", syncErpRouter);
+app.use("/sync-hcm", syncHcmRouter);
+app.use("/rh", rhRouter);
 // Montado ANTES de "/sync-kyria" de propósito: como "/sync-kyria" é prefixo de
 // "/sync-kyria/mapping", o Express dá a primeira chance ao mount registrado primeiro — se fosse
 // ao contrário, toda requisição pra /sync-kyria/mapping/* passaria (sem bater rota nenhuma) por
@@ -186,7 +190,7 @@ const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 // seguro (espelho completo), travar o boot por causa disso seria pior que o problema.
 async function iniciar() {
   try {
-    await carregarFiltrosAtivos(SYNC_JOBS);
+    await carregarFiltrosAtivos(TODOS_OS_SYNC_JOBS);
   } catch (error) {
     console.error("[boot] falhou ao carregar filtros ativos — subindo sem filtro nenhum:", error instanceof Error ? error.message : error);
   }
@@ -265,6 +269,8 @@ async function iniciar() {
     scheduleItemProdutoNfVendaSync();
     scheduleRateioNfVendaSync();
     scheduleMetaAnualSync();
+    // Senior HCM (módulo RH): 27 tabelas encadeadas num cron só, só se o canal do HCM estiver configurado.
+    agendarSyncHcm();
     scheduleOutboxSeniorSync();
     scheduleOutboxSeniorDespesaSync();
     // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do

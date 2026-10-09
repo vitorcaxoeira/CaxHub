@@ -99,14 +99,14 @@ export async function camposErp(job: SyncJobDescriptor): Promise<ResultadoCampos
   }
 
   const origensEspelhadas = new Set(job.colunas.map((c) => c.origem.toLowerCase()));
-  const fields = await comCache(`campos:${job.tabelaSenior}`, () => getTableFields(job.tabelaSenior));
+  const fields = await comCache(`campos:${job.sistema}:${job.tabelaSenior}`, () => getTableFields(job.tabelaSenior, job.sistema));
 
   // Domínio (lista fechada de valores) só existe pra campo com `enunam` preenchido — busca em
   // paralelo, uma vez por lstnam distinto (vários campos podem repetir o mesmo domínio, ex.
   // "LSitTit" usado em mais de uma tabela). Cacheado igual aos campos.
   const dominiosNomes = [...new Set(fields.map((f) => f.enunam).filter((n): n is string => !!n))];
   const dominios = await Promise.all(
-    dominiosNomes.map(async (nome) => [nome, await comCache(`dominio:${nome}`, () => getFieldDomainValues(nome))] as const)
+    dominiosNomes.map(async (nome) => [nome, await comCache(`dominio:${job.sistema}:${nome}`, () => getFieldDomainValues(nome, job.sistema))] as const)
   );
   const valoresPorDominio = new Map(dominios);
 

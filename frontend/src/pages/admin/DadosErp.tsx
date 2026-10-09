@@ -1,6 +1,6 @@
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { MultiSelectColumnFilter, VALOR_VAZIO, normalizar } from "../../components/ui/MultiSelectColumnFilter";
 
@@ -61,6 +61,11 @@ function valorFiltravel(linha: Record<string, unknown>, coluna: ColunaDados): st
 
 export function DadosErp() {
   const { jobName } = useParams<{ jobName: string }>();
+  // A mesma tela serve ao ERP (/admin/sincronizacao-erp/dados/...) e ao HCM (/admin/sincronizacao-hcm/dados/...).
+  const hcm = useLocation().pathname.startsWith("/admin/sincronizacao-hcm");
+  const API = hcm ? "/api/sync-hcm" : "/api/sync-erp";
+  const ROTA = hcm ? "/admin/sincronizacao-hcm" : "/admin/sincronizacao-erp";
+  const TITULO = hcm ? "Importados do HCM" : "Importados do ERP";
   const [resposta, setResposta] = useState<RespostaDados | null>(null);
   const [modoIndice, setModoIndice] = useState<boolean | null>(null);
   const [pagina, setPagina] = useState(1);
@@ -80,14 +85,14 @@ export function DadosErp() {
     setFiltrosColuna({});
     setModoIndice(null);
     axios
-      .get<RespostaDados>(`/api/sync-erp/${jobName}/dados`, { params: { pageSize: 1000 } })
+      .get<RespostaDados>(`${API}/${jobName}/dados`, { params: { pageSize: 1000 } })
       .then(({ data }) => {
         setResposta(data);
         setModoIndice(data.total <= data.limiteIndice);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os dados"))
       .finally(() => setCarregando(false));
-  }, [jobName]);
+  }, [jobName, API]);
 
   // Modo busca: refaz a chamada no servidor a cada troca de busca/página (com debounce curto
   // pra não disparar uma requisição por tecla).
@@ -96,7 +101,7 @@ export function DadosErp() {
     const timer = window.setTimeout(() => {
       setCarregando(true);
       axios
-        .get<RespostaDados>(`/api/sync-erp/${jobName}/dados`, { params: { busca, page: pagina, pageSize: PAGE_SIZE } })
+        .get<RespostaDados>(`${API}/${jobName}/dados`, { params: { busca, page: pagina, pageSize: PAGE_SIZE } })
         .then(({ data }) => {
           setResposta(data);
           setErro(null);
@@ -105,7 +110,7 @@ export function DadosErp() {
         .finally(() => setCarregando(false));
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [modoIndice, jobName, busca, pagina]);
+  }, [modoIndice, jobName, busca, pagina, API]);
 
   const colunas = resposta?.colunas ?? [];
   const todosOsItens = resposta?.itens ?? [];
@@ -147,8 +152,8 @@ export function DadosErp() {
   return (
     <div>
       <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
-        <Link to="/admin/sincronizacao-erp" className="hover:underline">
-          Administração · Importados do Senior
+        <Link to={ROTA} className="hover:underline">
+          Administração · {TITULO}
         </Link>
       </p>
 
@@ -159,7 +164,7 @@ export function DadosErp() {
             {resposta ? (
               <>
                 Espelho local <span className="font-mono">{resposta.tabelaLocal}</span> da tabela{" "}
-                <span className="font-mono">{resposta.tabelaSenior}</span> do Senior · somente leitura.
+                <span className="font-mono">{resposta.tabelaSenior}</span> do {hcm ? "HCM" : "Senior"} · somente leitura.
               </>
             ) : (
               "Somente leitura."
@@ -167,7 +172,7 @@ export function DadosErp() {
           </p>
         </div>
         <Link
-          to="/admin/sincronizacao-erp"
+          to={ROTA}
           className="flex-none rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition hover:bg-surface-2"
         >
           ← Voltar pra lista
