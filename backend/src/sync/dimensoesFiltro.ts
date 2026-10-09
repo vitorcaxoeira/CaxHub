@@ -17,6 +17,7 @@
 // [[import-circular-quebra-array-eager]] no segundo cérebro).
 import type { ColunaQuery } from "./consultaSenior";
 import type { SyncJobDescriptor } from "./registry";
+import type { SistemaSenior } from "../config/sistemaSenior";
 
 export interface Dimensao {
   chave: string;
@@ -26,9 +27,19 @@ export interface Dimensao {
   // comparação em `colunaDimensaoDoJob` já ser case-insensitive por segurança, não por
   // necessidade real.
   aliasLocal: string;
+  sistema: SistemaSenior;
 }
 
-export const DIMENSOES: Dimensao[] = [{ chave: "codemp", rotulo: "Empresa", aliasLocal: "codemp" }];
+// `sistema`: em qual Senior a dimensão existe. A empresa é `codemp` no ERP e `numemp` no HCM: a mesma
+// ideia com nomes de coluna diferentes, e cada tela só enxerga a sua.
+export const DIMENSOES: Dimensao[] = [
+  { chave: "codemp", rotulo: "Empresa", aliasLocal: "codemp", sistema: "erp" },
+  { chave: "numemp", rotulo: "Empresa", aliasLocal: "numemp", sistema: "hcm" },
+];
+
+export function dimensoesDoSistema(sistema: SistemaSenior): Dimensao[] {
+  return DIMENSOES.filter((d) => d.sistema === sistema);
+}
 
 export function dimensaoPorChave(chave: string): Dimensao | null {
   return DIMENSOES.find((d) => d.chave === chave) ?? null;

@@ -1,4 +1,5 @@
 import { runSqlViaSoap } from "../soap/client";
+import type { SistemaSenior } from "../config/sistemaSenior";
 import { modoVarredura, ModoVarredura } from "./politicaVarredura";
 import { filtroDoJob } from "./filtrosAtivos";
 import { montarQuerySenior } from "./consultaSenior";
@@ -78,6 +79,8 @@ export interface OpcoesVarredura<TWhere> {
   queryContagemOrigem?: string;
   /** Alternativa injetável a `queryContagemOrigem`, pra testar sem depender do SOAP. */
   contarOrigem?: () => Promise<number>;
+  /** Sistema Senior onde a contagem roda (omitido = ERP). */
+  sistema?: SistemaSenior;
   /**
    * Tolerância na comparação origem x processado, como fração da contagem de origem.
    * `deficit` = origem tem MAIS do que processamos (linha que devia ter vindo e não veio:
@@ -164,7 +167,7 @@ export async function varrerRemovidos<TWhere extends object>(
     try {
       linhasOrigem = opcoes.contarOrigem
         ? await opcoes.contarOrigem()
-        : Number(((await runSqlViaSoap(opcoes.queryContagemOrigem as string)) as { total: number }[])?.[0]?.total);
+        : Number(((await runSqlViaSoap(opcoes.queryContagemOrigem as string, { sistema: opcoes.sistema })) as { total: number }[])?.[0]?.total);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return naoExecutou(`falha ao contar na origem: ${message}`);
@@ -256,6 +259,8 @@ export interface OpcoesVarreduraDoJob {
   tabelaSenior: string;
   inicio: Date;
   linhasProcessadas: number;
+  /** Sistema Senior do job (omitido = ERP). */
+  sistema?: SistemaSenior;
   /** Quando presente, é sync incremental — varredura sempre pula: a query já vem recortada
    * por data, quase a base inteira ficaria sem carimbo e seria acusada de removida (mesmo
    * motivo de pedidoSync.ts). */
@@ -296,6 +301,7 @@ export async function executarVarreduraDoJob<TWhere extends object>(
     jobName: opcoes.jobName,
     inicio: opcoes.inicio,
     linhasProcessadas: opcoes.linhasProcessadas,
+    sistema: opcoes.sistema,
     escopo: (filtroTodos.escopoLocal ?? {}) as TWhere,
     queryContagemOrigem: montarQuerySenior(`SELECT COUNT(*) AS total FROM ${opcoes.tabelaSenior}`, filtroTodos.predicadosSql),
     incluirNuncaCarimbados: true,

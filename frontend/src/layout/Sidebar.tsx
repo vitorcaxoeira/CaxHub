@@ -152,11 +152,35 @@ const groups: NavGroup[] = [
     roles: ["admin"],
   },
   {
+    label: "Pessoas",
+    // Senior HCM (módulo RH): dado sensível (folha, salário individual, rescisão), só admin. Em sincronia
+    // com o RequireRole em App.tsx e com o requireRole("admin") de routes/rh/index.ts.
+    items: [
+      { to: "/rh/quadro", label: "Quadro de Pessoal" },
+      { to: "/rh/folha", label: "Folha de Pagamento" },
+      { to: "/rh/rescisoes", label: "Rescisões" },
+      { to: "/rh/reajustes", label: "Reajustes Salariais" },
+      { to: "/rh/turnover", label: "Turnover" },
+      {
+        label: "Jornada",
+        children: [
+          { to: "/rh/absenteismo", label: "Absenteísmo" },
+          { to: "/rh/ponto", label: "Horas Extras e Banco" },
+          { to: "/rh/jornada", label: "Conformidade de Jornada" },
+        ],
+      },
+      { to: "/rh/ferias", label: "Férias" },
+      { to: "/rh/dre", label: "DRE de RH" },
+    ],
+    roles: ["admin"],
+  },
+  {
     label: "Administração",
     items: [
       { to: "/admin/usuarios", label: "Usuários" },
       { to: "/admin/sincronizacao", label: "Exportados para o Senior" },
-      { to: "/admin/sincronizacao-erp", label: "Importados do Senior" },
+      { to: "/admin/sincronizacao-erp", label: "Importados do ERP" },
+      { to: "/admin/sincronizacao-hcm", label: "Importados do HCM" },
       {
         label: "Integração Kyria",
         children: [

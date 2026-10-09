@@ -1,5 +1,6 @@
 import axios from "axios";
 import { XMLParser } from "fast-xml-parser";
+import { conexaoSenior, SistemaSenior } from "../config/sistemaSenior";
 
 const SENIOR_NAMESPACE = "http://services.senior.com.br";
 
@@ -60,6 +61,8 @@ export function mensagemDeFalhaSoap(erro: unknown, operacao: string): string {
 export interface RunSqlOptions {
   limit?: number;
   offSet?: number;
+  /** Sistema Senior que recebe a consulta; omitido = ERP (comportamento de sempre). */
+  sistema?: SistemaSenior;
 }
 
 /**
@@ -71,13 +74,7 @@ export interface RunSqlOptions {
  * A resposta vem com o JSON em base64 dentro de `pmJsonResponse`.
  */
 export async function runSqlViaSoap(query: string, options: RunSqlOptions = {}): Promise<unknown[]> {
-  const soapUrl = process.env.SOAP_URL;
-  const soapUser = process.env.SOAP_USER;
-  const soapPassword = process.env.SOAP_PASSWORD;
-
-  if (!soapUrl || !soapUser || !soapPassword) {
-    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
-  }
+  const { url: soapUrl, usuario: soapUser, senha: soapPassword } = conexaoSenior(options.sistema ?? "erp");
 
   const endpoint = soapUrl.replace(/\?wsdl$/i, "");
 
@@ -831,14 +828,15 @@ const PAGE_SIZE = 10000;
 export async function runSqlViaSoapPaginated(
   query: string,
   orderByColumns: string[],
-  pageSize: number = PAGE_SIZE
+  pageSize: number = PAGE_SIZE,
+  sistema: SistemaSenior = "erp"
 ): Promise<unknown[]> {
   const orderedQuery = `${query} ORDER BY ${orderByColumns.join(", ")}`;
   const allRows: unknown[] = [];
   let offSet = 0;
 
   while (true) {
-    const page = await runSqlViaSoap(orderedQuery, { limit: pageSize, offSet });
+    const page = await runSqlViaSoap(orderedQuery, { limit: pageSize, offSet, sistema });
     allRows.push(...page);
     if (page.length < pageSize) break;
     offSet += pageSize;

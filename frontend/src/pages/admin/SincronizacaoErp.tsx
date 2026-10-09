@@ -285,7 +285,18 @@ function formatTempoAtras(iso: string | null): string {
   return `há ${diffDias} dia${diffDias === 1 ? "" : "s"}`;
 }
 
-export function SincronizacaoErp() {
+// A mesma tela serve aos dois sistemas Senior: o ERP (/sync-erp) e o HCM (/sync-hcm, módulo RH). O que muda
+// é a base da API, a dimensão de empresa (codemp no ERP, numemp no HCM), a rota de "Ver dados", os textos e,
+// só no HCM, o cartão de conexão no topo.
+export type SistemaSync = "erp" | "hcm";
+
+const CONFIG_SISTEMA: Record<SistemaSync, { api: string; rota: string; dimensao: string; titulo: string }> = {
+  erp: { api: "/api/sync-erp", rota: "/admin/sincronizacao-erp", dimensao: "codemp", titulo: "Importados do ERP" },
+  hcm: { api: "/api/sync-hcm", rota: "/admin/sincronizacao-hcm", dimensao: "numemp", titulo: "Importados do HCM" },
+};
+
+export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
+  const { api: API, rota: ROTA, dimensao: DIM, titulo: TITULO } = CONFIG_SISTEMA[sistema];
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<JobSync[]>([]);
   const [sincronizandoTodos, setSincronizandoTodos] = useState(false);
@@ -376,7 +387,7 @@ export function SincronizacaoErp() {
 
   function carregar() {
     axios
-      .get<ListaSyncErp>("/api/sync-erp")
+      .get<ListaSyncErp>(API)
       .then(({ data }) => {
         setJobs(data.jobs);
         setSincronizandoTodos(data.sincronizandoTodos);
@@ -389,19 +400,29 @@ export function SincronizacaoErp() {
   useEffect(() => {
     carregar();
     // Atualiza sozinho a cada 10s pra refletir "em andamento" -> concluído sem precisar
-    // que o usuário recarregue a página manualmente.
-    const intervalo = setInterval(carregar, 10000);
-    return () => clearInterval(intervalo);
+    // que o usuário recarregue a página manualmente. Aba em segundo plano não consulta (a lista
+    // custa uma rodada de COUNT(*) no banco) e, ao voltar, atualiza na hora.
+    const intervalo = setInterval(() => {
+      if (!document.hidden) carregar();
+    }, 10000);
+    const aoVoltar = () => {
+      if (!document.hidden) carregar();
+    };
+    document.addEventListener("visibilitychange", aoVoltar);
+    return () => {
+      clearInterval(intervalo);
+      document.removeEventListener("visibilitychange", aoVoltar);
+    };
   }, []);
 
   useEffect(() => {
     axios
-      .get<{ dimensoes: DimensaoInfo[] }>("/api/sync-erp/dimensoes")
+      .get<{ dimensoes: DimensaoInfo[] }>(`${API}/dimensoes`)
       .then(({ data }) => setDimensoes(data.dimensoes))
       .catch(() => {}); // botão "Filtro por Empresa" só some se isso falhar — sem alarde extra
   }, []);
 
-  const dimensaoCodemp = dimensoes.find((d) => d.chave === "codemp") ?? null;
+  const dimensaoCodemp = dimensoes.find((d) => d.chave === DIM) ?? null;
 
   function abrirModalDimensao() {
     setModalDimensaoAberto(true);
@@ -431,7 +452,7 @@ export function SincronizacaoErp() {
   function prevvisualizarCascata() {
     setPreviewCascata("carregando");
     axios
-      .post<{ resultados: ResultadoPropagacao[] }>("/api/sync-erp/dimensoes/codemp/pre-visualizar", {
+      .post<{ resultados: ResultadoPropagacao[] }>(`${API}/dimensoes/${DIM}/pre-visualizar`, {
         operador: operadorDimensao,
         valores: valoresDimensaoAtual(),
       })
@@ -444,7 +465,7 @@ export function SincronizacaoErp() {
     setErro(null);
     setConfirmacaoRecorteCascata(null);
     try {
-      const { data } = await axios.post<{ resultados: ResultadoPropagacao[] }>("/api/sync-erp/dimensoes/codemp/aplicar", {
+      const { data } = await axios.post<{ resultados: ResultadoPropagacao[] }>(`${API}/dimensoes/${DIM}/aplicar`, {
         operador: operadorDimensao,
         valores: valoresDimensaoAtual(),
         jobsExcluidos: [...excluidosCascata],
@@ -472,7 +493,7 @@ export function SincronizacaoErp() {
     setAplicandoCascata(true);
     setErro(null);
     try {
-      await axios.delete("/api/sync-erp/dimensoes/codemp");
+      await axios.delete(`${API}/dimensoes/${DIM}`);
       setPreviewCascata(null);
       carregar();
     } catch (err: any) {
@@ -486,7 +507,7 @@ export function SincronizacaoErp() {
     setDisparando(`${job.jobName}-${modo}`);
     setErro(null);
     try {
-      await axios.post(`/api/sync-erp/${job.jobName}/run`, { modo });
+      await axios.post(`${API}/${job.jobName}/run`, { modo });
       carregar();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao iniciar sincronização");
@@ -499,7 +520,7 @@ export function SincronizacaoErp() {
     setIniciandoTodos(true);
     setErro(null);
     try {
-      await axios.post("/api/sync-erp/run-all");
+      await axios.post(`${API}/run-all`);
       carregar();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao iniciar sincronização de todas as tabelas");
@@ -538,7 +559,7 @@ export function SincronizacaoErp() {
     if (!job.varreduraDisponivel) return;
     setRemovidosPorJob((r) => ({ ...r, [job.jobName]: "carregando" }));
     axios
-      .get<{ itens: ItemRemovido[] }>(`/api/sync-erp/${job.jobName}/removidos`)
+      .get<{ itens: ItemRemovido[] }>(`${API}/${job.jobName}/removidos`)
       .then(({ data }) => setRemovidosPorJob((r) => ({ ...r, [job.jobName]: data.itens })))
       .catch(() => setRemovidosPorJob((r) => ({ ...r, [job.jobName]: "erro" })));
   }
@@ -551,7 +572,7 @@ export function SincronizacaoErp() {
     if (camposPorJob[chave]) return;
     setCamposPorJob((c) => ({ ...c, [chave]: "carregando" }));
     axios
-      .get<RespostaCampos>(`/api/sync-erp/${job.jobName}/campos`, fonte === "erp" ? { params: { fonte: "erp" } } : undefined)
+      .get<RespostaCampos>(`${API}/${job.jobName}/campos`, fonte === "erp" ? { params: { fonte: "erp" } } : undefined)
       .then(({ data }) => setCamposPorJob((c) => ({ ...c, [chave]: data })))
       .catch((err) =>
         setCamposPorJob((c) => ({ ...c, [chave]: { erro: err.response?.data?.error ?? "Falha ao carregar os campos" } }))
@@ -566,7 +587,7 @@ export function SincronizacaoErp() {
     if (filtroPorJob[chave]) return;
     setFiltroPorJob((f) => ({ ...f, [chave]: "carregando" }));
     axios
-      .get<RespostaFiltro>(`/api/sync-erp/${job.jobName}/filtro/${modo}`)
+      .get<RespostaFiltro>(`${API}/${job.jobName}/filtro/${modo}`)
       .then(({ data }) => {
         setFiltroPorJob((f) => ({ ...f, [chave]: data }));
         setRascunhoPorJob((r) => ({
@@ -621,7 +642,7 @@ export function SincronizacaoErp() {
     const chave = `${job.jobName}:${modo}`;
     setPreviewPorJob((p) => ({ ...p, [chave]: "carregando" }));
     axios
-      .post<RespostaPreview>(`/api/sync-erp/${job.jobName}/preview`, { predicados: predicadosPreenchidos(job, modo) })
+      .post<RespostaPreview>(`${API}/${job.jobName}/preview`, { predicados: predicadosPreenchidos(job, modo) })
       .then(({ data }) => setPreviewPorJob((p) => ({ ...p, [chave]: data })))
       .catch((err) =>
         setPreviewPorJob((p) => ({ ...p, [chave]: { erro: err.response?.data?.error ?? "Falha ao montar a query" } }))
@@ -645,7 +666,7 @@ export function SincronizacaoErp() {
     setSalvandoVarredura(job.jobName);
     setErro(null);
     try {
-      await axios.put(`/api/sync-erp/${job.jobName}/varredura`, { modo });
+      await axios.put(`${API}/${job.jobName}/varredura`, { modo });
       carregar();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao mudar o modo de varredura");
@@ -661,7 +682,7 @@ export function SincronizacaoErp() {
     setSalvandoLote(job.jobName);
     setErro(null);
     try {
-      await axios.put(`/api/sync-erp/${job.jobName}/lote`, { tamanhoLote });
+      await axios.put(`${API}/${job.jobName}/lote`, { tamanhoLote });
       setRascunhoLotePorJob((r) => {
         const { [job.jobName]: _descartado, ...resto } = r;
         return resto;
@@ -680,7 +701,7 @@ export function SincronizacaoErp() {
     setErro(null);
     setConfirmacaoRecorte(null);
     try {
-      const { data } = await axios.put<RespostaFiltro>(`/api/sync-erp/${job.jobName}/filtro/${modo}`, {
+      const { data } = await axios.put<RespostaFiltro>(`${API}/${job.jobName}/filtro/${modo}`, {
         predicados: predicadosPreenchidos(job, modo),
         ...(acaoRecorte ? { acaoRecorte } : {}),
       });
@@ -716,7 +737,7 @@ export function SincronizacaoErp() {
     setSalvandoFiltro(chave);
     setErro(null);
     try {
-      await axios.delete(`/api/sync-erp/${job.jobName}/filtro/${modo}`);
+      await axios.delete(`${API}/${job.jobName}/filtro/${modo}`);
       setFiltroPorJob((f) => ({ ...f, [chave]: { predicados: [], predicadosSql: [], escopavel: true, motivoNaoEscopavel: null } }));
       setRascunhoPorJob((r) => ({ ...r, [chave]: [rascunhoVazio()] }));
       setPreviewPorJob((p) => {
@@ -739,7 +760,7 @@ export function SincronizacaoErp() {
     setConfirmacaoPropagar(null);
     try {
       const { data } = await axios.post<RespostaFiltro>(
-        `/api/sync-erp/${job.jobName}/filtro/todos/propagar`,
+        `${API}/${job.jobName}/filtro/todos/propagar`,
         acaoRecorte ? { acaoRecorte } : {}
       );
       const chave = `${job.jobName}:alterados`;
@@ -836,12 +857,14 @@ export function SincronizacaoErp() {
   return (
     <div>
       <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
-        Administração · Importados do Senior
+        Administração · {TITULO}
       </p>
+
+      {sistema === "hcm" && <CartaoConexaoHcm api={API} />}
 
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-bold text-foreground">Importados do Senior</h1>
+          <h1 className="font-display text-2xl font-bold text-foreground">{TITULO}</h1>
           <p className="mt-1 text-sm text-muted">
             Cada tabela roda sozinha no horário agendado. "Alterados" filtra pela data de geração/alteração do registro
             desde a última sincronização com sucesso — só aparece pra tabelas que têm esse campo no Senior.
@@ -1290,7 +1313,7 @@ export function SincronizacaoErp() {
                         </DropdownMenu.Trigger>
                         <DropdownMenu.Content className="w-56 p-0 py-1">
                           <DropdownMenu.Item
-                            onSelect={() => navigate(`/admin/sincronizacao-erp/dados/${job.jobName}`)}
+                            onSelect={() => navigate(`${ROTA}/dados/${job.jobName}`)}
                             className="rounded-none px-3 py-2"
                           >
                             Ver dados
@@ -2181,6 +2204,102 @@ function ConteudoErro({ erro, onFechar }: { erro: ErroAberto; onFechar: () => vo
         >
           Fechar
         </button>
+      </div>
+    </div>
+  );
+}
+
+export function SincronizacaoErp() {
+  return <SincronizacaoSenior sistema="erp" />;
+}
+
+export function SincronizacaoHcm() {
+  return <SincronizacaoSenior sistema="hcm" />;
+}
+
+interface ConexaoHcm {
+  configurado: boolean;
+  motivo?: string;
+  url?: string;
+  usuario?: string;
+  banco?: string | null;
+  herdaDoErp?: boolean;
+}
+
+interface ResultadoTeste {
+  ok: boolean;
+  colaboradores?: number;
+  erro?: string;
+  latenciaMs: number;
+}
+
+// Canal do HCM: URL (sem credenciais), usuário e banco, lidos do .env do backend. A senha nunca chega
+// aqui. "Testar conexão" roda uma contagem de colaboradores pelo mesmo canal dos jobs.
+function CartaoConexaoHcm({ api }: { api: string }) {
+  const [conexao, setConexao] = useState<ConexaoHcm | null>(null);
+  const [teste, setTeste] = useState<ResultadoTeste | "testando" | null>(null);
+
+  useEffect(() => {
+    axios
+      .get<ConexaoHcm>(`${api}/conexao`)
+      .then(({ data }) => setConexao(data))
+      .catch(() => setConexao({ configurado: false, motivo: "Não foi possível ler a configuração do HCM" }));
+  }, [api]);
+
+  async function testar() {
+    setTeste("testando");
+    try {
+      const { data } = await axios.post<ResultadoTeste>(`${api}/conexao/testar`);
+      setTeste(data);
+    } catch (err) {
+      const msg = axios.isAxiosError(err) ? err.response?.data?.error ?? err.message : "Falha ao testar";
+      setTeste({ ok: false, erro: String(msg), latenciaMs: 0 });
+    }
+  }
+
+  return (
+    <div className="mb-6 rounded-lg border border-border bg-surface p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Conexão com o HCM</p>
+          {!conexao && <p className="mt-1 text-sm text-muted">Carregando…</p>}
+          {conexao && !conexao.configurado && (
+            <p className="mt-1 text-sm text-destructive">
+              Não configurado: {conexao.motivo}. Defina SENIOR_HCM_BANCO (ex.: rhsenior.dbo.) no .env do backend para usar o serviço do ERP, ou
+              SENIOR_HCM_SOAP_URL, SENIOR_HCM_SOAP_USER e SENIOR_HCM_SOAP_PASSWORD para um serviço próprio.
+            </p>
+          )}
+          {conexao?.configurado && (
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+              <dt className="text-muted">Serviço</dt>
+              <dd className="break-all font-mono text-[12.5px] text-foreground">{conexao.url}</dd>
+              <dt className="text-muted">Usuário</dt>
+              <dd className="font-mono text-[12.5px] text-foreground">{conexao.usuario}</dd>
+              <dt className="text-muted">Banco do RH</dt>
+              <dd className="font-mono text-[12.5px] text-foreground">{conexao.banco ?? "o banco da própria conexão"}</dd>
+              <dt className="text-muted">Canal</dt>
+              <dd className="text-foreground">
+                {conexao.herdaDoErp
+                  ? "Usa o serviço do ERP (SENIOR_HCM_SOAP_* vazias) — troque quando o serviço do HCM for publicado"
+                  : "Serviço próprio do HCM"}
+              </dd>
+            </dl>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <button
+            onClick={testar}
+            disabled={!conexao?.configurado || teste === "testando"}
+            className="rounded-md border border-border px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {teste === "testando" ? "Testando…" : "Testar conexão"}
+          </button>
+          {teste && teste !== "testando" && (
+            <p className={`text-sm ${teste.ok ? "text-success" : "text-destructive"}`}>
+              {teste.ok ? `Conectou: ${teste.colaboradores} colaboradores (${teste.latenciaMs} ms)` : `Falhou: ${teste.erro}`}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

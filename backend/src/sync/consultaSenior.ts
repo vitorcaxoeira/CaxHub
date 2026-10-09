@@ -19,7 +19,7 @@ export interface ColunaQuery {
 // FROM tabela", uma tabela só, sem JOIN. A tabela pode ter um WHERE já embutido depois do
 // FROM (hoje só atividadeConsultorSync.ts) — o regex para no primeiro espaço/quebra.
 export function extrairTabela(query: string): string {
-  const match = query.match(/\bFROM\s+([a-zA-Z0-9_]+)/i);
+  const match = query.match(/\bFROM\s+([a-zA-Z0-9_.]+)/i);
   if (!match) {
     throw new Error(`extrairTabela: não achei "FROM tabela" na query: ${query}`);
   }
@@ -27,7 +27,7 @@ export function extrairTabela(query: string): string {
 }
 
 export function extrairColunas(query: string): ColunaQuery[] {
-  const match = query.match(/^\s*SELECT\s+([\s\S]+?)\s+FROM\s+[a-zA-Z0-9_]+/i);
+  const match = query.match(/^\s*SELECT\s+([\s\S]+?)\s+FROM\s+[a-zA-Z0-9_.]+/i);
   if (!match) {
     throw new Error(`extrairColunas: query fora do padrão "SELECT ... FROM tabela": ${query}`);
   }

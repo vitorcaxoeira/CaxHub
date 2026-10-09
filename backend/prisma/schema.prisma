@@ -161,6 +161,11 @@ model SyncLog {
   // runRatSyncPorNumrat, runRatItemSyncPorNumrat) que reaproveitam o jobName do job
   // agendado sem passar por esse carimbo — não são a execução "oficial" do job.
   duracaoMs           Int?
+
+  // A tela Importados do Senior/HCM pergunta "qual a última execução de cada job" a cada 10s (DISTINCT ON
+  // por jobName ordenado por runAt desc), e ultimoSucessoEm/varredura fazem o mesmo por job. Sem este índice
+  // cada uma dessas consultas varria a tabela inteira, que cresce todo dia (um log por job por execução).
+  @@index([jobName, runAt(sort: Desc)])
 }
 
 // Espelho local da tabela E070EMP do Senior ERP (empresas cadastradas).
@@ -3274,4 +3279,511 @@ model KyriaSyncConfig {
   atualizadoEm DateTime @updatedAt @map("atualizado_em")
 
   @@map("kyria_sync_config")
+}
+
+// ============================================================================
+// Modulo RH: espelho local das tabelas do Senior HCM (Vetorh). GERADO a partir do dicionario do
+// HCM da Soeltech em 09/10/2026 (rhsenior.dbo.*) e depois mantido a mao. Nomes de coluna = nomes
+// do Senior em minusculas, para o SELECT ... AS alias de cada job casar 1:1 com o model.
+// LGPD: ficam de fora CPF, PIS, CTPS, RG, endereco, telefone, dados bancarios, Pix e CID/obs de
+// afastamento (a query nem traz o campo). Colunas de controle de exclusao iguais as do ERP.
+// ============================================================================
+
+// Espelho de R030EMP (HCM): Empresas.
+model HcmEmpresa {
+  numemp            Int
+  nomemp            String? @db.VarChar(40)
+  apeemp            String? @db.VarChar(40)
+  sigemp            String? @db.VarChar(5)
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp])
+  @@map("hcm_empresas")
+}
+
+// Espelho de R030FIL (HCM): Filiais.
+model HcmFilial {
+  numemp            Int
+  codfil            Int
+  nomfil            String? @db.VarChar(40)
+  razsoc            String? @db.VarChar(40)
+  codest            String? @db.VarChar(4)
+  codcid            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, codfil])
+  @@map("hcm_filiais")
+}
+
+// Espelho de R016ORN (HCM): Locais de Trabalho.
+model HcmLocal {
+  taborg            Int
+  numloc            Int
+  nomloc            String? @db.VarChar(60)
+  datcri            DateTime? @db.Date
+  datext            DateTime? @db.Date
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([taborg, numloc])
+  @@map("hcm_locais")
+}
+
+// Espelho de R024CAR (HCM): Cargos.
+model HcmCargo {
+  estcar            Int
+  codcar            String @db.VarChar(24)
+  titred            String? @db.VarChar(30)
+  titcar            String? @db.VarChar(100)
+  codcbo            String? @db.VarChar(5)
+  datcri            DateTime? @db.Date
+  datext            DateTime? @db.Date
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([estcar, codcar])
+  @@map("hcm_cargos")
+}
+
+// Espelho de R017POS (HCM): Postos de Trabalho.
+model HcmPosto {
+  estpos            Int
+  postra            String @db.VarChar(24)
+  desred            String? @db.VarChar(70)
+  despos            String? @db.VarChar(150)
+  datcri            DateTime? @db.Date
+  datext            DateTime? @db.Date
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([estpos, postra])
+  @@map("hcm_postos")
+}
+
+// Espelho de R018CCU (HCM): Centros de Custo.
+model HcmCentroCusto {
+  numemp            Int
+  codccu            String @db.VarChar(18)
+  nomccu            String? @db.VarChar(80)
+  codfil            Int?
+  tipcta            String? @db.VarChar(1)
+  posccu            String? @db.VarChar(24)
+  datcri            DateTime? @db.Date
+  datext            DateTime? @db.Date
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, codccu])
+  @@map("hcm_centros_custo")
+}
+
+// Espelho de R010SIT (HCM): Situacoes de Ponto.
+model HcmSituacao {
+  codsit            Int
+  dessit            String? @db.VarChar(30)
+  desabr            String? @db.VarChar(4)
+  tipsit            Int?
+  incabs            Int?
+  conabs            Int?
+  sitcmp            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codsit])
+  @@map("hcm_situacoes")
+}
+
+// Espelho de R042CAU (HCM): Causas de Demissao.
+model HcmCausaDemissao {
+  caudem            Int
+  desdem            String? @db.VarChar(30)
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([caudem])
+  @@map("hcm_causas_demissao")
+}
+
+// Espelho de R076MOT (HCM): Motivos de Alteracao.
+model HcmMotivoAlteracao {
+  codmot            Int
+  nommot            String? @db.VarChar(30)
+  tipmot            String? @db.VarChar(1)
+  mtvalt            Int?
+  tpomvt            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codmot])
+  @@map("hcm_motivos_alteracao")
+}
+
+// Espelho de R008EVC (HCM): Eventos da Folha.
+model HcmEvento {
+  codtab            Int
+  codeve            Int
+  deseve            String? @db.VarChar(25)
+  tipeve            Int?
+  codcrt            Int?
+  nateve            Int?
+  rgreve            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codtab, codeve])
+  @@map("hcm_eventos")
+}
+
+// Espelho de R006ESC (HCM): Escalas.
+model HcmEscala {
+  codesc            Int
+  nomesc            String? @db.VarChar(30)
+  tabest            Int?
+  claesc            Int?
+  hordsr            Int?
+  horsem            Int?
+  hormes            Int?
+  tipesc            String? @db.VarChar(1)
+  tipjor            Int?
+  desjor            String? @db.VarChar(100)
+  turesc            Int?
+  escnot            String? @db.VarChar(1)
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codesc])
+  @@map("hcm_escalas")
+}
+
+// Espelho de R004HOR (HCM): Horarios.
+model HcmHorario {
+  codhor            Int
+  deshor            String? @db.VarChar(30)
+  tabest            Int?
+  turhor            Int?
+  jorhor            String? @db.VarChar(1)
+  hortrb            Int?
+  horext            Int?
+  hornot            Int?
+  tiphor            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codhor])
+  @@map("hcm_horarios")
+}
+
+// Espelho de R034FUN (HCM): Colaboradores.
+model HcmColaborador {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  nomfun            String? @db.VarChar(40)
+  apefun            String? @db.VarChar(50)
+  datadm            DateTime? @db.Date
+  tipadm            Int?
+  sitafa            Int?
+  estpos            Int?
+  postra            String? @db.VarChar(24)
+  estcar            Int?
+  codcar            String? @db.VarChar(24)
+  codesc            Int?
+  codtma            Int?
+  turint            Int?
+  codfil            Int?
+  taborg            Int?
+  numloc            Int?
+  codccu            String? @db.VarChar(18)
+  tipcon            Int?
+  tipsex            String? @db.VarChar(1)
+  estciv            Int?
+  grains            Int?
+  datnas            DateTime? @db.Date
+  codnac            Int?
+  datafa            DateTime? @db.Date
+  caudem            Int?
+  codmot            Int?
+  valsal            Decimal? @db.Decimal(13, 4)
+  tipsal            Int?
+  datsal            DateTime? @db.Date
+  horbas            Int?
+  horsem            Int?
+  hordsr            Int?
+  horsab            Int?
+  ultcal            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad])
+  @@map("hcm_colaboradores")
+}
+
+// Espelho de R038AFA (HCM): Afastamentos.
+model HcmAfastamento {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  datafa            DateTime @db.Date
+  horafa            Int
+  datter            DateTime? @db.Date
+  horter            Int?
+  prvter            DateTime? @db.Date
+  sitafa            Int?
+  caudem            Int?
+  diajus            Int?
+  qhrafa            Int?
+  oriafa            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, datafa, horafa])
+  @@map("hcm_afastamentos")
+}
+
+// Espelho de R038HSA (HCM): Historico Salarial.
+model HcmHistoricoSalarial {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  datalt            DateTime @db.Date
+  seqalt            Int
+  codmot            Int?
+  valsal            Decimal? @db.Decimal(13, 4)
+  tipsal            Int?
+  perdes            Decimal? @db.Decimal(5, 2)
+  perrea            Decimal? @db.Decimal(8, 5)
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, datalt, seqalt])
+  @@map("hcm_historico_salarial")
+}
+
+// Espelho de R038HLO (HCM): Historico de Local.
+model HcmHistoricoLocal {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  datalt            DateTime @db.Date
+  taborg            Int?
+  numloc            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, datalt])
+  @@map("hcm_historico_local")
+}
+
+// Espelho de R038HCA (HCM): Historico de Cargo.
+model HcmHistoricoCargo {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  datalt            DateTime @db.Date
+  estcar            Int?
+  codcar            String? @db.VarChar(24)
+  codmot            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, datalt])
+  @@map("hcm_historico_cargo")
+}
+
+// Espelho de R044CAL (HCM): Calculos de Folha.
+model HcmCalculoFolha {
+  numemp            Int
+  codcal            Int
+  tipcal            Int?
+  sitcal            String? @db.VarChar(1)
+  perref            DateTime? @db.Date
+  datpag            DateTime? @db.Date
+  inicmp            DateTime? @db.Date
+  fimcmp            DateTime? @db.Date
+  grucal            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, codcal])
+  @@map("hcm_calculos_folha")
+}
+
+// Espelho de R046VER (HCM): Verbas da Folha.
+model HcmVerbaFolha {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  codcal            Int
+  tabeve            Int
+  codeve            Int
+  refeve            Decimal? @db.Decimal(11, 2)
+  valeve            Decimal? @db.Decimal(11, 2)
+  orieve            String? @db.VarChar(1)
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, codcal, tabeve, codeve])
+  @@map("hcm_verbas_folha")
+}
+
+// Espelho de R042RCM (HCM): Rescisoes.
+model HcmRescisao {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  datdem            DateTime? @db.Date
+  caudem            Int?
+  datavi            DateTime? @db.Date
+  datpag            DateTime? @db.Date
+  fimctt            DateTime? @db.Date
+  salfav            Decimal? @db.Decimal(13, 4)
+  sldfgt            Decimal? @db.Decimal(11, 2)
+  totpro            Decimal? @db.Decimal(11, 2)
+  totdes            Decimal? @db.Decimal(11, 2)
+  basfgt            Decimal? @db.Decimal(11, 2)
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad])
+  @@map("hcm_rescisoes")
+}
+
+// Espelho de R042RCV (HCM): Verbas de Rescisao.
+model HcmVerbaRescisao {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  datpag            DateTime @db.Date
+  tclrcs            Int
+  tabeve            Int
+  codeve            Int
+  refeve            Decimal? @db.Decimal(11, 2)
+  valeve            Decimal? @db.Decimal(11, 2)
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, datpag, tclrcs, tabeve, codeve])
+  @@map("hcm_verbas_rescisao")
+}
+
+// Espelho de R066APU (HCM): Apuracao de Ponto.
+model HcmApuracaoPonto {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  datapu            DateTime @db.Date
+  hordat            Int?
+  codesc            Int?
+  codtma            Int?
+  turint            Int?
+  perref            DateTime? @db.Date
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, datapu])
+  @@map("hcm_apuracao_ponto")
+}
+
+// Espelho de R066SIT (HCM): Situacoes do Ponto.
+model HcmSituacaoPonto {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  datapu            DateTime @db.Date
+  codsit            Int
+  codrat            Int
+  qtdhor            Int?
+  qtdhnc            Int?
+  perref            DateTime? @db.Date
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, datapu, codsit, codrat])
+  @@map("hcm_situacao_ponto")
+}
+
+// Espelho de R070ACC (HCM): Marcacoes de Ponto.
+model HcmMarcacao {
+  numcra            BigInt
+  datacc            DateTime @db.Date
+  horacc            Int
+  seqacc            Int
+  tipacc            Int?
+  diracc            String? @db.VarChar(1)
+  numemp            Int?
+  tipcol            Int?
+  numcad            Int?
+  datapu            DateTime? @db.Date
+  oriacc            String? @db.VarChar(1)
+  usomar            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numcra, datacc, horacc, seqacc])
+  @@map("hcm_marcacoes")
+}
+
+// Espelho de R011LAN (HCM): Lancamentos do Banco de Horas.
+model HcmLancamentoBh {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  codbhr            Int
+  datlan            DateTime @db.Date
+  codsit            Int
+  orilan            String @db.VarChar(1)
+  sinlan            String? @db.VarChar(1)
+  qtdhor            Int?
+  qtdpag            Int?
+  datcmp            DateTime? @db.Date
+  perref            DateTime? @db.Date
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, codbhr, datlan, codsit, orilan])
+  @@map("hcm_lancamentos_bh")
+}
+
+// Espelho de R040PER (HCM): Periodos Aquisitivos de Ferias.
+model HcmPeriodoFerias {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  iniper            DateTime @db.Date
+  fimper            DateTime? @db.Date
+  qtddir            Decimal? @db.Decimal(5, 2)
+  qtdfal            Decimal? @db.Decimal(6, 2)
+  qtdafa            Decimal? @db.Decimal(7, 2)
+  qtdsld            Decimal? @db.Decimal(5, 2)
+  qtdabo            Decimal? @db.Decimal(5, 2)
+  sitper            Int?
+  limcon            DateTime? @db.Date
+  diadev            Int?
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, iniper])
+  @@map("hcm_periodos_ferias")
+}
+
+// Espelho de R040FEM (HCM): Programacao de Ferias.
+model HcmProgramacaoFerias {
+  numemp            Int
+  tipcol            Int
+  numcad            Int
+  iniper            DateTime @db.Date
+  inifer            DateTime @db.Date
+  tipfer            String? @db.VarChar(1)
+  diafer            Decimal? @db.Decimal(4, 2)
+  diaabo            Decimal? @db.Decimal(4, 2)
+  datpag            DateTime? @db.Date
+  fimfer            DateTime? @db.Date
+  opc13s            String? @db.VarChar(1)
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([numemp, tipcol, numcad, iniper, inifer])
+  @@map("hcm_programacao_ferias")
 }

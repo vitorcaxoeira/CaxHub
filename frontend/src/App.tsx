@@ -41,7 +41,17 @@ import { RelatorioCronograma } from "./pages/projetos/RelatorioCronograma";
 import { RelatorioProdutividade } from "./pages/projetos/RelatorioProdutividade";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
-import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
+import { SincronizacaoErp, SincronizacaoHcm } from "./pages/admin/SincronizacaoErp";
+import { QuadroPessoal } from "./pages/rh/QuadroPessoal";
+import { FolhaPagamento } from "./pages/rh/FolhaPagamento";
+import { Rescisoes } from "./pages/rh/Rescisoes";
+import { Reajustes } from "./pages/rh/Reajustes";
+import { Turnover } from "./pages/rh/Turnover";
+import { Absenteismo } from "./pages/rh/Absenteismo";
+import { PontoHoras } from "./pages/rh/PontoHoras";
+import { ConformidadeJornada } from "./pages/rh/ConformidadeJornada";
+import { Ferias } from "./pages/rh/Ferias";
+import { DreRh } from "./pages/rh/DreRh";
 import { SincronizacaoKyria } from "./pages/admin/SincronizacaoKyria";
 import { MapeamentoKyria } from "./pages/admin/MapeamentoKyria";
 import { DadosKyria } from "./pages/admin/DadosKyria";
@@ -219,6 +229,18 @@ export default function App() {
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
                 <Route path="/admin/sincronizacao-erp/dados/:jobName" element={<DadosErp />} />
+                <Route path="/admin/sincronizacao-hcm" element={<SincronizacaoHcm />} />
+                <Route path="/admin/sincronizacao-hcm/dados/:jobName" element={<DadosErp />} />
+                <Route path="/rh/quadro" element={<QuadroPessoal />} />
+                <Route path="/rh/folha" element={<FolhaPagamento />} />
+                <Route path="/rh/rescisoes" element={<Rescisoes />} />
+                <Route path="/rh/reajustes" element={<Reajustes />} />
+                <Route path="/rh/turnover" element={<Turnover />} />
+                <Route path="/rh/absenteismo" element={<Absenteismo />} />
+                <Route path="/rh/ponto" element={<PontoHoras />} />
+                <Route path="/rh/jornada" element={<ConformidadeJornada />} />
+                <Route path="/rh/ferias" element={<Ferias />} />
+                <Route path="/rh/dre" element={<DreRh />} />
                 <Route path="/admin/sincronizacao-kyria" element={<SincronizacaoKyria />} />
                 <Route path="/admin/mapeamento-kyria" element={<MapeamentoKyria />} />
                 <Route path="/admin/sincronizacao-kyria/dados/:jobName" element={<DadosKyria />} />

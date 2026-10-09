@@ -53,6 +53,9 @@ import { JOB_NAME as MOVIMENTO_TITULO_PAGAR_JOB, CRON_EXPR as MOVIMENTO_TITULO_P
 import { JOB_NAME as RATEIO_TITULO_PAGAR_JOB, CRON_EXPR as RATEIO_TITULO_PAGAR_CRON, CAMPO_DATA as RATEIO_TITULO_PAGAR_DATA, BASE_QUERY as RATEIO_TITULO_PAGAR_QUERY, runRateioTituloPagarSync } from "./rateioTituloPagarSync";
 import { JOB_NAME as TRANSACAO_JOB, CRON_EXPR as TRANSACAO_CRON, CAMPO_DATA as TRANSACAO_DATA, BASE_QUERY as TRANSACAO_QUERY, runTransacaoSync } from "./transacaoSync";
 import { prisma } from "../db/prisma";
+import type { SistemaSenior } from "../config/sistemaSenior";
+import { TABELAS_HCM } from "./hcm/tabelasHcm";
+import { definirTodosSyncsHcm } from "./hcm/definirSyncHcm";
 import { extrairTabela, extrairColunas, ColunaQuery } from "./consultaSenior";
 import { delegatePorTabelaLocal, pkFieldsDoModel } from "./recorteRetroativo";
 
@@ -70,6 +73,7 @@ const JOBS_SEM_DICIONARIO = new Set([CONSULTOR_JOB, CONTRATO_CONSULTOR_JOB]);
 // tabela fora daqui devolve erro claro em vez de aceitar em silêncio algo que o `run()` dela
 // não consome.
 const JOBS_COM_FILTRO = new Set([
+  ...TABELAS_HCM.map((t) => t.jobName),
   ATIVIDADE_CONSULTOR_JOB,
   CENTRO_CUSTO_JOB,
   CLIENTE_JOB,
@@ -121,8 +125,10 @@ const JOBS_COM_FILTRO = new Set([
 function catalogo(
   jobName: string,
   query: string,
-  tabelaLocal: string
+  tabelaLocal: string,
+  sistema: SistemaSenior = "erp"
 ): {
+  sistema: SistemaSenior;
   tabelaSenior: string;
   colunas: ColunaQuery[];
   temDicionario: boolean;
@@ -131,6 +137,7 @@ function catalogo(
   suportaFiltro: boolean;
 } {
   return {
+    sistema,
     tabelaSenior: extrairTabela(query),
     colunas: extrairColunas(query),
     temDicionario: !JOBS_SEM_DICIONARIO.has(jobName),
@@ -142,6 +149,9 @@ function catalogo(
 
 export interface SyncJobDescriptor {
   jobName: string;
+  // Sistema Senior de onde o job lê: "erp" (padrão, todos os jobs de antes do RH) ou "hcm". Decide o canal
+  // SOAP, o dicionário e o dialeto do job (config/sistemaSenior.ts) e em qual tela ele aparece.
+  sistema: SistemaSenior;
   displayName: string;
   cronExpr: string;
   suportaAlterados: boolean;
@@ -445,3 +455,31 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   // Vitor em 24/08/2026. Independente das demais (sem JOIN na query original).
   { jobName: META_ANUAL_JOB, displayName: "Metas Anuais", cronExpr: META_ANUAL_CRON, suportaAlterados: META_ANUAL_DATA != null, campoData: META_ANUAL_DATA, ...catalogo(META_ANUAL_JOB, META_ANUAL_QUERY, "metas_anuais"), run: runMetaAnualSync, usaUpsertEmLote: true, contarRegistros: () => prisma.metaAnual.count(), contarRemovidos: contarRemovidosGenerico("metas_anuais"), listarRemovidos: listarRemovidosGenerico("metas_anuais", "Meta Anual") },
 ];
+
+// Jobs do HCM (módulo RH): um por tabela de sync/hcm/tabelasHcm.ts, todos no mesmo padrão. Rodam
+// encadeados num cron só (server.ts / sync/agendamento.ts), então cronExpr aqui é só o horário de
+// exibição. SYNC_JOBS continua sendo SÓ o ERP (a tela e as rotas de antes do RH não mudam); o HCM tem a
+// sua lista e a tela "Importados do HCM" lê dela.
+export const CRON_HCM = "0 4 * * *";
+export const SYNC_JOBS_HCM: SyncJobDescriptor[] = definirTodosSyncsHcm(TABELAS_HCM).map(({ tabela, sync }) => ({
+  jobName: tabela.jobName,
+  displayName: tabela.displayName,
+  cronExpr: CRON_HCM,
+  suportaAlterados: tabela.campoData != null,
+  campoData: tabela.campoData,
+  ...catalogo(tabela.jobName, sync.queryBase, tabela.tabelaLocal, "hcm"),
+  run: sync.run,
+  usaUpsertEmLote: true,
+  contarRegistros: () => delegatePorTabelaLocal(tabela.tabelaLocal).count({ where: {} }),
+  contarRemovidos: contarRemovidosGenerico(tabela.tabelaLocal),
+  listarRemovidos: listarRemovidosGenerico(tabela.tabelaLocal, tabela.displayName.replace(/ \(HCM\)$/, "")),
+}));
+
+// União dos dois sistemas. `carregarFiltrosAtivos` SUBSTITUI o snapshot inteiro e descarta o filtro de
+// qualquer job que não esteja na lista que recebe: com só a lista de um sistema, salvar um filtro no
+// HCM apagaria da memória os filtros do ERP (e vice-versa) até o próximo boot.
+export const TODOS_OS_SYNC_JOBS: SyncJobDescriptor[] = [...SYNC_JOBS, ...SYNC_JOBS_HCM];
+
+export function jobsDoSistema(sistema: SistemaSenior): SyncJobDescriptor[] {
+  return sistema === "hcm" ? SYNC_JOBS_HCM : SYNC_JOBS;
+}
