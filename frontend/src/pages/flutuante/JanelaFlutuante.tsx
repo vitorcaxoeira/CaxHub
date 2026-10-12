@@ -9,7 +9,7 @@ import {
   avisarSessaoAlterada,
 } from "../../components/projetos/VigiaFimDeJornada";
 import { IndicadorProgresso } from "../../components/cronograma/IndicadorProgresso";
-import { IconePlay, IconeStop } from "../../components/ui/iconesExecucao";
+import { IconeLapis, IconePlay, IconeStop } from "../../components/ui/iconesExecucao";
 import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../components/ui/Toast";
 import { useCronometro } from "../../hooks/useCronometro";
@@ -124,10 +124,12 @@ function CartaoEmAndamento({
   atividade,
   processando,
   onParar,
+  onEditarNota,
 }: {
   atividade: AtividadeKanban;
   processando: boolean;
   onParar: (a: AtividadeKanban) => void;
+  onEditarNota: (a: AtividadeKanban) => void;
 }) {
   const { texto, atingiuLimite, decorridoMinutos } = useCronometro(atividade.sessaoAtualInicio, atividade.sessaoLimite);
   const contexto = atividade.estruturaNome ?? atividade.itemDescricao;
@@ -158,15 +160,27 @@ function CartaoEmAndamento({
       <div className="mt-2">
         <Consumo realizado={atividade.horasRealizadas + decorridoMinutos} previsto={limitePrevisto(atividade)} />
       </div>
-      <button
-        type="button"
-        onClick={() => onParar(atividade)}
-        disabled={processando}
-        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded border border-destructive/50 py-1.5 text-xs font-medium text-destructive transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {processando ? <Spinner className="h-3 w-3" /> : <IconeStop />}
-        Parar
-      </button>
+      <div className="mt-3 flex gap-1.5">
+        <button
+          type="button"
+          onClick={() => onEditarNota(atividade)}
+          disabled={processando}
+          aria-label="O que está sendo feito?"
+          title="O que está sendo feito?"
+          className="flex flex-none items-center justify-center rounded border border-border px-2.5 text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <IconeLapis className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => onParar(atividade)}
+          disabled={processando}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded border border-destructive/50 py-1.5 text-xs font-medium text-destructive transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {processando ? <Spinner className="h-3 w-3" /> : <IconeStop />}
+          Parar
+        </button>
+      </div>
     </div>
   );
 }
@@ -175,11 +189,13 @@ function Pilula({
   atividade,
   processando,
   onParar,
+  onEditarNota,
   onExpandir,
 }: {
   atividade: AtividadeKanban | null;
   processando: boolean;
   onParar: (a: AtividadeKanban) => void;
+  onEditarNota: (a: AtividadeKanban) => void;
   onExpandir: () => void;
 }) {
   const { texto, atingiuLimite } = useCronometro(atividade?.sessaoAtualInicio ?? null, atividade?.sessaoLimite);
@@ -200,6 +216,16 @@ function Pilula({
           >
             {texto}
           </span>
+          <button
+            type="button"
+            onClick={() => onEditarNota(atividade)}
+            disabled={processando}
+            aria-label="O que está sendo feito?"
+            title="O que está sendo feito?"
+            className="flex-none rounded border border-border p-1.5 text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+          >
+            <IconeLapis className="h-3 w-3" />
+          </button>
           <button
             type="button"
             onClick={() => onParar(atividade)}
@@ -287,6 +313,8 @@ export function JanelaFlutuante() {
   const [modo, setModoState] = useState<ModoJanela>(() => modoSalvo() ?? "expandida");
   const [processando, setProcessando] = useState<number | null>(null);
   const [pedidoParada, setPedidoParada] = useState<AtividadeKanban | null>(null);
+  // Nota de progresso ("O que está sendo feito?"): salva a observação da sessão aberta SEM parar.
+  const [pedidoNota, setPedidoNota] = useState<AtividadeKanban | null>(null);
 
   const setModo = useCallback((novo: ModoJanela) => {
     setModoState(novo);
@@ -507,6 +535,29 @@ export function JanelaFlutuante() {
     setPedidoParada(a);
   }
 
+  function pedirNota(a: AtividadeKanban) {
+    // Mesmo motivo do pedirParada: o modal não cabe na pílula.
+    if (modo === "pilula") setModo("expandida");
+    setPedidoNota(a);
+  }
+
+  // Mesmo endpoint do lápis da tela de Atividades (PATCH /:id/observacao): grava na sessão aberta e o
+  // texto vira a Descrição em Meus Apontamentos quando a atividade parar.
+  async function salvarNota(a: AtividadeKanban, texto: string) {
+    setPedidoNota(null);
+    setProcessando(a.id);
+    try {
+      await axios.patch(`/api/atividades/${a.id}/observacao`, { observacao: texto });
+      // Recarrega pra reabrir o lápis já mostrando o que acabou de ser salvo.
+      await carregar();
+    } catch (err: any) {
+      toast.mostrar(err.response?.data?.error ?? "Falha ao salvar a observação", "destructive");
+      await carregar();
+    } finally {
+      setProcessando(null);
+    }
+  }
+
   async function parar(a: AtividadeKanban, observacao: string) {
     setPedidoParada(null);
     silenciarAteRef.current = Date.now() + SILENCIO_ACAO_LOCAL_MS;
@@ -544,7 +595,13 @@ export function JanelaFlutuante() {
 
       {modo === "pilula" ? (
         <div className="min-h-0 flex-1">
-          <Pilula atividade={emAndamento} processando={processando === emAndamento?.id} onParar={pedirParada} onExpandir={() => setModo("expandida")} />
+          <Pilula
+            atividade={emAndamento}
+            processando={processando === emAndamento?.id}
+            onParar={pedirParada}
+            onEditarNota={pedirNota}
+            onExpandir={() => setModo("expandida")}
+          />
         </div>
       ) : (
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
@@ -556,7 +613,12 @@ export function JanelaFlutuante() {
           ) : (
             <>
               {emAndamento ? (
-                <CartaoEmAndamento atividade={emAndamento} processando={processando === emAndamento.id} onParar={pedirParada} />
+                <CartaoEmAndamento
+                  atividade={emAndamento}
+                  processando={processando === emAndamento.id}
+                  onParar={pedirParada}
+                  onEditarNota={pedirNota}
+                />
               ) : (
                 <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted">
                   Nenhuma atividade em andamento
@@ -596,6 +658,18 @@ export function JanelaFlutuante() {
           descricaoPadrao={pedidoParada.descricaoPadrao}
           onConfirmar={(obs) => void parar(pedidoParada, obs)}
           onFechar={() => void parar(pedidoParada, "")}
+        />
+      )}
+
+      {pedidoNota && (
+        <ModalObservacaoAtividade
+          titulo={`Proposta ${pedidoNota.codpro}`}
+          descricaoPadrao={pedidoNota.descricaoPadrao}
+          pergunta="O que está sendo feito?"
+          // Cancelar não salva nada nem para o cronômetro (diferente do "Pular" do Parar).
+          rotuloFechar="Cancelar"
+          onConfirmar={(texto) => void salvarNota(pedidoNota, texto)}
+          onFechar={() => setPedidoNota(null)}
         />
       )}
     </div>
