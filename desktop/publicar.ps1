@@ -2,8 +2,8 @@
 # a compilação em Rust NUNCA acontece na VPS (3,8 GB de RAM) nem dentro do Docker.
 # Ver desktop/README.md.
 param(
-    [string]$Vps = "root@179.197.67.226",
-    [string]$Chave = "$HOME\.ssh\caxhub_vps_ed25519",
+    [string]$Vps = "soeltech-vps",
+    [string]$Chave = "$HOME\.ssh\soeltech_vps_ed25519",
     [switch]$SemPublicar
 )
 

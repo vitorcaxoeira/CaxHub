@@ -42,7 +42,7 @@ O instalador é por usuário (não pede administrador). Sem assinatura de códig
 
 ## Endereço do servidor
 
-Ordem de busca: variável `CAXHUB_URL` → `config.json` na pasta de configuração do app (`%APPDATA%\br.com.caxhub.desktop\config.json`, conteúdo `{"url": "https://..."}`) → `http://179.197.67.226:8080`. Trocar IP/domínio não exige reinstalar, mas o novo endereço precisa casar com `remote.urls` em `src-tauri/capabilities/default.json` (já cobre `*.caxhub.com.br`), senão a página perde os comandos nativos.
+Ordem de busca: variável `CAXHUB_URL` → `config.json` na pasta de configuração do app (`%APPDATA%\br.com.caxhub.desktop\config.json`, conteúdo `{"url": "https://..."}`) → `https://soeltech.caxhub.com.br`. Trocar IP/domínio não exige reinstalar, mas o novo endereço precisa casar com `remote.urls` em `src-tauri/capabilities/default.json` (já cobre `*.caxhub.com.br`), senão a página perde os comandos nativos.
 
 ## Segurança
 

@@ -22,7 +22,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const ROTULO_JANELA: &str = "flutuante";
-const URL_PADRAO: &str = "http://179.197.67.226:8080";
+const URL_PADRAO: &str = "https://soeltech.caxhub.com.br";
 // Tamanhos em pixels lógicos. A "pílula" mostra só o cronômetro; a expandida, a lista.
 const TAMANHO_PILULA: (f64, f64) = (320.0, 72.0);
 const TAMANHO_EXPANDIDA: (f64, f64) = (360.0, 560.0);
