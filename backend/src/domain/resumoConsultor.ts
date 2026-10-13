@@ -1,5 +1,5 @@
 import { prisma } from "../db/prisma";
-import { SITRAT_CANCELADO, sitratLabel } from "./ratDominio";
+import { SITRAT_CANCELADO, filtroRatItemRealizado, sitratLabel } from "./ratDominio";
 import { TIPDES_DESLOCAMENTO_ROTA, tipdesLabel } from "./rdvDominio";
 
 // Agregações do dashboard inicial do consultor (Home) — separadas da rota (routes/
@@ -68,7 +68,7 @@ export async function horasRealizadasNoPeriodo(
         horini: { not: null },
         horfim: { not: null },
         datati: { gte: de, lte: fimDoDia },
-        rat: { codfor, sitrat: { not: SITRAT_CANCELADO } },
+        ...filtroRatItemRealizado({ codfor }),
       },
       select: { datati: true, horini: true, horfim: true, codpro: true },
     }),

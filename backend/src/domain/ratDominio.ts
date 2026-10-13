@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 // Domínio "USU_LSITRAT" do Senior (situação da RAT — Registro de Atividade Técnica).
 // Valores confirmados via getFieldDomainValues("USU_LSITRAT") direto no dicionário do
 // Senior (não é suposição).
@@ -21,6 +23,17 @@ export const SITRAT_ORDER = [9, 8, 6, 5, 4, 2, 1];
 // da conta; a listagem (routes/rats.ts) continua mostrando a linha normalmente, só com o tom
 // "destructive" (ver sitratTone abaixo). Uma RAT cancelada não vira trabalho realizado.
 export const SITRAT_CANCELADO = 5;
+
+// Filtro do RatItem que conta como hora REALIZADA: fora a RAT cancelada, o item excluído no Senior
+// e o item de RAT excluída lá. Um lugar só, porque o teto da atividade, o card do quadro, a
+// alocação e o resumo do consultor têm de somar a mesma coisa (13/10/2026: só o relatório de
+// produtividade e a eficiência filtravam o excluído, então 144 h de apontamento enviado em dobro ao
+// Senior seguiriam consumindo o teto mesmo depois de apagadas no ERP). `rat` acrescenta condições
+// do cabeçalho (ex.: `{ codfor }`) sem perder as regras acima. Não vale pro cálculo SQL cru de
+// domain/eficienciaDados.ts (RAT_ITEM_VALIDO), que repete as mesmas regras em SQL.
+export function filtroRatItemRealizado(rat: Prisma.RatWhereInput = {}): Prisma.RatItemWhereInput {
+  return { removidoEmSenior: null, rat: { ...rat, sitrat: { not: SITRAT_CANCELADO }, removidoEmSenior: null } };
+}
 
 export function sitratLabel(sitrat: number | null): string {
   if (sitrat === null) return "—";
