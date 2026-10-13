@@ -28,6 +28,7 @@ import {
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade, entidadeIdRat } from "../audit/identidadeEntidade";
+import { criarFilaUnica } from "./filaUnica";
 
 const JOB_NAME = "outbox_senior-sync";
 
@@ -644,10 +645,19 @@ async function enviarParaSenior(item: SincronizacaoPendente): Promise<ResultadoE
 // erro de custo incondicional já corrigido em GET /rats (ver
 // Padrões/custo-condicional-ao-filtro-nao-ao-request no segundo cérebro). O cron continua
 // chamando sem argumento nenhum pra varrer tudo.
-export async function processarFilaSincronizacao(
-  opcoes: { apenasId?: number; apenasIds?: number[] } = {}
-): Promise<void> {
-  const ids = opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
+//
+// Uma varredura por vez (13/10/2026): o cron e o fim de um lote confirmado rodavam ao mesmo tempo
+// e enviavam a mesma pendência duas vezes ao Senior, que não tem exclusão de apontamento. Quem
+// chega durante uma varredura espera a anterior terminar e só então lê a fila, já sem o que foi
+// enviado. Ver sync/filaUnica.ts.
+const emFilaUnica = criarFilaUnica();
+
+export function processarFilaSincronizacao(opcoes: { apenasId?: number; apenasIds?: number[] } = {}): Promise<void> {
+  return emFilaUnica(() => varrerFila(opcoes));
+}
+
+async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): Promise<void> {
+  const ids =opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
   const pendentes = await prisma.sincronizacaoPendente.findMany({
     where: {
       status: "pendente",
@@ -678,7 +688,15 @@ export async function processarFilaSincronizacao(
       // conseguiria excluir o apontamento com a requisição em voo: o DELETE de
       // routes/apontamentos.ts só permite desfazer enquanto a pendência está "pendente",
       // e o registro nasceria órfão no ERP se a exclusão passasse no meio do envio.
-      await prisma.sincronizacaoPendente.update({ where: { id: item.id }, data: { status: "enviando" } });
+      //
+      // É uma reserva, não só uma marca (13/10/2026): só segue quem trocou "pendente" por
+      // "enviando". Se outro processo ou outra ação já pegou a pendência desde que a lista foi lida,
+      // pula — reenviar duplicaria o apontamento no ERP.
+      const reserva = await prisma.sincronizacaoPendente.updateMany({
+        where: { id: item.id, status: "pendente" },
+        data: { status: "enviando" },
+      });
+      if (reserva.count === 0) continue;
 
       const registrado = await enviarParaSenior(item);
       const duracaoMs = Date.now() - inicioEnvio;
