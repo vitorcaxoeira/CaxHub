@@ -29,6 +29,13 @@ import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade, entidadeIdRat } from "../audit/identidadeEntidade";
 import { criarFilaUnica } from "./filaUnica";
+import {
+  AncoraRat,
+  MOTIVO_ENVIO_INTERROMPIDO,
+  MOTIVO_ENVIO_INTERROMPIDO_BLOQUEADO,
+  destinoDaPendenciaInterrompida,
+  escolherAncoraRat,
+} from "./regrasFilaSenior";
 
 const JOB_NAME = "outbox_senior-sync";
 
@@ -250,6 +257,38 @@ async function procurarApontamentoNoSenior(item: {
   return { numrat: Number(linhas[0].numrat), seqrat: Number(linhas[0].seqrat) };
 }
 
+// Procura no Senior a(s) RAT(s) DIGITADA(s) que o próprio CaxHub já abriu pra este cabeçalho local.
+// O cabeçalho do Senior guarda o `ideExt` que mandamos (USU_IDEEXT = id local da RAT, USU_SISORI =
+// "CaxHub"; conferido em produção em 13/10/2026). Serve pro caso em que o 1º envio de uma RAT nova
+// foi gravado lá mas a resposta se perdeu (timeout de 20 s): o cabeçalho local segue sem número, e
+// pedir `gerRat=S` de novo abriria uma SEGUNDA RAT pro mesmo cabeçalho. Só RAT Digitada (sitrat 9)
+// pode receber item, então RAT já aprovada/cancelada não entra. Falha da consulta propaga: nunca cair
+// em `gerRat=S` por não ter conseguido perguntar.
+async function procurarRatsNoSeniorPorIdeExt(rat: { id: number; codemp: number; codfor: number; codpro: number }): Promise<number[]> {
+  for (const n of [rat.id, rat.codemp, rat.codfor, rat.codpro]) {
+    if (!Number.isInteger(n)) throw new Error("Identificação inválida da RAT na conferência do Senior");
+  }
+  const linhas = (await runSqlViaSoap(
+    `SELECT USU_NUMRAT AS numrat FROM USU_TE777RAT ` +
+      `WHERE USU_CODEMP = ${rat.codemp} AND USU_CODFOR = ${rat.codfor} AND USU_CODPRO = ${rat.codpro} ` +
+      `AND USU_IDEEXT = '${ideExtRat(rat.id)}' AND USU_SISORI = '${SIS_ORI}' AND USU_SITRAT = 9`
+  )) as { numrat: number }[];
+  return linhas.map((l) => Number(l.numrat));
+}
+
+// O envio falhou SEM resposta do Senior (rede, timeout, XML inesperado, erroExecucao) e a RAT local
+// seguia sem número: o Senior pode ter gravado ou não. Quem pega este erro (varrerFila) segura os
+// outros itens da mesma RAT até a próxima varredura, quando o 1º é reconciliado e os demais já vão
+// com `numRat`. Sem isso o 2º item sairia com `gerRat=S` e abriria outra RAT.
+class DesfechoDesconhecidoError extends Error {
+  constructor(
+    message: string,
+    readonly ratId: number
+  ) {
+    super(message);
+  }
+}
+
 /** RatItem já validado (data/hora e Rat.codpro presentes) — o que `montarPayloadApontamento` exige. */
 interface RatItemPronto {
   id: number;
@@ -269,14 +308,20 @@ interface RatItemPronto {
 // Monta o payload de `registrarAtividades` a partir do RatItem já validado. Isolado à parte
 // pra ser a MESMA função usada no envio real (enviarApontamento) e na prévia sem envio
 // (previewEnvioSenior) — não existe outro lugar que decida esse mapeamento de campo.
-function montarPayloadApontamento(ratItem: RatItemPronto): RegistrarAtividadesPayload {
+function montarPayloadApontamento(
+  ratItem: RatItemPronto,
+  ancora: AncoraRat = escolherAncoraRat(ratItem.rat.numrat, [])
+): RegistrarAtividadesPayload {
   // Âncora explícita da RAT (25/09/2026): RAT local que já
   // tem número no Senior manda `numRat` (é a RAT que quem confirmou escolheu, ou a que o
   // sistema escolheu por ele); RAT local ainda sem número manda `gerRat=S`, senão o Senior
   // anexaria o item numa RAT aberta qualquer. A fila é serial: o 2º item de uma RAT nova só
-  // sai depois do write-back do 1º gravar o `numrat`, então ele já vai com `numRat`.
+  // sai depois do write-back do 1º gravar o `numrat`, então ele já vai com `numRat`. O envio real
+  // (enviarApontamento) ainda pergunta ao Senior se ele já abriu uma RAT pra este cabeçalho
+  // (resposta perdida do 1º envio) e passa o resultado em `ancora`; a prévia, que não chama o
+  // Senior, usa só o número local.
   const destino: Pick<RegistrarAtividadesPayload, "numRat" | "gerRat"> =
-    ratItem.rat.numrat != null ? { numRat: ratItem.rat.numrat } : { gerRat: "S" };
+    "numRat" in ancora ? { numRat: ancora.numRat } : { gerRat: "S" };
   return {
     ...destino,
     codEmp: ratItem.codemp,
@@ -353,7 +398,36 @@ async function enviarApontamento(item: SincronizacaoPendente): Promise<Resultado
     return { tipo: "apontamento", ratId: ratItem.ratId, ratItemId: ratItem.id, ...jaExiste };
   }
 
-  const resposta = await registrarAtividadesViaSoap(montarPayloadApontamento(ratItem as RatItemPronto));
+  // RAT local sem número: o Senior pode já ter aberto uma pra ela numa tentativa cuja resposta se
+  // perdeu. Pergunta antes de pedir RAT nova (ver procurarRatsNoSeniorPorIdeExt).
+  const ancora = escolherAncoraRat(
+    ratItem.rat.numrat,
+    ratItem.rat.numrat == null
+      ? await procurarRatsNoSeniorPorIdeExt({
+          id: ratItem.rat.id,
+          codemp: ratItem.rat.codemp,
+          codfor: ratItem.rat.codfor,
+          codpro: ratItem.rat.codpro,
+        })
+      : []
+  );
+  if ("numRat" in ancora && ancora.deSenior) {
+    console.warn(
+      `[${JOB_NAME}] RAT local ${ratItem.rat.id} sem número, mas o Senior já tem a RAT ${ancora.numRat} aberta por ela` +
+        `${ancora.ambigua ? " (e outras — divisão anterior)" : ""} — anexa nela em vez de abrir RAT nova`
+    );
+  }
+
+  let resposta: Awaited<ReturnType<typeof registrarAtividadesViaSoap>>;
+  try {
+    resposta = await registrarAtividadesViaSoap(montarPayloadApontamento(ratItem as RatItemPronto, ancora));
+  } catch (erro) {
+    // Sem resposta e pedindo RAT nova: não dá pra saber se o Senior abriu. Segura os irmãos.
+    if ("gerRat" in ancora) {
+      throw new DesfechoDesconhecidoError(erro instanceof Error ? erro.message : String(erro), ratItem.ratId);
+    }
+    throw erro;
+  }
 
   // Casa pelo ideExt em vez de pegar o primeiro: o serviço aceita lote e nada garante a
   // ordem de volta.
@@ -657,7 +731,7 @@ export function processarFilaSincronizacao(opcoes: { apenasId?: number; apenasId
 }
 
 async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): Promise<void> {
-  const ids =opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
+  const ids = opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
   const pendentes = await prisma.sincronizacaoPendente.findMany({
     where: {
       status: "pendente",
@@ -670,8 +744,18 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
   let enviados = 0;
   let falhas = 0;
   let semCanal = 0;
+  let aguardandoPrimeiro = 0;
+  // RATs locais cujo 1º envio terminou sem resposta (ver DesfechoDesconhecidoError): os demais itens
+  // delas esperam a próxima varredura, quando o 1º é reconciliado e todos vão com `numRat`.
+  const ratsEmEspera = new Set<number>();
 
   for (const item of pendentes) {
+    const ratIdDoPayload = item.tipo === "criar_apontamento" ? Number((item.payload as { ratId?: number })?.ratId) : NaN;
+    if (Number.isFinite(ratIdDoPayload) && ratsEmEspera.has(ratIdDoPayload)) {
+      aguardandoPrimeiro += 1;
+      continue;
+    }
+
     // Auditoria registra a TENTATIVA de envio, não só sucesso — o evento nasce aqui
     // (processamento assíncrono da fila), não no clique do usuário que originou o
     // SincronizacaoPendente: o correlationId é por item processado, não pela ação
@@ -726,6 +810,50 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
         if (ratDono && ratDono.id !== registrado.ratId) {
           colidiuComOutraRat = true;
           ratDestinoId = ratDono.id;
+        } else if (!ratDono && ratOrigem && ratOrigem.numrat != null && ratOrigem.numrat !== registrado.numrat) {
+          // O cabeçalho local já tem número e o Senior gravou o item em OUTRA RAT que ainda não
+          // existe aqui. Sobrescrever o número do cabeçalho (o que o `rat.update` abaixo faria)
+          // apontaria uma RAT real do Senior pra uma RAT errada, com os itens antigos dela
+          // junto — foi assim que um fechamento foi pra RAT errada em 13/10/2026. Cria o
+          // cabeçalho da RAT nova e trata como a colisão acima: o item é reapontado e o
+          // cabeçalho de origem não é tocado. O sync traz o resto do cabeçalho depois (mesma
+          // chave codemp+numprj+codfpj+numrat).
+          const irma = await prisma.rat.create({
+            data: {
+              codemp: ratOrigem.codemp,
+              codfor: ratOrigem.codfor,
+              numprj: ratOrigem.numprj,
+              codfpj: ratOrigem.codfpj,
+              numrat: registrado.numrat,
+              codpro: ratOrigem.codpro,
+              codcli: ratOrigem.codcli,
+              datemi: ratOrigem.datemi,
+              sitrat: 9,
+              usufor: ratOrigem.usufor,
+              depexe: ratOrigem.depexe,
+              origemCaxHub: true,
+            },
+          });
+          await criarEventoAuditoria({
+            origem: "job",
+            codemp: ratOrigem.codemp,
+            codpro: ratOrigem.codpro,
+            entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+            entidadeId: entidadeIdRat(irma.id),
+            entidadeRotulo: `RAT ${registrado.numrat}`,
+            eventoTipo: EVENTOS_AUDITORIA.RAT_CRIADA,
+            alteracoes: null,
+            metadata: {
+              origemCriacao: "caxhub",
+              motivo: "numero_divergente",
+              ratOrigemId: ratOrigem.id,
+              numratEnviado: ratOrigem.numrat,
+              numratGravado: registrado.numrat,
+            },
+            correlationId,
+          });
+          colidiuComOutraRat = true;
+          ratDestinoId = irma.id;
         }
         // Com a RAT de destino explícita (numRat), o Senior deveria gravar exatamente nela.
         // Número diferente = o contrato não foi respeitado — o reaponte acima segue valendo,
@@ -847,6 +975,12 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
       const duracaoMs = Date.now() - inicioEnvio;
       const message = error instanceof Error ? error.message : String(error);
 
+      // 1º envio de uma RAT nova sem resposta: os outros itens dela esperam a próxima varredura.
+      if (error instanceof DesfechoDesconhecidoError) {
+        ratsEmEspera.add(error.ratId);
+        if (Number.isFinite(ratIdDoPayload)) ratsEmEspera.add(ratIdDoPayload);
+      }
+
       // Tipo ainda sem operação publicada: devolve pra fila do jeito que estava, SEM
       // consumir tentativa e sem evento de auditoria (não houve tentativa de verdade).
       // Sem isso, esses itens queimariam as 5 tentativas e virariam "bloqueado" — foi
@@ -916,7 +1050,8 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
         status: falhas > 0 ? "error" : "success",
         message:
           `${enviados} enviado(s), ${falhas} falha(s)` +
-          (semCanal > 0 ? `, ${semCanal} aguardando canal` : ""),
+          (semCanal > 0 ? `, ${semCanal} aguardando canal` : "") +
+          (aguardandoPrimeiro > 0 ? `, ${aguardandoPrimeiro} aguardando o 1º item da RAT (sem resposta do Senior)` : ""),
       },
     });
   }
@@ -995,6 +1130,53 @@ export async function reprocessar(id: number): Promise<void> {
     where: { id },
     data: { status: "pendente", tentativas: 0, ultimoErro: null },
   });
+}
+
+// Chamada no boot (server.ts), ANTES de agendar o cron. Um único processo envia, então toda
+// pendência em "enviando" quando o servidor sobe ficou órfã: o processo morreu no meio do envio e
+// nada mais a retoma (varrerFila só lê "pendente"). Cada tipo volta pra fila só se repetir o envio
+// for seguro — ver destinoDaPendenciaInterrompida. Não dispara varredura: o cron de 15 min pega, o
+// que dá tempo de um envio que estava em voo terminar no Senior antes da conferência.
+// `apenasIds` existe só pra verificação local (prisma/verificarRecuperacaoFila.ts).
+export async function recuperarEnviosInterrompidos(
+  opcoes: { apenasIds?: number[] } = {}
+): Promise<{ voltaramParaFila: number; bloqueadas: number }> {
+  const presas = await prisma.sincronizacaoPendente.findMany({
+    where: { status: "enviando", ...(opcoes.apenasIds ? { id: { in: opcoes.apenasIds } } : {}) },
+    include: { atividade: { select: { seqati: true } } },
+  });
+
+  let voltaramParaFila = 0;
+  let bloqueadas = 0;
+  for (const item of presas) {
+    const destino = destinoDaPendenciaInterrompida(item.tipo, item.atividade?.seqati ?? null);
+    // `status: "enviando"` na condição: se algo mexeu na pendência entre a leitura e aqui, não pisa.
+    const resultado = await prisma.sincronizacaoPendente.updateMany({
+      where: { id: item.id, status: "enviando" },
+      data: {
+        status: destino,
+        ultimoErro: destino === "bloqueado" ? MOTIVO_ENVIO_INTERROMPIDO_BLOQUEADO : MOTIVO_ENVIO_INTERROMPIDO,
+      },
+    });
+    if (resultado.count === 0) continue;
+    if (destino === "bloqueado") bloqueadas += 1;
+    else voltaramParaFila += 1;
+  }
+
+  if (presas.length > 0) {
+    console.warn(
+      `[${JOB_NAME}] ${presas.length} envio(s) interrompido(s) por reinício: ${voltaramParaFila} voltaram pra fila, ${bloqueadas} bloqueado(s) pra decisão manual`
+    );
+    await prisma.syncLog.create({
+      data: {
+        jobName: JOB_NAME,
+        query: "recuperação de envios interrompidos",
+        status: "success",
+        message: `${voltaramParaFila} voltaram pra fila, ${bloqueadas} bloqueado(s) — pendências que estavam "enviando" quando o servidor reiniciou`,
+      },
+    });
+  }
+  return { voltaramParaFila, bloqueadas };
 }
 
 export function scheduleOutboxSeniorSync(): void {

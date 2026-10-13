@@ -596,6 +596,33 @@ export async function reprocessarDespesa(id: number): Promise<void> {
   });
 }
 
+// Chamada no boot (server.ts), antes de agendar o cron — mesmo motivo de recuperarEnviosInterrompidos
+// em outboxSenior.ts: um único processo envia, então "enviando" ao subir é pendência órfã de um
+// reinício no meio do envio. Aqui todo tipo volta pra fila: a inclusão confere no Senior antes de
+// gravar (procurarDespesaNoSenior) e editar/excluir usam `seqRdv`, que repetidos não criam nada novo.
+// `apenasIds` existe só pra verificação local.
+export async function recuperarEnviosDespesaInterrompidos(opcoes: { apenasIds?: number[] } = {}): Promise<number> {
+  const resultado = await prisma.sincronizacaoPendenteDespesa.updateMany({
+    where: { status: "enviando", ...(opcoes.apenasIds ? { id: { in: opcoes.apenasIds } } : {}) },
+    data: {
+      status: "pendente",
+      ultimoErro: "Envio interrompido por reinício do servidor — a confirmação do Senior não chegou. Reenvio confere no Senior antes de gravar.",
+    },
+  });
+  if (resultado.count > 0) {
+    console.warn(`[${JOB_NAME}] ${resultado.count} envio(s) de despesa interrompido(s) por reinício voltaram pra fila`);
+    await prisma.syncLog.create({
+      data: {
+        jobName: JOB_NAME,
+        query: "recuperação de envios interrompidos",
+        status: "success",
+        message: `${resultado.count} voltaram pra fila — despesas que estavam "enviando" quando o servidor reiniciou`,
+      },
+    });
+  }
+  return resultado.count;
+}
+
 export function scheduleOutboxSeniorDespesaSync(): void {
   // Mesma cadência de scheduleOutboxSeniorSync — rede de segurança pro que o disparo imediato
   // não conseguiu.
