@@ -19,6 +19,7 @@ import {
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdDespesa, entidadeIdRat } from "../audit/identidadeEntidade";
+import { criarFilaUnica } from "./filaUnica";
 
 const JOB_NAME = "outbox_senior_despesa-sync";
 
@@ -350,8 +351,17 @@ async function enviarDespesa(item: SincronizacaoPendenteDespesa): Promise<Result
 // Processa a fila: tenta enviar cada despesa pendente, com no máximo MAX_TENTATIVAS. Mesma
 // estrutura de processarFilaSincronizacao em outboxSenior.ts (disparo imediato via apenasId,
 // varredura completa via cron).
-export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasIds?: number[] } = {}): Promise<void> {
-  const ids = opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
+//
+// Uma varredura por vez, pelo mesmo motivo de processarFilaSincronizacao (13/10/2026): duas
+// varreduras simultâneas enviam a mesma pendência duas vezes e o serviço não tem exclusão.
+const emFilaUnica = criarFilaUnica();
+
+export function processarFilaDespesas(opcoes: { apenasId?: number; apenasIds?: number[] } = {}): Promise<void> {
+  return emFilaUnica(() => varrerFilaDespesas(opcoes));
+}
+
+async function varrerFilaDespesas(opcoes: { apenasId?: number; apenasIds?: number[] }): Promise<void> {
+  const ids =opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
   const pendentes = await prisma.sincronizacaoPendenteDespesa.findMany({
     where: {
       status: "pendente",
@@ -392,7 +402,13 @@ export async function processarFilaDespesas(opcoes: { apenasId?: number; apenasI
       // Marca "enviando" ANTES da chamada — fecha a janela em que a despesa poderia ser
       // editada/excluída de novo com o envio em voo (ver pendenciaEmAndamento, checado pelas
       // rotas de editar/excluir antes de aceitar uma nova ação).
-      await prisma.sincronizacaoPendenteDespesa.update({ where: { id: item.id }, data: { status: "enviando" } });
+      // Reserva (não só marca): só segue quem trocou "pendente" por "enviando"; se outra ação já
+      // pegou a pendência desde que a lista foi lida, pula.
+      const reserva = await prisma.sincronizacaoPendenteDespesa.updateMany({
+        where: { id: item.id, status: "pendente" },
+        data: { status: "enviando" },
+      });
+      if (reserva.count === 0) continue;
 
       registrado = await enviarDespesa(item);
       const duracaoMs = Date.now() - inicioEnvio;
