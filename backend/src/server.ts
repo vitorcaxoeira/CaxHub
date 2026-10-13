@@ -95,8 +95,8 @@ import { scheduleItemServicoNfVendaSync } from "./sync/itemServicoNfVendaSync";
 import { scheduleItemProdutoNfVendaSync } from "./sync/itemProdutoNfVendaSync";
 import { scheduleRateioNfVendaSync } from "./sync/rateioNfVendaSync";
 import { scheduleMetaAnualSync } from "./sync/metaAnualSync";
-import { scheduleOutboxSeniorSync } from "./sync/outboxSenior";
-import { scheduleOutboxSeniorDespesaSync } from "./sync/outboxSeniorDespesa";
+import { recuperarEnviosInterrompidos, scheduleOutboxSeniorSync } from "./sync/outboxSenior";
+import { recuperarEnviosDespesaInterrompidos, scheduleOutboxSeniorDespesaSync } from "./sync/outboxSeniorDespesa";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
@@ -212,6 +212,16 @@ async function iniciar() {
       "[boot] falhou ao carregar tamanhos de lote configurados — subindo com o default (1000) em tudo:",
       error instanceof Error ? error.message : error
     );
+  }
+
+  // Envio ao Senior que estava em voo quando o processo anterior morreu fica preso em "enviando"
+  // pra sempre (a varredura só lê "pendente"). Recuperar ANTES de aceitar requisição e de agendar
+  // o cron; falha aqui sobe do mesmo jeito, só deixa a pendência presa como antes.
+  try {
+    await recuperarEnviosInterrompidos();
+    await recuperarEnviosDespesaInterrompidos();
+  } catch (error) {
+    console.error("[boot] falhou ao recuperar envios interrompidos ao Senior:", error instanceof Error ? error.message : error);
   }
 
   app.listen(port, () => {
