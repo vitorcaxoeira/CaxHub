@@ -16,7 +16,7 @@ import {
   SITPRO_ATIVIDADES_VISIVEIS,
 } from "../domain/propostasDominio";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresDosDepartamentos, gerenciaDepartamento } from "../domain/contextoProjeto";
-import { SITRAT_CANCELADO } from "../domain/ratDominio";
+import { filtroRatItemRealizado } from "../domain/ratDominio";
 import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { UPLOADS_DIR } from "../config/uploads";
 import { enfileirar } from "../sync/outboxSenior";
@@ -362,7 +362,7 @@ async function carregarAtividadesVisiveisImpl(
             seqati: { in: seqatisValidos },
             horini: { not: null },
             horfim: { not: null },
-            rat: { sitrat: { not: SITRAT_CANCELADO } },
+            ...filtroRatItemRealizado(),
           },
           select: { seqati: true, horini: true, horfim: true },
         })

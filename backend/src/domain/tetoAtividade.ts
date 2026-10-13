@@ -1,6 +1,6 @@
 import { AtividadeConsultor } from "@prisma/client";
 import { prisma } from "../db/prisma";
-import { SITRAT_CANCELADO } from "./ratDominio";
+import { filtroRatItemRealizado } from "./ratDominio";
 
 // Teto de apontamento de uma atividade e quanto dele já foi consumido.
 //
@@ -16,8 +16,9 @@ export function tetoDaAtividade(atividade: Pick<AtividadeConsultor, "qtdhor" | "
 }
 
 // "Realizado" = sessões de execução fechadas mas ainda NÃO confirmadas + duração dos
-// RatItem já confirmados/sincronizados, EXCETO o de uma RAT cancelada (sitrat=5) — RAT
-// cancelada não é trabalho realizado, mesmo com horini/horfim preenchidos. Uma sessão
+// RatItem já confirmados/sincronizados, EXCETO o de uma RAT cancelada (sitrat=5) e o excluído no
+// Senior (ver filtroRatItemRealizado) — nenhum dos dois é trabalho realizado, mesmo com
+// horini/horfim preenchidos. Uma sessão
 // confirmada tem `ratItemId` preenchido, então sai da conta de sessões e passa a contar
 // via RatItem — nunca as duas ao mesmo tempo, senão a mesma hora entraria duas vezes.
 //
@@ -57,7 +58,7 @@ export async function realizadoDasAtividades(
             seqati: { in: seqatis },
             horini: { not: null },
             horfim: { not: null },
-            rat: { sitrat: { not: SITRAT_CANCELADO } },
+            ...filtroRatItemRealizado(),
           },
           select: { seqati: true, horini: true, horfim: true },
         })

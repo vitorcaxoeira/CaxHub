@@ -35,7 +35,7 @@ import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade, entidadeIdProposta } from "../audit/identidadeEntidade";
-import { SITRAT_CANCELADO, calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone, type IntegracaoErpStatus } from "../domain/ratDominio";
+import { filtroRatItemRealizado, calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone, type IntegracaoErpStatus } from "../domain/ratDominio";
 import {
   configBloqueioProposta,
   configBloqueioPropostasEmLote,
@@ -746,7 +746,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
               seqati: { in: seqatisValidos },
               horini: { not: null },
               horfim: { not: null },
-              rat: { sitrat: { not: SITRAT_CANCELADO } },
+              ...filtroRatItemRealizado(),
             },
             select: { seqati: true, horini: true, horfim: true },
           })
@@ -1573,7 +1573,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
               seqati: { in: seqatisValidos },
               horini: { not: null },
               horfim: { not: null },
-              rat: { sitrat: { not: SITRAT_CANCELADO } },
+              ...filtroRatItemRealizado(),
             },
             select: { seqati: true, horini: true, horfim: true },
           })
