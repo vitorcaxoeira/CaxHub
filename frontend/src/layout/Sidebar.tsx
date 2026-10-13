@@ -353,11 +353,11 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
 
   return (
     // Dois comportamentos no mesmo elemento, um por breakpoint: abaixo de `lg` é um drawer
-    // fixo que desliza por transform (`mobileOpen`); a partir de `lg` volta a ser o painel em
-    // fluxo normal de sempre, que só colapsa/expande a largura (`open`) — nunca os dois ao
+    // fixo que desliza por transform (`mobileOpen`); a partir de `lg` é o painel `sticky` (preso ao
+    // topo, altura da tela), que só colapsa/expande a largura (`open`) — nunca os dois ao
     // mesmo tempo, o breakpoint decide (28/08/2026, ver AppShell.tsx pro backdrop/estado).
     <aside
-      className={`fixed inset-y-0 left-0 z-40 flex h-dvh w-64 flex-none flex-col overflow-hidden border-r border-border bg-surface transition-transform duration-200 lg:static lg:z-auto lg:h-auto lg:translate-x-0 lg:transition-[width] ${
+      className={`fixed inset-y-0 left-0 z-40 flex h-dvh w-64 flex-none flex-col overflow-hidden border-r border-border bg-surface transition-transform duration-200 lg:sticky lg:top-0 lg:z-auto lg:translate-x-0 lg:transition-[width] ${
         mobileOpen ? "translate-x-0" : "-translate-x-full"
       } ${open ? "lg:w-60 lg:border-r" : "lg:w-0 lg:border-r-0"}`}
     >
@@ -368,8 +368,9 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
       {/* Rolagem própria (12/10/2026): no celular a gaveta é `fixed` com overflow-hidden e a altura da tela; sem
           `overflow-y-auto` + `min-h-0` o que passa da tela era cortado e os últimos itens de um grupo aberto (ex.:
           Pessoas) ficavam inalcançáveis. `h-dvh` acompanha a barra do navegador do celular; o respiro embaixo
-          cobre a barra home do iPhone. No desktop (`lg:`) o painel cresce com a página e nada rola aqui. */}
-      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain whitespace-nowrap px-3 py-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] lg:overflow-visible">
+          cobre a barra home do iPhone. No desktop (`lg:`) o painel é `sticky` com a altura da tela: fica parado
+          enquanto a página rola e só o menu rola dentro dele (a pedido, 12/10/2026). */}
+      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain whitespace-nowrap px-3 py-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         {topLevel.map((item) => (
           <NavLink key={item.to} to={item.to} end className={linkClass} onClick={onNavigate}>
             {item.label}
