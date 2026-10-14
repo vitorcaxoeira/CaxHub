@@ -2134,7 +2134,9 @@ atividadesRouter.get("/:id/historico", async (req: AuthenticatedRequest, res) =>
         descricao: h.descricao,
         colunaAnteriorNome: h.colunaAnterior?.nome ?? null,
         colunaNovaNome: h.colunaNova?.nome ?? null,
-        userNome: h.user?.nome ?? "Usuário removido",
+        // userId nulo no histórico = ação do job (parada automática, sync). A exclusão de usuário é física (SetNull),
+        // então um usuário apagado no futuro também cairia aqui; em produção hoje todo registro sem autor é de job.
+        userNome: h.user?.nome ?? "Sistema (automático)",
         movidoEm: h.movidoEm,
       })),
     });
