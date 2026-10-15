@@ -22,8 +22,9 @@ export function RequireGestorOuAdmin({ permitirViajante = false, depexe }: { per
       .get("/api/dashboard/meu-perfil")
       .then(({ data }) => {
         if (cancelado) return;
-        const gerenciados: number[] = data.departamentosGerenciados ?? [];
-        const gerencia = depexe === undefined ? gerenciados.length > 0 : gerenciados.includes(depexe);
+        // Cada item é um objeto { depexe, depexeLabel, integrantes }, não o número do departamento.
+        const gerenciados: { depexe: number }[] = data.departamentosGerenciados ?? [];
+        const gerencia = depexe === undefined ? gerenciados.length > 0 : gerenciados.some((d) => d.depexe === depexe);
         setEhGestor(gerencia || (permitirViajante && data.viajante === true));
       })
       .catch(() => !cancelado && setEhGestor(false));

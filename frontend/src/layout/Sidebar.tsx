@@ -311,7 +311,8 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
         setEhGestorOuAdmin((data.departamentosGerenciados ?? []).length > 0);
         setSouConsultor(data.consultor != null);
         setSouViajante(data.viajante === true);
-        setEhGestorDho((data.departamentosGerenciados ?? []).includes(DEPEXE_DHO));
+        // Cada item de departamentosGerenciados é um objeto { depexe, depexeLabel, integrantes }, não o número.
+        setEhGestorDho((data.departamentosGerenciados ?? []).some((d: { depexe: number }) => d.depexe === DEPEXE_DHO));
       })
       .catch(() => {
         if (!cancelado) {
