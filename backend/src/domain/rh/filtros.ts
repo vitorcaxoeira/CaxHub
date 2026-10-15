@@ -100,8 +100,8 @@ export function condicoesColaborador(f: FiltroRh, alias = "c"): Prisma.Sql {
   return Prisma.join(partes, " AND ");
 }
 
-/** Quem vê nome e valor individual. Hoje só o admin chega às rotas de RH (routes/rh/index.ts), e ele vê
- * tudo. A supressão de grupos pequenos (comum.ts, GRUPO_MINIMO) continua no cálculo das telas para o dia em
+/** Quem vê nome e valor individual. Hoje só chegam às rotas de RH o admin e o gestor do DHO
+ * (routes/rh/index.ts), e os dois veem tudo. A supressão de grupos pequenos (comum.ts, GRUPO_MINIMO) continua no cálculo das telas para o dia em
  * que existir um papel que veja só o agregado: bastaria esta função devolver false para ele. */
 export function veIndividual(_req: Request): boolean {
   return true;
