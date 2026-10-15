@@ -13,6 +13,9 @@ export const ENTIDADES_AUDITORIA = {
   SOLICITACAO_VIAGEM: "solicitacao_viagem",
   AVALIACAO_5S: "avaliacao_5s",
   CONSULTOR: "consultor",
+  // Painel de Eficiência (Gestão de Projetos › Eficiência): apontamento tirado do cálculo do painel e ação do plano de ação.
+  EFICIENCIA_APONTAMENTO: "eficiencia_apontamento",
+  EFICIENCIA_ACAO: "eficiencia_acao",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -229,5 +232,16 @@ export const EVENTOS_AUDITORIA = {
   // Mesmo espírito de DESPESA_ENVIADA_SENIOR: nasce no processamento da fila, não no clique.
   DESPESA_EDITADA_SENIOR: "DESPESA_EDITADA_SENIOR",
   DESPESA_EXCLUIDA_SENIOR: "DESPESA_EXCLUIDA_SENIOR",
+
+  // Painel de Eficiência: um gestor tira (ou devolve) UM apontamento do cálculo do PAINEL, com motivo. Não altera a
+  // RAT nem o teto da Alocação (ver domain/eficienciaExclusoes.ts). entidadeId = id do RatItem.
+  EFICIENCIA_APONTAMENTO_EXCLUIDO: "EFICIENCIA_APONTAMENTO_EXCLUIDO",
+  EFICIENCIA_APONTAMENTO_RESTAURADO: "EFICIENCIA_APONTAMENTO_RESTAURADO",
+
+  // Painel de Eficiência: plano de ação. entidadeId = id da ação.
+  EFICIENCIA_ACAO_CRIADA: "EFICIENCIA_ACAO_CRIADA",
+  EFICIENCIA_ACAO_ALTERADA: "EFICIENCIA_ACAO_ALTERADA",
+  EFICIENCIA_ACAO_STATUS_ALTERADO: "EFICIENCIA_ACAO_STATUS_ALTERADO",
+  EFICIENCIA_ACAO_EXCLUIDA: "EFICIENCIA_ACAO_EXCLUIDA",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];

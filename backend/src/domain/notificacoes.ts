@@ -148,3 +148,22 @@ export async function notificarAprovadoresViagem(
     await criarNotificacao(id, "viagem_aguardando_aprovacao", mensagem, undefined, solicitacaoId);
   }
 }
+
+// Notifica um consultor pelo `codfor`, sem atividade envolvida (Plano de ação do Painel de Eficiência). Mesmo caminho de
+// notificarConsultorDaAtividade: codfor -> Consultor.email -> User; sem login no CaxHub, ou o próprio autor, não notifica
+// (silencioso de propósito: não é erro da ação que disparou). Devolve o userId notificado, ou null.
+export async function notificarConsultorPorCodfor(
+  codfor: number,
+  tipo: string,
+  mensagem: string,
+  excluirUserId?: number
+): Promise<number | null> {
+  const consultor = await prisma.consultor.findFirst({ where: { codfor } });
+  if (!consultor?.email) return null;
+
+  const usuario = await prisma.user.findFirst({ where: { email: { equals: consultor.email, mode: "insensitive" } } });
+  if (!usuario || usuario.id === excluirUserId) return null;
+
+  await criarNotificacao(usuario.id, tipo, mensagem.slice(0, 500));
+  return usuario.id;
+}

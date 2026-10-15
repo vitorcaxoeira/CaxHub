@@ -1,10 +1,20 @@
-import { Alerta, PainelEficiencia, Tom, brlCompacto, clienteCurto, hh, hn, meses1, nomeCurto, pct, rotuloMes, tomEficiencia, tomFundo, tomMeses, tomTexto } from "../../lib/eficiencia";
+import { Alerta, PainelEficiencia, SugestaoAcao, Tom, brlCompacto, clienteCurto, hh, hn, meses1, nomeCurto, pct, rotuloMes, tomEficiencia, tomFundo, tomMeses, tomTexto } from "../../lib/eficiencia";
 import { Cartao, Indicador, Vazio } from "./comum";
 
 export interface AcoesPainel {
-  irPara: (aba: "propostas" | "equipe" | "qualidade", filtro?: string) => void;
+  irPara: (aba: "propostas" | "equipe" | "qualidade" | "acoes", filtro?: string) => void;
   abrirProposta: (codemp: number, codpro: number) => void;
   abrirConsultor: (codfor: number) => void;
+  /** Abre o formulário de ação já preenchido com o que se sabe do lugar de onde veio. */
+  criarAcao: (sugestao: SugestaoAcao) => void;
+}
+
+// O alerta já sabe o que sugerir (texto vindo do servidor) e a que proposta/consultor se refere.
+function sugestaoDoAlerta(a: Alerta): SugestaoAcao {
+  const base = { titulo: a.acaoSugerida, origemAlerta: `${a.rotulo}: ${a.titulo}`.slice(0, 200), referencia: a.titulo };
+  if (a.alvo.tipo === "proposta") return { ...base, codemp: a.alvo.codemp, codpro: a.alvo.codpro };
+  if (a.alvo.tipo === "consultor") return { ...base, codforAlvo: a.alvo.codfor };
+  return base;
 }
 
 const SEVERIDADE_FAIXA: Record<Tom, string> = { bad: "bg-destructive", warn: "bg-warning", ok: "bg-success", off: "bg-muted/50" };
@@ -120,11 +130,11 @@ export function VisaoGeral({ painel, acoes }: { painel: PainelEficiencia; acoes:
           ) : (
             <ul className="space-y-2">
               {alertas.slice(0, 7).map((a, i) => (
-                <li key={i}>
+                <li key={i} className="grid grid-cols-[minmax(0,1fr)_auto] items-stretch overflow-hidden rounded-md border border-border bg-surface">
                   <button
                     type="button"
                     onClick={() => abrirAlerta(a)}
-                    className="grid w-full grid-cols-[4px_1fr_auto] items-center gap-3 overflow-hidden rounded-md border border-border bg-surface py-2.5 pr-3 text-left transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="grid w-full grid-cols-[4px_1fr_auto] items-center gap-3 py-2.5 pr-3 text-left transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     <span className={`h-full self-stretch rounded-r ${SEVERIDADE_FAIXA[a.severidade]}`} />
                     <span className="min-w-0">
@@ -136,6 +146,16 @@ export function VisaoGeral({ painel, acoes }: { painel: PainelEficiencia; acoes:
                     </span>
                     <span className="whitespace-nowrap text-[12.5px] font-medium text-primary">Abrir →</span>
                   </button>
+                  {a.acaoSugerida && (
+                    <button
+                      type="button"
+                      onClick={() => acoes.criarAcao(sugestaoDoAlerta(a))}
+                      className="border-l border-border px-3 text-[12px] font-medium text-primary transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      title={a.acaoSugerida}
+                    >
+                      + Criar ação
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

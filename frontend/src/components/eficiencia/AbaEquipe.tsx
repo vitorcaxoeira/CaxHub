@@ -8,10 +8,16 @@ export function AbaEquipe({
   painel,
   abrirConsultor,
   abrirProposta,
+  recorteDepartamentos,
+  onAlternarIgnorado,
 }: {
   painel: PainelEficiencia;
   abrirConsultor: (codfor: number) => void;
   abrirProposta: (codemp: number, codpro: number) => void;
+  /** Rótulos dos departamentos escolhidos no filtro: a equipe mostra só o time deles. Vazio = sem recorte. */
+  recorteDepartamentos?: string;
+  /** Liga/desliga o consultor nos indicadores da equipe (escolha pessoal, guardada no navegador). */
+  onAlternarIgnorado: (codfor: number) => void;
 }) {
   const [ordem, setOrdem] = useState<Ordem<Chave>>({ chave: "pendente", dir: -1 });
   const { meta, equipe, carga } = painel;
@@ -19,15 +25,17 @@ export function AbaEquipe({
   const capMin = meta.capacidadeHorasMes * 60;
   const consultores = equipe.consultores;
 
-  const executadoTotal = consultores.reduce((t, c) => t + c.executado, 0);
+  // Os ignorados ficam na lista (esmaecidos, pra dar pra desmarcar), mas não entram em nenhum total daqui.
+  const contam = consultores.filter((c) => !c.ignorado);
+  const executadoTotal = contam.reduce((t, c) => t + c.executado, 0);
   // Eficiência da equipe: média das eficiências ponderada pelo executado de cada um.
-  const eficienciaEquipe = executadoTotal > 0 ? consultores.reduce((t, c) => t + (c.eficiencia ?? 0) * c.executado, 0) / executadoTotal : null;
+  const eficienciaEquipe = executadoTotal > 0 ? contam.reduce((t, c) => t + (c.eficiencia ?? 0) * c.executado, 0) / executadoTotal : null;
 
   const linhas = useMemo(
     () => ordenar<ConsultorLinha, Chave>(consultores, ordem, (c, k) => (k === "nome" ? c.nome : k === "eficiencia" ? c.eficiencia ?? 2 : c[k])),
     [consultores, ordem]
   );
-  const limite = Math.max(3.5, ...consultores.map((c) => (c.pendente + c.revisar) / capMin));
+  const limite = Math.max(3.5, ...contam.map((c) => (c.pendente + c.revisar) / capMin));
   const ordenarPor = (k: Chave) => setOrdem((o) => proximaOrdem(o, k, ["nome"]));
 
   const { mapa } = equipe;
@@ -52,13 +60,13 @@ export function AbaEquipe({
 
       <Cartao
         titulo="Consultores"
-        nota="Carga pendente: horas alocadas que ainda cabem no saldo do item"
+        nota={`Carga pendente: horas alocadas que ainda cabem no saldo do item${recorteDepartamentos ? ` · só o time de ${recorteDepartamentos}` : ""}`}
         acao={
           <BotaoCopiar
             montar={() =>
               paraTsv(
-                ["Consultor", "Departamento", "Pendente (h)", "Meses", "A revisar (h)", "Executado (h)", "Alocado (h)", "Eficiência %", "Propostas com saldo"],
-                linhas.map((c) => [c.nome, c.departamento ?? "", (c.pendente / 60).toFixed(1), meses1(c.meses), (c.revisar / 60).toFixed(1), (c.executado / 60).toFixed(1), (c.alocado / 60).toFixed(1), c.eficiencia == null ? "" : Math.round(c.eficiencia * 100), c.propostasComSaldo])
+                ["Consultor", "Departamento", "Pendente (h)", "Meses", "A revisar (h)", "Executado (h)", "Alocado (h)", "Eficiência %", "Propostas com saldo", "Ignorado nos indicadores"],
+                linhas.map((c) => [c.nome, c.departamento ?? "", (c.pendente / 60).toFixed(1), meses1(c.meses), (c.revisar / 60).toFixed(1), (c.executado / 60).toFixed(1), (c.alocado / 60).toFixed(1), c.eficiencia == null ? "" : Math.round(c.eficiencia * 100), c.propostasComSaldo, c.ignorado ? "Sim" : ""])
               )
             }
           />
@@ -76,6 +84,7 @@ export function AbaEquipe({
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr>
+                  <Th rotulo="Ignorar" className="w-14" />
                   <Th rotulo="Consultor" chave="nome" ordem={ordem} onOrdenar={ordenarPor} />
                   <Th rotulo="Carteira" className="min-w-[200px]" />
                   <Th rotulo="Pendente" chave="pendente" ordem={ordem} onOrdenar={ordenarPor} numerico />
@@ -93,11 +102,22 @@ export function AbaEquipe({
                     tabIndex={0}
                     onClick={() => abrirConsultor(c.codfor)}
                     onKeyDown={(e) => e.key === "Enter" && abrirConsultor(c.codfor)}
-                    className="cursor-pointer border-t border-border/60 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    className={`cursor-pointer border-t border-border/60 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${c.ignorado ? "opacity-45" : ""}`}
                   >
+                    {/* Check de ignorar: tira o consultor dos indicadores da equipe (carga, eficiência, sobrecarga, a revisar, mapa e alertas). Não abre a gaveta. */}
+                    <td className="px-2.5 py-2" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={c.ignorado}
+                        onChange={() => onAlternarIgnorado(c.codfor)}
+                        aria-label={`Ignorar ${c.nome} nos indicadores da equipe`}
+                        title={c.ignorado ? "Ignorado: desmarque para voltar a contar nos indicadores da equipe" : "Marque para tirar este consultor dos indicadores da equipe"}
+                        className="h-4 w-4 cursor-pointer accent-primary"
+                      />
+                    </td>
                     <td className="px-2.5 py-2">
-                      <span className="block font-medium text-foreground">{nomeCurto(c.nome)}</span>
-                      <span className="block text-[11.5px] text-muted">{c.departamento ?? "—"}</span>
+                      <span className={`block font-medium text-foreground ${c.ignorado ? "line-through" : ""}`}>{nomeCurto(c.nome)}</span>
+                      <span className="block text-[11.5px] text-muted">{c.departamento ?? "—"}{c.ignorado && " · ignorado nos indicadores"}</span>
                     </td>
                     <td className="px-2.5 py-2">
                       <span className="relative flex h-3 gap-0.5 rounded bg-surface-2">

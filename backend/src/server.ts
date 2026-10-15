@@ -99,6 +99,7 @@ import { recuperarEnviosInterrompidos, scheduleOutboxSeniorSync } from "./sync/o
 import { recuperarEnviosDespesaInterrompidos, scheduleOutboxSeniorDespesaSync } from "./sync/outboxSeniorDespesa";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
+import { agendarAcoesVencidas } from "./sync/acoesEficienciaVencidas";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
 import { carregarModosVarreduraAtivos } from "./sync/politicaVarredura";
 import { carregarTamanhosLoteAtivos } from "./sync/politicaLote";
@@ -288,6 +289,8 @@ async function iniciar() {
     // (15 em 15s — cadência bem mais curta, ver o comentário no arquivo).
     agendarParadaAutomatica();
     agendarParadaPorFechamento();
+    // Plano de ação do Painel de Eficiência: avisa pelo sino a ação que passou do prazo (de hora em hora, dias úteis).
+    agendarAcoesVencidas();
     // Kyria — segunda origem de dados, ao lado do Senior (ver src/kyria/).
     scheduleKyriaTeamsSync();
     scheduleKyriaMembersSync();
