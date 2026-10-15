@@ -48,3 +48,12 @@ export function entidadeIdEficienciaApontamento(ratItemId: number): string {
 export function entidadeIdEficienciaAcao(id: number): string {
   return String(id);
 }
+
+// Plano de Evolução: ciclo e participante pelo id da linha.
+export function entidadeIdPlanoCiclo(id: number): string {
+  return String(id);
+}
+
+export function entidadeIdPlanoParticipante(id: number): string {
+  return String(id);
+}

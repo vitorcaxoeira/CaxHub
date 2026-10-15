@@ -758,6 +758,48 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeRemocao,
     resumo: (e) => `Excluiu a ação do plano de ação — ${rotuloEntidade(e)}`,
   },
+  PLANO_CICLO_CRIADO: {
+    tone: "success",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeCriacao,
+    resumo: (e) => `Criou o ciclo do Plano de Evolução — ${rotuloEntidade(e)}`,
+  },
+  PLANO_CICLO_ALTERADO: {
+    tone: "neutral",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou os parâmetros do ciclo — ${rotuloEntidade(e)}`,
+  },
+  PLANO_CICLO_PUBLICADO: {
+    tone: "primary",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Publicou o ciclo (parâmetros travados) — ${rotuloEntidade(e)}`,
+  },
+  PLANO_CICLO_ENCERRADO: {
+    tone: "neutral",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Encerrou o ciclo — ${rotuloEntidade(e)}`,
+  },
+  PLANO_PARTICIPANTE_ADERIU: {
+    tone: "success",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeCriacao,
+    resumo: (e) => `Registrou a adesão ao Plano de Evolução — ${rotuloEntidade(e)}`,
+  },
+  PLANO_PARTICIPANTE_VALOR_BASE_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Lançou novo Valor Hora Base${e.metadata?.motivoRotulo ? ` (${e.metadata.motivoRotulo})` : ""} — ${rotuloEntidade(e)}`,
+  },
+  PLANO_PARTICIPANTE_ENCERRADO: {
+    tone: "destructive",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeRemocao,
+    resumo: (e) => `Encerrou a participação no Plano de Evolução — ${rotuloEntidade(e)}`,
+  },
 };
 
 // "3:30 h" a partir dos minutos gravados no metadata do evento (qualquer coisa que não seja número vira "—").

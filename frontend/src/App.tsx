@@ -30,6 +30,8 @@ import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
 import { Eficiencia } from "./pages/projetos/Eficiencia";
 import { MinhasAcoes } from "./pages/projetos/MinhasAcoes";
+import { MeuPlano } from "./pages/projetos/MeuPlano";
+import { PlanoEvolucao } from "./pages/projetos/PlanoEvolucao";
 import { Auditoria } from "./pages/auditoria/Auditoria";
 import { SolicitacoesViagem } from "./pages/solicitacoes/SolicitacoesViagem";
 import { SolicitacaoViagemForm } from "./pages/solicitacoes/SolicitacaoViagemForm";
@@ -166,6 +168,9 @@ export default function App() {
               {/* Minhas ações: o responsável de uma ação do Plano de ação é consultor do time (não gestor), então a rota fica
                   fora do RequireGestorOuAdmin; o backend só devolve as ações dele. */}
               <Route path="/projetos/minhas-acoes" element={<MinhasAcoes />} />
+              {/* Meu plano (Plano de Evolução dos consultores PJ): o consultor vê só o PRÓPRIO andamento, então fica fora do
+                  RequireGestorOuAdmin; o backend devolve 404 a quem não participa do plano. */}
+              <Route path="/projetos/meu-plano" element={<MeuPlano />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />
               <Route path="/projetos/jornadas" element={<Jornadas />} />
               <Route path="/projetos/aprovacoes" element={<Aprovacoes />} />
@@ -189,6 +194,8 @@ export default function App() {
                   exigirAdminOuGestor de routes/eficiencia.ts no backend. */}
               <Route element={<RequireGestorOuAdmin />}>
                 <Route path="/projetos/eficiencia" element={<Eficiencia />} />
+                {/* Plano de Evolução (gestão): mesma guarda do painel. Sem item de menu próprio: o acesso é pelo link no Painel de Eficiência. */}
+                <Route path="/projetos/eficiencia/plano-evolucao" element={<PlanoEvolucao />} />
                 <Route path="/solicitacoes/nova" element={<SolicitacaoViagemForm />} />
                 <Route path="/solicitacoes/aprovacoes" element={<SolicitacoesViagem escopo="aprovacao" />} />
                 <Route path="/solicitacoes/atendimento" element={<SolicitacoesViagem escopo="atendimento" />} />

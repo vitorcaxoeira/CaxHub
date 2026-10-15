@@ -16,6 +16,10 @@ export const ENTIDADES_AUDITORIA = {
   // Painel de Eficiência (Gestão de Projetos › Eficiência): apontamento tirado do cálculo do painel e ação do plano de ação.
   EFICIENCIA_APONTAMENTO: "eficiencia_apontamento",
   EFICIENCIA_ACAO: "eficiencia_acao",
+  // Plano de Evolução Profissional e Eficiência (consultores PJ). PLANO_PARTICIPANTE carrega valor hora: SÓ ADMIN enxerga o histórico
+  // (ver routes/auditoria.ts: podeVerEntidade e esconderEntidadesSoAdmin).
+  PLANO_CICLO: "plano_ciclo",
+  PLANO_PARTICIPANTE: "plano_participante",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -243,5 +247,14 @@ export const EVENTOS_AUDITORIA = {
   EFICIENCIA_ACAO_ALTERADA: "EFICIENCIA_ACAO_ALTERADA",
   EFICIENCIA_ACAO_STATUS_ALTERADO: "EFICIENCIA_ACAO_STATUS_ALTERADO",
   EFICIENCIA_ACAO_EXCLUIDA: "EFICIENCIA_ACAO_EXCLUIDA",
+
+  // Plano de Evolução: ciclo (entidadeId = id do ciclo) e participante (entidadeId = id do participante).
+  PLANO_CICLO_CRIADO: "PLANO_CICLO_CRIADO",
+  PLANO_CICLO_ALTERADO: "PLANO_CICLO_ALTERADO",
+  PLANO_CICLO_PUBLICADO: "PLANO_CICLO_PUBLICADO",
+  PLANO_CICLO_ENCERRADO: "PLANO_CICLO_ENCERRADO",
+  PLANO_PARTICIPANTE_ADERIU: "PLANO_PARTICIPANTE_ADERIU",
+  PLANO_PARTICIPANTE_VALOR_BASE_ALTERADO: "PLANO_PARTICIPANTE_VALOR_BASE_ALTERADO",
+  PLANO_PARTICIPANTE_ENCERRADO: "PLANO_PARTICIPANTE_ENCERRADO",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];

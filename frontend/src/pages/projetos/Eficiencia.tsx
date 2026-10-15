@@ -1,6 +1,6 @@
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { Skeleton } from "../../components/ui/Skeleton";
@@ -395,6 +395,12 @@ export function Eficiencia() {
         </div>
         <div className="flex items-center gap-2">
           {geradoEm && <span className="hidden text-[12px] text-muted sm:inline">Atualizado às {geradoEm}</span>}
+          <Link
+            to="/projetos/eficiencia/plano-evolucao"
+            className="rounded-md border border-border bg-surface px-3 py-1.5 text-[12.5px] font-medium text-foreground transition hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Plano de evolução
+          </Link>
           <button
             type="button"
             onClick={() => setRecarga((n) => n + 1)}

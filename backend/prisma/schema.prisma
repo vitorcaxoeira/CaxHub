@@ -3843,3 +3843,115 @@ model AcaoEficiencia {
   @@index([responsavelCodfor])
   @@map("eficiencia_acoes")
 }
+
+// ======================================================================================================
+// Plano de Evolução Profissional e Eficiência (consultores PJ) — regulamento v3.1 da Soeltech.
+// Plano e decisões: docs/plano-evolucao/PLANO.md. A unidade de medida é o ITEM DA PROPOSTA (decisão de 15/10/2026), não a atividade
+// atribuída ao consultor. Fase 1: ciclos e parâmetros, participantes e histórico de base; a apuração com snapshot é a Fase 2.
+// ======================================================================================================
+
+// Um ciclo semestral. Os parâmetros do item 12 do regulamento ficam TRAVADOS depois de publicar (o texto proíbe mudar com o ciclo em andamento):
+// o backend recusa a edição de qualquer coisa que não seja rascunho.
+model PlanoCiclo {
+  id       Int      @id @default(autoincrement())
+  ano      Int
+  /// 1 = jan a jun, 2 = jul a dez
+  semestre Int
+  inicio   DateTime @db.Date
+  fim      DateTime @db.Date
+  /// rascunho | publicado | encerrado
+  status   String   @default("rascunho") @db.VarChar(12)
+
+  // Parâmetros do item 12
+  /// Meta do Índice de Eficiência Global, em % (escala dentro ÷ executado, teto 100). Nulo até a gestão definir.
+  metaEficienciaGlobal           Decimal? @db.Decimal(5, 2)
+  /// depexe do ITEM da proposta que formam "a área" (padrão 8 Consultoria ERP e 9 Consultoria HCM).
+  departamentosArea              Int[]    @default([8, 9])
+  /// Horas executadas mínimas no ciclo para um consultor ser avaliado; abaixo disso o indicador fica "sem base".
+  amostraMinimaHoras             Int      @default(10)
+  /// "A" = só Start/Stop ao vivo; "B" = A mais lançamento no Senior no mesmo dia.
+  definicaoOnline                String   @default("A") @db.VarChar(1)
+  /// % dos pesos dos indicadores da eficiência operacional que o consultor precisa atingir (padrão 100).
+  notaMinimaEficienciaIndividual Int      @default(100)
+  /// Ciclo "não apurado" (contrato inativo, ciclo incompleto) quebra a sequência dos 10 ciclos? Padrão: não.
+  naoApuradoQuebraSequencia      Boolean  @default(false)
+  certificacoesExigidas          String?  @db.VarChar(1000)
+  atividadesElegiveisClientes    String?  @db.VarChar(1000)
+
+  // Calendário interno (item 3.2)
+  corteEvidencias DateTime @db.Date
+  apuracaoAte     DateTime @db.Date
+  devolutivaEm    DateTime @db.Date
+  contestacaoAte  DateTime @db.Date
+
+  publicadoEm   DateTime?
+  publicadoPor  Int?
+  criadoPor     Int
+  criadoEm      DateTime  @default(now())
+  atualizadoEm  DateTime  @updatedAt
+  atualizadoPor Int?
+
+  indicadores PlanoCicloIndicador[]
+
+  @@unique([ano, semestre])
+  @@map("plano_ciclos")
+}
+
+// Indicador da eficiência operacional (item 6.4) num ciclo: peso e meta. `chave` é uma de INDICADORES (domain/planoEvolucao/eficienciaIndividual.ts).
+model PlanoCicloIndicador {
+  id      Int        @id @default(autoincrement())
+  cicloId Int
+  ciclo   PlanoCiclo @relation(fields: [cicloId], references: [id], onDelete: Cascade)
+  chave   String     @db.VarChar(40)
+  /// automatico | manual
+  tipo    String     @db.VarChar(10)
+  peso    Int        @default(0)
+  /// Meta em % (indicadores automáticos). Nula nos manuais.
+  meta    Decimal?   @db.Decimal(5, 2)
+  ativo   Boolean    @default(true)
+  ordem   Int        @default(0)
+
+  @@unique([cicloId, chave])
+  @@map("plano_ciclo_indicadores")
+}
+
+// Consultor PJ que assinou o Termo de Ciência. `ciclosConsecutivosAntes` é o histórico trazido de fora do CaxHub (normalmente 0); a Fase 2
+// passa a atualizá-lo a cada apuração. Dado sensível (valor hora): só admin lê e altera valores; o gestor enxerga o time dele sem valores.
+model PlanoParticipante {
+  id                      Int       @id @default(autoincrement())
+  codfor                  Int       @unique
+  dataAdesao              DateTime  @db.Date
+  versaoRegulamento       String    @default("3.1") @db.VarChar(10)
+  /// Início do 1º ciclo (calculado da adesão, regulamento item 3.1).
+  primeiroCicloInicio     DateTime  @db.Date
+  ciclosConsecutivosAntes Int       @default(0)
+  /// ativo | encerrado
+  status                  String    @default("ativo") @db.VarChar(10)
+  encerradoEm             DateTime?
+  motivoEncerramento      String?   @db.VarChar(300)
+  criadoPor               Int
+  criadoEm                DateTime  @default(now())
+  atualizadoEm            DateTime  @updatedAt
+
+  valoresBase PlanoValorBase[]
+
+  @@map("plano_participantes")
+}
+
+// Histórico do Valor Hora Base do participante. O vigente é o de `desde` mais recente que não passa da data. Nunca se reescreve uma linha:
+// reajuste contratual ou efetivação entram como linha nova.
+model PlanoValorBase {
+  id             Int               @id @default(autoincrement())
+  participanteId Int
+  participante   PlanoParticipante @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+  valorHoraBase  Decimal           @db.Decimal(11, 2)
+  desde          DateTime          @db.Date
+  /// adesao | efetivacao | reajuste
+  motivo         String            @db.VarChar(12)
+  observacao     String?           @db.VarChar(300)
+  criadoPor      Int
+  criadoEm       DateTime          @default(now())
+
+  @@index([participanteId, desde])
+  @@map("plano_valores_base")
+}
