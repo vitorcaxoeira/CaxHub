@@ -28,6 +28,7 @@ import { Aprovacoes } from "./pages/projetos/Aprovacoes";
 import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
 import { Eficiencia } from "./pages/projetos/Eficiencia";
+import { MinhasAcoes } from "./pages/projetos/MinhasAcoes";
 import { Auditoria } from "./pages/auditoria/Auditoria";
 import { SolicitacoesViagem } from "./pages/solicitacoes/SolicitacoesViagem";
 import { SolicitacaoViagemForm } from "./pages/solicitacoes/SolicitacaoViagemForm";
@@ -161,6 +162,9 @@ export default function App() {
               <Route path="/perfil" element={<Perfil />} />
               <Route path="/projetos/atividades" element={<Atividades />} />
               <Route path="/projetos/apontamentos" element={<MeusApontamentos />} />
+              {/* Minhas ações: o responsável de uma ação do Plano de ação é consultor do time (não gestor), então a rota fica
+                  fora do RequireGestorOuAdmin; o backend só devolve as ações dele. */}
+              <Route path="/projetos/minhas-acoes" element={<MinhasAcoes />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />
               <Route path="/projetos/jornadas" element={<Jornadas />} />
               <Route path="/projetos/aprovacoes" element={<Aprovacoes />} />

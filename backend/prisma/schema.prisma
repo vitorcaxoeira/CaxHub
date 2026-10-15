@@ -1285,6 +1285,7 @@ model RatItem {
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   sessoes AtividadeSessaoExecucao[]
+  foraDoCalculo ApontamentoForaDoCalculo[]
 
   @@unique([codemp, numrat, seqrat])
   @@index([seqati])
@@ -3786,4 +3787,59 @@ model HcmProgramacaoFerias {
 
   @@id([numemp, tipcol, numcad, iniper, inifer])
   @@map("hcm_programacao_ferias")
+}
+
+// Painel de Eficiência (Gestão de Projetos › Eficiência) — exclusão de UM apontamento (RatItem) do cálculo
+// do PAINEL. Vale só lá: não mexe em RAT, no teto/realizado da Alocação, no Senior nem no relatório de
+// produtividade. O gestor do item (ou admin) decide, com motivo obrigatório; "restaurar" preenche
+// restauradoEm e o apontamento volta à conta. Cada exclusão é uma linha (o histórico fica nas restauradas);
+// a migration cria um ÍNDICE ÚNICO PARCIAL (ratItemId onde restauradoEm é nulo) que o Prisma não expressa:
+// no máximo uma exclusão ATIVA por apontamento. Snapshot (item, consultor, minutos) pra o log continuar
+// legível se o RatItem mudar depois. excluidoPor/restauradoPor são user ids sem FK de propósito (log).
+model ApontamentoForaDoCalculo {
+  id            Int       @id @default(autoincrement())
+  ratItemId     Int
+  ratItem       RatItem   @relation(fields: [ratItemId], references: [id], onDelete: Cascade)
+  codemp        Int
+  codpro        Int
+  seqite        Int
+  codfor        Int?
+  minutos       Int
+  motivo        String    @db.VarChar(30)
+  observacao    String?   @db.VarChar(300)
+  excluidoPor   Int
+  excluidoEm    DateTime  @default(now())
+  restauradoPor Int?
+  restauradoEm  DateTime?
+
+  @@index([codemp, codpro, seqite])
+  @@map("eficiencia_apontamentos_excluidos")
+}
+
+// Painel de Eficiência — Plano de ação: o que o gestor combinou a partir de um alerta, com dono e prazo.
+// Substitui o localStorage do cockpit original (as ações agora são compartilhadas entre gestores).
+// `depexe` é o departamento que enxerga a ação (o da proposta de referência ou, sem proposta, o do criador).
+// `avisoVencidaEm` evita avisar duas vezes a mesma ação vencida (rotina diária).
+model AcaoEficiencia {
+  id                Int       @id @default(autoincrement())
+  titulo            String    @db.VarChar(200)
+  observacao        String?   @db.VarChar(1000)
+  codemp            Int?
+  codpro            Int?
+  codforAlvo        Int?
+  origemAlerta      String?   @db.VarChar(200)
+  depexe            Int?
+  responsavelCodfor Int
+  prazo             DateTime  @db.Date
+  status            String    @default("aberta") @db.VarChar(12)
+  concluidaEm       DateTime?
+  avisoVencidaEm    DateTime?
+  criadoPor         Int
+  criadoEm          DateTime  @default(now())
+  atualizadoEm      DateTime  @updatedAt
+  atualizadoPor     Int?
+
+  @@index([status, prazo])
+  @@index([responsavelCodfor])
+  @@map("eficiencia_acoes")
 }

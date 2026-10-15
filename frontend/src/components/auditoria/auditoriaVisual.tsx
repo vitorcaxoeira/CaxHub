@@ -717,7 +717,55 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeRemocao,
     resumo: (e) => `Removeu o comprovante ${e.metadata?.nomeArquivo ?? ""}`,
   },
+
+  // Painel de Eficiência (Gestão de Projetos › Eficiência). A exclusão vale só no painel: RAT e teto não mudam.
+  EFICIENCIA_APONTAMENTO_EXCLUIDO: {
+    tone: "warning",
+    rotuloGrupo: "Eficiência",
+    icone: IconeRemocao,
+    resumo: (e) =>
+      `Tirou do cálculo do painel o apontamento de ${horasDoMetadata(e.metadata?.minutos)} — ${rotuloEntidade(e)}. Motivo: ${e.metadata?.motivoRotulo ?? e.metadata?.motivo ?? "—"}${
+        e.metadata?.observacao ? ` (${e.metadata.observacao})` : ""
+      }`,
+  },
+  EFICIENCIA_APONTAMENTO_RESTAURADO: {
+    tone: "success",
+    rotuloGrupo: "Eficiência",
+    icone: IconeStatus,
+    resumo: (e) => `Devolveu ao cálculo do painel o apontamento de ${horasDoMetadata(e.metadata?.minutos)} — ${rotuloEntidade(e)}`,
+  },
+  EFICIENCIA_ACAO_CRIADA: {
+    tone: "success",
+    rotuloGrupo: "Eficiência",
+    icone: IconeCriacao,
+    resumo: (e) => `Criou a ação do plano de ação — ${rotuloEntidade(e)}${e.metadata?.responsavel ? ` (responsável: ${e.metadata.responsavel})` : ""}`,
+  },
+  EFICIENCIA_ACAO_ALTERADA: {
+    tone: "neutral",
+    rotuloGrupo: "Eficiência",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou a ação do plano de ação — ${rotuloEntidade(e)}`,
+  },
+  EFICIENCIA_ACAO_STATUS_ALTERADO: {
+    tone: "primary",
+    rotuloGrupo: "Eficiência",
+    icone: IconeStatus,
+    resumo: (e) => `Mudou o status da ação para ${e.metadata?.statusRotulo ?? e.metadata?.status ?? "—"} — ${rotuloEntidade(e)}`,
+  },
+  EFICIENCIA_ACAO_EXCLUIDA: {
+    tone: "destructive",
+    rotuloGrupo: "Eficiência",
+    icone: IconeRemocao,
+    resumo: (e) => `Excluiu a ação do plano de ação — ${rotuloEntidade(e)}`,
+  },
 };
+
+// "3:30 h" a partir dos minutos gravados no metadata do evento (qualquer coisa que não seja número vira "—").
+function horasDoMetadata(minutos: unknown): string {
+  if (typeof minutos !== "number" || !Number.isFinite(minutos)) return "—";
+  const total = Math.round(Math.abs(minutos));
+  return `${Math.trunc(total / 60)}:${String(total % 60).padStart(2, "0")} h`;
+}
 
 const CONFIG_PADRAO: ConfigEvento = {
   tone: "neutral",

@@ -9,6 +9,19 @@
 
 export type Tom = "ok" | "warn" | "bad" | "off";
 
+// Como o ESTOURO da proposta é lido:
+//  - "item": soma do estouro de cada item (um item acima do vendido já conta, mesmo que outro item da proposta tenha saldo). Padrão.
+//  - "proposta": só o total (executado − vendido da proposta inteira); o saldo de um item compensa o estouro de outro.
+// Só muda proposta, cliente e carteira. Horas por item, eficiência/carga do consultor (por alocação) e carga pendente não mudam.
+export type ModoEstouro = "item" | "proposta";
+export const MODOS_ESTOURO: ModoEstouro[] = ["item", "proposta"];
+export const modoEstouroValido = (v: unknown): ModoEstouro => (v === "proposta" ? "proposta" : "item");
+
+// fatser do item que vira receita direta (S = Faturamento Normal, A = Antecipado). Os demais (N sem faturamento, C comercial,
+// H suporte, I investimento) entram no valor do painel, mas são apontados à parte como "sem faturamento".
+export const FATSER_FATURAVEL = ["S", "A"] as const;
+const semFaturamento = (fatser: string | null) => fatser != null && fatser.trim() !== "" && !(FATSER_FATURAVEL as readonly string[]).includes(fatser.trim().toUpperCase());
+
 // Constantes da conta. Vão no payload (`meta.limiares`) pra aba "Como calculamos" nunca divergir
 // do que o backend de fato aplica.
 export const LIMIARES = {
@@ -28,6 +41,10 @@ export const LIMIARES = {
   // Eficiência: >= 95% ok, >= 80% atenção, abaixo disso crítico.
   eficienciaOk: 0.95,
   eficienciaAtencao: 0.8,
+  // Proposta atípica (fora da curva): consumo de 300% ou mais E 200 h ou mais acima do vendido. Distorce
+  // totais e médias da carteira; o painel avisa e deixa o usuário ocultar (nunca oculta sozinho).
+  atipicaConsumo: 3,
+  atipicaAcimaMin: 12000,
 } as const;
 
 export interface ItemEntrada {
@@ -89,6 +106,12 @@ export interface ItemCalculado {
   acima: number; // estouro
   saldo: number;
   impacto: number; // R$ do estouro, no valor-hora do próprio item
+  // Em R$ ao valor-hora de VENDA do item (não é faturamento nem custo). Item sem valor-hora fica zerado.
+  valorVendido: number;
+  valorExecutado: number;
+  valorSaldo: number;
+  /** fatser fora de Normal/Antecipado: o valor existe, mas não é receita direta. */
+  semFaturamento: boolean;
   semAlocacao: number; // executado do item que nenhuma alocação ativa explica
   // Só os consultores que o usuário pode ver (o time dele; admin vê todos).
   consultores: ConsultorNoItem[];
@@ -111,6 +134,15 @@ export interface PropostaCalculada {
   acima: number;
   saldo: number;
   impacto: number;
+  /** Os dois jeitos de ler o estouro, sempre calculados: `acima` acima é o do modo escolhido; estes dois servem pra mostrar o outro. */
+  acimaPorItem: number;
+  acimaGlobal: number;
+  /** R$ ao valor-hora de venda (ver ItemCalculado). `valorSaldo` segue o modo, como `saldo`. */
+  valorVendido: number;
+  valorExecutado: number;
+  valorSaldo: number;
+  /** Parte do valor vendido que está em itens sem faturamento direto (N, C, H, I). */
+  valorSemFaturamento: number;
   semAlocacao: number;
   consumo: number | null;
   eficiencia: number | null;
@@ -150,7 +182,8 @@ export function tomMeses(meses: number): Tom {
 export function calcularItem(
   item: ItemEntrada,
   alocacoes: AlocacaoEntrada[],
-  visiveis: Set<number> | null
+  visiveis: Set<number> | null,
+  ignorados: Set<number> | null = null
 ): ItemCalculado {
   const executado = Math.max(0, item.executado);
   const vendido = Math.max(0, item.vendido);
@@ -172,7 +205,9 @@ export function calcularItem(
   const consultores: ConsultorNoItem[] = [];
   const outros = { alocado: 0, executado: 0 };
   for (const [codfor, v] of porConsultor) {
-    if (visiveis != null && !visiveis.has(codfor)) {
+    // Fora do recorte da tela OU ignorado pela pessoa: vira "outros" (sem nome, fora de equipe, carga e mapa). As horas do ITEM
+    // (vendido, executado, estouro) não mudam: consultor ignorado só sai dos indicadores da equipe, não da proposta.
+    if ((visiveis != null && !visiveis.has(codfor)) || ignorados?.has(codfor)) {
       outros.alocado += v.alocado;
       outros.executado += v.executado;
       continue;
@@ -199,6 +234,10 @@ export function calcularItem(
     acima,
     saldo,
     impacto: item.valhor != null && item.valhor > 0 ? (acima / 60) * item.valhor : 0,
+    valorVendido: item.valhor != null && item.valhor > 0 ? (vendido / 60) * item.valhor : 0,
+    valorExecutado: item.valhor != null && item.valhor > 0 ? (executado / 60) * item.valhor : 0,
+    valorSaldo: item.valhor != null && item.valhor > 0 ? (saldo / 60) * item.valhor : 0,
+    semFaturamento: semFaturamento(item.fatser),
     semAlocacao: Math.max(0, executado - executadoPorAlocados),
     consultores,
     outros,
@@ -208,16 +247,31 @@ export function calcularItem(
 export function calcularProposta(
   proposta: PropostaEntrada,
   alocacoesPorItem: Map<string, AlocacaoEntrada[]>,
-  visiveis: Set<number> | null
+  visiveis: Set<number> | null,
+  ignorados: Set<number> | null = null,
+  modo: ModoEstouro = "item"
 ): PropostaCalculada {
   const itens = proposta.itens.map((i) =>
-    calcularItem(i, alocacoesPorItem.get(chaveItem(i.codemp, i.codpro, i.seqite)) ?? [], visiveis)
+    calcularItem(i, alocacoesPorItem.get(chaveItem(i.codemp, i.codpro, i.seqite)) ?? [], visiveis, ignorados)
   );
   const soma = (f: (i: ItemCalculado) => number) => itens.reduce((t, i) => t + f(i), 0);
   const vendido = soma((i) => i.vendido);
   const executado = soma((i) => i.executado);
-  const dentro = soma((i) => i.dentro);
-  const acima = soma((i) => i.acima);
+  const acimaPorItem = soma((i) => i.acima);
+  const acimaGlobal = Math.max(0, executado - vendido);
+  // Valor-hora MÉDIO da proposta (só itens com vendido e valor-hora): é o preço do estouro quando ele é lido pela proposta inteira,
+  // já que o excedente global não pertence a um item só.
+  const comValor = itens.filter((i) => i.vendido > 0 && i.valhor != null && i.valhor > 0);
+  const minutosComValor = comValor.reduce((t, i) => t + i.vendido, 0);
+  const valhorMedio = minutosComValor > 0 ? comValor.reduce((t, i) => t + i.vendido * (i.valhor as number), 0) / minutosComValor : 0;
+  const global = modo === "proposta";
+  const acima = global ? acimaGlobal : acimaPorItem;
+  const dentro = global ? Math.min(executado, vendido) : soma((i) => i.dentro);
+  const saldo = global ? Math.max(0, vendido - executado) : soma((i) => i.saldo);
+  const impacto = global ? (acimaGlobal / 60) * valhorMedio : soma((i) => i.impacto);
+  const valorVendido = soma((i) => i.valorVendido);
+  const valorExecutado = soma((i) => i.valorExecutado);
+  const valorSaldo = global ? Math.max(0, valorVendido - valorExecutado) : soma((i) => i.valorSaldo);
   const itensPorSituacao = zeroSituacoes();
   for (const i of itens) itensPorSituacao[i.situacao]++;
 
@@ -244,8 +298,14 @@ export function calcularProposta(
     executado,
     dentro,
     acima,
-    saldo: soma((i) => i.saldo),
-    impacto: soma((i) => i.impacto),
+    saldo,
+    impacto,
+    acimaPorItem,
+    acimaGlobal,
+    valorVendido,
+    valorExecutado,
+    valorSaldo,
+    valorSemFaturamento: itens.filter((i) => i.semFaturamento).reduce((t, i) => t + i.valorVendido, 0),
     semAlocacao: soma((i) => i.semAlocacao),
     consumo,
     eficiencia: eficiencia(dentro, executado),
@@ -368,6 +428,12 @@ export function resumirCarteira(propostas: PropostaCalculada[]): ResumoCarteira 
   return r;
 }
 
+// Uma definição só de "proposta atípica": usada pela aba Qualidade e pelo botão "Ocultar atípicas".
+// Consumo `null` = sem vendido e com execução (consumo infinito), que conta como acima do limite.
+export function ehAtipica(p: Pick<PropostaCalculada, "consumo" | "acima">): boolean {
+  return (p.consumo == null || p.consumo >= LIMIARES.atipicaConsumo) && p.acima >= LIMIARES.atipicaAcimaMin;
+}
+
 export interface FaixaConsumo {
   chave: string;
   rotulo: string;
@@ -468,7 +534,7 @@ export function calcularClientes(propostas: PropostaCalculada[]): ClienteCalcula
 export type AlvoAlerta =
   | { tipo: "proposta"; codemp: number; codpro: number }
   | { tipo: "consultor"; codfor: number }
-  | { tipo: "aba"; aba: "propostas" | "equipe" | "qualidade"; filtro?: string };
+  | { tipo: "aba"; aba: "propostas" | "equipe" | "qualidade" | "acoes"; filtro?: string };
 
 export interface Alerta {
   severidade: Tom;
@@ -477,6 +543,8 @@ export interface Alerta {
   titulo: string;
   detalhe: string;
   alvo: AlvoAlerta;
+  /** Texto sugerido pro botão "Criar ação" (Plano de ação). Ausente = alerta que não vira ação. */
+  acaoSugerida?: string;
 }
 
 const fmtH = (min: number) => `${Math.round(min / 60).toLocaleString("pt-BR")} h`;
@@ -500,6 +568,7 @@ export function montarAlertas(
       titulo: `${p.cliente} · PS ${p.codpro}`,
       detalhe: `${fmtH(p.acima)} acima do vendido${p.impacto > 0 ? ` (R$ ${Math.round(p.impacto).toLocaleString("pt-BR")})` : ""} · ${fmtPct(p.consumo)} consumido · ${itensEstourados} ite${itensEstourados > 1 ? "ns" : "m"} estourado${itensEstourados > 1 ? "s" : ""}`,
       alvo: { tipo: "proposta", codemp: p.codemp, codpro: p.codpro },
+      acaoSugerida: `Alinhar aditivo ou replanejamento da PS ${p.codpro} com o cliente`,
     });
   }
   const criticas = estouradas.filter((p) => p.critico);
@@ -512,6 +581,7 @@ export function montarAlertas(
       titulo: `Mais ${resto.length} proposta${resto.length > 1 ? "s" : ""} com estouro crítico`,
       detalhe: `${fmtH(resto.reduce((t, p) => t + p.acima, 0))} acima do vendido somadas.`,
       alvo: { tipo: "aba", aba: "propostas", filtro: "estouro" },
+      acaoSugerida: "Tratar as propostas com estouro crítico",
     });
   }
 
@@ -523,6 +593,7 @@ export function montarAlertas(
       titulo: `${resumo.itensPertoDoLimite} ite${resumo.itensPertoDoLimite > 1 ? "ns" : "m"} com mais de 80% do vendido consumido`,
       detalhe: `Restam ${fmtH(resumo.saldoPertoDoLimite)} antes de estourar. Confirme o avanço real com os consultores.`,
       alvo: { tipo: "aba", aba: "propostas", filtro: "atencao" },
+      acaoSugerida: "Levantar o avanço real dos itens com mais de 80% do vendido consumido",
     });
   }
 
@@ -534,6 +605,7 @@ export function montarAlertas(
       titulo: `${nomes.get(c.codfor) ?? `Consultor ${c.codfor}`} com ${c.meses.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} meses de carteira`,
       detalhe: `${fmtH(c.pendente)} pendentes em ${c.propostasComSaldo} propostas. Avalie redistribuir ou repriorizar.`,
       alvo: { tipo: "consultor", codfor: c.codfor },
+      acaoSugerida: `Redistribuir parte da carteira de ${nomes.get(c.codfor) ?? `consultor ${c.codfor}`}`,
     });
   }
 
@@ -546,6 +618,7 @@ export function montarAlertas(
       titulo: `${fmtH(revisar)} alocadas em itens sem saldo`,
       detalhe: "Consultores alocados em itens que já consumiram o vendido. Revisar ou formalizar aditivo.",
       alvo: { tipo: "aba", aba: "qualidade" },
+      acaoSugerida: "Revisar as alocações em itens sem saldo",
     });
   }
 
@@ -558,6 +631,7 @@ export function montarAlertas(
       titulo: `${fmtH(resumo.semAlocacao)} apontadas sem consultor alocado`,
       detalhe: `${fmtPct(frac)} do executado sem dono no item.`,
       alvo: { tipo: "aba", aba: "qualidade" },
+      acaoSugerida: "Corrigir a alocação dos itens com apontamento sem consultor",
     });
   }
 
@@ -571,8 +645,15 @@ export function montarAlertas(
       titulo: `${semInicio.length} proposta${semInicio.length > 1 ? "s" : ""} aprovada${semInicio.length > 1 ? "s" : ""} sem início`,
       detalhe: `${fmtH(horas)} vendidas aguardando agendamento.`,
       alvo: { tipo: "aba", aba: "propostas", filtro: "naoini" },
+      acaoSugerida: "Agendar o início das propostas aprovadas",
     });
   }
 
-  return alertas.sort((a, b) => Number(b.severidade === "bad") - Number(a.severidade === "bad") || b.peso - a.peso);
+  return ordenarAlertas(alertas);
+}
+
+// Crítico primeiro, depois por peso (impacto em horas). Exportada porque a rota ainda acrescenta o alerta de ações
+// atrasadas (que vem do banco, não da conta de horas) e precisa reordenar.
+export function ordenarAlertas(alertas: Alerta[]): Alerta[] {
+  return [...alertas].sort((a, b) => Number(b.severidade === "bad") - Number(a.severidade === "bad") || b.peso - a.peso);
 }

@@ -39,3 +39,12 @@ export function entidadeIdConsultor(codemp: number, codfor: number): string {
 export function entidadeIdAvaliacao5S(id: number): string {
   return String(id);
 }
+
+// Painel de Eficiência: a exclusão é identificada pelo RatItem (o apontamento), a ação pelo id dela.
+export function entidadeIdEficienciaApontamento(ratItemId: number): string {
+  return String(ratItemId);
+}
+
+export function entidadeIdEficienciaAcao(id: number): string {
+  return String(id);
+}

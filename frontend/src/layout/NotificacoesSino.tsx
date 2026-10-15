@@ -42,6 +42,12 @@ function destinoDaNotificacao(n: Notificacao): string | null {
       return aprovacoes("config-proposta", "pendente");
     case "config_proposta_decidida":
       return aprovacoes("config-proposta", "");
+    // Plano de ação do Painel de Eficiência: o responsável (consultor) vai pra "Minhas ações"; o gestor que criou, pra aba do painel.
+    case "acao_eficiencia_atribuida":
+    case "acao_eficiencia_vencida":
+      return "/projetos/minhas-acoes";
+    case "acao_eficiencia_vencida_gestor":
+      return "/projetos/eficiencia?aba=acoes&filtro=atrasadas";
   }
 
   // atividade_movida, novo_comentario, horas_excedentes e qualquer tipo futuro com atividade.

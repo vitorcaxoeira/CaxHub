@@ -31,14 +31,28 @@ export function ComoCalculamos({ limiares: l, capacidade }: { limiares: Limiares
     [
       "Estouro",
       <>
-        <Cod>executado − vendido</Cod> nos itens acima do vendido.
+        <Cod>executado − vendido</Cod>. Por padrão é lido <b>item a item</b>: soma só os itens acima do vendido, então um item estourado já conta mesmo que outro item da proposta tenha
+        saldo. A opção <b>Estouro</b> da barra de filtros troca para <b>Pela proposta</b>: <Cod>max(0, executado − vendido)</Cod> do total, onde o saldo de um item compensa o estouro de outro.
+        A troca vale para proposta, cliente, carteira, alertas, tendência e Financeiro; <b>não muda</b> as horas de cada item, a carga pendente nem a eficiência do consultor (essas são por
+        alocação). A gaveta mostra os dois números.
       </>,
     ],
     [
       "Impacto financeiro",
       <>
         <Cod>estouro × valor-hora do item</Cod>. O valor-hora é o do próprio item na proposta; item sem valor-hora não entra (aparece em Qualidade dos dados). Estimativa de
-        horas que não serão faturadas, salvo aditivo.
+        horas que não serão faturadas, salvo aditivo. Lendo o estouro <b>pela proposta</b>, o estouro global usa o valor-hora <b>médio</b> da proposta (ponderado pelas horas vendidas),
+        já que o excedente não pertence a um item só.
+      </>,
+    ],
+    [
+      "Eficiência financeira",
+      <>
+        Aba <b>Financeiro</b>. Tudo em R$ ao <b>valor-hora de venda</b> do item: <Cod>valor vendido = horas vendidas × valor-hora</Cod>, <Cod>valor executado = horas executadas × valor-hora</Cod>,
+        <Cod>valor estourado = impacto</Cod>, <Cod>valor dentro = executado − estourado</Cod>. <b>Eficiência financeira</b> = <Cod>valor dentro ÷ valor executado</Cod>: parecida com a de horas,
+        mas pesada pelo valor-hora (estourar um item caro custa mais que um barato). <b>Receita por hora executada</b> = <Cod>valor dentro ÷ horas executadas</Cod>, comparada ao valor-hora
+        médio vendido. <b>Não é faturamento</b> (a nota fiscal só se liga ao projeto, não à proposta) <b>nem custo</b> (poucos consultores têm valor-hora cadastrado). Todos os itens entram,
+        inclusive os sem faturamento direto; o painel diz quanto do valor está neles. Respeita todos os filtros, os ignorados e o modo de estouro.
       </>,
     ],
     ["Saldo a executar", <><Cod>vendido − executado</Cod> nos itens que ainda têm saldo.</>],
@@ -57,6 +71,46 @@ export function ComoCalculamos({ limiares: l, capacidade }: { limiares: Limiares
       </span>,
     ],
     ["Estouro crítico", `Proposta com ${hh(l.criticoMin)} ou mais acima do vendido, ou consumo de ${pctL(l.criticoConsumo)} ou mais.`],
+    [
+      "Apontamento fora do cálculo",
+      <>
+        O gestor do item (ou um administrador) pode tirar UM apontamento da conta, com motivo, e restaurar depois. Vale <b>só neste painel</b>: a RAT, o teto da Alocação,
+        a Home do consultor, o relatório de produtividade e o Senior continuam contando a hora. Por isso o executado aqui pode ser menor que o das outras telas. A exclusão
+        sai do executado do item, da tendência mensal e da eficiência/carga do consultor; a lista fica na aba Qualidade dos dados e tudo é auditado.
+      </>,
+    ],
+    [
+      "Proposta ignorada",
+      <>
+        O check <b>Ignorar</b> na lista da aba Propostas tira UMA proposta de todos os cálculos: resumo, alertas, pareto, faixas de consumo, clientes, equipe, carga e a tendência mensal.
+        Vale para qualquer proposta, atípica ou não. A linha continua na lista (esmaecida) para dar para desmarcar, e uma faixa no topo lembra quantas estão ignoradas. É uma escolha
+        <b> sua</b>, guardada neste navegador: não é compartilhada com outros gestores nem auditada. Não confundir com "Apontamento fora do cálculo", que é decisão do gestor, compartilhada e auditada.
+      </>,
+    ],
+    [
+      "Consultor ignorado",
+      <>
+        O check <b>Ignorar</b> na lista da aba Equipe e carga tira UM consultor dos <b>indicadores da equipe</b>: carga pendente, eficiência da equipe, consultores em sobrecarga,
+        alocação a revisar, mapa de alocação e alertas de capacidade. As horas das propostas (vendido, executado, estouro, eficiência da proposta) <b>não mudam</b>: o que ele
+        apontou continua no item. A linha dele fica na lista (esmaecida, com os números reais) para dar para desmarcar. Também é escolha <b>sua</b>, guardada neste navegador,
+        sem compartilhar nem auditar.
+      </>,
+    ],
+    [
+      "Item e consultor ignorados numa proposta",
+      <>
+        Na gaveta da proposta, o check <b>Ignorar</b> em <b>Itens e consultores</b> tira um item da conta (vendido, executado, estouro e a equipe dele saem), e o da aba <b>Consultores</b> tira as horas
+        que a pessoa apontou naquela proposta do executado dos itens. Vale em todo o painel (lista, carteira, clientes, equipe, tendência), mas só para <b>aquela</b> proposta: o mesmo consultor
+        continua contando nas outras. A gaveta mostra os números sem ignorar para comparar. Consultor de fora do seu time entra somado, sem nome e sem check. Escolha <b>sua</b>, guardada neste navegador.
+      </>,
+    ],
+    [
+      "Proposta atípica",
+      <>
+        Consumo de {pctL(l.atipicaConsumo)} ou mais <b>e</b> {hh(l.atipicaAcimaMin)} ou mais acima do vendido. É só um aviso: aparece com a marca "atípica" na lista de propostas e na
+        aba Qualidade dos dados, e não muda nenhuma conta. Para tirar uma proposta dos números, use "Ignorar" (item acima).
+      </>,
+    ],
     [
       "Eficiência do consultor",
       <>
@@ -93,8 +147,8 @@ export function ComoCalculamos({ limiares: l, capacidade }: { limiares: Limiares
         <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted">
           <li><b className="text-foreground">Avanço físico (%) por item:</b> o cadastro existe na estrutura do cronograma, mas não está preenchido. Sem ele não dá para projetar o estouro antes de acontecer.</li>
           <li><b className="text-foreground">Data prevista de fim por item:</b> quase nenhuma proposta tem. Hoje só há o prazo no cabeçalho.</li>
+          <li><b className="text-foreground">Custo e faturamento real por proposta:</b> não há custo-hora confiável dos consultores e a nota fiscal só se liga ao projeto, não à proposta. Por isso o Financeiro usa o valor de venda, sem margem.</li>
           <li><b className="text-foreground">Capacidade por consultor</b> com férias e ausências: usamos um valor único por consultor em projeto.</li>
-          <li><b className="text-foreground">Plano de ação</b> (dono, prazo e status por alerta) e <b className="text-foreground">exclusão de apontamento do cálculo</b>, com motivo e histórico: próxima fase.</li>
         </ul>
       </Cartao>
     </div>
