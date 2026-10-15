@@ -4,6 +4,7 @@ import { estaNoApp } from "./lib/desktop";
 import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
+import { DEPEXE_DHO } from "./auth/acessoRh";
 import { Require5S } from "./auth/Require5S";
 import { RequireGestorOuAdmin } from "./auth/RequireGestorOuAdmin";
 import { ThemeProvider } from "./theme/ThemeContext";
@@ -218,6 +219,22 @@ export default function App() {
                 <Route path="/5s/cadastros/perguntas" element={<Perguntas5S />} />
                 <Route path="/5s/cadastros/participantes" element={<Participantes5S />} />
               </Route>
+              {/* Pessoas (Senior HCM): admin ou gestor do departamento 11 (DHO). Gestor não é Role (vem de
+                  DepartamentoGestor), então a guarda é dinâmica. Em sincronia com o item do menu (Sidebar,
+                  `gestorDho`) e o exigirAdminOuGestorDho de routes/rh/index.ts. Ao mudar quem entra, ampliar
+                  as três camadas. */}
+              <Route element={<RequireGestorOuAdmin depexe={DEPEXE_DHO} />}>
+                <Route path="/rh/quadro" element={<QuadroPessoal />} />
+                <Route path="/rh/folha" element={<FolhaPagamento />} />
+                <Route path="/rh/rescisoes" element={<Rescisoes />} />
+                <Route path="/rh/reajustes" element={<Reajustes />} />
+                <Route path="/rh/turnover" element={<Turnover />} />
+                <Route path="/rh/absenteismo" element={<Absenteismo />} />
+                <Route path="/rh/ponto" element={<PontoHoras />} />
+                <Route path="/rh/jornada" element={<ConformidadeJornada />} />
+                <Route path="/rh/ferias" element={<Ferias />} />
+                <Route path="/rh/dre" element={<DreRh />} />
+              </Route>
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
               </Route>
@@ -235,16 +252,6 @@ export default function App() {
                 <Route path="/admin/sincronizacao-erp/dados/:jobName" element={<DadosErp />} />
                 <Route path="/admin/sincronizacao-hcm" element={<SincronizacaoHcm />} />
                 <Route path="/admin/sincronizacao-hcm/dados/:jobName" element={<DadosErp />} />
-                <Route path="/rh/quadro" element={<QuadroPessoal />} />
-                <Route path="/rh/folha" element={<FolhaPagamento />} />
-                <Route path="/rh/rescisoes" element={<Rescisoes />} />
-                <Route path="/rh/reajustes" element={<Reajustes />} />
-                <Route path="/rh/turnover" element={<Turnover />} />
-                <Route path="/rh/absenteismo" element={<Absenteismo />} />
-                <Route path="/rh/ponto" element={<PontoHoras />} />
-                <Route path="/rh/jornada" element={<ConformidadeJornada />} />
-                <Route path="/rh/ferias" element={<Ferias />} />
-                <Route path="/rh/dre" element={<DreRh />} />
                 <Route path="/admin/sincronizacao-kyria" element={<SincronizacaoKyria />} />
                 <Route path="/admin/mapeamento-kyria" element={<MapeamentoKyria />} />
                 <Route path="/admin/sincronizacao-kyria/dados/:jobName" element={<DadosKyria />} />

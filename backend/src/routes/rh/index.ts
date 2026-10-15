@@ -1,7 +1,8 @@
-import { Router, Request, Response } from "express";
+import { NextFunction, Router, Request, Response } from "express";
 import { Prisma } from "@prisma/client";
-import { requireAuth, requireRole } from "../../auth/middleware";
+import { AuthenticatedRequest, requireAuth } from "../../auth/middleware";
 import { prisma } from "../../db/prisma";
+import { podeAcessarRh } from "../../domain/rh/acesso";
 import { FiltroRh, lerFiltro, veIndividual } from "../../domain/rh/filtros";
 import { TIPO_COLABORADOR } from "../../domain/rh/dominios";
 import { quadro } from "../../domain/rh/quadro";
@@ -16,10 +17,24 @@ import { ferias } from "../../domain/rh/ferias";
 import { dre } from "../../domain/rh/dre";
 
 // Módulo RH (Senior HCM): todas as telas leem do espelho local (hcm_*), nunca do Senior ao vivo.
-// Só o admin acessa (dado sensível: folha, salário individual, rescisão) e ele vê tudo, inclusive nome e
-// valor individual. Um papel só-agregado, se vier, usa a supressão de grupos pequenos de domain/rh/comum.ts.
+// Acessam o admin e o gestor do departamento 11 (DHO) (dado sensível: folha, salário individual, rescisão), e os
+// dois veem tudo, inclusive nome e valor individual. Um papel só-agregado, se vier, usa a supressão de grupos
+// pequenos de domain/rh/comum.ts.
 export const rhRouter = Router();
-rhRouter.use(requireAuth, requireRole("admin"));
+
+async function exigirAdminOuGestorDho(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!(await podeAcessarRh(req.user!.userId, req.user!.role))) {
+      res.status(403).json({ error: "Sem permissão para acessar este recurso" });
+      return;
+    }
+    next();
+  } catch (error) {
+    handleError(res, error, "acesso");
+  }
+}
+
+rhRouter.use(requireAuth, exigirAdminOuGestorDho);
 
 function handleError(res: Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);

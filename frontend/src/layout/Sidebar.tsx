@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { DEPEXE_DHO } from "../auth/acessoRh";
 
 interface NavLeaf {
   to: string;
@@ -18,6 +19,10 @@ interface NavLeaf {
   // `viajante` do /meu-perfil). Combina em OU com `gestorOuAdmin`, como `souConsultor`. Só
   // "Minhas Solicitações" usa — o viajante só consulta a própria viagem.
   souViajante?: boolean;
+  // Aparece pra admin e pra quem é gestor do departamento 11 (DHO) — dinâmico, via DepartamentoGestor. Só
+  // o menu Pessoas usa. Em sincronia com o RequireGestorOuAdmin (depexe) em App.tsx e com o
+  // exigirAdminOuGestorDho de routes/rh/index.ts.
+  gestorDho?: boolean;
   // Restringe ESTE item a papéis específicos dentro de um grupo aberto a todos (ex.: Atendimento
   // de viagens). Mantido em sincronia com o RequireRole em App.tsx e o backend.
   roles?: string[];
@@ -155,26 +160,28 @@ const groups: NavGroup[] = [
   },
   {
     label: "Pessoas",
-    // Senior HCM (módulo RH): dado sensível (folha, salário individual, rescisão), só admin. Em sincronia
-    // com o RequireRole em App.tsx e com o requireRole("admin") de routes/rh/index.ts.
+    // Senior HCM (módulo RH): dado sensível (folha, salário individual, rescisão). Admin e gestor do
+    // departamento 11 (DHO). O grupo é "*" e cada item traz `gestorDho`, que esconde o grupo inteiro de quem
+    // não é um dos dois. Em sincronia com o RequireGestorOuAdmin em App.tsx e com o exigirAdminOuGestorDho
+    // de routes/rh/index.ts.
     items: [
-      { to: "/rh/quadro", label: "Quadro de Pessoal" },
-      { to: "/rh/folha", label: "Folha de Pagamento" },
-      { to: "/rh/rescisoes", label: "Rescisões" },
-      { to: "/rh/reajustes", label: "Reajustes Salariais" },
-      { to: "/rh/turnover", label: "Turnover" },
+      { to: "/rh/quadro", label: "Quadro de Pessoal", gestorDho: true },
+      { to: "/rh/folha", label: "Folha de Pagamento", gestorDho: true },
+      { to: "/rh/rescisoes", label: "Rescisões", gestorDho: true },
+      { to: "/rh/reajustes", label: "Reajustes Salariais", gestorDho: true },
+      { to: "/rh/turnover", label: "Turnover", gestorDho: true },
       {
         label: "Jornada",
         children: [
-          { to: "/rh/absenteismo", label: "Absenteísmo" },
-          { to: "/rh/ponto", label: "Horas Extras e Banco" },
-          { to: "/rh/jornada", label: "Conformidade de Jornada" },
+          { to: "/rh/absenteismo", label: "Absenteísmo", gestorDho: true },
+          { to: "/rh/ponto", label: "Horas Extras e Banco", gestorDho: true },
+          { to: "/rh/jornada", label: "Conformidade de Jornada", gestorDho: true },
         ],
       },
-      { to: "/rh/ferias", label: "Férias" },
-      { to: "/rh/dre", label: "DRE de RH" },
+      { to: "/rh/ferias", label: "Férias", gestorDho: true },
+      { to: "/rh/dre", label: "DRE de RH", gestorDho: true },
     ],
-    roles: ["admin"],
+    roles: "*",
   },
   {
     label: "Administração",
@@ -263,6 +270,8 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   const [souConsultor, setSouConsultor] = useState(false);
   // Viaja em alguma solicitação já reservada/finalizada (vem do mesmo /meu-perfil).
   const [souViajante, setSouViajante] = useState(false);
+  // Gerencia o departamento 11 (DHO) — vem do mesmo /meu-perfil; admin entra por `user.role`.
+  const [ehGestorDho, setEhGestorDho] = useState(false);
   // Papel no módulo 5S (null = não é participante). Mesma guarda de efeito superado do /meu-perfil.
   const [papel5s, setPapel5s] = useState<string | null>(null);
 
@@ -284,6 +293,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
       setEhGestorOuAdmin(true);
       setSouConsultor(false);
       setSouViajante(false);
+      setEhGestorDho(true);
       return;
     }
     // Guarda de "efeito superado" (28/08/2026) — mesma classe de corrida já corrigida em
@@ -301,12 +311,15 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
         setEhGestorOuAdmin((data.departamentosGerenciados ?? []).length > 0);
         setSouConsultor(data.consultor != null);
         setSouViajante(data.viajante === true);
+        // Cada item de departamentosGerenciados é um objeto { depexe, depexeLabel, integrantes }, não o número.
+        setEhGestorDho((data.departamentosGerenciados ?? []).some((d: { depexe: number }) => d.depexe === DEPEXE_DHO));
       })
       .catch(() => {
         if (!cancelado) {
           setEhGestorOuAdmin(false);
           setSouConsultor(false);
           setSouViajante(false);
+          setEhGestorDho(false);
         }
       });
     return () => {
@@ -319,6 +332,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   function leafVisivel(item: NavLeaf): boolean {
     if (item.roles && !(user && item.roles.includes(user.role))) return false;
     if (item.papel5s) return !!papel5s && (item.papel5s as string[]).includes(papel5s);
+    if (item.gestorDho) return ehGestorDho;
     return (
       (!item.gestorOuAdmin && !item.souConsultor && !item.souViajante) ||
       !!(item.gestorOuAdmin && ehGestorOuAdmin) ||
