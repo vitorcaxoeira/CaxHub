@@ -4,6 +4,7 @@ import { podeVerArea } from "../domain/gestao5s";
 import { carregarAcesso5S } from "../domain/gestao5sAcesso";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { ENTIDADES_AUDITORIA } from "../audit/taxonomia";
 import { podeExecutarAcao, resolverContextoConsultor } from "../domain/contextoProjeto";
 import { sitproLabel } from "../domain/propostasDominio";
 import { Prisma } from "@prisma/client";
@@ -12,6 +13,15 @@ const INCLUDE_USUARIO = { usuario: { select: { nome: true, fotoUrl: true } } } a
 type EventoComUsuario = Prisma.AuditEventoGetPayload<{ include: typeof INCLUDE_USUARIO }>;
 
 export const auditoriaRouter = Router();
+
+// O histórico do participante do Plano de Evolução traz o valor hora dos consultores PJ. Só o admin enxerga, na lista geral, na exportação e
+// na consulta por entidade: o gestor de departamento NÃO (o atalho "gerencia algum departamento" de podeVerEntidade o deixaria ver tudo).
+const ENTIDADES_SO_ADMIN: string[] = [ENTIDADES_AUDITORIA.PLANO_PARTICIPANTE, ENTIDADES_AUDITORIA.PLANO_APURACAO];
+function esconderEntidadesSoAdmin(req: AuthenticatedRequest, where: Prisma.AuditEventoWhereInput): void {
+  if (req.user!.role === "admin") return;
+  const ja = where.AND == null ? [] : Array.isArray(where.AND) ? where.AND : [where.AND];
+  where.AND = [...ja, { entidadeTipo: { notIn: ENTIDADES_SO_ADMIN } }];
+}
 
 // admin sempre vê; qualquer papel com departamentosGerenciados.length > 0 (Líder
 // Técnico/gestor de departamento) também — comercial e consultor comum ficam de fora
@@ -90,6 +100,9 @@ async function podeVerEntidade(req: AuthenticatedRequest, entidadeTipo: string, 
     if (!avaliacao) return false;
     return podeVerArea(await carregarAcesso5S(req.user!.userId, req.user!.role), avaliacao.area);
   }
+
+  // Valor hora dos PJ: checado ANTES do atalho de gestor abaixo (o admin já retornou true no topo).
+  if (ENTIDADES_SO_ADMIN.includes(entidadeTipo)) return false;
 
   if (contexto.departamentosGerenciados.length > 0) return true;
 
@@ -234,6 +247,7 @@ async function buscarPagina(filtros: FiltrosAuditoria) {
 auditoriaRouter.get("/", requireAcessoAuditoria, async (req: AuthenticatedRequest, res) => {
   try {
     const filtros = montarFiltros(req.query);
+    esconderEntidadesSoAdmin(req, filtros.where);
     const resultado = await buscarPagina(filtros);
     res.json(resultado);
   } catch (error) {
@@ -256,6 +270,7 @@ function csvEscape(valor: unknown): string {
 auditoriaRouter.get("/export", requireAcessoAuditoria, async (req: AuthenticatedRequest, res) => {
   try {
     const filtros = montarFiltros(req.query);
+    esconderEntidadesSoAdmin(req, filtros.where);
     const linhas = await prisma.auditEvento.findMany({
       where: filtros.where,
       orderBy: [{ ocorridoEm: "desc" }, { id: "desc" }],

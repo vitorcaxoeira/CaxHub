@@ -76,6 +76,8 @@ const groups: NavGroup[] = [
       { to: "/projetos/apontamentos", label: "Meus Apontamentos" },
       // Ações do Plano de ação do Painel de Eficiência em que a pessoa é a responsável (consultor do time, não gestor).
       { to: "/projetos/minhas-acoes", label: "Minhas ações", souConsultor: true },
+      // Plano de Evolução dos consultores PJ: o consultor vê só o próprio andamento (quem não participa recebe uma tela explicando).
+      { to: "/projetos/meu-plano", label: "Meu plano", souConsultor: true },
       // Sem `gestorOuAdmin`: o consultor entra pra acompanhar os pedidos dele, o gestor
       // pra decidir os do time. O recorte de quem vê o quê é do servidor.
       { to: "/projetos/aprovacoes", label: "Aprovações" },

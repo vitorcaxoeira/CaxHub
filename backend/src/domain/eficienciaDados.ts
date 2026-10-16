@@ -84,7 +84,7 @@ interface LinhaItem {
 //
 // ATENÇÃO: repete em SQL as regras de `filtroRatItemRealizado` (domain/ratDominio.ts, a versão Prisma usada pelo
 // teto, pela Alocação e pela Home). Se uma mudar, mude a outra.
-const RAT_ITEM_VALIDO = Prisma.sql`
+export const RAT_ITEM_VALIDO = Prisma.sql`
   ri.removido_em_senior IS NULL AND r.removido_em_senior IS NULL
   AND r.sitrat IS DISTINCT FROM ${SITRAT_CANCELADO}
   AND ri.horini IS NOT NULL AND ri.horfim > ri.horini`;

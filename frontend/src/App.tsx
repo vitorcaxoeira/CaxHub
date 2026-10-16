@@ -30,6 +30,8 @@ import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
 import { Eficiencia } from "./pages/projetos/Eficiencia";
 import { MinhasAcoes } from "./pages/projetos/MinhasAcoes";
+import { MeuPlano } from "./pages/projetos/MeuPlano";
+import { PlanoEvolucao } from "./pages/projetos/PlanoEvolucao";
 import { Auditoria } from "./pages/auditoria/Auditoria";
 import { SolicitacoesViagem } from "./pages/solicitacoes/SolicitacoesViagem";
 import { SolicitacaoViagemForm } from "./pages/solicitacoes/SolicitacaoViagemForm";
@@ -40,6 +42,7 @@ import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
 import { RatVisualizacao } from "./pages/projetos/RatVisualizacao";
 import { RelatorioDespesasRat } from "./pages/projetos/RelatorioDespesasRat";
 import { RelatorioCronograma } from "./pages/projetos/RelatorioCronograma";
+import { RelatorioMemoriaPlano } from "./pages/projetos/RelatorioMemoriaPlano";
 import { RelatorioProdutividade } from "./pages/projetos/RelatorioProdutividade";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
@@ -128,6 +131,17 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            {/* Memória de cálculo da apuração do Plano de Evolução (botão Imprimir/Baixar PDF da Apuração e do Meu plano) — fora do
+                AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o backend (GET .../memoria) decide quem enxerga: admin, gestor do
+                time (sem R$) ou o próprio consultor depois da devolutiva. */}
+            <Route
+              path="/projetos/eficiencia/plano-evolucao/memoria/:id"
+              element={
+                <ProtectedRoute>
+                  <RelatorioMemoriaPlano />
+                </ProtectedRoute>
+              }
+            />
             {/* Relatório impresso do Resultado geral 5S (botão Imprimir do dashboard) — fora do
                 AppShell pelo mesmo motivo da rota acima; mantém o login e o acesso ao módulo 5S. */}
             <Route
@@ -166,6 +180,9 @@ export default function App() {
               {/* Minhas ações: o responsável de uma ação do Plano de ação é consultor do time (não gestor), então a rota fica
                   fora do RequireGestorOuAdmin; o backend só devolve as ações dele. */}
               <Route path="/projetos/minhas-acoes" element={<MinhasAcoes />} />
+              {/* Meu plano (Plano de Evolução dos consultores PJ): o consultor vê só o PRÓPRIO andamento, então fica fora do
+                  RequireGestorOuAdmin; o backend devolve 404 a quem não participa do plano. */}
+              <Route path="/projetos/meu-plano" element={<MeuPlano />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />
               <Route path="/projetos/jornadas" element={<Jornadas />} />
               <Route path="/projetos/aprovacoes" element={<Aprovacoes />} />
@@ -189,6 +206,8 @@ export default function App() {
                   exigirAdminOuGestor de routes/eficiencia.ts no backend. */}
               <Route element={<RequireGestorOuAdmin />}>
                 <Route path="/projetos/eficiencia" element={<Eficiencia />} />
+                {/* Plano de Evolução (gestão): mesma guarda do painel. Sem item de menu próprio: o acesso é pelo link no Painel de Eficiência. */}
+                <Route path="/projetos/eficiencia/plano-evolucao" element={<PlanoEvolucao />} />
                 <Route path="/solicitacoes/nova" element={<SolicitacaoViagemForm />} />
                 <Route path="/solicitacoes/aprovacoes" element={<SolicitacoesViagem escopo="aprovacao" />} />
                 <Route path="/solicitacoes/atendimento" element={<SolicitacoesViagem escopo="atendimento" />} />

@@ -48,6 +48,10 @@ function destinoDaNotificacao(n: Notificacao): string | null {
       return "/projetos/minhas-acoes";
     case "acao_eficiencia_vencida_gestor":
       return "/projetos/eficiencia?aba=acoes&filtro=atrasadas";
+    // Plano de Evolução: ciclo publicado e resultado devolvido levam o consultor ao Meu plano.
+    case "plano_ciclo_publicado":
+    case "plano_resultado_disponivel":
+      return "/projetos/meu-plano";
   }
 
   // atividade_movida, novo_comentario, horas_excedentes e qualquer tipo futuro com atividade.
