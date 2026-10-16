@@ -13,7 +13,7 @@ import { AbaFinanceiro } from "../../components/eficiencia/AbaFinanceiro";
 import { AbaPropostas, FiltroCarteira, filtroValido } from "../../components/eficiencia/AbaPropostas";
 import { AbaQualidade } from "../../components/eficiencia/AbaQualidade";
 import { ComoCalculamos } from "../../components/eficiencia/ComoCalculamos";
-import { FaixaIgnoradas } from "../../components/eficiencia/FaixaIgnoradas";
+import { AlertaIgnorados } from "../../components/eficiencia/FaixaIgnoradas";
 import { GavetaConsultor, GavetaProposta } from "../../components/eficiencia/Gavetas";
 import { ModalAcao } from "../../components/eficiencia/ModalAcao";
 import { AcoesPainel, VisaoGeral } from "../../components/eficiencia/VisaoGeral";
@@ -365,6 +365,35 @@ export function Eficiencia() {
                 </svg>
               </button>
             )}
+            {ignoradas.size > 0 && <AlertaIgnorados total={ignoradas.size} onVer={() => mudarAba("propostas")} onRestaurar={() => setIgnoradas(new Set())} />}
+            {/* Itens e consultores ignorados DENTRO de propostas: só os que existem no recorte atual entram na conta. O botão abre a primeira proposta marcada. */}
+            {painel && painel.meta.ignoradosNaProposta.itens > 0 && (
+              <AlertaIgnorados
+                tipo="item"
+                verRotulo="Abrir a proposta"
+                total={painel.meta.ignoradosNaProposta.itens}
+                onVer={() => abrirPrimeira(itensIgnorados)}
+                onRestaurar={() => setItensIgnorados(new Set())}
+              />
+            )}
+            {painel && painel.meta.ignoradosNaProposta.consultores > 0 && (
+              <AlertaIgnorados
+                tipo="consultorProposta"
+                verRotulo="Abrir a proposta"
+                total={painel.meta.ignoradosNaProposta.consultores}
+                onVer={() => abrirPrimeira(consultoresNaProposta)}
+                onRestaurar={() => setConsultoresNaProposta(new Set())}
+              />
+            )}
+            {/* Conta os que realmente aparecem na lista (um codfor guardado de outro recorte não conta). */}
+            {painel && painel.equipe.consultores.some((c) => c.ignorado) && (
+              <AlertaIgnorados
+                tipo="consultor"
+                total={painel.equipe.consultores.filter((c) => c.ignorado).length}
+                onVer={() => mudarAba("equipe")}
+                onRestaurar={() => setConsultoresIgnorados(new Set())}
+              />
+            )}
           </div>
           {/* Como ler o estouro: item a item (um item acima do vendido já conta) ou pelo total da proposta (o saldo de um item compensa outro). */}
           <div role="group" aria-label="Como ler o estouro" className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-muted">
@@ -509,36 +538,6 @@ export function Eficiencia() {
           </>
         )}
       </div>
-
-      {ignoradas.size > 0 && <FaixaIgnoradas total={ignoradas.size} onVer={() => mudarAba("propostas")} onRestaurar={() => setIgnoradas(new Set())} />}
-      {/* Itens e consultores ignorados DENTRO de propostas: só os que existem no recorte atual entram na conta. O botão abre a primeira proposta marcada. */}
-      {painel && painel.meta.ignoradosNaProposta.itens > 0 && (
-        <FaixaIgnoradas
-          tipo="item"
-          verRotulo="Abrir a proposta"
-          total={painel.meta.ignoradosNaProposta.itens}
-          onVer={() => abrirPrimeira(itensIgnorados)}
-          onRestaurar={() => setItensIgnorados(new Set())}
-        />
-      )}
-      {painel && painel.meta.ignoradosNaProposta.consultores > 0 && (
-        <FaixaIgnoradas
-          tipo="consultorProposta"
-          verRotulo="Abrir a proposta"
-          total={painel.meta.ignoradosNaProposta.consultores}
-          onVer={() => abrirPrimeira(consultoresNaProposta)}
-          onRestaurar={() => setConsultoresNaProposta(new Set())}
-        />
-      )}
-      {/* Conta os que realmente aparecem na lista (um codfor guardado de outro recorte não conta). */}
-      {painel && painel.equipe.consultores.some((c) => c.ignorado) && (
-        <FaixaIgnoradas
-          tipo="consultor"
-          total={painel.equipe.consultores.filter((c) => c.ignorado).length}
-          onVer={() => mudarAba("equipe")}
-          onRestaurar={() => setConsultoresIgnorados(new Set())}
-        />
-      )}
 
       <Tabs tabs={abas} activeKey={aba} onChange={mudarAba} />
 
