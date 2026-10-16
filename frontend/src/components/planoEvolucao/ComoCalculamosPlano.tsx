@@ -30,6 +30,22 @@ export function ComoCalculamosPlano() {
       </>,
     ],
     [
+      "Apuração do ciclo",
+      <>
+        Depois do corte de evidências, o admin <b>fecha o índice global</b> do ciclo (um só resultado para todos). O gestor lança o que depende de evidência (competências, certificações, avaliação de clientes, case e os
+        indicadores manuais) e o sistema junta com os indicadores automáticos. <b>Apurar congela o resultado</b>: o que foi apurado é o que se explica, mesmo que os dados mudem depois. A sequência do reforçador vem das
+        apurações <b>encerradas</b> dos ciclos anteriores; um ciclo anterior ainda aberto bloqueia o seguinte.
+      </>,
+    ],
+    [
+      "Devolutiva e contestação",
+      <>
+        O resultado só aparece para o consultor depois que o gestor registra a <b>devolutiva</b>, e vem com a <b>memória de cálculo</b> (tela e PDF): portão, os 5 requisitos, reforçador e valor hora. Se o consultor contestar,
+        o gestor registra a contestação e o desfecho. Contestação <b>procedente</b> (só o admin) reabre a apuração para corrigir os lançamentos, e a versão anterior fica guardada. Só se encerra com nenhuma contestação aberta; no
+        10º ciclo, encerrar <b>efetiva</b> o novo Valor Hora Base.
+      </>,
+    ],
+    [
       "Descumprir e efetivar",
       <>
         Falhar em qualquer requisito individual ou no portão zera a pontuação e o reforçador, volta à base vigente e recomeça a contagem. Ao cumprir <b>10 ciclos consecutivos</b>, o valor do 10º ciclo vira a nova base
@@ -133,7 +149,8 @@ export function ComoCalculamosPlano() {
 
       <Cartao titulo="O que ainda não temos">
         <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted">
-          <li><b className="text-foreground">Apuração com registro:</b> nesta fase o CaxHub só faz a <b>prévia ao vivo</b>. Lançar certificações, case e competências, fechar o ciclo com memória de cálculo, devolutiva e contestação é a próxima etapa.</li>
+          <li><b className="text-foreground">Prazos automáticos:</b> as datas do ciclo (apuração, devolutiva, contestação) são só referência. O CaxHub não bloqueia nem cobra por prazo vencido; quem decide o ritmo é o gestor.</li>
+          <li><b className="text-foreground">Upload de evidências:</b> certificações, case e competências são registrados pelo gestor, com uma linha de evidência. Não há envio de arquivos.</li>
           <li><b className="text-foreground">Cumprimento de cronogramas:</b> desativado. A data prevista de fim está preenchida em menos de 1% das atividades, então não há base para medir.</li>
           <li><b className="text-foreground">Encerramento de tarefa:</b> o item do Senior não tem data de encerramento. Por isso a eficiência é medida hora a hora no ciclo e não "por tarefa encerrada".</li>
           <li><b className="text-foreground">Avaliação de Clientes por formulário:</b> o CaxHub não envia o formulário. O gestor lança o resultado na apuração.</li>

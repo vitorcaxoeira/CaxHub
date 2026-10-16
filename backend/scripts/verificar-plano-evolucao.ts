@@ -26,6 +26,20 @@ import { ItemNoCiclo, avaliarMeta, indiceDe, indicesDoCiclo } from "../src/domai
 import { apontamentoOnline, avaliarOnline, cumpreEficienciaIndividual, ehOnline } from "../src/domain/planoEvolucao/eficienciaIndividual";
 import { INDICADORES_PADRAO, ParametrosDaPrevia, montarPrevia } from "../src/domain/planoEvolucao/previa";
 import {
+  CicloAnterior,
+  Lancamentos,
+  SnapshotApuracao,
+  consecutivosAntesDoCiclo,
+  eficienciaIndividualDaApuracao,
+  lacunasAnteriores,
+  lancamentosVazios,
+  montarEntrada,
+  montarMemoriaDeCalculo,
+  pendenciasDeLancamento,
+  resultadosDosIndicadores,
+  rotuloPendencia,
+} from "../src/domain/planoEvolucao/apuracao";
+import {
   pendenciasDePublicacao,
   validarCalendario,
   validarEdicaoCiclo,
@@ -354,6 +368,107 @@ const valores = (r: { valorHoraCentavos: number }[]) => r.map((x) => x.valorHora
   confere("meta global ausente: não conclui, e o ciclo segue projetável", [montarPrevia({ ...params, metaEficienciaGlobal: null }, [part(1, 10000)], itens, online).global.atingiu], [null]);
   // Sem nenhum participante o global da ÁREA continua calculado.
   confere("sem participantes o global da área existe", montarPrevia(params, [], itens, online).global.executadoMin, h(95));
+}
+
+// 16. Apuração (Fase 2): pendências de lançamento, indicadores do ciclo, sequência derivada e memória de cálculo.
+{
+  const config = INDICADORES_PADRAO.map((i) => ({ chave: i.chave, tipo: i.tipo, peso: i.peso, ativo: i.ativo, meta: i.tipo === "automatico" ? 80 : null }));
+  const lanc = (extra: Partial<Lancamentos> = {}): Lancamentos => ({ ...lancamentosVazios(), ...extra });
+  const completo = (extra: Partial<Lancamentos> = {}): Lancamentos =>
+    lanc({
+      competenciasPct: 90,
+      certificacoesCumpriu: true,
+      clientesMedia: 8.4,
+      clientesRespostas: 6,
+      caseCumpriu: true,
+      manuais: [{ chave: "retrabalho", atingiu: true }, { chave: "qualidade_tecnica", atingiu: true }, { chave: "aderencia_processos", atingiu: true }],
+      ...extra,
+    });
+  const auto = [
+    { chave: "produtividade" as const, valor: 90, horasMin: h(100), atingiu: true, semBase: false },
+    { chave: "apontamento_online" as const, valor: 85, horasMin: h(100), atingiu: true, semBase: false },
+  ];
+
+  // Pendências
+  const inds0 = resultadosDosIndicadores(config, auto, []);
+  const ei0 = eficienciaIndividualDaApuracao(inds0, 100, null);
+  confere("ciclo sem lançamento: faltam portão e requisitos e os indicadores manuais", pendenciasDeLancamento(config, lanc(), ei0), ["competencias", "certificacoes", "avaliacaoClientes", "caseTecnico", "indicador:retrabalho", "indicador:qualidade_tecnica", "indicador:aderencia_processos"]);
+  confere("contrato inativo: 'não apurado', nada mais é exigido", pendenciasDeLancamento(config, lanc({ contratoAtivoNoCiclo: false }), ei0), []);
+  confere("ciclo incompleto: nada mais é exigido", pendenciasDeLancamento(config, lanc({ cicloCompleto: false }), ei0), []);
+  confere("tudo lançado: sem pendência", pendenciasDeLancamento(config, completo(), eficienciaIndividualDaApuracao(resultadosDosIndicadores(config, auto, completo().manuais), 100, null)), []);
+  confere("3+ respostas de cliente exigem a média; menos de 3 não", [pendenciasDeLancamento(config, completo({ clientesRespostas: 5, clientesMedia: null }), { cumpriu: true }), pendenciasDeLancamento(config, completo({ clientesRespostas: 2, clientesMedia: null }), { cumpriu: true })], [["avaliacaoClientes"], []]);
+  confere("clientes: zero respostas lançado (0) NÃO é pendência", pendenciasDeLancamento(config, completo({ clientesRespostas: 0, clientesMedia: null }), { cumpriu: true }), []);
+  confere("indicador manual desativado ou sem peso não é pendência", pendenciasDeLancamento(config.map((i) => (i.chave === "retrabalho" ? { ...i, peso: 0 } : i.chave === "qualidade_tecnica" ? { ...i, ativo: false } : i)), completo({ manuais: [{ chave: "aderencia_processos", atingiu: false }] }), { cumpriu: true }), []);
+  confere("rótulos das pendências", [rotuloPendencia("competencias"), rotuloPendencia("indicador:retrabalho")], ["Avaliação de Competências", "Indicador Retrabalho"]);
+
+  // Eficiência individual com indicadores do gestor
+  const todos = resultadosDosIndicadores(config, auto, completo().manuais);
+  confere("só indicadores ativos entram, na ordem do ciclo", todos.map((i) => i.chave), ["produtividade", "apontamento_online", "retrabalho", "qualidade_tecnica", "aderencia_processos"]);
+  confere("todos atingidos: eficiência individual cumprida", eficienciaIndividualDaApuracao(todos, 100, null).cumpriu, true);
+  const umFalho = resultadosDosIndicadores(config, auto, [{ chave: "retrabalho", atingiu: false }, { chave: "qualidade_tecnica", atingiu: true }, { chave: "aderencia_processos", atingiu: true }]);
+  const ei1 = eficienciaIndividualDaApuracao(umFalho, 100, null);
+  confere("um indicador de peso 10 falho: nota 90% e não cumpre com mínimo 100", [ei1.cumpriu, ei1.veredito.nota], [false, 90]);
+  confere("com nota mínima 90 o mesmo caso cumpre", eficienciaIndividualDaApuracao(umFalho, 90, null).cumpriu, true);
+  const semBase = resultadosDosIndicadores(config.filter((i) => i.tipo === "automatico"), [{ ...auto[0], atingiu: null, semBase: true }, { ...auto[1], atingiu: null, semBase: true }], []);
+  confere("nenhum indicador com base: não conclui, e vira pendência de decisão", [eficienciaIndividualDaApuracao(semBase, 100, null).cumpriu, pendenciasDeLancamento(config.filter((i) => i.tipo === "automatico"), completo(), eficienciaIndividualDaApuracao(semBase, 100, null))], [null, ["eficienciaIndividual"]]);
+  const dec = eficienciaIndividualDaApuracao(semBase, 100, true);
+  confere("decisão do gestor vale quando nada tem base, e fica marcada", [dec.cumpriu, dec.decisaoManual], [true, true]);
+  confere("decisão do gestor NÃO sobrepõe indicadores que concluem", [eficienciaIndividualDaApuracao(umFalho, 100, true).cumpriu, eficienciaIndividualDaApuracao(umFalho, 100, true).decisaoManual], [false, false]);
+
+  // Entrada para o motor de regras
+  const ent = montarEntrada(completo(), true, true);
+  confere("entrada: clientes cumprido pela regra (média 8,4 em 6)", [ent.avaliacaoClientes, ent.global, ent.eficienciaIndividual], [true, true, true]);
+  confere("entrada: média 7,9 em 3 respostas reprova; 1 resposta aprova", [montarEntrada(completo({ clientesMedia: 7.9, clientesRespostas: 3 }), true, true).avaliacaoClientes, montarEntrada(completo({ clientesMedia: 3, clientesRespostas: 1 }), true, true).avaliacaoClientes], [false, true]);
+  confere("o resultado do ciclo sai do mesmo motor da Fase 1 (5% + reforçador de 1,5 p.p. = 6,5% de R$ 100)", apurarCiclo({ baseCentavos: 10000, consecutivos: 3 }, ent).resultado.valorHoraCentavos, 10650);
+
+  // Sequência derivada das apurações anteriores
+  const ciclo = (id: number, inicio: string, fim: string, apuracao: CicloAnterior["apuracao"], ensaio = false): CicloAnterior => ({ id, rotulo: `ciclo ${id}`, inicio, fim, ensaio, apuracao });
+  const c1 = ciclo(1, "2027-01-01", "2027-06-30", { status: "encerrado", consecutivosDepois: 1 });
+  const c2 = ciclo(2, "2027-07-01", "2027-12-31", { status: "encerrado", consecutivosDepois: 2 });
+  confere("consecutivos antes do 3º ciclo = os do 2º encerrado", consecutivosAntesDoCiclo(0, [c1, c2], "2028-01-01"), 2);
+  confere("sem histórico vale o informado na adesão", consecutivosAntesDoCiclo(4, [], "2027-01-01"), 4);
+  confere("ciclo apurado mas NÃO encerrado ainda não alimenta a sequência", consecutivosAntesDoCiclo(0, [c1, ciclo(2, "2027-07-01", "2027-12-31", { status: "devolutiva", consecutivosDepois: 2 })], "2028-01-01"), 1);
+  confere("ensaio nunca entra na sequência", consecutivosAntesDoCiclo(0, [ciclo(9, "2026-07-01", "2026-12-31", { status: "encerrado", consecutivosDepois: 7 }, true)], "2027-01-01"), 0);
+  confere("descumprimento zera: o último encerrado tinha 0 depois", consecutivosAntesDoCiclo(5, [c1, ciclo(2, "2027-07-01", "2027-12-31", { status: "encerrado", consecutivosDepois: 0 })], "2028-01-01"), 0);
+  confere("lacuna: ciclo 1 sem apuração bloqueia o 2º", lacunasAnteriores([ciclo(1, "2027-01-01", "2027-06-30", null)], "2027-07-01", "2027-01-01").map((c) => c.id), [1]);
+  confere("lacuna: ciclo apurado mas não encerrado também bloqueia", lacunasAnteriores([ciclo(1, "2027-01-01", "2027-06-30", { status: "apurado", consecutivosDepois: 1 })], "2027-07-01", "2027-01-01").map((c) => c.id), [1]);
+  confere("sem lacuna quando todos os anteriores estão encerrados", lacunasAnteriores([c1, c2], "2028-01-01", "2027-01-01"), []);
+  confere("ciclo anterior à adesão do participante não é lacuna (entrou depois)", lacunasAnteriores([ciclo(1, "2027-01-01", "2027-06-30", null)], "2027-07-01", "2027-07-01"), []);
+  confere("ensaio não é lacuna", lacunasAnteriores([ciclo(9, "2026-07-01", "2026-12-31", null, true)], "2027-01-01", "2027-01-01"), []);
+
+  // Memória de cálculo
+  const estadoAntes = { baseCentavos: 10950, consecutivos: 0 };
+  const resultado = apurarCiclo(estadoAntes, ent);
+  const snap: SnapshotApuracao = {
+    versao: 1,
+    geradoEm: "2027-06-18T15:00:00.000Z",
+    ciclo: { id: 1, rotulo: "1º semestre de 2027", inicio: "2027-01-01", fim: "2027-06-30", ensaio: false, amostraMinimaHoras: 10, notaMinimaEficienciaIndividual: 100, definicaoOnline: "A", departamentosAreaRotulos: ["Consultoria ERP", "Consultoria HCM"], indicadores: config },
+    participante: { id: 1, codfor: 280, nome: "Fulano de Tal" },
+    estadoAntes,
+    lancamentos: completo(),
+    indicadores: todos,
+    eficienciaIndividual: { cumpriu: true, nota: 100, pontos: 100, base: 100, semBase: [], decisaoManual: false },
+    global: { indice: 78.5, meta: 75, atingiu: true, semBase: false, executadoMin: h(5000), dentroMin: h(3925), acimaMin: h(1075), itens: 300, calculadoEm: "2027-06-17T12:00:00.000Z" },
+    entrada: ent,
+    resultado: resultado.resultado,
+    estadoDepois: resultado.proximo,
+  };
+  const comValores = montarMemoriaDeCalculo(snap, true);
+  const semValores = montarMemoriaDeCalculo(snap, false);
+  confere("memória: 5 seções (portão, requisitos, indicadores, global, resultado)", comValores.secoes.map((x) => x.titulo.split(" ")[0]), ["Portão", "Requisitos", "Eficiência", "Requisito", "Resultado"]);
+  confere("memória: 4 requisitos individuais cumpridos e o global atingido", [comValores.secoes[1].linhas.every((l) => l.tom === "ok"), comValores.secoes[3].linhas[1].valor], [true, "atingida (+1 ponto)"]);
+  const res = comValores.secoes[4].linhas;
+  confere("memória: 5,0% + 0,0% = 5,0% sobre R$ 109,50 = R$ 114,98", [res.find((l) => l.rotulo === "Percentual do ciclo")?.valor, res.find((l) => l.rotulo === "Valor Hora do Ciclo")?.valor?.replace(/\s/g, " ")], ["5,0%", "R$ 114,98"]);
+  confere("memória com valores traz a fórmula em R$", comValores.formula.includes("R$") && comValores.formula.includes("114,98"), true);
+  confere("memória do GESTOR não tem nenhum R$ (valor hora é dado sensível)", JSON.stringify(semValores).includes("R$"), false);
+  confere("memória: resumo e cabeçalho", [comValores.resumo, comValores.consultor, comValores.periodo], ["Cumprido · 5,0% sobre a base", "Fulano de Tal", "01/01/2027 a 30/06/2027"]);
+  const descumpriu = apurarCiclo({ baseCentavos: 10000, consecutivos: 3 }, montarEntrada(completo({ caseCumpriu: false }), true, true));
+  const memD = montarMemoriaDeCalculo({ ...snap, lancamentos: completo({ caseCumpriu: false }), estadoAntes: { baseCentavos: 10000, consecutivos: 3 }, entrada: montarEntrada(completo({ caseCumpriu: false }), true, true), resultado: descumpriu.resultado, estadoDepois: descumpriu.proximo }, true);
+  confere("memória do descumprimento: aponta o case, zera a sequência e a fórmula não aplica percentual", [memD.secoes[1].linhas[2].tom, memD.secoes[4].linhas[0].detalhe, memD.formula.startsWith("Sem pontuação")], ["bad", "motivo: Case Técnico", true]);
+  const efet = apurarCiclo({ baseCentavos: 10000, consecutivos: 9 }, ent);
+  const memE = montarMemoriaDeCalculo({ ...snap, estadoAntes: { baseCentavos: 10000, consecutivos: 9 }, resultado: efet.resultado, estadoDepois: efet.proximo }, true);
+  confere("memória da efetivação (10º ciclo): destaca e mostra o novo valor base", memE.secoes[4].linhas.some((l) => l.valor.includes("EFETIVAÇÃO") && (l.detalhe ?? "").replace(/ /g, " ").includes("R$ 109,50")), true);
+  confere("memória do ensaio carrega o marcador", montarMemoriaDeCalculo({ ...snap, ciclo: { ...snap.ciclo, ensaio: true } }, true).ensaio, true);
 }
 
 console.log(`${total - falhas}/${total} asserções ok`);

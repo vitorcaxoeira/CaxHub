@@ -4,6 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { TabDef, Tabs } from "../../components/ui/Tabs";
+import { Apuracao } from "../../components/planoEvolucao/Apuracao";
 import { CiclosParametros } from "../../components/planoEvolucao/CiclosParametros";
 import { ComoCalculamosPlano } from "../../components/planoEvolucao/ComoCalculamosPlano";
 import { Participantes } from "../../components/planoEvolucao/Participantes";
@@ -12,6 +13,7 @@ import { CiclosResposta, ParticipantesResposta, PreviaResposta, rotuloStatusCicl
 
 const ABAS: TabDef[] = [
   { key: "previa", label: "Ciclo atual" },
+  { key: "apuracao", label: "Apuração" },
   { key: "ciclos", label: "Ciclos e parâmetros" },
   { key: "participantes", label: "Participantes" },
   { key: "regras", label: "Como calculamos" },
@@ -20,7 +22,7 @@ const ABAS: TabDef[] = [
 const mensagemDe = (e: unknown, padrao: string) => (axios.isAxiosError(e) ? e.response?.data?.error ?? padrao : padrao);
 
 // Plano de Evolução Profissional e Eficiência dos consultores PJ (Gestão de Projetos › Eficiência › Plano de evolução).
-// Admin: tudo. Gestor: lê o time dele e a prévia sem valores em R$. A apuração com registro (lançamentos, memória de cálculo, devolutiva) é a Fase 2.
+// Admin: tudo. Gestor: lê o time dele, lança e apura o time dele, sempre sem valores em R$. Apuração: lançamentos, memória de cálculo, devolutiva, contestação e encerramento.
 export function PlanoEvolucao() {
   const { user } = useAuth();
   const admin = user?.role === "admin";
@@ -161,6 +163,7 @@ export function PlanoEvolucao() {
               )}
             </div>
           )}
+          {aba === "apuracao" && <Apuracao ciclos={ciclos.ciclos} cicloId={cicloId} onSelecionar={setCicloId} admin={admin} />}
           {aba === "ciclos" && <CiclosParametros dados={ciclos} podeEditar={admin} selecionadoId={cicloId} onSelecionar={setCicloId} onMudou={recarregar} />}
           {aba === "participantes" && <Participantes dados={participantes} podeEditar={admin} motivosValorBase={ciclos.motivosValorBase} onMudou={recarregar} />}
           {aba === "regras" && <ComoCalculamosPlano />}

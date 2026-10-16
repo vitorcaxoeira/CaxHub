@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Cartao, Chip, Indicador, Vazio } from "../../components/eficiencia/comum";
 import { hn } from "../../lib/eficiencia";
-import { MeuPlanoResposta, ProjecaoDto, ROTULO_REQUISITO, ResultadoCicloDto, brl2, dataBr, pctBp, pctNum, tomDaMeta } from "../../lib/planoEvolucao";
+import { MeuPlanoResposta, ProjecaoDto, ROTULO_REQUISITO, ResultadoCicloDto, brl2, dataBr, pctBp, pctNum, rotuloSituacaoCiclo, tomDaMeta, tomDaSituacaoCiclo } from "../../lib/planoEvolucao";
 
 function Desfecho({ titulo, r }: { titulo: string; r: ResultadoCicloDto }) {
   const descumpriu = r.status === "descumprido";
@@ -138,7 +138,7 @@ export function MeuPlano() {
                 <Vazio>A projeção do valor hora aparece quando o administrador lançar o seu Valor Hora Base.</Vazio>
               )}
 
-              {c && c.pendentes.length > 0 && (
+              {c && c.pendentes.length > 0 && !dados.historico.some((h) => h.cicloRotulo === dados.ciclo?.rotulo) && (
                 <Cartao titulo="O que depende da apuração" nota="lançado pelo gestor, com evidência">
                   <ul className="list-disc space-y-1 pl-5 text-sm text-muted">
                     {c.pendentes.map((p) => (
@@ -153,6 +153,49 @@ export function MeuPlano() {
                 </Cartao>
               )}
             </>
+          )}
+
+          {dados.historico.length > 0 && (
+            <Cartao titulo="Meus resultados" nota="apurados pelo gestor e devolvidos a você">
+              <ul className="divide-y divide-border/60">
+                {dados.historico.map((h) => (
+                  <li key={h.apuracaoId} className="py-3 first:pt-0 last:pb-0">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span className="font-medium text-foreground">{h.cicloRotulo}</span>
+                      <Chip tom={tomDaSituacaoCiclo(h.statusCiclo)}>{rotuloSituacaoCiclo(h.statusCiclo)}</Chip>
+                      {h.ensaio && <Chip tom="warn">simulação</Chip>}
+                      <span className="text-[12px] text-muted">{h.statusRotulo}</span>
+                    </div>
+                    <p className="mt-1 text-[13px] text-muted">
+                      {h.statusCiclo === "cumprido" && h.percentualBp != null ? (
+                        <>
+                          <b className="text-foreground">{pctBp(h.percentualBp)}</b> sobre o valor base
+                          {h.valorHora != null && (
+                            <>
+                              {" "}
+                              = <b className="font-mono text-foreground">{brl2(h.valorHora)}</b>/h
+                            </>
+                          )}
+                          {h.efetivou && <span className="text-success"> · efetivou o valor como novo Valor Hora Base</span>}
+                        </>
+                      ) : (
+                        "Neste ciclo o valor ficou no valor base."
+                      )}
+                      {h.devolutivaEm ? ` · devolutiva em ${dataBr(h.devolutivaEm)}` : ""}
+                    </p>
+                    {h.contestacao && (
+                      <p className="mt-1 text-[12.5px] text-muted">
+                        Contestação{h.contestacao.recebidaEm ? ` em ${dataBr(h.contestacao.recebidaEm)}` : ""}: {h.contestacao.texto}
+                        {h.desfecho ? <> · desfecho: <b className="text-foreground">{h.desfecho.resultado === "procedente" ? "procedente" : "mantida"}</b>{h.desfecho.texto ? ` — ${h.desfecho.texto}` : ""}</> : " · aguardando resposta"}
+                      </p>
+                    )}
+                    <a href={`/projetos/eficiencia/plano-evolucao/memoria/${h.apuracaoId}`} target="_blank" rel="noreferrer" className="mt-1.5 inline-block text-[12.5px] font-medium text-primary hover:underline">
+                      Ver a memória de cálculo
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </Cartao>
           )}
 
           <Cartao titulo="Meu valor hora base" nota={`adesão em ${dataBr(dados.participante.dataAdesao)} · 1º ciclo em ${dataBr(dados.participante.primeiroCicloInicio)}`}>

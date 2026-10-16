@@ -157,7 +157,186 @@ export interface MeuPlanoResposta {
   global?: PreviaGlobalDto;
   consultor?: PreviaConsultorDto | null;
   aviso: string | null;
+  /** Resultados já devolvidos (apuração em "devolutiva" ou "encerrado"), do mais recente ao mais antigo. */
+  historico: HistoricoResultadoDto[];
 }
+
+export interface HistoricoResultadoDto {
+  apuracaoId: number;
+  cicloRotulo: string;
+  inicio: string;
+  fim: string;
+  ensaio: boolean;
+  status: StatusApuracao;
+  statusRotulo: string;
+  statusCiclo: "cumprido" | "descumprido" | "nao_apurado" | null;
+  percentualBp: number | null;
+  valorHora: number | null;
+  efetivou: boolean;
+  devolutivaEm: string | null;
+  contestacao: { recebidaEm: string | null; texto: string } | null;
+  desfecho: { resultado: string; texto: string | null } | null;
+}
+
+// ---------------------------------------------------------------- apuração (Fase 2)
+
+export type StatusApuracao = "rascunho" | "apurado" | "devolutiva" | "encerrado";
+export type TomMemoria = "ok" | "bad" | "warn" | "off";
+
+export interface LancamentosDto {
+  contratoAtivoNoCiclo: boolean;
+  cicloCompleto: boolean;
+  interrupcaoDias: number;
+  competenciasPct: number | null;
+  certificacoesCumpriu: boolean | null;
+  clientesMedia: number | null;
+  clientesRespostas: number | null;
+  caseCumpriu: boolean | null;
+  eficienciaIndividualDecisao: boolean | null;
+  manuais: { chave: string; atingiu: boolean | null }[];
+}
+
+export type ChaveObservacao = "competencias" | "certificacoes" | "clientes" | "case" | "eficiencia" | "geral";
+
+export interface IndicadorApuradoDto {
+  chave: string;
+  rotulo: string;
+  tipo: "automatico" | "manual";
+  peso: number;
+  meta: number | null;
+  valor: number | null;
+  atingiu: boolean | null;
+  semBase: boolean;
+  origem: "automatico" | "gestor";
+}
+
+export interface LinhaMemoria {
+  rotulo: string;
+  valor: string;
+  detalhe?: string;
+  tom?: TomMemoria;
+}
+export interface SecaoMemoria {
+  titulo: string;
+  nota?: string;
+  linhas: LinhaMemoria[];
+}
+export interface MemoriaDeCalculoDto {
+  titulo: string;
+  consultor: string;
+  ciclo: string;
+  periodo: string;
+  apuradoEm: string;
+  ensaio: boolean;
+  resumo: string;
+  secoes: SecaoMemoria[];
+  formula: string;
+}
+
+export interface ApuracaoListaItem {
+  participanteId: number;
+  codfor: number;
+  nome: string;
+  departamento: string | null;
+  apuracaoId: number | null;
+  status: StatusApuracao | "nao_iniciada";
+  statusRotulo: string;
+  pendentes: { chave: string; rotulo: string }[];
+  statusCiclo: "cumprido" | "descumprido" | "nao_apurado" | null;
+  percentualBp: number | null;
+  efetivou: boolean;
+  devolutivaEm: string | null;
+  contestacaoPendente: boolean;
+  /** Só o admin recebe. */
+  valorHora?: number | null;
+}
+
+export interface GlobalFechadoDto {
+  executadoMin: number;
+  dentroMin: number;
+  acimaMin: number;
+  itens: number;
+  indice: number | null;
+  meta: number | null;
+  atingiu: boolean | null;
+  semBase: boolean;
+  calculadoEm: string;
+}
+
+export interface ApuracaoListaResposta {
+  ciclo: CicloDto;
+  ensaio: boolean;
+  mostraValores: boolean;
+  global: GlobalFechadoDto | null;
+  globalAgora: { executadoMin: number; dentroMin: number; indice: number | null; atingiu: boolean | null; semBase: boolean };
+  podeFecharGlobal: boolean;
+  abreEm: string;
+  participantes: ApuracaoListaItem[];
+}
+
+export interface ApuracaoDetalheResposta {
+  ciclo: CicloDto;
+  ensaio: boolean;
+  mostraValores: boolean;
+  participante: { id: number; codfor: number; nome: string; departamento: string | null; primeiroCicloInicio: string };
+  apuracao: {
+    id: number | null;
+    status: StatusApuracao;
+    statusRotulo: string;
+    lancamentos: LancamentosDto;
+    observacoes: Partial<Record<ChaveObservacao, string>>;
+    lancadoEm: string | null;
+    indicadores: IndicadorApuradoDto[];
+    eficienciaIndividual: { cumpriu: boolean | null; nota: number | null; semBase: boolean | string[]; decisaoManual: boolean };
+    pendentes: { chave: string; rotulo: string }[];
+    apuradoEm: string | null;
+    resultado: {
+      statusCiclo: "cumprido" | "descumprido" | "nao_apurado";
+      pontuacaoBp: number;
+      reforcadorBp: number;
+      percentualBp: number;
+      efetivou: boolean;
+      motivos: string[];
+      consecutivosAntes: number;
+      consecutivosDepois: number;
+      valorHora?: number;
+      valorHoraBase?: number;
+    } | null;
+    devolutiva: { em: string; observacao: string | null } | null;
+    contestacao: { recebidaEm: string | null; texto: string } | null;
+    desfecho: { resultado: "mantida" | "procedente"; texto: string | null; em: string | null } | null;
+    encerradoEm: string | null;
+    revisoes: number;
+  };
+  global: GlobalFechadoDto | null;
+  bloqueios: string[];
+  podeApurar: boolean;
+  estadoAntes: { consecutivos: number; valorHoraBase?: number | null; temBase: boolean };
+  memoria: MemoriaDeCalculoDto | null;
+}
+
+export interface MemoriaResposta {
+  id: number;
+  status: StatusApuracao;
+  statusRotulo: string;
+  mostraValores: boolean;
+  devolutivaEm: string | null;
+  contestacao: { recebidaEm: string | null; texto: string } | null;
+  desfecho: { resultado: string; texto: string | null } | null;
+  memoria: MemoriaDeCalculoDto;
+}
+
+export const rotuloStatusApuracao: Record<StatusApuracao | "nao_iniciada", string> = {
+  nao_iniciada: "Não iniciada",
+  rascunho: "Em lançamento",
+  apurado: "Apurado",
+  devolutiva: "Devolutiva feita",
+  encerrado: "Encerrado",
+};
+
+export const tomDoStatusApuracao = (s: StatusApuracao | "nao_iniciada"): Tom => (s === "encerrado" ? "ok" : s === "devolutiva" ? "warn" : s === "apurado" ? "warn" : "off");
+export const rotuloSituacaoCiclo = (s: "cumprido" | "descumprido" | "nao_apurado" | null) => (s === "cumprido" ? "Cumprido" : s === "descumprido" ? "Descumprido" : s === "nao_apurado" ? "Não apurado" : "—");
+export const tomDaSituacaoCiclo = (s: "cumprido" | "descumprido" | "nao_apurado" | null): Tom => (s === "cumprido" ? "ok" : s === "descumprido" ? "bad" : "off");
 
 // ---------------------------------------------------------------- apresentação
 

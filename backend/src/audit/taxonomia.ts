@@ -20,6 +20,8 @@ export const ENTIDADES_AUDITORIA = {
   // (ver routes/auditoria.ts: podeVerEntidade e esconderEntidadesSoAdmin).
   PLANO_CICLO: "plano_ciclo",
   PLANO_PARTICIPANTE: "plano_participante",
+  // Apuração do ciclo: traz o valor hora do resultado, então também é SÓ do admin no histórico geral.
+  PLANO_APURACAO: "plano_apuracao",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -256,5 +258,15 @@ export const EVENTOS_AUDITORIA = {
   PLANO_PARTICIPANTE_ADERIU: "PLANO_PARTICIPANTE_ADERIU",
   PLANO_PARTICIPANTE_VALOR_BASE_ALTERADO: "PLANO_PARTICIPANTE_VALOR_BASE_ALTERADO",
   PLANO_PARTICIPANTE_ENCERRADO: "PLANO_PARTICIPANTE_ENCERRADO",
+
+  // Plano de Evolução, Fase 2: índice global do ciclo e apuração (entidadeId = id da apuração).
+  PLANO_GLOBAL_FECHADO: "PLANO_GLOBAL_FECHADO",
+  PLANO_APURACAO_LANCADA: "PLANO_APURACAO_LANCADA",
+  PLANO_APURACAO_APURADA: "PLANO_APURACAO_APURADA",
+  PLANO_APURACAO_DEVOLUTIVA: "PLANO_APURACAO_DEVOLUTIVA",
+  PLANO_APURACAO_CONTESTADA: "PLANO_APURACAO_CONTESTADA",
+  PLANO_APURACAO_DESFECHO: "PLANO_APURACAO_DESFECHO",
+  PLANO_APURACAO_REABERTA: "PLANO_APURACAO_REABERTA",
+  PLANO_APURACAO_ENCERRADA: "PLANO_APURACAO_ENCERRADA",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];

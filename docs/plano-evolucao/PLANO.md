@@ -1,9 +1,14 @@
 # Plano de Evolução Profissional e Eficiência (consultores PJ) dentro do Painel de Eficiência do CaxHub
 
-> **Estado em 15/10/2026 — Fase 0 medida (`FASE0-medicoes.md`), Fase 1 entregue e SEM commit** na worktree `CaxHub-plano-evolucao` (branch `plano-evolucao`).
-> Fase 1 = motor puro (`backend/src/domain/planoEvolucao/`), tabelas `plano_*` (2 migrations), `routes/planoEvolucao.ts`, telas `PlanoEvolucao` (gestão) e `MeuPlano`.
-> Testes: `scripts/verificar-plano-evolucao.ts` (136) e `prisma/verificarPlanoEvolucaoApi.ts` (88). Falta a **Fase 2**: lançamentos do gestor, apuração com snapshot,
-> memória de cálculo em PDF, devolutiva e contestação, efetivação gravada e CSV. As seções abaixo que falam em alocação, `atividades_consultor` e coluna do quadro
+> **Estado em 16/10/2026 — Fase 0 medida (`FASE0-medicoes.md`), Fase 1 commitada e Fase 2 entregue e SEM commit** na worktree `CaxHub-plano-evolucao` (branch `plano-evolucao`).
+> Fase 1 = motor puro (`backend/src/domain/planoEvolucao/`), tabelas `plano_*`, `routes/planoEvolucao.ts`, telas `PlanoEvolucao` (gestão) e `MeuPlano`.
+> Fase 2 = `domain/planoEvolucao/apuracao.ts`, `routes/planoEvolucaoApuracao.ts` (+ `planoEvolucaoComum.ts`), migration `20261016100000`, aba **Apuração**,
+> memória de cálculo em tela e PDF (`/projetos/eficiencia/plano-evolucao/memoria/:id`), devolutiva, contestação/desfecho, encerramento com efetivação e CSV.
+> Testes: `verificar-plano-evolucao.ts` (173), `verificarPlanoEvolucaoApi.ts` (88) e `verificarPlanoApuracaoApi.ts` (84).
+> Regras fechadas na Fase 2: estados `rascunho → apurado → devolutiva → encerrado`; resultado congelado em snapshot; índice global fechado uma vez por ciclo (global sem base = não atingido);
+> sequência do reforçador derivada das apurações reais ENCERRADAS (ciclo anterior aberto bloqueia o seguinte); ensaio (ciclo anterior a 01/01/2027) nunca alimenta sequência nem efetiva;
+> a efetivação grava o novo Valor Hora Base no encerrar; contestação procedente só pelo admin e reabre guardando a versão anterior; consultor só vê o resultado depois da devolutiva;
+> gestor vê tudo do time sem R$; `plano_participante` e `plano_apuracao` só o admin vê na auditoria. As seções abaixo que falam em alocação, `atividades_consultor` e coluna do quadro
 > foram **substituídas** pela decisão do item da proposta (seção "Decisão de 15/10/2026").
 
 ## Contexto

@@ -3891,7 +3891,9 @@ model PlanoCiclo {
   atualizadoEm  DateTime  @updatedAt
   atualizadoPor Int?
 
-  indicadores PlanoCicloIndicador[]
+  indicadores     PlanoCicloIndicador[]
+  apuracoes       PlanoApuracao[]
+  resultadoGlobal PlanoCicloResultadoGlobal?
 
   @@unique([ano, semestre])
   @@map("plano_ciclos")
@@ -3934,6 +3936,7 @@ model PlanoParticipante {
   atualizadoEm            DateTime  @updatedAt
 
   valoresBase PlanoValorBase[]
+  apuracoes   PlanoApuracao[]
 
   @@map("plano_participantes")
 }
@@ -3954,4 +3957,100 @@ model PlanoValorBase {
 
   @@index([participanteId, desde])
   @@map("plano_valores_base")
+}
+
+// Índice global da ÁREA num ciclo, FECHADO uma vez (o mesmo número para todos os consultores) antes de apurar: a meta global é coletiva e
+// ninguém pode ser apurado com um índice diferente do vizinho. Imutável depois que existe apuração além do rascunho.
+model PlanoCicloResultadoGlobal {
+  id           Int        @id @default(autoincrement())
+  cicloId      Int        @unique
+  ciclo        PlanoCiclo @relation(fields: [cicloId], references: [id], onDelete: Restrict)
+  executadoMin Int
+  dentroMin    Int
+  acimaMin     Int
+  itens        Int
+  /// dentro ÷ executado, em %. Nulo sem horas.
+  indice       Decimal?   @db.Decimal(6, 2)
+  /// A meta do ciclo NO MOMENTO em que foi fechado (a do ciclo publicado não muda, mas fica registrada).
+  meta         Decimal    @db.Decimal(5, 2)
+  atingiu      Boolean?
+  /// Horas abaixo da amostra mínima: sem base, não conclui.
+  semBase      Boolean    @default(false)
+  calculadoEm  DateTime   @default(now())
+  calculadoPor Int
+
+  @@map("plano_ciclo_resultado_global")
+}
+
+// Apuração de UM participante num ciclo: o que o gestor lançou (rascunho editável), o resultado CONGELADO (snapshot) com a memória de cálculo,
+// a devolutiva, a contestação e o desfecho. Valor hora é dado sensível: só admin, o gestor do time sem R$ e o próprio consultor (depois da devolutiva).
+model PlanoApuracao {
+  id             Int               @id @default(autoincrement())
+  cicloId        Int
+  ciclo          PlanoCiclo        @relation(fields: [cicloId], references: [id], onDelete: Restrict)
+  participanteId Int
+  participante   PlanoParticipante @relation(fields: [participanteId], references: [id], onDelete: Restrict)
+  /// Ciclo anterior à vigência: simulação. Nunca alimenta a sequência de ciclos nem gera efetivação.
+  ensaio         Boolean           @default(false)
+  /// rascunho | apurado | devolutiva | encerrado
+  status         String            @default("rascunho") @db.VarChar(12)
+
+  // Lançamentos do gestor (editáveis só no rascunho)
+  contratoAtivoNoCiclo        Boolean  @default(true)
+  cicloCompleto               Boolean  @default(true)
+  interrupcaoDias             Int      @default(0)
+  competenciasPct             Decimal? @db.Decimal(5, 2)
+  certificacoesCumpriu        Boolean?
+  clientesMedia               Decimal? @db.Decimal(4, 2)
+  clientesRespostas           Int?
+  caseCumpriu                 Boolean?
+  eficienciaIndividualDecisao Boolean?
+  /// [{ chave, atingiu }] dos indicadores manuais do ciclo.
+  manuais                     Json     @default("[]")
+  /// { competencias, certificacoes, clientes, case, eficiencia, geral }: observação e evidência de cada lançamento.
+  observacoes                 Json     @default("{}")
+  lancadoPor                  Int?
+  lancadoEm                   DateTime?
+
+  // Resultado congelado
+  apuradoEm         DateTime?
+  apuradoPor        Int?
+  /// Tudo o que entrou na conta e como (ver SnapshotApuracao em domain/planoEvolucao/apuracao.ts).
+  snapshot          Json?
+  /// cumprido | descumprido | nao_apurado
+  statusCiclo       String?  @db.VarChar(12)
+  pontuacaoBp       Int?
+  reforcadorBp      Int?
+  percentualBp      Int?
+  baseCentavos      Int?
+  valorHoraCentavos Int?
+  consecutivosAntes Int?
+  consecutivosDepois Int?
+  efetivou          Boolean  @default(false)
+  globalAtingido    Boolean?
+  motivos           String[] @default([])
+  /// Versões anteriores do snapshot, guardadas quando uma contestação procedente reabre a apuração.
+  revisoes          Json     @default("[]")
+
+  // Devolutiva, contestação e desfecho (sem prazos automáticos: o gestor registra)
+  devolutivaEm            DateTime? @db.Date
+  devolutivaPor           Int?
+  devolutivaObs           String?   @db.VarChar(1000)
+  contestacaoRecebidaEm   DateTime? @db.Date
+  contestacaoTexto        String?   @db.VarChar(2000)
+  contestacaoRegistradaPor Int?
+  /// mantida | procedente
+  desfecho                String?   @db.VarChar(12)
+  desfechoTexto           String?   @db.VarChar(1000)
+  desfechoEm              DateTime?
+  desfechoPor             Int?
+  encerradoEm             DateTime?
+  encerradoPor            Int?
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  @@unique([cicloId, participanteId])
+  @@index([status])
+  @@map("plano_apuracoes")
 }

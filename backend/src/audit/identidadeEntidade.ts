@@ -57,3 +57,7 @@ export function entidadeIdPlanoCiclo(id: number): string {
 export function entidadeIdPlanoParticipante(id: number): string {
   return String(id);
 }
+
+export function entidadeIdPlanoApuracao(id: number): string {
+  return String(id);
+}

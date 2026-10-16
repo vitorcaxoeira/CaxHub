@@ -42,6 +42,7 @@ import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
 import { RatVisualizacao } from "./pages/projetos/RatVisualizacao";
 import { RelatorioDespesasRat } from "./pages/projetos/RelatorioDespesasRat";
 import { RelatorioCronograma } from "./pages/projetos/RelatorioCronograma";
+import { RelatorioMemoriaPlano } from "./pages/projetos/RelatorioMemoriaPlano";
 import { RelatorioProdutividade } from "./pages/projetos/RelatorioProdutividade";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
@@ -127,6 +128,17 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <RelatorioProdutividade />
+                </ProtectedRoute>
+              }
+            />
+            {/* Memória de cálculo da apuração do Plano de Evolução (botão Imprimir/Baixar PDF da Apuração e do Meu plano) — fora do
+                AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o backend (GET .../memoria) decide quem enxerga: admin, gestor do
+                time (sem R$) ou o próprio consultor depois da devolutiva. */}
+            <Route
+              path="/projetos/eficiencia/plano-evolucao/memoria/:id"
+              element={
+                <ProtectedRoute>
+                  <RelatorioMemoriaPlano />
                 </ProtectedRoute>
               }
             />

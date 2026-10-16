@@ -1,4 +1,4 @@
-import { NextFunction, Response, Router } from "express";
+import { Response, Router } from "express";
 import { Prisma, PlanoCiclo, PlanoCicloIndicador, PlanoParticipante, PlanoValorBase } from "@prisma/client";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
@@ -6,10 +6,12 @@ import { criarEventoAuditoria, diffCampos } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA, EventoAuditoriaTipo } from "../audit/taxonomia";
 import { entidadeIdPlanoCiclo, entidadeIdPlanoParticipante } from "../audit/identidadeEntidade";
 import { codforsDoTime } from "../domain/contextoProjeto";
+import { notificarConsultorPorCodfor } from "../domain/notificacoes";
 import { AcessoEficiencia, ehGestor, resolverAcesso } from "../domain/eficienciaAcesso";
 import { hojeIso } from "../domain/eficienciaAcoes";
 import { DEPEXE_LABELS, depexeLabel } from "../domain/propostasDominio";
 import { VIGENCIA_INICIO, calendarioDoCiclo, inicioDoPrimeiroCiclo, periodoDoSemestre } from "../domain/planoEvolucao/calendario";
+import { rotuloStatusApuracao } from "../domain/planoEvolucao/apuracao";
 import { INDICADORES } from "../domain/planoEvolucao/eficienciaIndividual";
 import { carregarHorasPorOrigem, carregarItensDoCiclo, carregarNomesDeConsultores, baseVigenteEm } from "../domain/planoEvolucao/planoEvolucaoDados";
 import { INDICADORES_PADRAO, ParametrosDaPrevia, ParticipanteDaPrevia, PreviaConsultor, montarPrevia } from "../domain/planoEvolucao/previa";
@@ -25,6 +27,24 @@ import {
   validarValorBase,
 } from "../domain/planoEvolucao/validacao";
 
+import {
+  CicloComIndicadores,
+  acessoDe,
+  auditar,
+  carregarAcesso,
+  cicloDto,
+  dataDeIso,
+  exigirAdmin,
+  exigirAdminOuGestor,
+  handleError,
+  idDoParametro,
+  isoDaData,
+  numOuNulo,
+  parametrosDaPrevia,
+  rotuloCiclo,
+} from "./planoEvolucaoComum";
+import { planoApuracaoRouter } from "./planoEvolucaoApuracao";
+
 // Plano de Evolução Profissional e Eficiência (consultores PJ) — Fase 1. Plano completo: docs/plano-evolucao/PLANO.md.
 //
 // Quem pode o quê:
@@ -35,135 +55,9 @@ import {
 export const planoEvolucaoRouter = Router();
 planoEvolucaoRouter.use(requireAuth);
 
-function handleError(res: Response, error: unknown, label: string) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`[plano-evolucao:${label}]`, message);
-  res.status(500).json({ error: message });
-}
-
-const acessoDe = (res: Response) => res.locals.acesso as AcessoEficiencia;
-
-// Resolve o acesso uma vez por requisição (as guardas abaixo e os handlers leem de res.locals).
-async function carregarAcesso(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    res.locals.acesso = await resolverAcesso(req.user!.userId, req.user!.role);
-    next();
-  } catch (error) {
-    handleError(res, error, "acesso");
-  }
-}
 planoEvolucaoRouter.use(carregarAcesso);
 
-function exigirAdmin(_req: AuthenticatedRequest, res: Response, next: NextFunction): void {
-  if (!acessoDe(res).admin) {
-    res.status(403).json({ error: "Somente o administrador pode fazer isto" });
-    return;
-  }
-  next();
-}
-
-function exigirAdminOuGestor(_req: AuthenticatedRequest, res: Response, next: NextFunction): void {
-  const a = acessoDe(res);
-  if (!a.admin && !ehGestor(a)) {
-    res.status(403).json({ error: "Sem permissão para acessar este recurso" });
-    return;
-  }
-  next();
-}
-
-// ---------------------------------------------------------------- utilitários
-
-const isoDaData = (d: Date) => d.toISOString().slice(0, 10);
-const dataDeIso = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
-const numOuNulo = (d: Prisma.Decimal | null) => (d == null ? null : Number(d));
-const idDoParametro = (v: string) => {
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
-const rotuloCiclo = (c: Pick<PlanoCiclo, "ano" | "semestre">) => `${c.semestre}º semestre de ${c.ano}`;
-
-type CicloComIndicadores = PlanoCiclo & { indicadores: PlanoCicloIndicador[] };
-
-function auditar(
-  tx: Prisma.TransactionClient,
-  req: AuthenticatedRequest,
-  alvo: { tipo: "ciclo" | "participante"; id: number; rotulo: string },
-  eventoTipo: EventoAuditoriaTipo,
-  extra: { alteracoes?: ReturnType<typeof diffCampos>["alteracoes"]; metadata?: Record<string, unknown> } = {}
-) {
-  return criarEventoAuditoria(
-    {
-      origem: "tela",
-      usuarioId: req.user!.userId,
-      entidadeTipo: alvo.tipo === "ciclo" ? ENTIDADES_AUDITORIA.PLANO_CICLO : ENTIDADES_AUDITORIA.PLANO_PARTICIPANTE,
-      entidadeId: alvo.tipo === "ciclo" ? entidadeIdPlanoCiclo(alvo.id) : entidadeIdPlanoParticipante(alvo.id),
-      entidadeRotulo: alvo.rotulo,
-      eventoTipo,
-      alteracoes: extra.alteracoes ?? null,
-      metadata: extra.metadata ?? null,
-      correlationId: req.correlationId!,
-    },
-    tx
-  );
-}
-
 // ---------------------------------------------------------------- DTOs
-
-function cicloDto(c: CicloComIndicadores) {
-  const indicadores = [...c.indicadores]
-    .sort((a, b) => a.ordem - b.ordem)
-    .map((i) => {
-      const def = INDICADORES.find((x) => x.chave === i.chave);
-      return {
-        chave: i.chave,
-        rotulo: def?.rotulo ?? i.chave,
-        descricao: def?.descricao ?? "",
-        tipo: i.tipo as "automatico" | "manual",
-        peso: i.peso,
-        meta: numOuNulo(i.meta),
-        ativo: i.ativo,
-        ordem: i.ordem,
-      };
-    });
-  return {
-    id: c.id,
-    ano: c.ano,
-    semestre: c.semestre,
-    rotulo: rotuloCiclo(c),
-    inicio: isoDaData(c.inicio),
-    fim: isoDaData(c.fim),
-    status: c.status as "rascunho" | "publicado" | "encerrado",
-    editavel: c.status === "rascunho",
-    metaEficienciaGlobal: numOuNulo(c.metaEficienciaGlobal),
-    departamentosArea: c.departamentosArea,
-    departamentosAreaRotulos: c.departamentosArea.map((d) => depexeLabel(d)),
-    amostraMinimaHoras: c.amostraMinimaHoras,
-    definicaoOnline: c.definicaoOnline as "A" | "B",
-    notaMinimaEficienciaIndividual: c.notaMinimaEficienciaIndividual,
-    naoApuradoQuebraSequencia: c.naoApuradoQuebraSequencia,
-    certificacoesExigidas: c.certificacoesExigidas,
-    atividadesElegiveisClientes: c.atividadesElegiveisClientes,
-    corteEvidencias: isoDaData(c.corteEvidencias),
-    apuracaoAte: isoDaData(c.apuracaoAte),
-    devolutivaEm: isoDaData(c.devolutivaEm),
-    contestacaoAte: isoDaData(c.contestacaoAte),
-    publicadoEm: c.publicadoEm,
-    indicadores,
-    pendenciasPublicacao:
-      c.status === "rascunho"
-        ? pendenciasDePublicacao({ metaEficienciaGlobal: numOuNulo(c.metaEficienciaGlobal), departamentosArea: c.departamentosArea, indicadores })
-        : [],
-  };
-}
-
-const parametrosDaPrevia = (c: CicloComIndicadores): ParametrosDaPrevia => ({
-  metaEficienciaGlobal: numOuNulo(c.metaEficienciaGlobal),
-  amostraMinimaHoras: c.amostraMinimaHoras,
-  definicaoOnline: c.definicaoOnline as "A" | "B",
-  notaMinimaEficienciaIndividual: c.notaMinimaEficienciaIndividual,
-  naoApuradoQuebraSequencia: c.naoApuradoQuebraSequencia,
-  indicadores: c.indicadores.map((i) => ({ chave: i.chave, tipo: i.tipo as "automatico" | "manual", peso: i.peso, meta: numOuNulo(i.meta), ativo: i.ativo })),
-});
 
 const rotuloStatusCiclo = (r: ResultadoCiclo) => (r.status === "cumprido" ? "cumprido" : r.status === "descumprido" ? "descumprido" : "não apurado");
 
@@ -407,6 +301,17 @@ planoEvolucaoRouter.post("/ciclos/:id/publicar", exigirAdmin, async (req: Authen
       });
       return row;
     });
+    // Aviso pelo sino a cada participante ativo (ciclo de ensaio é simulação: não avisa ninguém). Nunca derruba a publicação, que já está gravada.
+    if (isoDaData(publicado.fim) >= VIGENCIA_INICIO) {
+      const ativos = await prisma.planoParticipante.findMany({ where: { status: "ativo" }, select: { codfor: true } });
+      for (const p of ativos) {
+        try {
+          await notificarConsultorPorCodfor(p.codfor, "plano_ciclo_publicado", `O ciclo ${rotuloCiclo(publicado)} do Plano de Evolução foi publicado. Veja as metas e o seu andamento em Meu plano.`, req.user!.userId);
+        } catch (erroAviso) {
+          console.error("[plano-evolucao:aviso]", erroAviso instanceof Error ? erroAviso.message : erroAviso);
+        }
+      }
+    }
     res.json(cicloDto(publicado));
   } catch (error) {
     handleError(res, error, "publicar-ciclo");
@@ -686,7 +591,26 @@ planoEvolucaoRouter.get("/meu", async (_req, res) => {
     }
     const ciclos = await prisma.planoCiclo.findMany({ where: { status: { not: "rascunho" } }, include: { indicadores: true } });
     const ciclo = escolherCicloAtual(ciclos, hojeIso());
+    // Resultados que o consultor já pode ver: só depois da devolutiva (antes disso a apuração é do gestor). O valor hora é dele.
+    const apuracoes = await prisma.planoApuracao.findMany({ where: { participanteId: participante.id, status: { in: ["devolutiva", "encerrado"] } }, include: { ciclo: true }, orderBy: { ciclo: { inicio: "desc" } } });
+    const historico = apuracoes.map((a) => ({
+      apuracaoId: a.id,
+      cicloRotulo: rotuloCiclo(a.ciclo),
+      inicio: isoDaData(a.ciclo.inicio),
+      fim: isoDaData(a.ciclo.fim),
+      ensaio: a.ensaio,
+      status: a.status,
+      statusRotulo: rotuloStatusApuracao(a.status),
+      statusCiclo: a.statusCiclo,
+      percentualBp: a.percentualBp,
+      valorHora: a.valorHoraCentavos == null ? null : a.valorHoraCentavos / 100,
+      efetivou: a.efetivou && !a.ensaio,
+      devolutivaEm: a.devolutivaEm ? isoDaData(a.devolutivaEm) : null,
+      contestacao: a.contestacaoTexto ? { recebidaEm: a.contestacaoRecebidaEm ? isoDaData(a.contestacaoRecebidaEm) : null, texto: a.contestacaoTexto } : null,
+      desfecho: a.desfecho ? { resultado: a.desfecho, texto: a.desfechoTexto } : null,
+    }));
     const base = {
+      historico,
       participante: {
         dataAdesao: isoDaData(participante.dataAdesao),
         primeiroCicloInicio: isoDaData(participante.primeiroCicloInicio),
@@ -717,3 +641,6 @@ planoEvolucaoRouter.get("/meu", async (_req, res) => {
     handleError(res, error, "meu");
   }
 });
+
+// Fase 2: apuração, devolutiva, contestação, memória de cálculo, PDF e CSV. Montado aqui pra herdar o login e o acesso já resolvidos acima.
+planoEvolucaoRouter.use(planoApuracaoRouter);

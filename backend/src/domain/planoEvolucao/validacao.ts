@@ -225,3 +225,127 @@ export function validarEncerramento(corpo: unknown): Validacao<{ motivo: string 
   if (motivo.length > MOTIVO_MAX) return erro(`O motivo passa de ${MOTIVO_MAX} caracteres.`);
   return { ok: true, dados: { motivo } };
 }
+
+// ---------------------------------------------------------------- apuração (Fase 2)
+
+export const CHAVES_OBSERVACAO = ["competencias", "certificacoes", "clientes", "case", "eficiencia", "geral"] as const;
+export type ChaveObservacao = (typeof CHAVES_OBSERVACAO)[number];
+export const OBSERVACAO_MAX = 500;
+
+export interface EdicaoLancamentos {
+  contratoAtivoNoCiclo?: boolean;
+  cicloCompleto?: boolean;
+  interrupcaoDias?: number;
+  competenciasPct?: number | null;
+  certificacoesCumpriu?: boolean | null;
+  clientesMedia?: number | null;
+  clientesRespostas?: number | null;
+  caseCumpriu?: boolean | null;
+  eficienciaIndividualDecisao?: boolean | null;
+  manuais?: { chave: string; atingiu: boolean | null }[];
+  observacoes?: Partial<Record<ChaveObservacao, string | null>>;
+}
+
+// undefined = não veio; null = limpar; boolean = valor. Qualquer outra coisa é erro.
+const triEstado = (v: unknown): boolean | null | undefined | "invalido" => (v === undefined ? undefined : v === null ? null : typeof v === "boolean" ? v : "invalido");
+
+/** Edição parcial dos lançamentos do gestor (só o que veio no corpo entra no resultado). Só indicador MANUAL pode ser lançado. */
+export function validarLancamentos(corpo: unknown): Validacao<EdicaoLancamentos> {
+  const c = (corpo ?? {}) as Record<string, unknown>;
+  const saida: EdicaoLancamentos = {};
+
+  for (const campo of ["contratoAtivoNoCiclo", "cicloCompleto"] as const) {
+    if (c[campo] === undefined) continue;
+    if (typeof c[campo] !== "boolean") return erro("Informe sim ou não para o portão do ciclo.");
+    saida[campo] = c[campo] as boolean;
+  }
+
+  if (c.interrupcaoDias !== undefined) {
+    const n = Number(c.interrupcaoDias);
+    if (!Number.isInteger(n) || n < 0 || n > 366) return erro("A interrupção formal é um número de dias entre 0 e 366.");
+    saida.interrupcaoDias = n;
+  }
+
+  if (c.competenciasPct !== undefined) {
+    const n = numeroOuNulo(c.competenciasPct);
+    if (n === undefined || Number.isNaN(n) || (n !== null && (n < 0 || n > 100))) return erro("A Avaliação de Competências é um percentual entre 0 e 100.");
+    saida.competenciasPct = n;
+  }
+
+  if (c.clientesMedia !== undefined) {
+    const n = numeroOuNulo(c.clientesMedia);
+    if (n === undefined || Number.isNaN(n) || (n !== null && (n < 0 || n > 10))) return erro("A média das avaliações de clientes vai de 0 a 10.");
+    saida.clientesMedia = n === null ? null : Math.round(n * 100) / 100;
+  }
+
+  if (c.clientesRespostas !== undefined) {
+    const n = numeroOuNulo(c.clientesRespostas);
+    if (n === undefined || Number.isNaN(n) || (n !== null && (!Number.isInteger(n) || n < 0 || n > 1000))) return erro("O número de avaliações respondidas é um inteiro entre 0 e 1000.");
+    saida.clientesRespostas = n;
+  }
+
+  for (const campo of ["certificacoesCumpriu", "caseCumpriu", "eficienciaIndividualDecisao"] as const) {
+    const t = triEstado(c[campo]);
+    if (t === "invalido") return erro("Informe cumprido, não cumprido ou deixe em branco.");
+    if (t !== undefined) saida[campo] = t;
+  }
+
+  if (c.manuais !== undefined) {
+    if (!Array.isArray(c.manuais)) return erro("Indicadores manuais inválidos.");
+    const manuais = INDICADORES.filter((i) => i.tipo === "manual").map((i) => i.chave as string);
+    const vistos = new Set<string>();
+    const lista: { chave: string; atingiu: boolean | null }[] = [];
+    for (const bruto of c.manuais as Record<string, unknown>[]) {
+      const chave = String(bruto?.chave ?? "");
+      if (!manuais.includes(chave)) return erro(`O indicador ${chave || "(vazio)"} não é lançado pelo gestor.`);
+      if (vistos.has(chave)) return erro(`O indicador ${chave} aparece duas vezes.`);
+      vistos.add(chave);
+      const t = triEstado(bruto.atingiu);
+      if (t === "invalido" || t === undefined) return erro("Informe atingido, não atingido ou deixe em branco.");
+      lista.push({ chave, atingiu: t });
+    }
+    saida.manuais = lista;
+  }
+
+  if (c.observacoes !== undefined) {
+    if (c.observacoes === null || typeof c.observacoes !== "object" || Array.isArray(c.observacoes)) return erro("Observações inválidas.");
+    const obs: Partial<Record<ChaveObservacao, string | null>> = {};
+    for (const [chave, valor] of Object.entries(c.observacoes as Record<string, unknown>)) {
+      if (!(CHAVES_OBSERVACAO as readonly string[]).includes(chave)) return erro(`Observação desconhecida: ${chave}.`);
+      const t = textoOuNulo(valor, OBSERVACAO_MAX, "A observação");
+      if (!t.ok) return t;
+      if (t.dados !== undefined) obs[chave as ChaveObservacao] = t.dados;
+    }
+    saida.observacoes = obs;
+  }
+
+  return { ok: true, dados: saida };
+}
+
+export function validarDevolutiva(corpo: unknown, hoje: string): Validacao<{ devolutivaEm: string; observacao: string | null }> {
+  const c = (corpo ?? {}) as Record<string, unknown>;
+  if (!dataIsoValida(c.devolutivaEm)) return erro("Informe a data da reunião de devolutiva.");
+  if (c.devolutivaEm > hoje) return erro("A devolutiva só pode ser registrada depois de acontecer (a data não pode ser futura).");
+  const obs = textoOuNulo(c.observacao, 1000, "A observação");
+  if (!obs.ok) return obs;
+  return { ok: true, dados: { devolutivaEm: c.devolutivaEm, observacao: obs.dados ?? null } };
+}
+
+export function validarContestacao(corpo: unknown, hoje: string): Validacao<{ recebidaEm: string; texto: string }> {
+  const c = (corpo ?? {}) as Record<string, unknown>;
+  if (!dataIsoValida(c.recebidaEm)) return erro("Informe a data em que a contestação foi recebida.");
+  if (c.recebidaEm > hoje) return erro("A data de recebimento não pode ser futura.");
+  if (typeof c.texto !== "string" || c.texto.trim().length === 0) return erro("Registre o que o consultor contestou.");
+  const texto = c.texto.trim();
+  if (texto.length > 2000) return erro("A contestação passa de 2000 caracteres.");
+  return { ok: true, dados: { recebidaEm: c.recebidaEm, texto } };
+}
+
+export function validarDesfecho(corpo: unknown): Validacao<{ resultado: "mantida" | "procedente"; texto: string }> {
+  const c = (corpo ?? {}) as Record<string, unknown>;
+  if (c.resultado !== "mantida" && c.resultado !== "procedente") return erro("Escolha o desfecho: apuração mantida ou contestação procedente.");
+  if (typeof c.texto !== "string" || c.texto.trim().length === 0) return erro("Explique o desfecho (a resposta formal ao consultor).");
+  const texto = c.texto.trim();
+  if (texto.length > 1000) return erro("O texto do desfecho passa de 1000 caracteres.");
+  return { ok: true, dados: { resultado: c.resultado, texto } };
+}

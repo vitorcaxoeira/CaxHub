@@ -800,6 +800,54 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeRemocao,
     resumo: (e) => `Encerrou a participação no Plano de Evolução — ${rotuloEntidade(e)}`,
   },
+  PLANO_GLOBAL_FECHADO: {
+    tone: "primary",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Fechou o índice global do ciclo — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_LANCADA: {
+    tone: "neutral",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Registrou lançamentos da apuração — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_APURADA: {
+    tone: "primary",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Apurou o ciclo (resultado congelado) — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_DEVOLUTIVA: {
+    tone: "success",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Registrou a devolutiva — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_CONTESTADA: {
+    tone: "warning",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Registrou contestação da apuração — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_DESFECHO: {
+    tone: "neutral",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Registrou o desfecho da contestação — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_REABERTA: {
+    tone: "warning",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Reabriu a apuração (contestação procedente) — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_ENCERRADA: {
+    tone: "success",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Encerrou a apuração — ${rotuloEntidade(e)}`,
+  },
 };
 
 // "3:30 h" a partir dos minutos gravados no metadata do evento (qualquer coisa que não seja número vira "—").
