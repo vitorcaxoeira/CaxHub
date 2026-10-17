@@ -16,7 +16,7 @@ export const auditoriaRouter = Router();
 
 // O histórico do participante do Plano de Evolução traz o valor hora dos consultores PJ. Só o admin enxerga, na lista geral, na exportação e
 // na consulta por entidade: o gestor de departamento NÃO (o atalho "gerencia algum departamento" de podeVerEntidade o deixaria ver tudo).
-const ENTIDADES_SO_ADMIN: string[] = [ENTIDADES_AUDITORIA.PLANO_PARTICIPANTE, ENTIDADES_AUDITORIA.PLANO_APURACAO];
+const ENTIDADES_SO_ADMIN: string[] = [ENTIDADES_AUDITORIA.PLANO_PARTICIPANTE, ENTIDADES_AUDITORIA.PLANO_APURACAO, ENTIDADES_AUDITORIA.META_COMERCIAL];
 function esconderEntidadesSoAdmin(req: AuthenticatedRequest, where: Prisma.AuditEventoWhereInput): void {
   if (req.user!.role === "admin") return;
   const ja = where.AND == null ? [] : Array.isArray(where.AND) ? where.AND : [where.AND];

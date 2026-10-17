@@ -22,6 +22,9 @@ export const ENTIDADES_AUDITORIA = {
   PLANO_PARTICIPANTE: "plano_participante",
   // Apuração do ciclo: traz o valor hora do resultado, então também é SÓ do admin no histórico geral.
   PLANO_APURACAO: "plano_apuracao",
+  // Gestão de Metas do Comercial: o ano de metas (entidadeId = ano) e os indicadores (entidadeId = "indicador:<id>"). Metas individuais de
+  // pessoas: SÓ ADMIN no histórico geral (routes/auditoria.ts esconderEntidadesSoAdmin).
+  META_COMERCIAL: "meta_comercial",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -268,5 +271,12 @@ export const EVENTOS_AUDITORIA = {
   PLANO_APURACAO_DESFECHO: "PLANO_APURACAO_DESFECHO",
   PLANO_APURACAO_REABERTA: "PLANO_APURACAO_REABERTA",
   PLANO_APURACAO_ENCERRADA: "PLANO_APURACAO_ENCERRADA",
+
+  // Gestão de Metas do Comercial.
+  META_COMERCIAL_ANO_CRIADO: "META_COMERCIAL_ANO_CRIADO",
+  META_COMERCIAL_PLANEJAMENTO_ALTERADO: "META_COMERCIAL_PLANEJAMENTO_ALTERADO",
+  META_COMERCIAL_LANCAMENTO: "META_COMERCIAL_LANCAMENTO",
+  META_COMERCIAL_INDICADOR_CRIADO: "META_COMERCIAL_INDICADOR_CRIADO",
+  META_COMERCIAL_INDICADOR_ALTERADO: "META_COMERCIAL_INDICADOR_ALTERADO",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];

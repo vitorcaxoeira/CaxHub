@@ -46,6 +46,7 @@ import { solicitacoesViagemRouter } from "./routes/solicitacoesViagem";
 import { jornadasRouter } from "./routes/jornadas";
 import { propostaVisualizacaoRouter } from "./routes/propostaVisualizacao";
 import { auditoriaRouter } from "./routes/auditoria";
+import { metasComercialRouter } from "./routes/metasComercial";
 import { gestao5sRouter } from "./routes/gestao5s";
 import { attachCorrelationId } from "./audit/correlationId";
 import { scheduleEmpresaSync } from "./sync/empresaSync";
@@ -182,6 +183,7 @@ app.use("/jornadas", jornadasRouter);
 app.use("/proposta-visualizacao", propostaVisualizacaoRouter);
 app.use("/auditoria", auditoriaRouter);
 app.use("/5s", gestao5sRouter);
+app.use("/metas-comercial", metasComercialRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 

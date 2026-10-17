@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { DEPEXE_COMERCIAL } from "../auth/acessoComercial";
 import { DEPEXE_DHO } from "../auth/acessoRh";
 
 interface NavLeaf {
@@ -23,6 +24,9 @@ interface NavLeaf {
   // o menu Pessoas usa. Em sincronia com o RequireGestorOuAdmin (depexe) em App.tsx e com o
   // exigirAdminOuGestorDho de routes/rh/index.ts.
   gestorDho?: boolean;
+  // Aparece pra admin e pra quem é gestor do departamento 2 (Comercial) — dinâmico, via DepartamentoGestor. Só Comercial › Gestão de
+  // Metas usa. Em sincronia com o RequireGestorOuAdmin (depexe) em App.tsx e com o exigirAdminOuGestorComercial de routes/metasComercial.ts.
+  gestorComercial?: boolean;
   // Restringe ESTE item a papéis específicos dentro de um grupo aberto a todos (ex.: Atendimento
   // de viagens). Mantido em sincronia com o RequireRole em App.tsx e o backend.
   roles?: string[];
@@ -66,8 +70,22 @@ const TODOS_5S: NavLeaf["papel5s"] = ["coordenador", "avaliador", "lider"];
 const groups: NavGroup[] = [
   {
     label: "Comercial",
-    items: [{ to: "/projetos/propostas", label: "Propostas" }],
-    roles: ["admin", "comercial"],
+    items: [
+      { to: "/projetos/propostas", label: "Propostas", roles: ["admin", "comercial"] },
+      // Só o gestor do Comercial (e o admin): a gerente lança as metas anuais do time e acompanha a evolução.
+      {
+        label: "Gestão de Metas",
+        children: [
+          { to: "/comercial/metas", label: "Painel", gestorComercial: true, end: true },
+          { to: "/comercial/metas/lancamentos", label: "Lançamentos", gestorComercial: true },
+          { to: "/comercial/metas/planejamento", label: "Metas do ano", gestorComercial: true },
+          { to: "/comercial/metas/indicadores", label: "Indicadores", gestorComercial: true },
+        ],
+      },
+    ],
+    // O grupo é "*" porque o gestor do Comercial nem sempre tem o papel `comercial`; cada item traz o próprio filtro e o grupo some
+    // sozinho de quem não vê nenhum item (filtro de grupo vazio mais abaixo).
+    roles: "*",
   },
   {
     label: "Gestão de Projetos",
@@ -274,6 +292,8 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   const [souViajante, setSouViajante] = useState(false);
   // Gerencia o departamento 11 (DHO) — vem do mesmo /meu-perfil; admin entra por `user.role`.
   const [ehGestorDho, setEhGestorDho] = useState(false);
+  // Gerencia o departamento 2 (Comercial) — vem do mesmo /meu-perfil; admin entra por `user.role`.
+  const [ehGestorComercial, setEhGestorComercial] = useState(false);
   // Papel no módulo 5S (null = não é participante). Mesma guarda de efeito superado do /meu-perfil.
   const [papel5s, setPapel5s] = useState<string | null>(null);
 
@@ -296,6 +316,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
       setSouConsultor(false);
       setSouViajante(false);
       setEhGestorDho(true);
+      setEhGestorComercial(true);
       return;
     }
     // Guarda de "efeito superado" (28/08/2026) — mesma classe de corrida já corrigida em
@@ -315,6 +336,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
         setSouViajante(data.viajante === true);
         // Cada item de departamentosGerenciados é um objeto { depexe, depexeLabel, integrantes }, não o número.
         setEhGestorDho((data.departamentosGerenciados ?? []).some((d: { depexe: number }) => d.depexe === DEPEXE_DHO));
+        setEhGestorComercial((data.departamentosGerenciados ?? []).some((d: { depexe: number }) => d.depexe === DEPEXE_COMERCIAL));
       })
       .catch(() => {
         if (!cancelado) {
@@ -322,6 +344,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
           setSouConsultor(false);
           setSouViajante(false);
           setEhGestorDho(false);
+          setEhGestorComercial(false);
         }
       });
     return () => {
@@ -335,6 +358,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     if (item.roles && !(user && item.roles.includes(user.role))) return false;
     if (item.papel5s) return !!papel5s && (item.papel5s as string[]).includes(papel5s);
     if (item.gestorDho) return ehGestorDho;
+    if (item.gestorComercial) return ehGestorComercial;
     return (
       (!item.gestorOuAdmin && !item.souConsultor && !item.souViajante) ||
       !!(item.gestorOuAdmin && ehGestorOuAdmin) ||

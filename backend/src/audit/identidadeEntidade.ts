@@ -61,3 +61,12 @@ export function entidadeIdPlanoParticipante(id: number): string {
 export function entidadeIdPlanoApuracao(id: number): string {
   return String(id);
 }
+
+// Gestão de Metas do Comercial: o ano de metas pelo próprio ano; o indicador pelo id da linha.
+export function entidadeIdMetaComercialAno(ano: number): string {
+  return String(ano);
+}
+
+export function entidadeIdMetaComercialIndicador(id: number): string {
+  return `indicador:${id}`;
+}

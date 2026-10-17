@@ -4054,3 +4054,116 @@ model PlanoApuracao {
   @@index([status])
   @@map("plano_apuracoes")
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Gestão de Metas do Comercial (menu Comercial › Gestão de Metas). Só o admin e o gestor do departamento Comercial (depexe 2) acessam.
+// Substitui a planilha META 2026.xlsx da gerente comercial: meta anual da empresa x peso mensal, metas e realizado por pessoa e mês.
+// A meta mensal efetiva é a GRAVADA em MetaComercialLancamento; pesos e "% da empresa" são só assistentes que preenchem os meses.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+// Cadastro dos indicadores (Mensalidade, Licenças, Horas, Faturamento...). A gestora inclui indicador novo sem deploy.
+model MetaComercialIndicador {
+  id         Int      @id @default(autoincrement())
+  codigo     String   @unique @db.VarChar(40)
+  nome       String   @db.VarChar(80)
+  /// BRL | HORAS | QTD
+  unidade    String   @db.VarChar(6)
+  /// SOMA = fluxo do mês (soma os meses); SALDO = posição (o realizado do período é o último mês lançado, ex.: carteira de mensalidade)
+  acumulacao String   @default("SOMA") @db.VarChar(5)
+  /// MANUAL = digitado; FATURAMENTO_SENIOR = soma das NFs fechadas (mesma base da Análise de Faturamento), somente leitura
+  origem     String   @default("MANUAL") @db.VarChar(20)
+  ordem      Int      @default(0)
+  ativo      Boolean  @default(true)
+  criadoEm   DateTime @default(now())
+
+  empresa       MetaComercialEmpresa[]
+  participantes MetaComercialParticipanteIndicador[]
+  lancamentos   MetaComercialLancamento[]
+
+  @@map("metas_comercial_indicadores")
+}
+
+// Um ano de metas. `pesosMensais` tem 12 posições (% do ano que cada mês representa; soma 100).
+model MetaComercialAno {
+  ano           Int       @id
+  pesosMensais  Decimal[] @db.Decimal(9, 6)
+  observacao    String?   @db.VarChar(500)
+  criadoPor     Int
+  criadoEm      DateTime  @default(now())
+  atualizadoPor Int?
+  atualizadoEm  DateTime?
+
+  empresa       MetaComercialEmpresa[]
+  participantes MetaComercialParticipante[]
+
+  @@map("metas_comercial_anos")
+}
+
+// Meta anual da EMPRESA por indicador. Para SALDO é a posição-alvo.
+model MetaComercialEmpresa {
+  ano         Int
+  indicadorId Int
+  metaAnual   Decimal @db.Decimal(16, 2)
+
+  anoRef    MetaComercialAno       @relation(fields: [ano], references: [ano], onDelete: Cascade)
+  indicador MetaComercialIndicador @relation(fields: [indicadorId], references: [id], onDelete: Restrict)
+
+  @@id([ano, indicadorId])
+  @@map("metas_comercial_empresa")
+}
+
+// Pessoa do time Comercial num ano. `naoAtribuido` = a linha que guarda ajustes avulsos de realizado que a planilha somava à mão
+// (ex.: "+14.493,21") e que não pertencem a ninguém; não tem codfor.
+model MetaComercialParticipante {
+  id           Int     @id @default(autoincrement())
+  ano          Int
+  codfor       Int?
+  /// Nome no momento do cadastro (o consultor pode mudar de nome no Senior sem reescrever o histórico).
+  nome         String  @db.VarChar(100)
+  funcao       String? @db.VarChar(60)
+  naoAtribuido Boolean @default(false)
+  ordem        Int     @default(0)
+  ativo        Boolean @default(true)
+
+  anoRef      MetaComercialAno                     @relation(fields: [ano], references: [ano], onDelete: Cascade)
+  indicadores MetaComercialParticipanteIndicador[]
+  lancamentos MetaComercialLancamento[]
+
+  @@unique([ano, codfor])
+  @@index([ano])
+  @@map("metas_comercial_participantes")
+}
+
+// Quais indicadores a pessoa acompanha e com que rótulo ("Mensalidade" da Taíza = Incremento Mensal da empresa).
+model MetaComercialParticipanteIndicador {
+  participanteId Int
+  indicadorId    Int
+  rotulo         String? @db.VarChar(80)
+  ordem          Int     @default(0)
+
+  participante MetaComercialParticipante @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+  indicador    MetaComercialIndicador    @relation(fields: [indicadorId], references: [id], onDelete: Restrict)
+
+  @@id([participanteId, indicadorId])
+  @@map("metas_comercial_participante_indicadores")
+}
+
+// Meta e realizado de UMA pessoa, num indicador, num mês. Faturamento (origem Senior) nunca tem realizado aqui.
+model MetaComercialLancamento {
+  id             Int      @id @default(autoincrement())
+  participanteId Int
+  indicadorId    Int
+  mes            Int
+  meta           Decimal? @db.Decimal(16, 2)
+  realizado      Decimal? @db.Decimal(16, 2)
+  observacao     String?  @db.VarChar(300)
+  lancadoPor     Int
+  lancadoEm      DateTime @default(now())
+
+  participante MetaComercialParticipante @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+  indicador    MetaComercialIndicador    @relation(fields: [indicadorId], references: [id], onDelete: Restrict)
+
+  @@unique([participanteId, indicadorId, mes])
+  @@index([indicadorId])
+  @@map("metas_comercial_lancamentos")
+}

@@ -4,6 +4,7 @@ import { estaNoApp } from "./lib/desktop";
 import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
+import { DEPEXE_COMERCIAL } from "./auth/acessoComercial";
 import { DEPEXE_DHO } from "./auth/acessoRh";
 import { Require5S } from "./auth/Require5S";
 import { RequireGestorOuAdmin } from "./auth/RequireGestorOuAdmin";
@@ -23,6 +24,10 @@ import { FluxoCaixa } from "./pages/financeiro/FluxoCaixa";
 import { Historico } from "./pages/financeiro/Historico";
 import { ResultadoAnalitico } from "./pages/contabil/ResultadoAnalitico";
 import { Propostas } from "./pages/projetos/Propostas";
+import { MetasPainel } from "./pages/comercial/metas/MetasPainel";
+import { MetasLancamentos } from "./pages/comercial/metas/MetasLancamentos";
+import { MetasPlanejamento } from "./pages/comercial/metas/MetasPlanejamento";
+import { MetasIndicadores } from "./pages/comercial/metas/MetasIndicadores";
 import { Atividades } from "./pages/projetos/Atividades";
 import { Jornadas } from "./pages/projetos/Jornadas";
 import { Aprovacoes } from "./pages/projetos/Aprovacoes";
@@ -256,6 +261,15 @@ export default function App() {
               </Route>
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
+              </Route>
+              {/* Comercial › Gestão de Metas: admin ou gestor do departamento 2 (Comercial). Gestor não é Role (vem de
+                  DepartamentoGestor), então a guarda é dinâmica. Em sincronia com o item do menu (Sidebar, `gestorComercial`) e o
+                  exigirAdminOuGestorComercial de routes/metasComercial.ts. Ao mudar quem entra, ampliar as três camadas. */}
+              <Route element={<RequireGestorOuAdmin depexe={DEPEXE_COMERCIAL} />}>
+                <Route path="/comercial/metas" element={<MetasPainel />} />
+                <Route path="/comercial/metas/lancamentos" element={<MetasLancamentos />} />
+                <Route path="/comercial/metas/planejamento" element={<MetasPlanejamento />} />
+                <Route path="/comercial/metas/indicadores" element={<MetasIndicadores />} />
               </Route>
               <Route element={<RequireRole roles={["admin"]} />}>
                 <Route path="/financeiro/contas-a-receber" element={<ContasReceber />} />
