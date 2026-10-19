@@ -6,7 +6,10 @@ import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EventoAuditoriaTipo } from "../audit/taxonomia";
 import { entidadeIdMetaComercialAno, entidadeIdMetaComercialIndicador } from "../audit/identidadeEntidade";
 import { consultoresDosDepartamentos, nomeConsultor } from "../domain/contextoProjeto";
-import { faturamentoMensal } from "../domain/faturamentoItens";
+import { faturamentoMensal, notasFaturadas } from "../domain/faturamentoItens";
+import { carteiraDoAno, FonteCarteira } from "../domain/metasComercial/carteira";
+import { distribuirPorRepresentante, horasVendidasPorRepresentante } from "../domain/metasComercial/horasPropostas";
+import { licencasVendidasPorRepresentante, pedidosLicencas } from "../domain/metasComercial/licencasPedidos";
 import { DEPEXE_COMERCIAL } from "../domain/propostasDominio";
 import { podeGerirMetasComercial } from "../domain/metasComercial/acesso";
 import { Acumulacao, mesesDoPeriodo, PESOS_PADRAO, validarPesos } from "../domain/metasComercial/calculo";
@@ -249,6 +252,7 @@ function anoDto(a: AnoCompleto) {
     participantes: a.participantes.map((p) => ({
       id: p.id,
       codfor: p.codfor,
+      codrep: p.codrep,
       nome: p.nome,
       funcao: p.funcao,
       naoAtribuido: p.naoAtribuido,
@@ -310,6 +314,7 @@ metasComercialRouter.post("/anos", async (req: AuthenticatedRequest, res) => {
           data: {
             ano,
             codfor: p.codfor,
+            codrep: p.codrep,
             nome: p.nome,
             funcao: p.funcao,
             ordem: p.ordem,
@@ -411,6 +416,28 @@ metasComercialRouter.put("/anos/:ano", async (req: AuthenticatedRequest, res) =>
 
 // ---------------------------------------------------------------- participantes
 
+/** undefined = não veio; null = limpar; número = representante existente; false = inválido. */
+async function lerCodrep(v: unknown): Promise<number | null | undefined | false> {
+  if (v === undefined) return undefined;
+  if (v === null || v === "") return null;
+  if (typeof v !== "number" || !Number.isInteger(v)) return false;
+  return (await prisma.representante.findUnique({ where: { codrep: v }, select: { codrep: true } })) ? v : false;
+}
+
+// Representantes do Senior que têm proposta: o vínculo pessoa ↔ representante leva as horas vendidas para a pessoa.
+metasComercialRouter.get("/representantes", async (_req, res) => {
+  try {
+    const lista = await prisma.$queryRaw<{ codrep: number; nome: string; ativo: boolean }[]>`
+      SELECT r.codrep, r.nomrep AS nome, (r.sitrep = 'A') AS ativo
+      FROM representantes r
+      WHERE r.removido_em_senior IS NULL AND EXISTS (SELECT 1 FROM propostas p WHERE p.codrep = r.codrep)
+      ORDER BY r.nomrep`;
+    res.json({ representantes: lista });
+  } catch (error) {
+    handleError(res, error, "representantes");
+  }
+});
+
 metasComercialRouter.get("/elegiveis", async (_req, res) => {
   try {
     const time = await consultoresDosDepartamentos([DEPEXE_COMERCIAL]);
@@ -464,6 +491,11 @@ metasComercialRouter.post("/anos/:ano/participantes", async (req: AuthenticatedR
       res.status(400).json({ error: "Função inválida (até 60 caracteres)" });
       return;
     }
+    const codrep = await lerCodrep(req.body?.codrep);
+    if (codrep === false) {
+      res.status(400).json({ error: "Representante do Senior inexistente" });
+      return;
+    }
     const lidos = await lerIndicadoresDaPessoa(req.body?.indicadores ?? []);
     if ("erro" in lidos) {
       res.status(400).json({ error: lidos.erro });
@@ -473,7 +505,7 @@ metasComercialRouter.post("/anos/:ano/participantes", async (req: AuthenticatedR
     const nome = nomeConsultor(consultor);
     const criado = await prisma.$transaction(async (tx) => {
       const p = await tx.metaComercialParticipante.create({
-        data: { ano, codfor, nome, funcao: funcao ?? null, ordem: (maxOrdem._max.ordem ?? 0) + 1, indicadores: { create: lidos.itens.map((i, ordem) => ({ ...i, ordem })) } },
+        data: { ano, codfor, codrep: codrep ?? null, nome, funcao: funcao ?? null, ordem: (maxOrdem._max.ordem ?? 0) + 1, indicadores: { create: lidos.itens.map((i, ordem) => ({ ...i, ordem })) } },
       });
       await auditar(tx, req, { id: entidadeIdMetaComercialAno(ano), rotulo: rotuloAno(ano) }, "META_COMERCIAL_PLANEJAMENTO_ALTERADO", { participanteIncluido: nome });
       return p;
@@ -503,6 +535,12 @@ metasComercialRouter.put("/anos/:ano/participantes/:id", async (req: Authenticat
       return;
     }
     if (funcao !== undefined) data.funcao = funcao;
+    const codrep = await lerCodrep(req.body?.codrep);
+    if (codrep === false) {
+      res.status(400).json({ error: "Representante do Senior inexistente" });
+      return;
+    }
+    if (codrep !== undefined) data.codrep = codrep;
     if (req.body?.ativo !== undefined) {
       if (typeof req.body.ativo !== "boolean" || (p.naoAtribuido && !req.body.ativo)) {
         res.status(400).json({ error: "Campo 'ativo' inválido" });
@@ -588,6 +626,36 @@ async function faturamentoDoAno(ano: number): Promise<number[]> {
   return meses;
 }
 
+/** Séries do Senior por origem de indicador (null = mês sem valor) e a data da última foto da carteira. */
+async function realizadoSeniorDoAno(ano: number): Promise<{
+  series: Record<string, Array<number | null>>;
+  seriesPessoa: Record<string, Map<number, Array<number | null>>>;
+  faturamento: number[];
+  ultimaFotoCarteira: Date | null;
+  fontesCarteira: Array<FonteCarteira | null>;
+}> {
+  const [faturamento, carteira, horasPorRep, licencasPorRep, participantes] = await Promise.all([
+    faturamentoDoAno(ano),
+    carteiraDoAno(ano),
+    horasVendidasPorRepresentante(ano),
+    licencasVendidasPorRepresentante(ano),
+    prisma.metaComercialParticipante.findMany({ where: { ano }, select: { id: true, codrep: true, naoAtribuido: true, ativo: true } }),
+  ]);
+  const horas = distribuirPorRepresentante(horasPorRep, participantes);
+  const licencas = distribuirPorRepresentante(licencasPorRep, participantes);
+  return {
+    series: { FATURAMENTO_SENIOR: faturamento.map((v) => (v ? v : null)), CARTEIRA_SENIOR: carteira.mensal, PROPOSTAS_SENIOR: horas.total, PEDIDOS_SENIOR: licencas.total },
+    seriesPessoa: { PROPOSTAS_SENIOR: horas.porParticipante, PEDIDOS_SENIOR: licencas.porParticipante },
+    faturamento,
+    ultimaFotoCarteira: carteira.ultimaFoto,
+    fontesCarteira: carteira.fontes,
+  };
+}
+
+/** Mapa → objeto para o JSON (participanteId → 12 meses). */
+const seriesPessoaJson = (s: Record<string, Map<number, Array<number | null>>>) =>
+  Object.fromEntries(Object.entries(s).map(([origem, mapa]) => [origem, Object.fromEntries(mapa)]));
+
 metasComercialRouter.get("/anos/:ano/lancamentos", async (req, res) => {
   try {
     const ano = anoDoParametro(req.params.ano);
@@ -595,10 +663,14 @@ metasComercialRouter.get("/anos/:ano/lancamentos", async (req, res) => {
       res.status(404).json({ error: "Ano não encontrado" });
       return;
     }
-    const [lancs, fat] = await Promise.all([prisma.metaComercialLancamento.findMany({ where: { participante: { ano } } }), faturamentoDoAno(ano)]);
+    const [lancs, senior] = await Promise.all([prisma.metaComercialLancamento.findMany({ where: { participante: { ano } } }), realizadoSeniorDoAno(ano)]);
     res.json({
       lancamentos: lancs.map((l) => ({ participanteId: l.participanteId, indicadorId: l.indicadorId, mes: l.mes, meta: dec(l.meta), realizado: dec(l.realizado), observacao: l.observacao })),
-      faturamentoSenior: fat,
+      faturamentoSenior: senior.faturamento,
+      realizadoSenior: senior.series,
+      realizadoSeniorPessoa: seriesPessoaJson(senior.seriesPessoa),
+      ultimaFotoCarteira: senior.ultimaFotoCarteira,
+      fontesCarteira: senior.fontesCarteira,
     });
   } catch (error) {
     handleError(res, error, "lancamentos");
@@ -662,7 +734,7 @@ metasComercialRouter.put("/anos/:ano/lancamentos", async (req: AuthenticatedRequ
         res.status(400).json({ error: `Valor inválido em ${p.nome} / ${ind.nome} / mês ${mes}: use números não negativos e observação de até 300 caracteres` });
         return;
       }
-      if (realizado != null && ind.origem === "FATURAMENTO_SENIOR") {
+      if (realizado != null && ind.origem !== "MANUAL") {
         res.status(400).json({ error: `${ind.nome} vem do Senior e não pode ser digitado` });
         return;
       }
@@ -719,15 +791,15 @@ metasComercialRouter.put("/anos/:ano/lancamentos", async (req: AuthenticatedRequ
 
 // ---------------------------------------------------------------- painel
 
-async function montarPainelDoAno(ano: number, periodo: string): Promise<{ painel: Painel } | { erro: string; status: number }> {
+async function montarPainelDoAno(ano: number, periodo: string): Promise<{ painel: Painel & { ultimaFotoCarteira: Date | null; fontesCarteira: Array<FonteCarteira | null> } } | { erro: string; status: number }> {
   const meses = mesesDoPeriodo(periodo);
   if (!meses) return { erro: "Período inválido (ano, s1, s2, t1..t4, mes-N ou ate-N)", status: 400 };
   const a = await prisma.metaComercialAno.findUnique({ where: { ano }, include: INCLUDE_ANO });
   if (!a) return { erro: "Ano não encontrado", status: 404 };
-  const [indicadores, lancs, fat] = await Promise.all([
+  const [indicadores, lancs, senior] = await Promise.all([
     prisma.metaComercialIndicador.findMany(),
     prisma.metaComercialLancamento.findMany({ where: { participante: { ano } } }),
-    faturamentoDoAno(ano),
+    realizadoSeniorDoAno(ano),
   ]);
   const painel = montarPainel({
     ano,
@@ -740,10 +812,45 @@ async function montarPainelDoAno(ano: number, periodo: string): Promise<{ painel
       .filter((p) => p.ativo)
       .map((p) => ({ id: p.id, nome: p.nome, funcao: p.funcao, naoAtribuido: p.naoAtribuido, ordem: p.ordem, indicadores: p.indicadores.map((i) => ({ indicadorId: i.indicadorId, rotulo: i.rotulo, ordem: i.ordem })) })),
     lancamentos: lancs.map((l) => ({ participanteId: l.participanteId, indicadorId: l.indicadorId, mes: l.mes, meta: dec(l.meta), realizado: dec(l.realizado) })),
-    faturamentoMensal: fat,
+    realizadoSenior: senior.series,
+    realizadoSeniorPessoa: senior.seriesPessoa,
   });
-  return { painel };
+  return { painel: { ...painel, ultimaFotoCarteira: senior.ultimaFotoCarteira, fontesCarteira: senior.fontesCarteira } };
 }
+
+// Pedidos de venda que formam as Licenças de um mês (detalhe do "Mês a mês — Licenças"). Mesma regra do total, então a soma confere.
+metasComercialRouter.get("/anos/:ano/licencas/pedidos", async (req, res) => {
+  try {
+    const ano = anoDoParametro(req.params.ano);
+    const mes = Number(req.query.mes);
+    if (ano == null || !Number.isInteger(mes) || mes < 1 || mes > 12) {
+      res.status(400).json({ error: "Informe ano e mês (1 a 12)" });
+      return;
+    }
+    const pedidos = await pedidosLicencas(ano, mes);
+    const total = Math.round(pedidos.reduce((s, p) => s + p.valor, 0) * 100) / 100;
+    res.json({ ano, mes, quantidade: pedidos.length, total, pedidos });
+  } catch (error) {
+    handleError(res, error, "licencas-pedidos");
+  }
+});
+
+// Notas que formam o Faturamento de um mês (detalhe do "Mês a mês — Faturamento"). Mesma regra do total, então a soma confere.
+metasComercialRouter.get("/anos/:ano/faturamento/notas", async (req, res) => {
+  try {
+    const ano = anoDoParametro(req.params.ano);
+    const mes = Number(req.query.mes);
+    if (ano == null || !Number.isInteger(mes) || mes < 1 || mes > 12) {
+      res.status(400).json({ error: "Informe ano e mês (1 a 12)" });
+      return;
+    }
+    const notas = await notasFaturadas(ano, mes);
+    const total = Math.round(notas.reduce((s, n) => s + n.valor, 0) * 100) / 100;
+    res.json({ ano, mes, quantidade: notas.length, total, notas });
+  } catch (error) {
+    handleError(res, error, "faturamento-notas");
+  }
+});
 
 metasComercialRouter.get("/anos/:ano/painel", async (req, res) => {
   try {

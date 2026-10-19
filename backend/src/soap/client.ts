@@ -1,6 +1,6 @@
 import axios from "axios";
 import { XMLParser } from "fast-xml-parser";
-import { conexaoSenior, SistemaSenior } from "../config/sistemaSenior";
+import { conexaoSenior, garantirEscritaNoSenior, SistemaSenior } from "../config/sistemaSenior";
 
 const SENIOR_NAMESPACE = "http://services.senior.com.br";
 
@@ -333,6 +333,7 @@ export function montarEnvelopeRegistrarAtividades(payload: RegistrarAtividadesPa
  * quando a chamada em si falha (rede, XML inesperado, erroExecucao preenchido).
  */
 export async function registrarAtividadesViaSoap(payload: RegistrarAtividadesPayload): Promise<RegistrarAtividadesResposta> {
+  garantirEscritaNoSenior("registrarAtividades");
   const soapUrl = process.env.SOAP_URL;
   const soapUser = process.env.SOAP_USER;
   const soapPassword = process.env.SOAP_PASSWORD;
@@ -503,6 +504,7 @@ export function montarEnvelopeAlocarAtividades(payload: AlocarAtividadesPayload,
  * (sync/outboxSenior.ts).
  */
 export async function alocarAtividadesViaSoap(payload: AlocarAtividadesPayload): Promise<AlocarAtividadesResposta> {
+  garantirEscritaNoSenior("alocarAtividades");
   const soapUrl = process.env.SOAP_URL;
   const soapUser = process.env.SOAP_USER;
   const soapPassword = process.env.SOAP_PASSWORD;
@@ -669,6 +671,7 @@ export function montarEnvelopeManterItemDespesa(payload: ManterItemDespesaPayloa
  * normaliza a resposta — quem decide é o chamador (sync/outboxSeniorDespesa.ts).
  */
 export async function manterItemDespesaViaSoap(payload: ManterItemDespesaPayload): Promise<ManterItemDespesaResposta> {
+  garantirEscritaNoSenior("ManterItemDespesa");
   const soapUrl = process.env.SOAP_URL;
   const soapUser = process.env.SOAP_USER;
   const soapPassword = process.env.SOAP_PASSWORD;
@@ -773,6 +776,7 @@ export function montarEnvelopeFecharRat(payload: FecharRatPayload, user: string,
  * normaliza a resposta — quem decide é o chamador (sync/outboxSenior.ts).
  */
 export async function fecharRatViaSoap(payload: FecharRatPayload): Promise<FecharRatResposta> {
+  garantirEscritaNoSenior("fecharRAT");
   const soapUrl = process.env.SOAP_URL;
   const soapUser = process.env.SOAP_USER;
   const soapPassword = process.env.SOAP_PASSWORD;

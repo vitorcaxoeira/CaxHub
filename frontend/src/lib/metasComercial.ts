@@ -4,6 +4,19 @@
 
 export type Unidade = "BRL" | "HORAS" | "QTD";
 export type Acumulacao = "SOMA" | "SALDO";
+/** MANUAL = digitado em Lançamentos; as outras vêm do Senior e são somente leitura. */
+export type Origem = "MANUAL" | "FATURAMENTO_SENIOR" | "CARTEIRA_SENIOR" | "PROPOSTAS_SENIOR" | "PEDIDOS_SENIOR";
+
+export const ehDoSenior = (origem: string) => origem !== "MANUAL";
+
+export const ROTULO_ORIGEM: Record<Origem, string> = {
+  MANUAL: "Digitado em Lançamentos",
+  FATURAMENTO_SENIOR: "Notas fiscais do Senior",
+  CARTEIRA_SENIOR: "Carteira de contratos do Senior (RVTR101, motivo 500)",
+  PROPOSTAS_SENIOR: "Horas das propostas aprovadas (Senior)",
+  PEDIDOS_SENIOR: "Pedidos com rateio na conta 177 (Senior)",
+};
+export const rotuloOrigem = (origem: string) => ROTULO_ORIGEM[origem as Origem] ?? origem;
 
 export interface Indicador {
   id: number;
@@ -11,7 +24,7 @@ export interface Indicador {
   nome: string;
   unidade: Unidade;
   acumulacao: Acumulacao;
-  origem: "MANUAL" | "FATURAMENTO_SENIOR";
+  origem: Origem;
   ordem: number;
   ativo: boolean;
   emUso: boolean;
@@ -26,6 +39,8 @@ export interface IndicadorDaPessoa {
 export interface Participante {
   id: number;
   codfor: number | null;
+  /** Representante do Senior: as horas das propostas dele são o realizado de Horas de Serviços da pessoa. */
+  codrep: number | null;
   nome: string;
   funcao: string | null;
   naoAtribuido: boolean;
@@ -56,6 +71,14 @@ export interface LancamentosResposta {
   lancamentos: Lancamento[];
   /** Faturamento das NFs fechadas, mês a mês (12 posições). */
   faturamentoSenior: number[];
+  /** Realizado do Senior por origem (FATURAMENTO_SENIOR, CARTEIRA_SENIOR), 12 posições; null = mês sem valor. */
+  realizadoSenior: Record<string, Array<number | null>>;
+  /** Realizado do Senior por pessoa (origem -> participanteId -> 12 meses), ex.: horas das propostas pelo representante. */
+  realizadoSeniorPessoa?: Record<string, Record<string, Array<number | null>>>;
+  /** Quando a carteira de contratos foi fotografada pela última vez (ISO), ou null. */
+  ultimaFotoCarteira: string | null;
+  /** Fonte de cada mês da carteira: FOTO (lida no mês) ou RECONSTRUIDA (mês anterior à primeira foto, recalculado). */
+  fontesCarteira: Array<"FOTO" | "RECONSTRUIDA" | null>;
 }
 
 export interface Consolidado {
@@ -112,6 +135,15 @@ export interface Painel {
   atingimentoGeral: number | null;
   indicadores: IndicadorEmpresa[];
   pessoas: PessoaPainel[];
+  ultimaFotoCarteira: string | null;
+  fontesCarteira: Array<"FOTO" | "RECONSTRUIDA" | null>;
+}
+
+/** "19/10 às 11:22" (data e hora locais da foto da carteira). */
+export function quandoFoto(iso: string | null | undefined): string {
+  if (!iso) return "sem foto ainda";
+  const d = new Date(iso);
+  return `${d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 export const MESES_CURTOS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
@@ -149,6 +181,14 @@ export function fmtResumo(unidade: Unidade, v: number | null | undefined): strin
   if (v == null || !Number.isFinite(v)) return "—";
   if (unidade === "BRL") return `R$ ${nf0.format(v)}`;
   return fmtValor(unidade, v);
+}
+
+/** Para textos curtos (linha de apoio dos cartões): reais a partir de 1 milhão viram "R$ 13,8 mi"; o resto como fmtResumo. */
+export function fmtCurto(unidade: Unidade, v: number | null | undefined): string {
+  if (v != null && Number.isFinite(v) && unidade === "BRL" && Math.abs(v) >= 1e6) {
+    return `R$ ${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(v / 1e6)} mi`;
+  }
+  return fmtResumo(unidade, v);
 }
 
 export const fmtPct = (x: number | null | undefined, casas = 1): string =>
@@ -209,3 +249,102 @@ export const rotuloPeriodo = (periodo: string): string => {
   if (m) return m[1] === "mes" ? MESES_LONGOS[Number(m[2]) - 1] : `Acumulado até ${MESES_LONGOS[Number(m[2]) - 1].toLowerCase()}`;
   return periodo;
 };
+
+export interface Representante {
+  codrep: number;
+  nome: string;
+  ativo: boolean;
+}
+
+export interface NotaFaturada {
+  codemp: number;
+  codfil: number;
+  serie: string;
+  numero: number;
+  emissao: string;
+  codcli: number;
+  cliente: string | null;
+  codrep: number;
+  representante: string | null;
+  itens: number;
+  valor: number;
+}
+
+export interface NotasFaturadasResposta {
+  ano: number;
+  mes: number;
+  quantidade: number;
+  total: number;
+  notas: NotaFaturada[];
+}
+
+export interface PedidoLicenca {
+  codemp: number;
+  codfil: number;
+  numped: number;
+  emissao: string;
+  sitped: number;
+  codcli: number;
+  cliente: string | null;
+  codrep: number | null;
+  representante: string | null;
+  servicos: string;
+  valor: number;
+}
+
+export interface PedidosLicencasResposta {
+  ano: number;
+  mes: number;
+  quantidade: number;
+  total: number;
+  pedidos: PedidoLicenca[];
+}
+
+/** Situação do pedido (domínio LSitPed do Senior). */
+export const SITUACAO_PEDIDO: Record<number, string> = {
+  1: "Aberto total",
+  2: "Aberto parcial",
+  3: "Suspenso",
+  4: "Liquidado",
+  5: "Cancelado",
+  6: "Aguardando WMS",
+  7: "Em transmissão",
+  8: "Preparação análise/NF",
+  9: "Não fechado",
+};
+
+// ---------------------------------------------------------------- quadro (estilo da planilha)
+
+export interface ColunasQuadro {
+  /** Quanto falta para a meta (coluna DESAFIO da planilha). Nulo sem meta ou quando superou. */
+  falta: number | null;
+  /** Quanto passou da meta. Nulo quando não superou. */
+  superou: number | null;
+  /** % que falta (100% − %), nunca negativo. Nulo sem meta. */
+  pctFalta: number | null;
+}
+
+/** Colunas de desafio de uma linha do quadro: as contas J e K da planilha, com "superou" no lugar de número negativo. */
+export function colunasQuadro(c: { meta: number; realizado: number; atingimento: number | null }): ColunasQuadro {
+  if (!(c.meta > 0) || c.atingimento == null) return { falta: null, superou: null, pctFalta: null };
+  const saldo = arredonda2(c.meta - c.realizado);
+  if (saldo < 0) return { falta: null, superou: -saldo, pctFalta: 0 };
+  return { falta: saldo, superou: null, pctFalta: Math.max(0, 1 - c.atingimento) };
+}
+
+/** DESAFIO GERAL da planilha: média de (100% − %) = 100% − realizado geral. Acima de 100% não há o que faltar: fica 0% (a planilha
+ * mostraria negativo), como o "% que falta" de cada linha que superou a meta. */
+export const desafioGeral = (geral: number | null): number | null => (geral == null ? null : Math.max(0, 1 - geral));
+
+/** Série do gráfico do mês a mês a partir das células mensais (acumulada em SOMA; posição de cada mês em SALDO). */
+export function serieDe(mensal: CelulaMes[], acumulacao: Acumulacao): Array<{ mes: number; meta: number; realizado: number | null }> {
+  const ultimo = Math.max(0, ...mensal.filter((m) => m.realizado != null).map((m) => m.mes));
+  let meta = 0;
+  let real = 0;
+  return mensal.map((m) => {
+    if (acumulacao === "SALDO") return { mes: m.mes, meta: m.meta ?? 0, realizado: m.realizado };
+    meta += m.meta ?? 0;
+    real += m.realizado ?? 0;
+    return { mes: m.mes, meta: arredonda2(meta), realizado: m.mes <= ultimo ? arredonda2(real) : null };
+  });
+}

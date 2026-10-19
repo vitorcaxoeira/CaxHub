@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../ui/Modal";
 import { useToast } from "../ui/Toast";
 import { ConfigAno, Indicador, Lancamento, MESES_CURTOS, MESES_LONGOS, Participante, distribuirPorPesos, fmtValor, lerNumero, numParaCampo } from "../../lib/metasComercial";
-import { Aviso, botaoPrimario, botaoSecundario, campo, mensagemDe } from "./comum";
+import { Aviso, botaoPrimario, botaoSecundario, campo, campoAuto, mensagemDe } from "./comum";
 
 interface Props {
   aberto: boolean;
@@ -125,7 +125,7 @@ export function MetasMensaisModal({ aberto, onClose, config, indicadores, partic
               <div className="flex flex-wrap items-end gap-3">
                 <div>
                   <label htmlFor="ass-ind" className="mb-1 block text-[12px] text-muted">Indicador</label>
-                  <select id="ass-ind" value={indAss} onChange={(e) => setIndAss(Number(e.target.value))} className={`${campo} w-auto`}>
+                  <select id="ass-ind" value={indAss} onChange={(e) => setIndAss(Number(e.target.value))} className={campoAuto}>
                     {defs.map(({ pi, ind }) => (
                       <option key={ind.id} value={ind.id}>{pi.rotulo?.trim() || ind.nome}</option>
                     ))}
@@ -133,7 +133,7 @@ export function MetasMensaisModal({ aberto, onClose, config, indicadores, partic
                 </div>
                 <div>
                   <label htmlFor="ass-modo" className="mb-1 block text-[12px] text-muted">Partir de</label>
-                  <select id="ass-modo" value={modo} onChange={(e) => setModo(e.target.value as "valor" | "percentual")} className={`${campo} w-auto`}>
+                  <select id="ass-modo" value={modo} onChange={(e) => setModo(e.target.value as "valor" | "percentual")} className={campoAuto}>
                     <option value="valor">Um valor (total do período)</option>
                     <option value="percentual">% da meta anual da empresa</option>
                   </select>
@@ -144,13 +144,13 @@ export function MetasMensaisModal({ aberto, onClose, config, indicadores, partic
                 </div>
                 <div>
                   <label htmlFor="ass-de" className="mb-1 block text-[12px] text-muted">De</label>
-                  <select id="ass-de" value={de} onChange={(e) => setDe(Number(e.target.value))} className={`${campo} w-auto`}>
+                  <select id="ass-de" value={de} onChange={(e) => setDe(Number(e.target.value))} className={campoAuto}>
                     {MESES.map((m) => <option key={m} value={m}>{MESES_LONGOS[m - 1]}</option>)}
                   </select>
                 </div>
                 <div>
                   <label htmlFor="ass-ate" className="mb-1 block text-[12px] text-muted">Até</label>
-                  <select id="ass-ate" value={ate} onChange={(e) => setAte(Number(e.target.value))} className={`${campo} w-auto`}>
+                  <select id="ass-ate" value={ate} onChange={(e) => setAte(Number(e.target.value))} className={campoAuto}>
                     {MESES.map((m) => <option key={m} value={m}>{MESES_LONGOS[m - 1]}</option>)}
                   </select>
                 </div>

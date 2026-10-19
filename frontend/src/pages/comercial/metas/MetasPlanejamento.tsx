@@ -5,7 +5,7 @@ import { MetasMensaisModal } from "../../../components/metasComercial/MetasMensa
 import { Elegivel, PessoaForm } from "../../../components/metasComercial/PessoaForm";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { useToast } from "../../../components/ui/Toast";
-import { ConfigAno, Indicador, LancamentosResposta, MESES_CURTOS, Participante, PESOS_PADRAO, fmtValor, lerNumero, numParaCampo, pesoParaCampo, somaPesos } from "../../../lib/metasComercial";
+import { ConfigAno, Indicador, LancamentosResposta, MESES_CURTOS, Participante, PESOS_PADRAO, Representante, fmtValor, lerNumero, numParaCampo, pesoParaCampo, somaPesos, ehDoSenior, rotuloOrigem } from "../../../lib/metasComercial";
 
 // Comercial › Gestão de Metas › Metas do ano: pesos de cada mês, meta anual da empresa por indicador e o time (quem acompanha o quê e as
 // metas mensais de cada pessoa). Depois disso a rotina do mês é só a tela de Lançamentos.
@@ -26,6 +26,7 @@ export function MetasPlanejamento() {
   const [erroForm, setErroForm] = useState<string | null>(null);
 
   const [elegiveis, setElegiveis] = useState<Elegivel[]>([]);
+  const [representantes, setRepresentantes] = useState<Representante[]>([]);
   const [incluindo, setIncluindo] = useState(false);
   const [editando, setEditando] = useState<Participante | null>(null);
   const [mensais, setMensais] = useState<Participante | null>(null);
@@ -39,13 +40,15 @@ export function MetasPlanejamento() {
       axios.get<{ indicadores: Indicador[] }>("/api/metas-comercial/indicadores"),
       axios.get<LancamentosResposta>(`/api/metas-comercial/anos/${ano}/lancamentos`),
       axios.get<{ elegiveis: Elegivel[] }>("/api/metas-comercial/elegiveis"),
+      axios.get<{ representantes: Representante[] }>("/api/metas-comercial/representantes"),
     ])
-      .then(([c, i, l, e]) => {
+      .then(([c, i, l, e, r]) => {
         if (cancelado) return;
         setConfig(c.data);
         setIndicadores(i.data.indicadores);
         setDados(l.data);
         setElegiveis(e.data.elegiveis);
+        setRepresentantes(r.data.representantes);
         setPesos(c.data.pesosMensais.map((p) => pesoParaCampo(p)));
         setMetas(Object.fromEntries(c.data.empresa.map((m) => [m.indicadorId, numParaCampo(m.metaAnual)])));
         setObservacao(c.data.observacao ?? "");
@@ -184,7 +187,7 @@ export function MetasPlanejamento() {
                           {i.nome}
                           <span className="ml-1.5 text-[11px] text-muted">{i.unidade === "BRL" ? "R$" : i.unidade === "HORAS" ? "horas" : "unidades"}</span>
                           {i.acumulacao === "SALDO" && <span className="ml-1.5 rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] text-muted">posição-alvo</span>}
-                          {i.origem === "FATURAMENTO_SENIOR" && <span className="ml-1.5 rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] text-muted">realizado do Senior</span>}
+                          {ehDoSenior(i.origem) && <span className="ml-1.5 rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] text-muted" title={rotuloOrigem(i.origem)}>{i.origem === "CARTEIRA_SENIOR" ? "realizado: carteira do Senior" : "realizado do Senior"}</span>}
                         </td>
                         <td className="px-2 py-1.5">
                           <input
@@ -230,6 +233,11 @@ export function MetasPlanejamento() {
                     <p className="text-sm font-medium text-foreground">
                       {p.nome}
                       {p.funcao && <span className="ml-2 text-[12.5px] font-normal text-muted">{p.funcao}</span>}
+                      {p.codrep != null && (
+                        <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] font-normal text-muted" title="Representante do Senior: as horas das propostas dele são o realizado de Horas de Serviços">
+                          representante {representantes.find((x) => x.codrep === p.codrep)?.nome ?? p.codrep}
+                        </span>
+                      )}
                       {!p.ativo && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] font-normal text-muted">inativa</span>}
                     </p>
                     <p className="mt-0.5 text-[12.5px] text-muted">
@@ -257,8 +265,8 @@ export function MetasPlanejamento() {
             </ul>
           </Cartao>
 
-          <PessoaForm aberto={incluindo} onClose={() => setIncluindo(false)} ano={config.ano} indicadores={indicadores} elegiveis={disponiveis} onSalvo={recarregar} />
-          {editando && <PessoaForm aberto onClose={() => setEditando(null)} ano={config.ano} indicadores={indicadores} elegiveis={[]} participante={editando} onSalvo={recarregar} />}
+          <PessoaForm aberto={incluindo} onClose={() => setIncluindo(false)} ano={config.ano} indicadores={indicadores} elegiveis={disponiveis} representantes={representantes} onSalvo={recarregar} />
+          {editando && <PessoaForm aberto onClose={() => setEditando(null)} ano={config.ano} indicadores={indicadores} elegiveis={[]} representantes={representantes} participante={editando} onSalvo={recarregar} />}
           {mensais && dados && <MetasMensaisModal aberto onClose={() => setMensais(null)} config={{ ...config, pesosMensais: pesosValidos ? (pesosNum as number[]) : config.pesosMensais }} indicadores={indicadores} participante={mensais} lancamentos={dados.lancamentos} onSalvo={recarregar} />}
         </div>
       )}

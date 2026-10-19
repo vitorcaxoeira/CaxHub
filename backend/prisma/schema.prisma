@@ -1663,6 +1663,8 @@ model Pedido {
   // grava NULL aqui. Nunca há DELETE físico: ver comentário em varrerRemovidos.ts.
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
+  /// Representante do pedido (E120PED.CodRep): leva as licenças vendidas para a pessoa na Gestão de Metas do Comercial.
+  codrep           Int?
   @@id([codemp, codfil, numped])
   @@map("pedidos")
 }
@@ -4070,7 +4072,10 @@ model MetaComercialIndicador {
   unidade    String   @db.VarChar(6)
   /// SOMA = fluxo do mês (soma os meses); SALDO = posição (o realizado do período é o último mês lançado, ex.: carteira de mensalidade)
   acumulacao String   @default("SOMA") @db.VarChar(5)
-  /// MANUAL = digitado; FATURAMENTO_SENIOR = soma das NFs fechadas (mesma base da Análise de Faturamento), somente leitura
+  /// MANUAL = digitado; FATURAMENTO_SENIOR = soma das NFs fechadas (mesma base da Análise de Faturamento);
+  /// CARTEIRA_SENIOR = foto mensal da carteira de contratos (MetaComercialCarteira); PEDIDOS_SENIOR = licenças dos pedidos
+  /// (conta 177); PROPOSTAS_SENIOR = horas das propostas
+  /// aprovadas (por representante). As do Senior são somente leitura.
   origem     String   @default("MANUAL") @db.VarChar(20)
   ordem      Int      @default(0)
   ativo      Boolean  @default(true)
@@ -4121,6 +4126,8 @@ model MetaComercialParticipante {
   /// Nome no momento do cadastro (o consultor pode mudar de nome no Senior sem reescrever o histórico).
   nome         String  @db.VarChar(100)
   funcao       String? @db.VarChar(60)
+  /// Representante do Senior (E090REP) da pessoa: as horas das propostas dele são o realizado de Horas de Serviços dela.
+  codrep       Int?
   naoAtribuido Boolean @default(false)
   ordem        Int     @default(0)
   ativo        Boolean @default(true)
@@ -4148,6 +4155,24 @@ model MetaComercialParticipanteIndicador {
   @@map("metas_comercial_participante_indicadores")
 }
 
+// Foto da carteira de mensalidades (relatório RVTR101 do Senior: contratos ativos com motivo 500, valor = PreUni / DiaPar × QtdCvs).
+// Uma linha por mês, regravada a cada foto diária: a última do mês vira o realizado da Mensalidade naquele mês. Não há histórico
+// anterior à primeira foto (o Senior só mostra a carteira do momento).
+model MetaComercialCarteira {
+  ano         Int
+  mes         Int
+  valor       Decimal  @db.Decimal(16, 2)
+  contratos   Int
+  itens       Int
+  capturadoEm DateTime @default(now())
+  /// FOTO = carteira lida do espelho naquele mês; RECONSTRUIDA = mês anterior à primeira foto, recalculado com o histórico de
+  /// reajustes e upgrades (E160REA). Reconstrução nunca sobrescreve foto.
+  fonte       String   @default("FOTO") @db.VarChar(12)
+
+  @@id([ano, mes])
+  @@map("metas_comercial_carteira")
+}
+
 // Meta e realizado de UMA pessoa, num indicador, num mês. Faturamento (origem Senior) nunca tem realizado aqui.
 model MetaComercialLancamento {
   id             Int      @id @default(autoincrement())
@@ -4166,4 +4191,150 @@ model MetaComercialLancamento {
   @@unique([participanteId, indicadorId, mes])
   @@index([indicadorId])
   @@map("metas_comercial_lancamentos")
+}
+
+// Espelho local da tabela E160CTR do Senior ERP (Vendas - Contratos - Dados gerais).
+model ContratoVenda {
+  codemp Int
+  codfil Int
+  numctr Int
+  codcli Int
+  clifat Int
+  codrep Int?
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitctr String @db.VarChar(1)
+  codmot Int?
+  diapar Int
+  datemi DateTime @db.Date
+  inivig DateTime? @db.Date
+  fimvig DateTime? @db.Date
+  ultrea DateTime? @db.Date
+  datger DateTime? @db.Date
+  /// Data do último faturamento do contrato: o fim de um contrato inativo na reconstrução da carteira de meses passados.
+  datuft DateTime? @db.Date
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codfil, numctr])
+
+  @@map("contratos_venda")
+}
+
+// Espelho local da tabela E160CVS do Senior ERP (Vendas - Contratos - Itens de serviço).
+model ContratoVendaServico {
+  codemp Int
+  codfil Int
+  numctr Int
+  datcpt DateTime @db.Date
+  seqcvs Int
+  codser String? @db.VarChar(14)
+  cplcvs String @db.VarChar(250)
+  qtdcvs Decimal @db.Decimal(14, 5)
+  preuni Decimal @db.Decimal(21, 10)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitcvs String @db.VarChar(1)
+  inirea DateTime? @db.Date
+  ultrea DateTime? @db.Date
+  /// Início da vigência do item (31/12/1900 = item antigo, sem data) e último faturamento do item: o começo e o fim do item na
+  /// reconstrução da carteira de meses passados.
+  inivig DateTime? @db.Date
+  datuft DateTime? @db.Date
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codfil, numctr, datcpt, seqcvs])
+
+  @@map("contratos_venda_servicos")
+}
+
+// Espelho local da tabela E160REA do Senior ERP (Vendas - Contratos - Históricos dos reajustes).
+model ContratoVendaReajuste {
+  codemp Int
+  codfil Int
+  numctr Int
+  datcpt DateTime @db.Date
+  seqcvs Int
+  seqcvp Int
+  ultrea DateTime @db.Date
+  vlrrea Decimal? @db.Decimal(14, 5)
+  vlratu Decimal? @db.Decimal(14, 5)
+  perrea Decimal? @db.Decimal(7, 4)
+  /// Domínio "LGerIte": G=Dados Gerais, I=Itens
+  tiprea String? @db.VarChar(1)
+  usu_vlrupg Decimal? @db.Decimal(14, 5)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codfil, numctr, datcpt, seqcvs, seqcvp, ultrea])
+
+  @@map("contratos_venda_reajustes")
+}
+
+// Espelho local da tabela E120ISP do Senior ERP (Vendas - Pedidos - Itens de Serviço).
+model PedidoItemServico {
+  codemp Int
+  codfil Int
+  numped Int
+  seqisp Int
+  codser String? @db.VarChar(14)
+  cplisp String? @db.VarChar(250)
+  qtdped Decimal @db.Decimal(14, 5)
+  preuni Decimal @db.Decimal(21, 10)
+  vlrbru Decimal? @db.Decimal(15, 2)
+  vlrliq Decimal? @db.Decimal(15, 2)
+  /// Domínio "LSitPed": 1=Aberto Total, 2=Aberto Parcial, 3=Suspenso, 4=Liquidado, 5=Cancelado, 6=Aguardando Integração WMS, 7=Em Transmissão, 8=Preparação Análise ou NF, 9=Não Fechado
+  sitisp Int
+  ctafin Int?
+  codrep Int?
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codfil, numped, seqisp])
+
+  @@map("pedidos_itens_servico")
+}
+
+// Espelho local da tabela E120RAT do Senior ERP (Vendas - Pedidos - Rateios).
+model PedidoRateio {
+  codemp Int
+  codfil Int
+  numped Int
+  seqrat Int
+  seqisp Int?
+  seqipd Int?
+  ctafin Int?
+  percta Decimal? @db.Decimal(7, 4)
+  vlrcta Decimal? @db.Decimal(15, 2)
+  // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
+  // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
+  // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
+  // nasça no CaxHub em vez de vir do Senior.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  // Quando a varredura constatou que a linha sumiu da origem. NULL = viva. Volta a NULL
+  // sozinho se a linha reaparecer, porque todo upsert grava NULL aqui. Nunca há DELETE.
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@index([codemp, codfil, numped, seqisp, ctafin], map: "pedidos_rateios_item_ctafin_idx")
+  @@id([codemp, codfil, numped, seqrat])
+
+  @@map("pedidos_rateios")
 }

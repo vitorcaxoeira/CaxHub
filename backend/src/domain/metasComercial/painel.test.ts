@@ -27,7 +27,7 @@ const base = {
     { participanteId: 99, indicadorId: 2, mes: 3, meta: null, realizado: 14493.21 },
     { participanteId: 99, indicadorId: 1, mes: 3, meta: null, realizado: 948672.34 },
   ],
-  faturamentoMensal: [915689.9, 960818.85, 1346286.42, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  realizadoSenior: { FATURAMENTO_SENIOR: [915689.9, 960818.85, 1346286.42, null, null, null, null, null, null, null, null, null] } as Record<string, Array<number | null>>,
 };
 
 test("painel do ano: realizado da empresa soma as pessoas e a linha Não atribuído", () => {
@@ -72,3 +72,26 @@ test("período recorta metas e realizado: só o 1º trimestre", () => {
   assert.equal(inc.consolidado.meta, 39999.99); // 3 × 13.333,33: cada mês em centavos, o resíduo fica em dezembro
   assert.ok(p.atingimentoGeral != null);
 });
+
+test("Mensalidade da carteira (RVTR101): vale a foto do último mês, sem digitação de ninguém", () => {
+  const carteira: IndicadorDef = { id: 7, codigo: "MENSALIDADE_CARTEIRA", nome: "Mensalidade", unidade: "BRL", acumulacao: "SALDO", origem: "CARTEIRA_SENIOR", ordem: 0 };
+  const fotos: Array<number | null> = [null, null, null, null, null, null, null, null, null, 938580.29, null, null];
+  const p = montarPainel({
+    ...base,
+    indicadores: [...IND, carteira],
+    metasEmpresa: new Map([...base.metasEmpresa, [7, 1000000]]),
+    realizadoSenior: { ...base.realizadoSenior, CARTEIRA_SENIOR: fotos },
+    periodo: "ano",
+    meses: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  });
+  const m = p.indicadores.find((i) => i.indicadorId === 7)!;
+  assert.equal(m.consolidado.realizado, 938580.29);
+  assert.equal(m.consolidado.meta, 1000000);
+  assert.ok(Math.abs(m.consolidado.atingimento! - 0.93858029) < 1e-9);
+  assert.equal(m.mensal[8].realizado, null); // setembro sem foto: vazio, não zero
+  assert.equal(m.mensal[9].realizado, 938580.29);
+  // Num período sem foto nenhuma (1º semestre), não há realizado.
+  const s1 = montarPainel({ ...base, indicadores: [...IND, carteira], metasEmpresa: new Map([...base.metasEmpresa, [7, 1000000]]), realizadoSenior: { CARTEIRA_SENIOR: fotos }, periodo: "s1", meses: [1, 2, 3, 4, 5, 6] });
+  assert.equal(s1.indicadores.find((i) => i.indicadorId === 7)!.consolidado.realizado, 0);
+});
+

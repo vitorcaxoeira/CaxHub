@@ -4,7 +4,7 @@ import { Aviso, botaoPrimario, botaoSecundario, Cabecalho, Cartao, campo, mensag
 import { Modal } from "../../../components/ui/Modal";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { useToast } from "../../../components/ui/Toast";
-import { Acumulacao, Indicador, Unidade } from "../../../lib/metasComercial";
+import { Acumulacao, Indicador, Unidade, rotuloOrigem } from "../../../lib/metasComercial";
 
 const ROTULO_UNIDADE: Record<Unidade, string> = { BRL: "Reais (R$)", HORAS: "Horas", QTD: "Quantidade" };
 const ROTULO_ACUMULACAO: Record<Acumulacao, string> = { SOMA: "Soma dos meses", SALDO: "Posição (vale o último mês)" };
@@ -70,7 +70,7 @@ export function MetasIndicadores() {
                     </td>
                     <td className="px-3 py-2 text-muted">{ROTULO_UNIDADE[i.unidade]}</td>
                     <td className="px-3 py-2 text-muted">{ROTULO_ACUMULACAO[i.acumulacao]}</td>
-                    <td className="px-3 py-2 text-muted">{i.origem === "FATURAMENTO_SENIOR" ? "Notas fiscais do Senior" : "Digitado em Lançamentos"}</td>
+                    <td className="px-3 py-2 text-muted">{rotuloOrigem(i.origem)}</td>
                     <td className="py-2 pl-3 text-right">
                       <div className="flex justify-end gap-2">
                         <button type="button" onClick={() => setModal({ indicador: i })} className={botaoSecundario}>

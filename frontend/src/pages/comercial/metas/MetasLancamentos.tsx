@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Aviso, BarraAtingimento, botaoPrimario, botaoSecundario, Cabecalho, Cartao, campo, mensagemDe, SeletorAno, tomDoAtingimento, useAnosMetas, Vazio } from "../../../components/metasComercial/comum";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { useToast } from "../../../components/ui/Toast";
-import { ConfigAno, Indicador, Lancamento, LancamentosResposta, MESES_CURTOS, MESES_LONGOS, fmtPct, fmtValor, lerNumero, numParaCampo } from "../../../lib/metasComercial";
+import { ConfigAno, Indicador, Lancamento, LancamentosResposta, MESES_CURTOS, MESES_LONGOS, ehDoSenior, fmtPct, fmtValor, lerNumero, numParaCampo, quandoFoto, rotuloOrigem } from "../../../lib/metasComercial";
 
 interface Edicao {
   meta?: string;
@@ -15,7 +15,7 @@ interface Edicao {
 const chave = (pid: number, iid: number) => `${pid}:${iid}`;
 
 // Comercial › Gestão de Metas › Lançamentos: a rotina do mês. Meta e realizado de cada pessoa por indicador, salvos de uma vez.
-// Faturamento (origem Senior) aparece só para leitura. Campo vazio apaga o valor.
+// Faturamento e Mensalidade (carteira de contratos) vêm do Senior e aparecem só para leitura. Campo vazio apaga o valor.
 export function MetasLancamentos() {
   const { anos, ano, escolherAno, recarregarAnos, erro: erroAnos } = useAnosMetas();
   const [params, setParams] = useSearchParams();
@@ -210,11 +210,24 @@ export function MetasLancamentos() {
                         {p.indicadores.map((pi) => {
                           const ind = indPorId.get(pi.indicadorId);
                           if (!ind) return null;
-                          const senior = ind.origem === "FATURAMENTO_SENIOR";
+                          const senior = ehDoSenior(ind.origem);
+                          const seriePessoa = dados.realizadoSeniorPessoa?.[ind.origem];
+                          const valorSenior = (seriePessoa ? seriePessoa[String(p.id)]?.[mes - 1] : dados.realizadoSenior?.[ind.origem]?.[mes - 1]) ?? null;
+                          const fonteCarteira = dados.fontesCarteira?.[mes - 1] ?? null;
+                          const notaSenior =
+                            ind.origem !== "CARTEIRA_SENIOR"
+                              ? "Senior"
+                              : valorSenior == null
+                                ? "sem foto"
+                                : fonteCarteira === "RECONSTRUIDA"
+                                  ? "reconstruída"
+                                  : mes === (dados.fontesCarteira ?? []).lastIndexOf("FOTO") + 1
+                                    ? `foto de ${quandoFoto(dados.ultimaFotoCarteira).split(" às")[0]}`
+                                    : "foto";
                           const metaTxt = textoCampo(p.id, ind.id, "meta");
                           const realTxt = textoCampo(p.id, ind.id, "realizado");
                           const meta = lerNumero(metaTxt);
-                          const real = lerNumero(realTxt);
+                          const real = senior ? valorSenior : lerNumero(realTxt);
                           const ating = typeof meta === "number" && typeof real === "number" && meta > 0 ? real / meta : null;
                           const sufixo = ind.unidade === "BRL" ? "R$" : ind.unidade === "HORAS" ? "h" : "";
                           return (
@@ -236,8 +249,8 @@ export function MetasLancamentos() {
                               </td>
                               <td className="px-2 py-1.5">
                                 {senior ? (
-                                  <span className="block px-2.5 py-1.5 text-right tabular-nums text-muted" title="Vem das notas fiscais do Senior">
-                                    {fmtValor(ind.unidade, dados.faturamentoSenior[mes - 1] || null)} <span className="text-[10.5px]">Senior</span>
+                                  <span className="block px-2.5 py-1.5 text-right tabular-nums text-muted" title={rotuloOrigem(ind.origem)}>
+                                    {fmtValor(ind.unidade, valorSenior)} <span className="text-[10.5px]">{notaSenior}</span>
                                   </span>
                                 ) : (
                                   <input

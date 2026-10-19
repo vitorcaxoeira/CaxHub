@@ -23,7 +23,8 @@ export const CTE_ITENS = `
   itens AS (
     SELECT nf.codcli, nf.codrep, nf.codsnf, nf.numnfv,
            EXTRACT(YEAR FROM nf.datemi)::int AS ano, EXTRACT(MONTH FROM nf.datemi)::int AS mes,
-           isv.codser AS codigo, 'S' AS tipo, isv.vlrbru AS valor, isv.numctr AS numctr
+           isv.codser AS codigo, 'S' AS tipo, isv.vlrbru AS valor, isv.numctr AS numctr,
+           nf.codemp AS codemp, nf.codfil AS codfil, nf.datemi AS datemi
     FROM itens_servico_nfv isv
     JOIN notas_fiscais_venda nf
       ON nf.codemp = isv.codemp AND nf.codfil = isv.codfil
@@ -37,7 +38,8 @@ export const CTE_ITENS = `
 
     SELECT nf.codcli, nf.codrep, nf.codsnf, nf.numnfv,
            EXTRACT(YEAR FROM nf.datemi)::int, EXTRACT(MONTH FROM nf.datemi)::int,
-           ipv.codpro, 'P', ipv.vlrbru, ipv.numctr
+           ipv.codpro, 'P', ipv.vlrbru, ipv.numctr,
+           nf.codemp, nf.codfil, nf.datemi
     FROM itens_produto_nfv ipv
     JOIN notas_fiscais_venda nf
       ON nf.codemp = ipv.codemp AND nf.codfil = ipv.codfil
@@ -65,5 +67,42 @@ export function faturamentoMensal(anoMin: number, anoMax: number): Promise<Fatur
     SITNFV_FECHADA,
     anoMin,
     anoMax
+  );
+}
+
+export interface NotaFaturada {
+  codemp: number;
+  codfil: number;
+  serie: string;
+  numero: number;
+  emissao: string;
+  codcli: number;
+  cliente: string | null;
+  codrep: number;
+  representante: string | null;
+  itens: number;
+  valor: number;
+}
+
+/**
+ * Notas que compõem o faturamento de um mês (a mesma CTE do total, então a soma das notas é o valor do mês): uma linha por NF,
+ * valor = soma do valor bruto dos itens de serviço e de produto. Maior valor primeiro.
+ */
+export async function notasFaturadas(ano: number, mes: number): Promise<NotaFaturada[]> {
+  return prisma.$queryRawUnsafe<NotaFaturada[]>(
+    `WITH ${CTE_ITENS}
+     SELECT i.codemp, i.codfil, i.codsnf AS serie, i.numnfv AS numero, to_char(MIN(i.datemi), 'YYYY-MM-DD') AS emissao,
+            i.codcli, MIN(c.nomcli) AS cliente, i.codrep, MIN(r.nomrep) AS representante,
+            COUNT(*)::int AS itens, ROUND(SUM(i.valor)::numeric, 2)::float8 AS valor
+     FROM itens i
+     LEFT JOIN clientes c ON c.codcli = i.codcli
+     LEFT JOIN representantes r ON r.codrep = i.codrep
+     WHERE i.mes = $4
+     GROUP BY i.codemp, i.codfil, i.codsnf, i.numnfv, i.codcli, i.codrep
+     ORDER BY valor DESC, i.numnfv`,
+    SITNFV_FECHADA,
+    ano,
+    ano,
+    mes
   );
 }

@@ -56,3 +56,40 @@ describe("formatação", () => {
     expect(rotuloPeriodo("ate-6")).toBe("Acumulado até junho");
   });
 });
+
+describe("quadro no estilo da planilha", () => {
+  it("Licenças: falta e % que falta como as colunas J e K da planilha", async () => {
+    const { colunasQuadro } = await import("./metasComercial");
+    const q = colunasQuadro({ meta: 840000, realizado: 503561.84, atingimento: 503561.84 / 840000 });
+    expect(q.falta).toBe(336438.16);
+    expect(q.superou).toBeNull();
+    expect(Math.round(q.pctFalta! * 10000) / 100).toBe(40.05);
+  });
+  it("superou a meta: mostra quanto passou e 0% faltando", async () => {
+    const { colunasQuadro } = await import("./metasComercial");
+    const q = colunasQuadro({ meta: 98400, realizado: 141782.74, atingimento: 141782.74 / 98400 });
+    expect(q.falta).toBeNull();
+    expect(q.superou).toBe(43382.74);
+    expect(q.pctFalta).toBe(0);
+  });
+  it("sem meta: nada a mostrar", async () => {
+    const { colunasQuadro } = await import("./metasComercial");
+    expect(colunasQuadro({ meta: 0, realizado: 5, atingimento: null })).toEqual({ falta: null, superou: null, pctFalta: null });
+  });
+  it("desafio geral = 100% − realizado geral (planilha 64,10% → 35,90%)", async () => {
+    const { desafioGeral } = await import("./metasComercial");
+    expect(Math.round(desafioGeral(0.641)! * 10000) / 100).toBe(35.9);
+    expect(desafioGeral(null)).toBeNull();
+    expect(desafioGeral(1.1482)).toBe(0);
+  });
+  it("série do mês a mês: SOMA acumula até o último mês com realizado; SALDO é a posição", async () => {
+    const { serieDe } = await import("./metasComercial");
+    const mensal = [
+      { mes: 1, meta: 10, realizado: 5, atingimento: 0.5 },
+      { mes: 2, meta: 10, realizado: 7, atingimento: 0.7 },
+      { mes: 3, meta: 10, realizado: null, atingimento: null },
+    ];
+    expect(serieDe(mensal, "SOMA").map((p) => [p.meta, p.realizado])).toEqual([[10, 5], [20, 12], [30, null]]);
+    expect(serieDe(mensal, "SALDO").map((p) => p.realizado)).toEqual([5, 7, null]);
+  });
+});

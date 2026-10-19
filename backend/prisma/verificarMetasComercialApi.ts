@@ -97,7 +97,7 @@ async function main() {
     const lista = await M("/indicadores", tOp);
     const cod = (c: string) => lista.corpo.indicadores.find((i: any) => i.codigo === c);
     confere("traz os 9 indicadores da planilha", lista.status === 200 && ["MENSALIDADE", "INCREMENTO_MENSAL", "LICENCAS", "HORAS_SERVICOS", "FATURAMENTO", "QUALIFICACOES", "REUNIOES", "OPORTUNIDADES", "NOVOS_CLIENTES"].every((c) => cod(c)));
-    confere("Faturamento é do Senior e Mensalidade é saldo", cod("FATURAMENTO")?.origem === "FATURAMENTO_SENIOR" && cod("MENSALIDADE")?.acumulacao === "SALDO");
+    confere("Faturamento e Mensalidade vêm do Senior; Mensalidade é saldo", cod("FATURAMENTO")?.origem === "FATURAMENTO_SENIOR" && cod("MENSALIDADE")?.origem === "CARTEIRA_SENIOR" && cod("MENSALIDADE")?.acumulacao === "SALDO");
     confere("indicador inválido = 400", (await M("/indicadores", tOp, { method: "POST", body: { nome: "", unidade: "BRL" } })).status === 400 && (await M("/indicadores", tOp, { method: "POST", body: { nome: "X", unidade: "KG" } })).status === 400);
     confere("nome repetido = 409", (await M("/indicadores", tOp, { method: "POST", body: { nome: "licenças", unidade: "BRL" } })).status === 409);
     const novoInd = await M("/indicadores", tOp, { method: "POST", body: { nome: "Teste Verificacao Metas", unidade: "QTD", acumulacao: "SOMA" } });
@@ -149,16 +149,25 @@ async function main() {
     confere("lote vazio = 400", (await L([])).status === 400);
     confere("mês 13 = 400", (await L([{ participanteId: pid, indicadorId: inc, mes: 13, meta: 1 }])).status === 400);
     confere("indicador que a pessoa não tem = 400", (await L([{ participanteId: pid, indicadorId: mens, mes: 1, meta: 1 }])).status === 400);
+    const horas = cod("HORAS_SERVICOS");
+    confere("Horas de Serviços vêm das propostas (Senior)", horas?.origem === "PROPOSTAS_SENIOR" && horas?.unidade === "HORAS");
+    await M(`/anos/${ANO}/participantes/${naoAtrib.id}`, tOp, { method: "PUT", body: { indicadores: [{ indicadorId: inc }, { indicadorId: mens }, { indicadorId: horas.id }] } });
+    confere("realizado de Horas (propostas do Senior) = 400", (await L([{ participanteId: naoAtrib.id, indicadorId: horas.id, mes: 1, realizado: 10 }])).status === 400);
+    const reps = await M("/representantes", tOp);
+    confere("lista representantes com proposta", reps.status === 200 && reps.corpo.representantes.some((r: any) => r.codrep === 32));
+    confere("representante inexistente = 400", (await M(`/anos/${ANO}/participantes/${pid}`, tOp, { method: "PUT", body: { codrep: 987654321 } })).status === 400);
+    confere("vincula representante à pessoa", (await M(`/anos/${ANO}/participantes/${pid}`, tOp, { method: "PUT", body: { codrep: 32 } })).status === 200 && (await M(`/anos/${ANO}`, tOp)).corpo.participantes.find((p: any) => p.id === pid)?.codrep === 32);
+    confere("realizado da Mensalidade (carteira do Senior) = 400", (await L([{ participanteId: naoAtrib.id, indicadorId: mens, mes: 1, realizado: 10 }])).status === 400);
     confere("realizado de Faturamento (Senior) = 400", (await L([{ participanteId: pid, indicadorId: fat, mes: 1, realizado: 10 }])).status === 400);
     confere("valor negativo = 400", (await L([{ participanteId: pid, indicadorId: inc, mes: 1, meta: -5 }])).status === 400);
     confere("lançamento repetido no lote = 400", (await L([{ participanteId: pid, indicadorId: inc, mes: 1, meta: 1 }, { participanteId: pid, indicadorId: inc, mes: 1, meta: 2 }])).status === 400);
     const g1 = await L([
       { participanteId: pid, indicadorId: inc, mes: 1, meta: 6560, realizado: 8376.31 },
       { participanteId: pid, indicadorId: inc, mes: 2, meta: 6560, realizado: 46367.63 },
-      { participanteId: pid, indicadorId: lic, mes: 1, meta: 28000, realizado: 52331.41 },
+      { participanteId: pid, indicadorId: lic, mes: 1, meta: 28000 },
       { participanteId: pid, indicadorId: fat, mes: 1, meta: 0 },
       { participanteId: naoAtrib.id, indicadorId: inc, mes: 3, realizado: 14493.21 },
-      { participanteId: naoAtrib.id, indicadorId: mens, mes: 3, meta: 1000000, realizado: 948672.34 },
+      { participanteId: naoAtrib.id, indicadorId: mens, mes: 3, meta: 1000000 },
     ]);
     confere("grava 6 lançamentos", g1.status === 200 && g1.corpo.gravados === 6, JSON.stringify(g1.corpo));
     const g2 = await L([{ participanteId: pid, indicadorId: inc, mes: 1, meta: 6560, realizado: 8376.31 }]);
@@ -179,7 +188,7 @@ async function main() {
     confere("meta mensal da empresa = anual × peso (Jan 13.333,33)", pi("INCREMENTO_MENSAL")?.mensal[0].meta === 13333.33, JSON.stringify(pi("INCREMENTO_MENSAL")?.mensal[0]));
     confere("realizado da empresa soma pessoa + Não atribuído (62.869,52)", Math.abs((pi("INCREMENTO_MENSAL")?.consolidado.realizado ?? 0) - 62869.52) < 0.005, String(pi("INCREMENTO_MENSAL")?.consolidado.realizado));
     confere("meta das pessoas aparece para conferir", pi("INCREMENTO_MENSAL")?.metaDasPessoas === 13120);
-    confere("Mensalidade (saldo) = 948.672,34 de 1.000.000", pi("MENSALIDADE")?.consolidado.realizado === 948672.34 && pi("MENSALIDADE")?.consolidado.meta === 1000000);
+    confere("Mensalidade vem da foto da carteira (2098 sem foto = 0 de 1.000.000)", pi("MENSALIDADE")?.consolidado.realizado === 0 && pi("MENSALIDADE")?.consolidado.meta === 1000000 && pi("MENSALIDADE")?.origem === "CARTEIRA_SENIOR" && "ultimaFotoCarteira" in pa);
     confere("Faturamento é do Senior (sem NF em 2098 = 0)", pi("FATURAMENTO")?.consolidado.realizado === 0 && pi("FATURAMENTO")?.origem === "FATURAMENTO_SENIOR");
     confere("pessoa com rótulo próprio e Não atribuído por último", pa.pessoas[0].indicadores[0].rotulo === "Mensalidade" && pa.pessoas[pa.pessoas.length - 1].naoAtribuido === true);
     confere("período t1 recorta (Q1 da meta 3 × 13.333,33)", (await M(`/anos/${ANO}/painel?periodo=t1`, tOp)).corpo.indicadores.find((i: any) => i.codigo === "INCREMENTO_MENSAL").consolidado.meta === 39999.99);
@@ -189,6 +198,24 @@ async function main() {
     // fetch().text() descarta o BOM por especificação: confere os bytes crus.
     const bytes = new Uint8Array(await (await fetch(`${raiz}/metas-comercial/anos/${ANO}/painel.csv?periodo=ano`, { headers: { Authorization: `Bearer ${tOp}` } })).arrayBuffer());
     confere("CSV com BOM, ';' e vírgula decimal", csv.status === 200 && String(csv.headers.get("content-type")).includes("text/csv") && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf && typeof csv.corpo === "string" && csv.corpo.startsWith("Escopo;Pessoa;") && csv.corpo.includes("Incremento Mensal") && /\d,\d\d/.test(csv.corpo), String(csv.corpo).slice(0, 120));
+
+    // ---- notas do faturamento (detalhe do mês): soma = realizado do painel ----
+    const notasSet = await M("/anos/2026/faturamento/notas?mes=9", tOp);
+    const painel2026 = await M("/anos/2026/painel?periodo=ano", tOp);
+    const fatSet = painel2026.status === 200 ? painel2026.corpo.indicadores.find((i: any) => i.codigo === "FATURAMENTO")?.mensal[8]?.realizado ?? 0 : null;
+    confere("notas de set/2026 somam o realizado do painel", notasSet.status === 200 && (fatSet == null || Math.abs(notasSet.corpo.total - fatSet) < 0.01), `notas ${notasSet.corpo?.total} painel ${fatSet}`);
+    confere("cada nota traz cliente e valor", notasSet.status === 200 && notasSet.corpo.notas.every((n: any) => typeof n.valor === "number" && n.numero > 0));
+    confere("mês inválido = 400", (await M("/anos/2026/faturamento/notas?mes=13", tOp)).status === 400);
+    if (tOutro) confere("notas: consultor sem gestão = 403", (await M("/anos/2026/faturamento/notas?mes=9", tOutro)).status === 403);
+
+    // ---- licenças: pedidos com rateio na conta 177 ----
+    confere("Licenças vêm dos pedidos (Senior)", cod("LICENCAS")?.origem === "PEDIDOS_SENIOR");
+    confere("realizado de Licenças (pedidos do Senior) = 400", (await L([{ participanteId: pid, indicadorId: lic, mes: 2, realizado: 10 }])).status === 400);
+    const pedAbr = await M("/anos/2026/licencas/pedidos?mes=4", tOp);
+    const licAbr = painel2026.status === 200 ? painel2026.corpo.indicadores.find((i: any) => i.codigo === "LICENCAS")?.mensal[3]?.realizado ?? 0 : null;
+    confere("pedidos de abr/2026 somam o realizado de Licenças do painel", pedAbr.status === 200 && (licAbr == null || Math.abs(pedAbr.corpo.total - licAbr) < 0.01), `pedidos ${pedAbr.corpo?.total} painel ${licAbr}`);
+    confere("licenças: mês inválido = 400", (await M("/anos/2026/licencas/pedidos?mes=0", tOp)).status === 400);
+    if (tOutro) confere("licenças: consultor sem gestão = 403", (await M("/anos/2026/licencas/pedidos?mes=4", tOutro)).status === 403);
 
     // ---- copiar de um ano, limpar valor e excluir ----
     const c2 = await M("/anos", tOp, { method: "POST", body: { ano: ANO - 1, copiarDe: ANO } });

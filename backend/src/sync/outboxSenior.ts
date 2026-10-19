@@ -1,3 +1,4 @@
+import { escritaNoSeniorDesligada } from "../config/sistemaSenior";
 import cron from "node-cron";
 import { randomUUID } from "crypto";
 import { AtividadeConsultor, EstruturaAtividade, Prisma, RatItem, Rat, AtividadeSessaoExecucao, SincronizacaoPendente } from "@prisma/client";
@@ -731,6 +732,11 @@ export function processarFilaSincronizacao(opcoes: { apenasId?: number; apenasId
 }
 
 async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): Promise<void> {
+  // Somente leitura (SENIOR_SOMENTE_LEITURA): nada sai; os itens ficam "pendente" e não gastam tentativa.
+  if (escritaNoSeniorDesligada()) {
+    console.warn(`[${JOB_NAME}] escrita no Senior desligada (SENIOR_SOMENTE_LEITURA): fila não enviada`);
+    return;
+  }
   const ids = opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
   const pendentes = await prisma.sincronizacaoPendente.findMany({
     where: {

@@ -3,12 +3,15 @@ import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Modal } from "../ui/Modal";
 import { useToast } from "../ui/Toast";
+import { cn } from "../../lib/cn";
 import { MESES_CURTOS, Unidade, fmtResumo } from "../../lib/metasComercial";
 
 export const mensagemDe = (e: unknown, padrao: string) => (axios.isAxiosError(e) ? e.response?.data?.error ?? padrao : padrao);
 
 export const campo =
   "w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60";
+/** Campo que se ajusta ao texto (seletores): `campo` traz w-full, então o conflito é resolvido pelo cn/twMerge, não concatenando classes. */
+export const campoAuto = cn(campo, "w-auto");
 export const botaoPrimario =
   "rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 export const botaoSecundario =
@@ -136,7 +139,7 @@ export function SeletorAno({ anos, ano, onEscolher, onCriado }: { anos: AnoResum
   return (
     <>
       <label htmlFor="metas-ano" className="sr-only">Ano</label>
-      <select id="metas-ano" value={ano ?? ""} onChange={(e) => onEscolher(Number(e.target.value))} className={`${campo} w-auto`}>
+      <select id="metas-ano" value={ano ?? ""} onChange={(e) => onEscolher(Number(e.target.value))} className={campoAuto}>
         {anos.map((a) => (
           <option key={a.ano} value={a.ano}>
             {a.ano}

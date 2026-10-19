@@ -2,7 +2,7 @@ import axios from "axios";
 import { FormEvent, useEffect, useState } from "react";
 import { Modal } from "../ui/Modal";
 import { useToast } from "../ui/Toast";
-import { Indicador, Participante } from "../../lib/metasComercial";
+import { Indicador, Participante, Representante } from "../../lib/metasComercial";
 import { Aviso, botaoPrimario, botaoSecundario, campo, mensagemDe } from "./comum";
 
 export interface Elegivel {
@@ -17,16 +17,19 @@ interface Props {
   indicadores: Indicador[];
   /** Pessoas do time que ainda não estão neste ano (só na inclusão). */
   elegiveis: Elegivel[];
+  /** Representantes do Senior com proposta (para levar as horas vendidas à pessoa). */
+  representantes: Representante[];
   /** Presente = edição; ausente = inclusão. */
   participante?: Participante;
   onSalvo: () => void;
 }
 
 // Inclui ou edita uma pessoa nas metas do ano: função e quais indicadores ela acompanha (com o rótulo que a planilha dela usa).
-export function PessoaForm({ aberto, onClose, ano, indicadores, elegiveis, participante, onSalvo }: Props) {
+export function PessoaForm({ aberto, onClose, ano, indicadores, elegiveis, representantes, participante, onSalvo }: Props) {
   const { mostrar } = useToast();
   const [codfor, setCodfor] = useState<number | "">("");
   const [funcao, setFuncao] = useState("");
+  const [codrep, setCodrep] = useState<number | "">("");
   const [ativo, setAtivo] = useState(true);
   const [marcados, setMarcados] = useState<Record<number, string>>({});
   const [gravando, setGravando] = useState(false);
@@ -37,6 +40,7 @@ export function PessoaForm({ aberto, onClose, ano, indicadores, elegiveis, parti
     setErro(null);
     setCodfor("");
     setFuncao(participante?.funcao ?? "");
+    setCodrep(participante?.codrep ?? "");
     setAtivo(participante?.ativo ?? true);
     setMarcados(Object.fromEntries((participante?.indicadores ?? []).map((i) => [i.indicadorId, i.rotulo ?? ""])));
   }, [aberto, participante]);
@@ -57,10 +61,10 @@ export function PessoaForm({ aberto, onClose, ano, indicadores, elegiveis, parti
     setGravando(true);
     try {
       if (participante) {
-        await axios.put(`/api/metas-comercial/anos/${ano}/participantes/${participante.id}`, { funcao: funcao.trim() === "" ? null : funcao.trim(), ativo, indicadores: corpoIndicadores });
+        await axios.put(`/api/metas-comercial/anos/${ano}/participantes/${participante.id}`, { funcao: funcao.trim() === "" ? null : funcao.trim(), codrep: codrep === "" ? null : codrep, ativo, indicadores: corpoIndicadores });
         mostrar("Pessoa atualizada.", "success");
       } else {
-        await axios.post(`/api/metas-comercial/anos/${ano}/participantes`, { codfor, funcao: funcao.trim() === "" ? null : funcao.trim(), indicadores: corpoIndicadores });
+        await axios.post(`/api/metas-comercial/anos/${ano}/participantes`, { codfor, codrep: codrep === "" ? null : codrep, funcao: funcao.trim() === "" ? null : funcao.trim(), indicadores: corpoIndicadores });
         mostrar("Pessoa incluída nas metas.", "success");
       }
       onSalvo();
@@ -87,6 +91,20 @@ export function PessoaForm({ aberto, onClose, ano, indicadores, elegiveis, parti
               ))}
             </select>
             {elegiveis.length === 0 && <p className="mt-1 text-[12px] text-muted">Todo o time do Comercial já está neste ano.</p>}
+          </div>
+        )}
+        {!participante?.naoAtribuido && (
+          <div>
+            <label htmlFor="pf-rep" className="mb-1 block text-[13px] font-medium text-foreground">Representante do Senior</label>
+            <select id="pf-rep" value={codrep} onChange={(e) => setCodrep(e.target.value === "" ? "" : Number(e.target.value))} className={campo}>
+              <option value="">Nenhum</option>
+              {representantes.map((r) => (
+                <option key={r.codrep} value={r.codrep}>
+                  {r.nome} ({r.codrep}){r.ativo ? "" : " · inativo"}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[12px] text-muted">As horas das propostas aprovadas deste representante viram o realizado de Horas de Serviços da pessoa.</p>
           </div>
         )}
         <div>

@@ -2,7 +2,8 @@ import { Acumulacao, arredonda2, atingimento, atingimentoGeral, Consolidado, con
 
 // Monta o painel da Gestão de Metas do Comercial a partir de linhas já carregadas (sem banco), para ser testável com os números da
 // planilha. Empresa: meta anual × peso do mês (SOMA) ou posição-alvo constante (SALDO); realizado = soma das pessoas (incluindo a linha
-// "Não atribuído") ou, para o indicador de origem Senior (Faturamento), o faturamento das NFs fechadas.
+// "Não atribuído") ou, para os indicadores de origem Senior, a série do Senior: Faturamento (NFs fechadas) e Mensalidade (foto
+// mensal da carteira de contratos, relatório RVTR101).
 
 export interface IndicadorDef {
   id: number;
@@ -41,8 +42,11 @@ export interface EntradaPainel {
   metasEmpresa: Map<number, number>;
   participantes: ParticipanteDef[];
   lancamentos: LancamentoDef[];
-  /** Faturamento de cada mês do ano (12 posições; 0 = sem NF). */
-  faturamentoMensal: number[];
+  /** Realizado que vem do Senior, por origem do indicador (FATURAMENTO_SENIOR, CARTEIRA_SENIOR): 12 posições, null = sem valor. */
+  realizadoSenior: Record<string, Array<number | null>>;
+  /** Realizado do Senior POR PESSOA (origem -> participanteId -> 12 meses), para as origens que se dividem por pessoa (horas das
+   * propostas, pelo representante de cada uma). Quando existe, substitui o lançamento digitado na linha da pessoa. */
+  realizadoSeniorPessoa?: Record<string, Map<number, Array<number | null>>>;
 }
 
 export interface CelulaMes {
@@ -130,8 +134,9 @@ export function montarPainel(e: EntradaPainel): Painel {
     const mensal: CelulaMes[] = [];
     for (let mes = 1; mes <= 12; mes++) {
       let realizado: number | null = null;
-      if (ind.origem === "FATURAMENTO_SENIOR") {
-        realizado = e.faturamentoMensal[mes - 1] ? arredonda2(e.faturamentoMensal[mes - 1]) : null;
+      if (ind.origem !== "MANUAL") {
+        const v = e.realizadoSenior[ind.origem]?.[mes - 1];
+        realizado = v == null ? null : arredonda2(v);
       } else {
         for (const p of e.participantes) {
           const l = lancDe(p.id, ind.id).find((x) => x.mes === mes);
@@ -176,7 +181,9 @@ export function montarPainel(e: EntradaPainel): Painel {
           const lancs = lancDe(p.id, ind.id);
           const linhas: LinhaMes[] = Array.from({ length: 12 }, (_, i) => {
             const l = lancs.find((x) => x.mes === i + 1);
-            return { mes: i + 1, meta: l?.meta ?? null, realizado: l?.realizado ?? null };
+            const seriePessoa = ind.origem !== "MANUAL" ? e.realizadoSeniorPessoa?.[ind.origem] : undefined;
+            const realizado = seriePessoa ? (seriePessoa.get(p.id)?.[i] ?? null) : (l?.realizado ?? null);
+            return { mes: i + 1, meta: l?.meta ?? null, realizado };
           });
           return {
             indicadorId: ind.id,

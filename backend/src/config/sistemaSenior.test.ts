@@ -86,3 +86,27 @@ test("literal de data: ERP segue como sempre (aspas simples), HCM usa CONVERT es
   assert.equal(predicadoCorteIncremental("datalt", new Date("2026-10-08T12:00:00Z"), "hcm"), "datalt >= CONVERT(date, '2026-10-08', 23)");
   assert.throws(() => predicadoCorteIncremental(null, new Date()), /sem campo de data/);
 });
+
+test("SENIOR_SOMENTE_LEITURA trava a escrita no Senior antes de abrir conexão", async () => {
+  const { escritaNoSeniorDesligada, garantirEscritaNoSenior, EscritaNoSeniorDesligadaError } = await import("./sistemaSenior");
+  const { registrarAtividadesViaSoap, fecharRatViaSoap } = await import("../soap/client");
+  const antes = process.env.SENIOR_SOMENTE_LEITURA;
+  try {
+    for (const v of ["true", "TRUE", "1", "sim"]) {
+      process.env.SENIOR_SOMENTE_LEITURA = v;
+      assert.equal(escritaNoSeniorDesligada(), true, v);
+    }
+    process.env.SENIOR_SOMENTE_LEITURA = "true";
+    assert.throws(() => garantirEscritaNoSenior("teste"), EscritaNoSeniorDesligadaError);
+    // As operações de escrita recusam antes de qualquer rede (o payload vazio nem chega a ser montado).
+    await assert.rejects(() => registrarAtividadesViaSoap({} as never), EscritaNoSeniorDesligadaError);
+    await assert.rejects(() => fecharRatViaSoap({} as never), EscritaNoSeniorDesligadaError);
+    for (const v of ["", "false", "0", "nao"]) {
+      process.env.SENIOR_SOMENTE_LEITURA = v;
+      assert.equal(escritaNoSeniorDesligada(), false, v);
+    }
+  } finally {
+    if (antes === undefined) delete process.env.SENIOR_SOMENTE_LEITURA;
+    else process.env.SENIOR_SOMENTE_LEITURA = antes;
+  }
+});

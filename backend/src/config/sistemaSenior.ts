@@ -110,3 +110,23 @@ export function urlMascarada(url: string): string {
     return "(URL inválida)";
   }
 }
+
+// Trava de escrita no Senior. `SENIOR_SOMENTE_LEITURA=true` no .env faz o CaxHub só LER do Senior: as filas de envio
+// (apontamentos, alocações, fechamento de RAT, despesas) não enviam nada e os itens ficam "pendente", e as operações de escrita
+// do cliente SOAP recusam antes de abrir conexão. Para o ambiente local apontado para o Senior de produção (pedido do Vitor em
+// 19/10/2026: "não enviar nenhum dado, somente leitura"). Produção NÃO tem esta variável.
+export function escritaNoSeniorDesligada(): boolean {
+  return ["1", "true", "sim", "s"].includes(env("SENIOR_SOMENTE_LEITURA").toLowerCase());
+}
+
+export class EscritaNoSeniorDesligadaError extends Error {
+  constructor(operacao: string) {
+    super(`Escrita no Senior desligada (SENIOR_SOMENTE_LEITURA=true): ${operacao} não foi enviado.`);
+    this.name = "EscritaNoSeniorDesligadaError";
+  }
+}
+
+export function garantirEscritaNoSenior(operacao: string): void {
+  if (escritaNoSeniorDesligada()) throw new EscritaNoSeniorDesligadaError(operacao);
+}
+
