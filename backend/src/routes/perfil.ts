@@ -10,6 +10,7 @@ import { AVATARS_DIR } from "../config/uploads";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdUsuario } from "../audit/identidadeEntidade";
+import { preferenciasPublicas, validarPreferencias } from "../domain/preferenciasTela";
 
 export const perfilRouter = Router();
 perfilRouter.use(requireAuth);
@@ -86,6 +87,27 @@ perfilRouter.put("/", async (req: AuthenticatedRequest, res) => {
   }
 
   res.json({ nome: atualizado.nome, email: atualizado.email, fotoUrl: atualizado.fotoUrl });
+});
+
+// PUT /api/perfil/preferencias — preferências de tela do próprio usuário (ex.: visão em que Atividades abre). Devolve todas,
+// para o AuthContext atualizar o usuário em memória.
+perfilRouter.put("/preferencias", async (req: AuthenticatedRequest, res) => {
+  const validado = validarPreferencias(req.body);
+  if ("erro" in validado) {
+    res.status(400).json({ error: validado.erro });
+    return;
+  }
+  try {
+    const pref = await prisma.preferenciaTela.upsert({
+      where: { userId: req.user!.userId },
+      update: validado.dados,
+      create: { userId: req.user!.userId, ...validado.dados },
+    });
+    res.json({ preferencias: preferenciasPublicas(pref) });
+  } catch (error) {
+    console.error("[perfil:preferencias]", error instanceof Error ? error.message : String(error));
+    res.status(500).json({ error: "Não foi possível salvar a preferência" });
+  }
 });
 
 // POST /api/perfil/avatar — troca a foto (sobrescreve a anterior).

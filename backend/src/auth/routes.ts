@@ -3,16 +3,26 @@ import bcrypt from "bcrypt";
 import { prisma } from "../db/prisma";
 import { signToken } from "./jwt";
 import { AuthenticatedRequest, requireAuth } from "./middleware";
+import { preferenciasPublicas } from "../domain/preferenciasTela";
 
 export const authRouter = Router();
 
-function toPublicUser(user: { id: number; email: string; nome: string; fotoUrl: string | null; role: { name: string } }) {
+function toPublicUser(user: {
+  id: number;
+  email: string;
+  nome: string;
+  fotoUrl: string | null;
+  role: { name: string };
+  preferenciaTela: { atividadesVisao: string } | null;
+}) {
   return {
     id: user.id,
     email: user.email,
     nome: user.nome,
     fotoUrl: user.fotoUrl,
     role: user.role.name,
+    // Vai junto com o usuário para a tela já abrir como ele escolheu (ex.: Atividades na Lista), sem outra requisição.
+    preferencias: preferenciasPublicas(user.preferenciaTela),
   };
 }
 
@@ -24,7 +34,7 @@ authRouter.post("/login", async (req, res) => {
     return;
   }
 
-  const user = await prisma.user.findUnique({ where: { email }, include: { role: true } });
+  const user = await prisma.user.findUnique({ where: { email }, include: { role: true, preferenciaTela: true } });
   if (!user) {
     res.status(401).json({ error: "Credenciais inválidas" });
     return;
@@ -72,7 +82,7 @@ authRouter.post("/convite/:token/aceitar", async (req, res) => {
     return;
   }
 
-  const user = await prisma.user.findUnique({ where: { inviteToken: token }, include: { role: true } });
+  const user = await prisma.user.findUnique({ where: { inviteToken: token }, include: { role: true, preferenciaTela: true } });
   if (!user || user.status !== "pendente" || !user.inviteExpiresAt || user.inviteExpiresAt < new Date()) {
     res.status(404).json({ error: "Convite inválido ou expirado" });
     return;
@@ -82,7 +92,7 @@ authRouter.post("/convite/:token/aceitar", async (req, res) => {
   const atualizado = await prisma.user.update({
     where: { id: user.id },
     data: { passwordHash, status: "ativo", inviteToken: null, inviteExpiresAt: null },
-    include: { role: true },
+    include: { role: true, preferenciaTela: true },
   });
 
   const jwtToken = signToken({ userId: atualizado.id, role: atualizado.role.name });
@@ -90,7 +100,7 @@ authRouter.post("/convite/:token/aceitar", async (req, res) => {
 });
 
 authRouter.get("/me", requireAuth, async (req: AuthenticatedRequest, res) => {
-  const user = await prisma.user.findUnique({ where: { id: req.user!.userId }, include: { role: true } });
+  const user = await prisma.user.findUnique({ where: { id: req.user!.userId }, include: { role: true, preferenciaTela: true } });
   if (!user) {
     res.status(404).json({ error: "Usuário não encontrado" });
     return;

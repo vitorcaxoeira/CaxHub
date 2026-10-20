@@ -14,9 +14,11 @@ import { useToast } from "../../components/ui/Toast";
 import { RAIA_A_FAZER, RAIA_EM_ANDAMENTO } from "../../lib/atividade-acoes";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { EVENTO_SESSAO_ALTERADA, avisarSessaoAlterada } from "../../components/projetos/VigiaFimDeJornada";
+import { EstrelaVisaoPadrao } from "../../components/projetos/EstrelaVisaoPadrao";
+import { useVisaoPadraoAtividades } from "../../hooks/useVisaoPadraoAtividades";
+import { VisaoAtividades, visaoInicial } from "../../lib/atividadesVisao";
 
-type Visao = "quadro" | "lista" | "calendario" | "timeline" | "workload";
-const VISOES: Visao[] = ["quadro", "lista", "calendario", "timeline", "workload"];
+type Visao = VisaoAtividades;
 const SITUACOES_VALIDAS: SituacaoKpi[] = ["backlog", "atrasadas", "concluidas"];
 // O Quadro baixa só as primeiras N atividades de cada raia (menos "Em Andamento", sempre completa): o admin
 // tem milhares em "A Fazer", e renderizar todas deixava a tela lenta. O usuário pede mais por raia.
@@ -71,8 +73,10 @@ export function Atividades() {
   // uma navegação (ex.: detalhe da proposta) preserva o estado em vez de resetar.
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const visaoParam = searchParams.get("visao");
-  const [visao, setVisaoState] = useState<Visao>(VISOES.includes(visaoParam as Visao) ? (visaoParam as Visao) : "quadro");
+  // Sem `?visao=` a tela abre na visão padrão do usuário (Perfil › Preferências ou a estrela ao lado das abas); quem nunca
+  // escolheu, no Quadro. A preferência chega junto com o usuário, então a primeira carga já é da visão certa.
+  const { padrao: visaoPadrao, salvar: salvarVisaoPadrao, salvando: salvandoVisaoPadrao } = useVisaoPadraoAtividades();
+  const [visao, setVisaoState] = useState<Visao>(() => visaoInicial(searchParams.get("visao"), visaoPadrao));
   const [busca, setBuscaState] = useState(searchParams.get("busca") ?? "");
   // Só o texto digitado é "vivo" (reflete na URL e no input a cada tecla); o disparo do
   // GET /api/atividades espera o debounce, senão cada tecla recalcula o quadro inteiro.
@@ -105,6 +109,11 @@ export function Atividades() {
   // A URL manda no padrão: chegar em /projetos/atividades?codfor=... (link compartilhado,
   // voltar de um detalhe) tem que preservar a seleção. Lido uma vez, na montagem.
   const urlTinhaCodfor = useRef(searchParams.get("codfor") !== null);
+  // Situações (raias) marcadas ao abrir a tela: "A Fazer" e "Em Andamento" (o que ainda pede ação). Os ids vêm de
+  // /quadro-colunas, por isso o padrão só é aplicado quando elas chegam. Mesma regra do consultor: a URL manda (link
+  // compartilhado, F5, voltar de um detalhe), e um KPI na URL também (o KPI é o critério de situação, ver clicarKpi).
+  const urlTinhaSituacao = useRef(searchParams.has("colunaId") || searchParams.has("situacao"));
+  const colunaIdPadrao = useRef("");
   const [atividades, setAtividades] = useState<AtividadeKanban[]>([]);
   const [total, setTotal] = useState(0);
   const [kpis, setKpis] = useState<KpisAtividades | null>(null);
@@ -187,10 +196,12 @@ export function Atividades() {
     setPageState(proximo.page);
 
     const params = new URLSearchParams();
-    if (proximo.visao !== "quadro") params.set("visao", proximo.visao);
+    // A visão só vai para a URL quando não é a padrão do usuário (sem o parâmetro, a tela abre na padrão).
+    if (proximo.visao !== visaoPadrao) params.set("visao", proximo.visao);
     if (proximo.busca) params.set("busca", proximo.busca);
     if (proximo.depexe) params.set("depexe", proximo.depexe);
-    if (proximo.colunaId) params.set("colunaId", proximo.colunaId);
+    // "Todas as situações" vai como `colunaId=` vazio quando há padrão: sem o parâmetro, um F5 voltaria ao padrão.
+    if (proximo.colunaId || colunaIdPadrao.current) params.set("colunaId", proximo.colunaId);
     if (proximo.pripro) params.set("pripro", proximo.pripro);
     if (proximo.codfor) params.set("codfor", proximo.codfor);
     if (proximo.atrasada) params.set("atrasada", "true");
@@ -202,14 +213,19 @@ export function Atividades() {
   }
 
   // Clicar num KPI vira o único critério de "situação" da lista/quadro; clicar de novo
-  // desliga. Também zera "só atrasadas" pra não ficarem contraditórios (ex.: KPI
-  // "concluídas" + checkbox "atrasada" nunca bateria com nenhuma linha).
+  // desliga. Também zera "só atrasadas" e as situações (raias) marcadas pra não ficarem
+  // contraditórios (ex.: KPI "concluídas" + "atrasada" ou + raias "A Fazer"/"Em Andamento"
+  // nunca bateria com nenhuma linha). Desligar o KPI devolve as situações padrão.
   function clicarKpi(tipo: SituacaoKpi) {
     if (situacao === tipo) {
-      atualizarFiltros({ situacao: null });
+      desligarKpi();
       return;
     }
-    atualizarFiltros({ situacao: tipo, atrasada: false });
+    atualizarFiltros({ situacao: tipo, atrasada: false, colunaId: "" });
+  }
+
+  function desligarKpi() {
+    atualizarFiltros({ situacao: null, colunaId: colunaIdPadrao.current });
   }
 
   function parametrosDosFiltros() {
@@ -326,8 +342,17 @@ export function Atividades() {
         setDepartamentos(opcoesRes.data.departamentos);
         setPrioridades(opcoesRes.data.prioridades);
         setConsultores(opcoesRes.data.consultores);
+        const colunasRecebidas: ColunaKanban[] = colunasRes.data.colunas;
+        colunaIdPadrao.current = colunasRecebidas
+          .filter((c) => c.nome === RAIA_A_FAZER || c.nome === RAIA_EM_ANDAMENTO)
+          .map((c) => c.id)
+          .join(",");
+        // Um único atualizarFiltros: ele lê o estado do render atual, então duas chamadas seguidas desfariam a primeira.
+        const patch: FiltrosPatch = {};
         const padrao: number[] = opcoesRes.data.consultorPadrao ?? [];
-        if (!urlTinhaCodfor.current && padrao.length > 0) atualizarFiltros({ codfor: padrao.join(",") });
+        if (!urlTinhaCodfor.current && padrao.length > 0) patch.codfor = padrao.join(",");
+        if (!urlTinhaSituacao.current && colunaIdPadrao.current) patch.colunaId = colunaIdPadrao.current;
+        if (Object.keys(patch).length > 0) atualizarFiltros(patch);
       })
       // `finally`, não `then`: se as opções falharem o padrão não vem, mas a lista ainda
       // tem que carregar — segurar pra sempre deixaria a tela vazia por causa de um filtro.
@@ -619,6 +644,14 @@ export function Atividades() {
     setDetalhe({ id: atividadeId, ...info });
   }
 
+  // A visão aberta vira a padrão: grava e tira o `?visao=` da URL, que agora é redundante.
+  async function tornarVisaoPadrao() {
+    if (!(await salvarVisaoPadrao(visao)) || !searchParams.has("visao")) return;
+    const params = new URLSearchParams(searchParams);
+    params.delete("visao");
+    setSearchParams(params, { replace: true });
+  }
+
   const tabClass = (ativa: boolean) =>
     `rounded-md px-3 py-1.5 text-sm font-medium transition ${
       ativa ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground"
@@ -632,27 +665,30 @@ export function Atividades() {
         Gestão de Projetos · Atividades
       </p>
 
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-2xl font-bold text-foreground">Atividades</h1>
           <p className="mt-1 text-sm text-muted">Acompanhe e movimente as atividades das propostas do seu time.</p>
         </div>
-        <div className="flex flex-wrap gap-2 rounded-md border border-border p-1">
-          <button onClick={() => atualizarFiltros({ visao: "quadro" })} className={tabClass(visao === "quadro")}>
-            Quadro
-          </button>
-          <button onClick={() => atualizarFiltros({ visao: "lista" })} className={tabClass(visao === "lista")}>
-            Lista
-          </button>
-          <button onClick={() => atualizarFiltros({ visao: "calendario" })} className={tabClass(visao === "calendario")}>
-            Calendário
-          </button>
-          <button onClick={() => atualizarFiltros({ visao: "timeline" })} className={tabClass(visao === "timeline")}>
-            Timeline
-          </button>
-          <button onClick={() => atualizarFiltros({ visao: "workload" })} className={tabClass(visao === "workload")}>
-            Workload
-          </button>
+        <div className="flex items-center gap-1">
+          <div className="flex flex-wrap gap-2 rounded-md border border-border p-1">
+            <button onClick={() => atualizarFiltros({ visao: "quadro" })} className={tabClass(visao === "quadro")}>
+              Quadro
+            </button>
+            <button onClick={() => atualizarFiltros({ visao: "lista" })} className={tabClass(visao === "lista")}>
+              Lista
+            </button>
+            <button onClick={() => atualizarFiltros({ visao: "calendario" })} className={tabClass(visao === "calendario")}>
+              Calendário
+            </button>
+            <button onClick={() => atualizarFiltros({ visao: "timeline" })} className={tabClass(visao === "timeline")}>
+              Timeline
+            </button>
+            <button onClick={() => atualizarFiltros({ visao: "workload" })} className={tabClass(visao === "workload")}>
+              Workload
+            </button>
+          </div>
+          <EstrelaVisaoPadrao visao={visao} padrao={visaoPadrao} salvando={salvandoVisaoPadrao} onTornarPadrao={tornarVisaoPadrao} />
         </div>
       </div>
 
@@ -678,7 +714,7 @@ export function Atividades() {
           situacaoKpi={situacao}
           onFiltros={(patch) => atualizarFiltros(patch)}
           onPageChange={(novaPagina) => atualizarFiltros({ page: novaPagina })}
-          onLimparKpi={() => atualizarFiltros({ situacao: null })}
+          onLimparKpi={desligarKpi}
           onMover={moverAtividade}
           onAbrirDetalhe={abrirDetalhe}
           onIniciar={iniciarAtividade}
@@ -698,7 +734,7 @@ export function Atividades() {
             filtros={filtros}
             situacaoKpi={situacao}
             onFiltros={(patch) => atualizarFiltros(patch)}
-            onLimparKpi={() => atualizarFiltros({ situacao: null })}
+            onLimparKpi={desligarKpi}
           />
           <KanbanBoard
             colunas={colunas}

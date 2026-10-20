@@ -1,6 +1,7 @@
 import axios from "axios";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { apagarDispositivo, estaNoApp, gravarDispositivo, lerDispositivo, nomeDoComputador } from "../lib/desktop";
+import type { VisaoAtividades } from "../lib/atividadesVisao";
 
 interface PayloadJwt {
   userId: number;
@@ -30,6 +31,8 @@ export interface AuthUser {
   nome: string;
   fotoUrl: string | null;
   role: string;
+  /** Preferências de tela (backend/src/domain/preferenciasTela.ts), gravadas em PUT /api/perfil/preferencias. */
+  preferencias: { atividadesVisao: VisaoAtividades };
 }
 
 interface AuthContextValue {
@@ -42,7 +45,7 @@ interface AuthContextValue {
   // /api/perfil, cujas respostas já trazem o dado atualizado. Evita precisar de reload
   // ou de um novo GET /api/auth/me: o token não muda (payload é só {userId, role}, ver
   // backend/src/auth/jwt.ts), então não há nada pra revalidar além do estado local.
-  atualizarUsuario: (patch: Partial<Pick<AuthUser, "nome" | "fotoUrl">>) => void;
+  atualizarUsuario: (patch: Partial<Pick<AuthUser, "nome" | "fotoUrl" | "preferencias">>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -292,7 +295,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }
 
-  function atualizarUsuario(patch: Partial<Pick<AuthUser, "nome" | "fotoUrl">>) {
+  function atualizarUsuario(patch: Partial<Pick<AuthUser, "nome" | "fotoUrl" | "preferencias">>) {
     setUser((atual) => (atual ? { ...atual, ...patch } : atual));
   }
 

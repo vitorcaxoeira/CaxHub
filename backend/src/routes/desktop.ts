@@ -6,6 +6,7 @@ import { prisma } from "../db/prisma";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
 import { periodosDoDia } from "../domain/jornadaConsultor";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
+import { preferenciasPublicas } from "../domain/preferenciasTela";
 
 // Suporte ao CaxHub Desktop (app Tauri com a janela flutuante). Só quem tem Consultor com
 // `codfor` vinculado usa: é o mesmo critério de GET /atividades/minha-sessao-aberta — sem isso
@@ -43,7 +44,7 @@ desktopRouter.post("/sessao", async (req, res) => {
     const agora = new Date();
     const dispositivo = await prisma.dispositivoDesktop.findUnique({
       where: { tokenHash: hashDoToken(token) },
-      include: { user: { include: { role: true } } },
+      include: { user: { include: { role: true, preferenciaTela: true } } },
     });
     // Mesma resposta pra todo motivo de recusa: não diz se o token existiu, venceu ou foi revogado.
     if (!dispositivo || dispositivo.revogadoEm || dispositivo.expiraEm <= agora || dispositivo.user.status !== "ativo") {
@@ -57,7 +58,15 @@ desktopRouter.post("/sessao", async (req, res) => {
     const { user } = dispositivo;
     res.json({
       token: signToken({ userId: user.id, role: user.role.name }),
-      user: { id: user.id, email: user.email, nome: user.nome, fotoUrl: user.fotoUrl, role: user.role.name },
+      user: {
+        id: user.id,
+        email: user.email,
+        nome: user.nome,
+        fotoUrl: user.fotoUrl,
+        role: user.role.name,
+        // Mesmo formato do usuário de /auth/me: sem isto, Atividades no app sempre abriria no Quadro.
+        preferencias: preferenciasPublicas(user.preferenciaTela),
+      },
     });
   } catch (error) {
     handleError(res, error, "sessao");

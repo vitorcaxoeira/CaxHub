@@ -32,6 +32,8 @@ model User {
 
   preferenciaDesktop      PreferenciaDesktop?
 
+  preferenciaTela         PreferenciaTela?
+
   dispositivosDesktop    DispositivoDesktop[]
   movimentacoesAtividade AtividadeHistoricoMovimentacao[]
   comentariosAtividade   AtividadeComentario[]
@@ -90,6 +92,19 @@ model PreferenciaDesktop {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("preferencias_desktop")
+}
+
+// Preferências de tela por usuário (a próxima preferência de tela vira coluna nova aqui, não tabela nova).
+model PreferenciaTela {
+  userId          Int      @id
+  /// Visão em que Gestão de Projetos › Atividades abre: quadro | lista | calendario | timeline | workload
+  /// (VISOES_ATIVIDADES em src/domain/preferenciasTela.ts; CHECK no banco).
+  atividadesVisao String   @default("quadro") @db.VarChar(12)
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("preferencias_tela")
 }
 
 // Computador em que o CaxHub Desktop está conectado. O JWT dura 8h; este token de dispositivo
