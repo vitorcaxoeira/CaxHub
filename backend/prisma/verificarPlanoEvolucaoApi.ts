@@ -9,6 +9,7 @@ import { prisma } from "../src/db/prisma";
 import { signToken } from "../src/auth/jwt";
 import { attachCorrelationId } from "../src/audit/correlationId";
 import { codforsDoTime, resolverContextoConsultor } from "../src/domain/contextoProjeto";
+import { DEPEXES_PLANO_EVOLUCAO } from "../src/domain/propostasDominio";
 import { auditoriaRouter } from "../src/routes/auditoria";
 import { planoEvolucaoRouter } from "../src/routes/planoEvolucao";
 import { carregarItensDoCiclo } from "../src/domain/planoEvolucao/planoEvolucaoDados";
@@ -61,20 +62,28 @@ async function main() {
   const participantesCriados = new Set<number>();
 
   try {
-    // ---- usuários: admin, gestor (com time) e alguém sem gestão ----
+    // ---- usuários: admin, gestor da Consultoria ERP/HCM (com time), gestor de OUTRA área e alguém sem gestão ----
     const admin = await prisma.user.findFirst({ where: { role: { name: "admin" }, status: "ativo" }, select: { id: true } });
     if (!admin) throw new Error("sem usuário admin no banco local");
     const gestores = await prisma.departamentoGestor.findMany();
     let gestor: { userId: number; role: string; email: string } | null = null;
     const gestoresIds = new Set<number>();
+    const daConsultoria = new Set<number>();
+    const papelDe = new Map<number, string>();
     for (const g of gestores) {
       const consultor = await prisma.consultor.findFirst({ where: { codemp: g.codemp, codusu: Number(g.usuges) }, select: { email: true } });
       if (!consultor?.email) continue;
       const user = await prisma.user.findFirst({ where: { email: { equals: consultor.email, mode: "insensitive" }, status: "ativo" }, select: { id: true, email: true, role: { select: { name: true } } } });
       if (!user || user.role.name === "admin") continue;
       gestoresIds.add(user.id);
+      papelDe.set(user.id, user.role.name);
+      if (!DEPEXES_PLANO_EVOLUCAO.includes(g.depexe)) continue;
+      daConsultoria.add(user.id);
       if (!gestor) gestor = { userId: user.id, role: user.role.name, email: user.email };
     }
+    // Gestor que NÃO gerencia a Consultoria ERP nem HCM: até 20/10/2026 qualquer gestor entrava no Plano; agora é 403.
+    const outraAreaId = [...gestoresIds].find((id) => !daConsultoria.has(id)) ?? null;
+    const tOutraArea = outraAreaId != null ? signToken({ userId: outraAreaId, role: papelDe.get(outraAreaId)! }) : null;
     const semGestaoRow = await prisma.user.findFirst({
       where: { role: { name: { in: ["consultoria", "suporte", "desenvolvimento"] } }, status: "ativo", id: { notIn: [...gestoresIds] } },
       select: { id: true, role: { select: { name: true } } },
@@ -82,7 +91,7 @@ async function main() {
     const tAdmin = signToken({ userId: admin.id, role: "admin" });
     const tGestor = gestor ? signToken({ userId: gestor.userId, role: gestor.role }) : null;
     const tSem = semGestaoRow ? signToken({ userId: semGestaoRow.id, role: semGestaoRow.role.name }) : null;
-    console.log(`admin=${admin.id} gestor=${gestor?.userId ?? "NENHUM"} semGestao=${semGestaoRow?.id ?? "NENHUM"}`);
+    console.log(`admin=${admin.id} gestor=${gestor?.userId ?? "NENHUM"} outraArea=${outraAreaId ?? "NENHUM"} semGestao=${semGestaoRow?.id ?? "NENHUM"}`);
 
     // ---- acesso ----
     confere("sem token = 401", (await P("/ciclos")).status === 401);
@@ -90,9 +99,15 @@ async function main() {
       confere("sem gestão = 403 nos ciclos e participantes", (await P("/ciclos", tSem)).status === 403 && (await P("/participantes", tSem)).status === 403);
       confere("quem não participa recebe 404 em /meu", (await P("/meu", tSem)).status === 404);
     }
+    if (tOutraArea) {
+      confere("gestor de outra área (não Consultoria ERP/HCM) = 403 nos ciclos, participantes e prévia", (await P("/ciclos", tOutraArea)).status === 403 && (await P("/participantes", tOutraArea)).status === 403 && (await P("/ciclos/1/previa", tOutraArea)).status === 403);
+    }
     if (tGestor) {
       confere("gestor lê os ciclos", (await P("/ciclos", tGestor)).status === 200);
-      confere("gestor NÃO cria ciclo, nem participante, nem lê as opções", (await P("/ciclos", tGestor, { method: "POST", body: { ano: 2099, semestre: 1 } })).status === 403 && (await P("/participantes", tGestor, { method: "POST", body: {} })).status === 403 && (await P("/participantes/opcoes", tGestor)).status === 403);
+      // Desde 20/10/2026 o gestor da Consultoria ERP/HCM administra o Plano como o admin. Corpo inválido = 400 prova que passou da guarda
+      // (seria 403) sem gravar nada.
+      const ciclosG = await P("/ciclos", tGestor);
+      confere("gestor da Consultoria pode editar (podeEditar) e passa da guarda de criar ciclo e participante", ciclosG.corpo.podeEditar === true && (await P("/ciclos", tGestor, { method: "POST", body: { ano: 1999, semestre: 1 } })).status === 400 && (await P("/participantes", tGestor, { method: "POST", body: {} })).status === 400 && (await P("/participantes/opcoes", tGestor)).status === 200);
     }
 
     // ---- ciclo: criação, validação e trava (ano 2099 não colide com nada real) ----
@@ -140,7 +155,7 @@ async function main() {
     const soma = await P(`/ciclos/${c99.id}`, tAdmin, { method: "PUT", body: { indicadores: [{ chave: "produtividade", peso: 60, meta: 85, ativo: true }] } });
     confere("pesos que não somam 100 aparecem como pendência (e bloqueiam a publicação)", soma.corpo.pendenciasPublicacao.some((t: string) => t.includes("somar 100")) && (await P(`/ciclos/${c99.id}/publicar`, tAdmin, { method: "POST" })).status === 400);
     await P(`/ciclos/${c99.id}`, tAdmin, { method: "PUT", body: { indicadores: [{ chave: "produtividade", peso: 50, meta: 85, ativo: true }] } });
-    if (tGestor) confere("gestor não edita ciclo", (await P(`/ciclos/${c99.id}`, tGestor, { method: "PUT", body: { amostraMinimaHoras: 1 } })).status === 403);
+    if (tGestor) confere("gestor da Consultoria passa da guarda de editar ciclo (corpo inválido = 400, não 403)", (await P(`/ciclos/${c99.id}`, tGestor, { method: "PUT", body: { amostraMinimaHoras: -1 } })).status === 400);
 
     confere("ciclo inexistente = 404", (await P("/ciclos/999999999", tAdmin, { method: "PUT", body: {} })).status === 404 && (await P("/ciclos/abc/publicar", tAdmin, { method: "POST" })).status === 404);
     const pub = await P(`/ciclos/${c99.id}/publicar`, tAdmin, { method: "POST" });
@@ -162,14 +177,27 @@ async function main() {
     let visiveisGestor: Set<number> | null = null;
     if (gestor) {
       const user = await prisma.user.findUnique({ where: { id: gestor.userId }, select: { email: true } });
-      visiveisGestor = await codforsDoTime("gestor", await resolverContextoConsultor(user!.email));
+      // Mesmo recorte da API: o time do gestor no Plano é só o dos departamentos da Consultoria que ele gerencia.
+      const ctx = await resolverContextoConsultor(user!.email);
+      ctx.departamentosGerenciados = ctx.departamentosGerenciados.filter((d) => DEPEXES_PLANO_EVOLUCAO.includes(d));
+      visiveisGestor = await codforsDoTime("gestor", ctx);
     }
     const jaNoPlano = new Set((await prisma.planoParticipante.findMany({ select: { codfor: true } })).map((p) => p.codfor));
+    // Só integrante ativo de um departamento da área do ciclo atual pode aderir (20/10/2026): os participantes de teste saem daí.
+    const opcoesAntes = await P("/participantes/opcoes", tAdmin);
+    const departamentosOpcoes: any[] = opcoesAntes.corpo?.departamentos ?? [];
+    const daArea = new Set<number>(departamentosOpcoes.flatMap((d: any) => d.integrantes.map((i: any) => i.codfor)));
+    const areaDoCiclo: number[] = (await prisma.planoCiclo.findUnique({ where: { id: opcoesAntes.corpo?.ciclo?.id ?? -1 } }))?.departamentosArea ?? [];
+    confere(
+      "opções de adesão: ciclo atual, só os departamentos da área, cada integrante com jaNoPlano",
+      opcoesAntes.status === 200 && opcoesAntes.corpo.ciclo != null && departamentosOpcoes.map((d: any) => d.depexe).join(",") === areaDoCiclo.join(",") && daArea.size > 0 && departamentosOpcoes.every((d: any) => d.integrantes.every((i: any) => typeof i.jaNoPlano === "boolean")),
+      JSON.stringify({ ciclo: opcoesAntes.corpo?.ciclo, deps: departamentosOpcoes.map((d: any) => `${d.depexe}:${d.integrantes.length}`), area: areaDoCiclo })
+    );
     // Os dois primeiros são os de mais horas (>= 10 h: têm base pra a conta de percentuais); o 3º é alguém do time do gestor, mesmo com poucas horas.
-    const candidatos = porHoras.filter((c) => !jaNoPlano.has(c));
+    const candidatos = porHoras.filter((c) => !jaNoPlano.has(c) && daArea.has(c));
     const escolhidos: number[] = candidatos.slice(0, 2);
     if (escolhidos.length < 2) throw new Error("sem consultores com horas suficientes na área para testar a prévia");
-    const membroDoTime = todosPorHoras.map(([c]) => c).find((c) => !jaNoPlano.has(c) && !escolhidos.includes(c) && visiveisGestor?.has(c)) ?? [...(visiveisGestor ?? [])].find((c) => !jaNoPlano.has(c) && !escolhidos.includes(c));
+    const membroDoTime = todosPorHoras.map(([c]) => c).find((c) => !jaNoPlano.has(c) && !escolhidos.includes(c) && daArea.has(c) && visiveisGestor?.has(c)) ?? [...(visiveisGestor ?? [])].find((c) => !jaNoPlano.has(c) && !escolhidos.includes(c) && daArea.has(c));
     const doTime = [...escolhidos.filter((c) => visiveisGestor?.has(c)), ...(membroDoTime != null ? [membroDoTime] : [])];
     const deFora = escolhidos.filter((c) => visiveisGestor != null && !visiveisGestor.has(c));
     console.log(`participantes de teste: ${escolhidos.join(", ")}${membroDoTime != null ? ` + ${membroDoTime} (do time do gestor)` : ""}; do time do gestor: ${doTime.join(",") || "nenhum"}; de fora: ${deFora.join(",") || "nenhum"}`);
@@ -200,7 +228,39 @@ async function main() {
     }
     confere("adesão repetida = 409", (await P("/participantes", tAdmin, { method: "POST", body: planos[0] })).status === 409);
     const opcoes = await P("/participantes/opcoes", tAdmin);
-    confere("as opções de adesão não trazem quem já está no plano", opcoes.status === 200 && opcoes.corpo.opcoes.length > 0 && !opcoes.corpo.opcoes.some((o: any) => adesoes.some((a) => a.codfor === o.codfor)));
+    const integrantesDepois: any[] = (opcoes.corpo?.departamentos ?? []).flatMap((d: any) => d.integrantes);
+    confere("as opções de adesão marcam quem já está no plano (jaNoPlano)", opcoes.status === 200 && adesoes.every((a) => integrantesDepois.some((i) => i.codfor === a.codfor && i.jaNoPlano === true)));
+    // Consultor ativo no cadastro, mas fora do time dos departamentos da área: o servidor recusa, como a tela não oferece.
+    const foraDaArea = await prisma.consultor.findFirst({ where: { codfor: { notIn: [...daArea, ...jaNoPlano] }, sitfor: "A" }, select: { codfor: true } });
+    if (foraDaArea?.codfor != null) {
+      const r = await P("/participantes", tAdmin, { method: "POST", body: { codfor: foraDaArea.codfor, dataAdesao: "2026-06-01", valorHoraBase: 100 } });
+      confere("adesão de quem não é integrante ativo da área = 400", r.status === 400, JSON.stringify(r.corpo).slice(0, 160));
+      if (r.status === 201) participantesCriados.add(r.corpo.id);
+    }
+
+    // ---- adesão em lote (modal com vários marcados): tudo ou nada ----
+    const livres = [...daArea].filter((c) => !jaNoPlano.has(c) && !adesoes.some((a) => a.codfor === c)).slice(0, 2);
+    if (livres.length === 2) {
+      const L = (corpo: unknown) => P("/participantes/lote", tAdmin, { method: "POST", body: corpo });
+      const base = { dataAdesao: "2026-06-01", ciclosConsecutivosAntes: 0 };
+      if (foraDaArea?.codfor != null) {
+        const r = await L({ ...base, itens: [{ codfor: livres[0], valorHoraBase: 100 }, { codfor: foraDaArea.codfor, valorHoraBase: 100 }] });
+        const gravou = await prisma.planoParticipante.findUnique({ where: { codfor: livres[0] } });
+        confere("lote com um consultor fora da área = 400 e NÃO grava nenhum (tudo ou nada)", r.status === 400 && gravou == null, JSON.stringify(r.corpo).slice(0, 160));
+        if (gravou) participantesCriados.add(gravou.id);
+      }
+      confere("lote com o mesmo consultor duas vezes = 400", (await L({ ...base, itens: [{ codfor: livres[0], valorHoraBase: 100 }, { codfor: livres[0], valorHoraBase: 90 }] })).status === 400);
+      confere("lote sem itens ou com valor inválido = 400", (await L({ ...base, itens: [] })).status === 400 && (await L({ ...base, itens: [{ codfor: livres[0], valorHoraBase: 0 }] })).status === 400);
+      if (tGestor) confere("gestor da Consultoria passa da guarda da adesão em lote (valor inválido = 400, não 403)", (await P("/participantes/lote", tGestor, { method: "POST", body: { ...base, itens: [{ codfor: livres[0], valorHoraBase: 0 }] } })).status === 400);
+      const ok = await L({ ...base, itens: [{ codfor: livres[0], valorHoraBase: 110.5 }, { codfor: livres[1], valorHoraBase: 95 }] });
+      for (const c of ok.corpo?.criados ?? []) participantesCriados.add(c.id);
+      const valores = await prisma.planoValorBase.findMany({ where: { participanteId: { in: (ok.corpo?.criados ?? []).map((c: any) => c.id) } }, select: { valorHoraBase: true } });
+      confere(
+        "lote válido = 201 com as duas adesões, cada uma com o seu Valor Hora Base",
+        ok.status === 201 && ok.corpo.criados.length === 2 && valores.map((v) => Number(v.valorHoraBase)).sort((a, b) => a - b).join(",") === "95,110.5",
+        JSON.stringify(ok.corpo).slice(0, 200)
+      );
+    }
 
     // ---- valor base: histórico nunca reescrito ----
     const [p1, p2, p3] = adesoes;
@@ -210,7 +270,7 @@ async function main() {
     confere("valor base com a mesma vigência = 409", (await P(`/participantes/${p1.id}/valor-base`, tAdmin, { method: "POST", body: { valorHoraBase: 130, desde: "2026-06-15", motivo: "reajuste" } })).status === 409);
     confere("valor base inválido = 400", (await P(`/participantes/${p1.id}/valor-base`, tAdmin, { method: "POST", body: { valorHoraBase: -5, desde: "2026-06-20", motivo: "reajuste" } })).status === 400 && (await P(`/participantes/${p1.id}/valor-base`, tAdmin, { method: "POST", body: { valorHoraBase: 100, desde: "2026-06-20", motivo: "outro" } })).status === 400);
     confere("participante inexistente = 404", (await P("/participantes/999999999/valor-base", tAdmin, { method: "POST", body: { valorHoraBase: 100, desde: "2026-06-20", motivo: "reajuste" } })).status === 404);
-    if (tGestor) confere("gestor NÃO lança valor base", (await P(`/participantes/${p1.id}/valor-base`, tGestor, { method: "POST", body: { valorHoraBase: 100, desde: "2026-07-20", motivo: "reajuste" } })).status === 403);
+    if (tGestor) confere("gestor da Consultoria passa da guarda do valor base (inválido = 400, não 403)", (await P(`/participantes/${p1.id}/valor-base`, tGestor, { method: "POST", body: { valorHoraBase: -1, desde: "2026-07-20", motivo: "reajuste" } })).status === 400);
 
     // ---- prévia: ciclo de ENSAIO 2026/2 (só cria se ainda não existir; senão usa o existente sem alterar) ----
     let c26 = await prisma.planoCiclo.findUnique({ where: { ano_semestre: { ano: 2026, semestre: 2 } } });
@@ -252,16 +312,17 @@ async function main() {
         confere("4 ciclos já cumpridos: reforçador de 2,0 p.p. (7% com global, R$ 150,50 → 161,04)", cB.projecao.comGlobal.percentualBp === 700 && cB.projecao.comGlobal.valorHora === 161.04, JSON.stringify(cB.projecao.comGlobal));
       }
 
-      // Gestor: só o time dele e nunca valores em R$.
-      if (tGestor && visiveisGestor) {
+      // Gestor da Consultoria = administrador do Plano: vê todos os participantes, com valores em R$, como o admin.
+      if (tGestor) {
         const g = await P(`/ciclos/${c26!.id}/previa`, tGestor);
-        confere("gestor lê a prévia, sem valores", g.status === 200 && g.corpo.mostraValores === false && !temChaveDeValor(g.corpo.consultores), JSON.stringify(g.corpo).slice(0, 120));
-        confere("gestor só vê consultores do time dele", g.corpo.consultores.every((c: any) => visiveisGestor!.has(c.codfor)));
-        for (const fora of deFora) confere(`consultor ${fora} (fora do time) NÃO aparece pro gestor`, !g.corpo.consultores.some((c: any) => c.codfor === fora));
-        if (p3) confere("consultor do time aparece pro gestor, com percentual projetado e sem R$", g.corpo.consultores.some((c: any) => c.codfor === p3.codfor && c.projecao?.comGlobal?.percentualBp > 0 && c.projecao.comGlobal.valorHora === undefined));
+        const a = await P(`/ciclos/${c26!.id}/previa`, tAdmin);
+        confere("gestor da Consultoria lê a prévia com valores, igual ao admin", g.status === 200 && g.corpo.mostraValores === true && g.corpo.consultores.length === a.corpo.consultores.length, JSON.stringify(g.corpo).slice(0, 120));
+        for (const fora of deFora) confere(`consultor ${fora} (de outro departamento da área) aparece pro gestor da Consultoria`, g.corpo.consultores.some((c: any) => c.codfor === fora));
         const gl = await P("/participantes", tGestor);
-        confere("gestor lista só o time e sem valores", gl.status === 200 && gl.corpo.mostraValores === false && !temChaveDeValor(gl.corpo.participantes) && gl.corpo.participantes.every((p: any) => visiveisGestor!.has(p.codfor)));
-        confere("a prévia sem permissão para ciclo inexistente = 404", (await P("/ciclos/999999999/previa", tGestor)).status === 404);
+        const al = await P("/participantes", tAdmin);
+        // Igual ao admin (valor vigente hoje pode ser null para quem só começa depois; o que importa é vir o mesmo campo e histórico).
+        confere("gestor da Consultoria lista todos os participantes com valores, igual ao admin", gl.status === 200 && gl.corpo.mostraValores === true && JSON.stringify(gl.corpo.participantes) === JSON.stringify(al.corpo.participantes) && adesoes.every((ad) => gl.corpo.participantes.some((p: any) => p.codfor === ad.codfor && "valorHoraBase" in p && Array.isArray(p.historicoBase))));
+        confere("a prévia de ciclo inexistente = 404", (await P("/ciclos/999999999/previa", tGestor)).status === 404);
       }
     }
 

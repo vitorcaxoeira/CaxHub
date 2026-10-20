@@ -6,6 +6,7 @@ import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
 import { DEPEXE_COMERCIAL } from "./auth/acessoComercial";
 import { DEPEXE_DHO } from "./auth/acessoRh";
+import { DEPEXES_PLANO_EVOLUCAO } from "./auth/acessoPlanoEvolucao";
 import { Require5S } from "./auth/Require5S";
 import { RequireGestorOuAdmin } from "./auth/RequireGestorOuAdmin";
 import { ThemeProvider } from "./theme/ThemeContext";
@@ -91,6 +92,14 @@ function SoFlutuanteNoApp({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+// O Plano de Evolução PJ morava em /projetos/eficiencia/plano-evolucao (botão dentro da Eficiência) e virou menu próprio em
+// /projetos/plano-evolucao (20/10/2026). Favorito e link antigo (inclusive a memória de cálculo) caem no endereço novo, com a busca.
+const PREFIXO_ANTIGO_PLANO = "/projetos/eficiencia/plano-evolucao";
+function RedirecionarPlanoEvolucao() {
+  const { pathname, search } = useLocation();
+  return <Navigate to={pathname.replace(PREFIXO_ANTIGO_PLANO, "/projetos/plano-evolucao") + search} replace />;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -137,10 +146,11 @@ export default function App() {
               }
             />
             {/* Memória de cálculo da apuração do Plano de Evolução (botão Imprimir/Baixar PDF da Apuração e do Meu plano) — fora do
-                AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o backend (GET .../memoria) decide quem enxerga: admin, gestor do
-                time (sem R$) ou o próprio consultor depois da devolutiva. */}
+                AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o backend (GET .../memoria) decide quem enxerga: admin, gestor da
+                Consultoria do time (sem R$) ou o próprio consultor depois da devolutiva. */}
+            <Route path={`${PREFIXO_ANTIGO_PLANO}/memoria/:id`} element={<RedirecionarPlanoEvolucao />} />
             <Route
-              path="/projetos/eficiencia/plano-evolucao/memoria/:id"
+              path="/projetos/plano-evolucao/memoria/:id"
               element={
                 <ProtectedRoute>
                   <RelatorioMemoriaPlano />
@@ -211,8 +221,7 @@ export default function App() {
                   exigirAdminOuGestor de routes/eficiencia.ts no backend. */}
               <Route element={<RequireGestorOuAdmin />}>
                 <Route path="/projetos/eficiencia" element={<Eficiencia />} />
-                {/* Plano de Evolução (gestão): mesma guarda do painel. Sem item de menu próprio: o acesso é pelo link no Painel de Eficiência. */}
-                <Route path="/projetos/eficiencia/plano-evolucao" element={<PlanoEvolucao />} />
+                <Route path={PREFIXO_ANTIGO_PLANO} element={<RedirecionarPlanoEvolucao />} />
                 <Route path="/solicitacoes/nova" element={<SolicitacaoViagemForm />} />
                 <Route path="/solicitacoes/aprovacoes" element={<SolicitacoesViagem escopo="aprovacao" />} />
                 <Route path="/solicitacoes/atendimento" element={<SolicitacoesViagem escopo="atendimento" />} />
@@ -265,6 +274,12 @@ export default function App() {
               {/* Comercial › Gestão de Metas: admin ou gestor do departamento 2 (Comercial). Gestor não é Role (vem de
                   DepartamentoGestor), então a guarda é dinâmica. Em sincronia com o item do menu (Sidebar, `gestorComercial`) e o
                   exigirAdminOuGestorComercial de routes/metasComercial.ts. Ao mudar quem entra, ampliar as três camadas. */}
+              {/* Gestão de Projetos › Plano de Evolução PJ: admin ou gestor da Consultoria ERP (8) ou HCM (9). Em sincronia com o item do menu
+                  (Sidebar, `gestorConsultoria`) e o carregarAcesso de routes/planoEvolucaoComum.ts. Ao mudar quem entra, ampliar as três camadas.
+                  O consultor acompanha o próprio plano em "Meu plano" (/projetos/meu-plano), fora desta guarda. */}
+              <Route element={<RequireGestorOuAdmin depexe={DEPEXES_PLANO_EVOLUCAO} />}>
+                <Route path="/projetos/plano-evolucao" element={<PlanoEvolucao />} />
+              </Route>
               <Route element={<RequireGestorOuAdmin depexe={DEPEXE_COMERCIAL} />}>
                 <Route path="/comercial/metas" element={<MetasPainel />} />
                 <Route path="/comercial/metas/lancamentos" element={<MetasLancamentos />} />

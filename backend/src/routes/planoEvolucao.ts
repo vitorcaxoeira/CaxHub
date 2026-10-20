@@ -24,6 +24,7 @@ import {
   validarEncerramento,
   validarNovoCiclo,
   validarNovoParticipante,
+  NovoParticipante,
   validarValorBase,
 } from "../domain/planoEvolucao/validacao";
 
@@ -121,12 +122,15 @@ function escolherCicloAtual(ciclos: CicloComIndicadores[], hoje: string): CicloC
 
 planoEvolucaoRouter.get("/ciclos", exigirAdminOuGestor, async (_req, res) => {
   try {
+    // A tela decide o que é editável por este flag (admin do Plano = admin ou gestor da Consultoria ERP/HCM), não pelo papel.
+    const podeEditar = acessoDe(res).admin;
     const ciclos = await prisma.planoCiclo.findMany({ include: { indicadores: true }, orderBy: [{ ano: "desc" }, { semestre: "desc" }] });
     const hoje = hojeIso();
     const atual = escolherCicloAtual(ciclos, hoje);
     res.json({
       hoje,
       atualId: atual?.id ?? null,
+      podeEditar,
       ciclos: ciclos.map(cicloDto),
       indicadoresDisponiveis: INDICADORES.map((i) => ({ chave: i.chave, rotulo: i.rotulo, tipo: i.tipo, descricao: i.descricao })),
       departamentos: Object.entries(DEPEXE_LABELS).map(([valor, rotulo]) => ({ valor: Number(valor), rotulo })),
@@ -450,47 +454,88 @@ planoEvolucaoRouter.get("/participantes", exigirAdminOuGestor, async (_req, res)
   }
 });
 
-// Consultores que ainda podem aderir (ativos no cadastro do Senior e fora do plano).
+// Quem pode aderir: integrante ATIVO de um departamento da área do ciclo atual. Mesma regra de "integrante ativo" da alocação de
+// consultores (GET /alocacao/consultores-elegiveis): está no time do departamento (DepartamentoTime, sitreg 'A') e é fornecedor ativo
+// (Consultor com codfor, sitfor 'A'). Quem está em dois departamentos da área aparece nos dois. Usado pela tela (opções) e pelo POST.
+type IntegranteDaArea = { codfor: number; nome: string; fotoUrl: string | null };
+async function integrantesDaArea(departamentos: number[]): Promise<Map<number, IntegranteDaArea[]>> {
+  const porDepartamento = new Map<number, IntegranteDaArea[]>(departamentos.map((d) => [d, []]));
+  if (departamentos.length === 0) return porDepartamento;
+  const times = await prisma.departamentoTime.findMany({ where: { depexe: { in: departamentos }, sitreg: "A" }, select: { codemp: true, depexe: true, codusu: true } });
+  if (times.length === 0) return porDepartamento;
+  const consultores = await prisma.consultor.findMany({
+    where: { OR: times.map((t) => ({ codemp: t.codemp, codusu: Number(t.codusu) })), codfor: { not: null }, sitfor: "A" },
+    select: { codemp: true, codusu: true, codfor: true, nomcom: true, nomfor: true, usuariosCaxHub: { select: { fotoUrl: true } } },
+  });
+  const porUsuario = new Map(consultores.map((c) => [`${c.codemp}:${c.codusu}`, c]));
+  for (const t of times) {
+    const c = porUsuario.get(`${t.codemp}:${Number(t.codusu)}`);
+    const lista = porDepartamento.get(t.depexe);
+    if (!c || c.codfor == null || !lista || lista.some((x) => x.codfor === c.codfor)) continue;
+    lista.push({ codfor: c.codfor, nome: c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`, fotoUrl: c.usuariosCaxHub[0]?.fotoUrl ?? null });
+  }
+  for (const lista of porDepartamento.values()) lista.sort((x, y) => x.nome.localeCompare(y.nome, "pt-BR"));
+  return porDepartamento;
+}
+
+async function cicloAtualDaAdesao() {
+  const ciclos = await prisma.planoCiclo.findMany({ include: { indicadores: true } });
+  return escolherCicloAtual(ciclos, hojeIso());
+}
+
+// Opções do modal "Registrar adesão": os departamentos da área do ciclo atual, cada um com os integrantes ativos. Quem já está no plano
+// (qualquer situação: codfor é único em plano_participantes) vem marcado, para a tela mostrar desabilitado.
 planoEvolucaoRouter.get("/participantes/opcoes", exigirAdmin, async (_req, res) => {
   try {
-    const [consultores, participantes] = await Promise.all([
-      prisma.consultor.findMany({ where: { codfor: { not: null }, sitfor: "A" }, select: { codfor: true, nomcom: true, nomfor: true, depexedes: true } }),
-      prisma.planoParticipante.findMany({ select: { codfor: true } }),
-    ]);
-    const jaParticipa = new Set(participantes.map((p) => p.codfor));
-    const vistos = new Set<number>();
-    const opcoes: { codfor: number; nome: string; departamento: string | null }[] = [];
-    for (const c of consultores) {
-      if (c.codfor == null || vistos.has(c.codfor) || jaParticipa.has(c.codfor)) continue;
-      vistos.add(c.codfor);
-      opcoes.push({ codfor: c.codfor, nome: c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`, departamento: c.depexedes ?? null });
+    const ciclo = await cicloAtualDaAdesao();
+    if (!ciclo) {
+      res.json({ ciclo: null, departamentos: [] });
+      return;
     }
-    res.json({ opcoes: opcoes.sort((x, y) => x.nome.localeCompare(y.nome, "pt-BR")) });
+    const [porDepartamento, participantes] = await Promise.all([integrantesDaArea(ciclo.departamentosArea), prisma.planoParticipante.findMany({ select: { codfor: true } })]);
+    const jaParticipa = new Set(participantes.map((p) => p.codfor));
+    res.json({
+      ciclo: { id: ciclo.id, rotulo: rotuloCiclo(ciclo) },
+      departamentos: ciclo.departamentosArea.map((depexe) => ({
+        depexe,
+        rotulo: depexeLabel(depexe),
+        integrantes: (porDepartamento.get(depexe) ?? []).map((i) => ({ ...i, jaNoPlano: jaParticipa.has(i.codfor) })),
+      })),
+    });
   } catch (error) {
     handleError(res, error, "opcoes-participantes");
   }
 });
 
-planoEvolucaoRouter.post("/participantes", exigirAdmin, async (req: AuthenticatedRequest, res) => {
-  try {
-    const v = validarNovoParticipante(req.body);
-    if (!v.ok) {
-      res.status(400).json({ error: v.erro });
-      return;
-    }
-    const d = v.dados;
-    const nomes = await carregarNomesDeConsultores([d.codfor]);
-    if (!nomes.has(d.codfor)) {
-      res.status(400).json({ error: "Consultor não encontrado." });
-      return;
-    }
-    if (await prisma.planoParticipante.findUnique({ where: { codfor: d.codfor } })) {
-      res.status(409).json({ error: "Este consultor já está no plano." });
-      return;
-    }
-    const primeiroCicloInicio = inicioDoPrimeiroCiclo(d.dataAdesao);
-    const nome = nomes.get(d.codfor)!.nome;
-    const criado = await prisma.$transaction(async (tx) => {
+// Registra uma ou várias adesões de uma vez, tudo ou nada (uma transação): o modal da tela marca vários consultores e salva uma vez, como
+// a alocação em lote. Mesma regra da tela: só integrante ativo de um departamento da área do ciclo atual, ninguém repetido, ninguém que
+// já esteja no plano. Cada adesão grava o seu Valor Hora Base inicial e o seu evento de auditoria.
+async function registrarAdesoes(req: AuthenticatedRequest, lista: NovoParticipante[]): Promise<{ status: number; corpo: Record<string, unknown> }> {
+  const ciclo = await cicloAtualDaAdesao();
+  if (!ciclo) return { status: 400, corpo: { error: "Cadastre um ciclo antes de registrar adesões." } };
+  const codfors = lista.map((d) => d.codfor);
+  if (new Set(codfors).size !== codfors.length) return { status: 400, corpo: { error: "O mesmo consultor apareceu mais de uma vez." } };
+  const [porDepartamento, nomes, existentes] = await Promise.all([
+    integrantesDaArea(ciclo.departamentosArea),
+    carregarNomesDeConsultores(codfors),
+    prisma.planoParticipante.findMany({ where: { codfor: { in: codfors } }, select: { codfor: true } }),
+  ]);
+  const nomeDe = (codfor: number) => nomes.get(codfor)?.nome ?? `Consultor ${codfor}`;
+  const daArea = new Set([...porDepartamento.values()].flatMap((l) => l.map((i) => i.codfor)));
+  const foraDaArea = codfors.filter((c) => !daArea.has(c));
+  if (foraDaArea.length > 0) {
+    const area = ciclo.departamentosArea.map((dep) => depexeLabel(dep)).join(", ") || "nenhum departamento marcado";
+    const quem = lista.length === 1 ? "O consultor precisa" : `${foraDaArea.map(nomeDe).join(", ")}: precisa${foraDaArea.length === 1 ? "" : "m"}`;
+    return { status: 400, corpo: { error: `${quem} ser integrante ativo de um departamento da área do ciclo ${rotuloCiclo(ciclo)} (${area}).` } };
+  }
+  if (existentes.length > 0) {
+    return { status: 409, corpo: { error: lista.length === 1 ? "Este consultor já está no plano." : `Já está no plano: ${existentes.map((e) => nomeDe(e.codfor)).join(", ")}.` } };
+  }
+  const criados = await prisma.$transaction(async (tx) => {
+    const saida: { id: number; codfor: number; nome: string; primeiroCicloInicio: string; valorHoraBase: number }[] = [];
+    for (const d of lista) {
+      const primeiroCicloInicio = inicioDoPrimeiroCiclo(d.dataAdesao);
+      const nome = nomeDe(d.codfor);
       const p = await tx.planoParticipante.create({
         data: {
           codfor: d.codfor,
@@ -500,16 +545,59 @@ planoEvolucaoRouter.post("/participantes", exigirAdmin, async (req: Authenticate
           criadoPor: req.user!.userId,
           valoresBase: { create: { valorHoraBase: d.valorHoraBase, desde: dataDeIso(d.dataAdesao), motivo: "adesao", criadoPor: req.user!.userId } },
         },
-        include: { valoresBase: true },
       });
       await auditar(tx, req, { tipo: "participante", id: p.id, rotulo: `Plano de Evolução: ${nome}` }, EVENTOS_AUDITORIA.PLANO_PARTICIPANTE_ADERIU, {
         metadata: { codfor: d.codfor, dataAdesao: d.dataAdesao, primeiroCicloInicio, valorHoraBase: d.valorHoraBase, ciclosConsecutivosAntes: d.ciclosConsecutivosAntes },
       });
-      return p;
-    });
-    res.status(201).json({ id: criado.id, codfor: criado.codfor, nome, primeiroCicloInicio, valorHoraBase: d.valorHoraBase });
+      saida.push({ id: p.id, codfor: p.codfor, nome, primeiroCicloInicio, valorHoraBase: d.valorHoraBase });
+    }
+    return saida;
+  });
+  return { status: 201, corpo: { criados } };
+}
+
+planoEvolucaoRouter.post("/participantes", exigirAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const v = validarNovoParticipante(req.body);
+    if (!v.ok) {
+      res.status(400).json({ error: v.erro });
+      return;
+    }
+    const r = await registrarAdesoes(req, [v.dados]);
+    res.status(r.status).json(r.status === 201 ? (r.corpo.criados as unknown[])[0] : r.corpo);
   } catch (error) {
     handleError(res, error, "aderir");
+  }
+});
+
+// Várias adesões de uma vez (modal "Registrar adesão"): data de assinatura e ciclos já cumpridos valem para todos; o Valor Hora Base é
+// de cada um. Corpo: { dataAdesao, ciclosConsecutivosAntes, itens: [{ codfor, valorHoraBase }] }.
+const MAX_ADESOES_POR_LOTE = 50;
+planoEvolucaoRouter.post("/participantes/lote", exigirAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const corpo = (req.body ?? {}) as Record<string, unknown>;
+    const itens = Array.isArray(corpo.itens) ? (corpo.itens as Record<string, unknown>[]) : [];
+    if (itens.length === 0) {
+      res.status(400).json({ error: "Marque ao menos um consultor." });
+      return;
+    }
+    if (itens.length > MAX_ADESOES_POR_LOTE) {
+      res.status(400).json({ error: `No máximo ${MAX_ADESOES_POR_LOTE} adesões por vez.` });
+      return;
+    }
+    const lista: NovoParticipante[] = [];
+    for (const item of itens) {
+      const v = validarNovoParticipante({ ...item, dataAdesao: corpo.dataAdesao, ciclosConsecutivosAntes: corpo.ciclosConsecutivosAntes });
+      if (!v.ok) {
+        res.status(400).json({ error: v.erro });
+        return;
+      }
+      lista.push(v.dados);
+    }
+    const r = await registrarAdesoes(req, lista);
+    res.status(r.status).json(r.corpo);
+  } catch (error) {
+    handleError(res, error, "aderir-lote");
   }
 });
 

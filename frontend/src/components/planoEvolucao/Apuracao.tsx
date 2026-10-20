@@ -213,7 +213,7 @@ export function Apuracao({ ciclos, cicloId, onSelecionar, admin }: { ciclos: Cic
                 </table>
               </div>
             )}
-            {!dados.mostraValores && <p className="mt-3 text-[12px] text-muted">Valor hora é dado sensível e só o administrador vê; você acompanha os percentuais.</p>}
+            {!dados.mostraValores && <p className="mt-3 text-[12px] text-muted">Valor hora é dado sensível: só o administrador e os gestores da Consultoria ERP e HCM veem.</p>}
           </Cartao>
         </>
       )}
@@ -575,7 +575,7 @@ function ModalApuracao({ cicloId, participanteId, onFechar, onMudou }: { cicloId
             {!editavel && det.memoria && (
               <div className="rounded-lg border border-border p-4">
                 <div className="mb-3 flex flex-wrap justify-end gap-2">
-                  <a href={`/projetos/eficiencia/plano-evolucao/memoria/${det.apuracao.id}`} target="_blank" rel="noreferrer" className={botaoSecundario}>
+                  <a href={`/projetos/plano-evolucao/memoria/${det.apuracao.id}`} target="_blank" rel="noreferrer" className={botaoSecundario}>
                     Abrir para imprimir
                   </a>
                   <button type="button" onClick={baixarPdf} disabled={ocupado === "pdf"} className={botaoSecundario}>
@@ -734,7 +734,7 @@ function FormDesfecho({ ocupado, admin, onEnviar }: { ocupado: string | null; ad
           <input type="radio" name="desfecho" checked={resultado === "procedente"} disabled={!admin} onChange={() => setResultado("procedente")} className="mt-1" />
           <span>
             Contestação procedente: reabre a apuração para corrigir os lançamentos
-            {!admin && <span className="block text-[12px] text-muted">Só o administrador reabre uma apuração.</span>}
+            {!admin && <span className="block text-[12px] text-muted">Só o administrador e os gestores da Consultoria ERP e HCM reabrem uma apuração.</span>}
           </span>
         </label>
       </div>

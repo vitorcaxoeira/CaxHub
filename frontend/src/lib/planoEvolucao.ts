@@ -45,6 +45,8 @@ export interface CicloDto {
 export interface CiclosResposta {
   hoje: string;
   atualId: number | null;
+  /** Admin do Plano (admin ou gestor da Consultoria ERP/HCM): cadastra e ajusta tudo, com valores em R$. */
+  podeEditar: boolean;
   ciclos: CicloDto[];
   indicadoresDisponiveis: { chave: string; rotulo: string; tipo: string; descricao: string }[];
   departamentos: { valor: number; rotulo: string }[];
@@ -139,6 +141,12 @@ export interface ParticipanteDto {
 export interface ParticipantesResposta {
   mostraValores: boolean;
   participantes: ParticipanteDto[];
+}
+
+/** GET /plano-evolucao/participantes/opcoes: departamentos da área do ciclo atual, cada um com os integrantes ativos (regra da alocação). */
+export interface OpcoesAdesao {
+  ciclo: { id: number; rotulo: string } | null;
+  departamentos: { depexe: number; rotulo: string; integrantes: { codfor: number; nome: string; fotoUrl: string | null; jaNoPlano: boolean }[] }[];
 }
 
 export interface MeuPlanoResposta {

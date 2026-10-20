@@ -8,30 +8,37 @@ import { useAuth } from "./AuthContext";
 // Sidebar usa em `gestorOuAdmin`). Espelha o `exigirAdminOuGestor` do router de solicitações.
 // `permitirViajante`: também deixa entrar quem viaja numa solicitação reservada/finalizada (o
 // backend devolve `viajante` no mesmo /meu-perfil) — usado só nas telas de leitura da própria viagem.
-// `depexe`: em vez de qualquer líder, só quem gerencia ESTE departamento (admin continua entrando) — usado
-// em Pessoas, restrito ao gestor do DHO.
-export function RequireGestorOuAdmin({ permitirViajante = false, depexe }: { permitirViajante?: boolean; depexe?: number }) {
+// `depexe`: em vez de qualquer líder, só quem gerencia ESTE departamento (ou um DESTES, numa lista) — admin continua entrando.
+// Usado em Pessoas (DHO), Gestão de Metas (Comercial) e Plano de Evolução PJ (Consultoria ERP e HCM).
+export function RequireGestorOuAdmin({ permitirViajante = false, depexe }: { permitirViajante?: boolean; depexe?: number | readonly number[] }) {
   const { user, loading } = useAuth();
-  const [ehGestor, setEhGestor] = useState<boolean | undefined>(undefined);
+  // O resultado vale só para a regra (e o usuário) em que foi calculado. Duas guardas desta na mesma posição da árvore de rotas (ex.: o
+  // redirecionamento do endereço antigo do Plano, sob a guarda "qualquer gestor", levando à guarda "só Consultoria") são a MESMA instância
+  // para o React: sem a chave, o "é gestor" da regra anterior deixava a tela nova renderizar uma vez antes de o efeito recalcular.
+  const chave = `${user?.id ?? ""}|${permitirViajante}|${depexe === undefined ? "" : String(depexe)}`;
+  const [resultado, setResultado] = useState<{ chave: string; ehGestor: boolean } | null>(null);
+  const ehGestor = resultado?.chave === chave ? resultado.ehGestor : undefined;
 
   useEffect(() => {
     if (!user || user.role === "admin") return;
     let cancelado = false;
-    setEhGestor(undefined);
     axios
       .get("/api/dashboard/meu-perfil")
       .then(({ data }) => {
         if (cancelado) return;
         // Cada item é um objeto { depexe, depexeLabel, integrantes }, não o número do departamento.
         const gerenciados: { depexe: number }[] = data.departamentosGerenciados ?? [];
-        const gerencia = depexe === undefined ? gerenciados.length > 0 : gerenciados.some((d) => d.depexe === depexe);
-        setEhGestor(gerencia || (permitirViajante && data.viajante === true));
+        const aceitos = depexe === undefined ? null : typeof depexe === "number" ? [depexe] : depexe;
+        const gerencia = aceitos === null ? gerenciados.length > 0 : gerenciados.some((d) => aceitos.includes(d.depexe));
+        setResultado({ chave, ehGestor: gerencia || (permitirViajante && data.viajante === true) });
       })
-      .catch(() => !cancelado && setEhGestor(false));
+      .catch(() => !cancelado && setResultado({ chave, ehGestor: false }));
     return () => {
       cancelado = true;
     };
-  }, [user, permitirViajante, depexe]);
+    // `chave` resume user, permitirViajante e depexe (uma lista nova a cada render não pode disparar o efeito de novo).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chave]);
 
   if (loading || !user) return loading ? null : <Navigate to="/" replace />;
   if (user.role === "admin") return <Outlet />;

@@ -4,6 +4,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { DEPEXE_COMERCIAL } from "../auth/acessoComercial";
 import { DEPEXE_DHO } from "../auth/acessoRh";
+import { DEPEXES_PLANO_EVOLUCAO } from "../auth/acessoPlanoEvolucao";
 
 interface NavLeaf {
   to: string;
@@ -27,6 +28,9 @@ interface NavLeaf {
   // Aparece pra admin e pra quem é gestor do departamento 2 (Comercial) — dinâmico, via DepartamentoGestor. Só Comercial › Gestão de
   // Metas usa. Em sincronia com o RequireGestorOuAdmin (depexe) em App.tsx e com o exigirAdminOuGestorComercial de routes/metasComercial.ts.
   gestorComercial?: boolean;
+  // Aparece pra admin e pra quem é gestor da Consultoria ERP (8) ou HCM (9) — dinâmico, via DepartamentoGestor. Só o Plano de Evolução PJ
+  // usa. Em sincronia com o RequireGestorOuAdmin (depexe) em App.tsx e com o carregarAcesso de routes/planoEvolucaoComum.ts.
+  gestorConsultoria?: boolean;
   // Restringe ESTE item a papéis específicos dentro de um grupo aberto a todos (ex.: Atendimento
   // de viagens). Mantido em sincronia com o RequireRole em App.tsx e o backend.
   roles?: string[];
@@ -101,6 +105,8 @@ const groups: NavGroup[] = [
       { to: "/projetos/aprovacoes", label: "Aprovações" },
       { to: "/projetos/alocacao", label: "Alocação", gestorOuAdmin: true },
       { to: "/projetos/eficiencia", label: "Eficiência", gestorOuAdmin: true },
+      // Gestão do Plano de Evolução dos consultores PJ (ciclos, participantes, prévia, apuração). Antes era um botão dentro da Eficiência.
+      { to: "/projetos/plano-evolucao", label: "Plano de Evolução PJ", gestorConsultoria: true },
       { to: "/projetos/jornadas", label: "Meta diária", gestorOuAdmin: true, souConsultor: true },
       { to: "/projetos/auditoria", label: "Auditoria", gestorOuAdmin: true },
     ],
@@ -294,6 +300,8 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
   const [ehGestorDho, setEhGestorDho] = useState(false);
   // Gerencia o departamento 2 (Comercial) — vem do mesmo /meu-perfil; admin entra por `user.role`.
   const [ehGestorComercial, setEhGestorComercial] = useState(false);
+  // Gerencia a Consultoria ERP ou HCM (DEPEXES_PLANO_EVOLUCAO) — vem do mesmo /meu-perfil; admin entra por `user.role`.
+  const [ehGestorConsultoria, setEhGestorConsultoria] = useState(false);
   // Papel no módulo 5S (null = não é participante). Mesma guarda de efeito superado do /meu-perfil.
   const [papel5s, setPapel5s] = useState<string | null>(null);
 
@@ -317,6 +325,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
       setSouViajante(false);
       setEhGestorDho(true);
       setEhGestorComercial(true);
+      setEhGestorConsultoria(true);
       return;
     }
     // Guarda de "efeito superado" (28/08/2026) — mesma classe de corrida já corrigida em
@@ -337,6 +346,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
         // Cada item de departamentosGerenciados é um objeto { depexe, depexeLabel, integrantes }, não o número.
         setEhGestorDho((data.departamentosGerenciados ?? []).some((d: { depexe: number }) => d.depexe === DEPEXE_DHO));
         setEhGestorComercial((data.departamentosGerenciados ?? []).some((d: { depexe: number }) => d.depexe === DEPEXE_COMERCIAL));
+        setEhGestorConsultoria((data.departamentosGerenciados ?? []).some((d: { depexe: number }) => DEPEXES_PLANO_EVOLUCAO.includes(d.depexe)));
       })
       .catch(() => {
         if (!cancelado) {
@@ -345,6 +355,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
           setSouViajante(false);
           setEhGestorDho(false);
           setEhGestorComercial(false);
+          setEhGestorConsultoria(false);
         }
       });
     return () => {
@@ -359,6 +370,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     if (item.papel5s) return !!papel5s && (item.papel5s as string[]).includes(papel5s);
     if (item.gestorDho) return ehGestorDho;
     if (item.gestorComercial) return ehGestorComercial;
+    if (item.gestorConsultoria) return ehGestorConsultoria;
     return (
       (!item.gestorOuAdmin && !item.souConsultor && !item.souViajante) ||
       !!(item.gestorOuAdmin && ehGestorOuAdmin) ||

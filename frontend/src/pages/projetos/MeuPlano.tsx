@@ -189,7 +189,7 @@ export function MeuPlano() {
                         {h.desfecho ? <> · desfecho: <b className="text-foreground">{h.desfecho.resultado === "procedente" ? "procedente" : "mantida"}</b>{h.desfecho.texto ? ` — ${h.desfecho.texto}` : ""}</> : " · aguardando resposta"}
                       </p>
                     )}
-                    <a href={`/projetos/eficiencia/plano-evolucao/memoria/${h.apuracaoId}`} target="_blank" rel="noreferrer" className="mt-1.5 inline-block text-[12.5px] font-medium text-primary hover:underline">
+                    <a href={`/projetos/plano-evolucao/memoria/${h.apuracaoId}`} target="_blank" rel="noreferrer" className="mt-1.5 inline-block text-[12.5px] font-medium text-primary hover:underline">
                       Ver a memória de cálculo
                     </a>
                   </li>

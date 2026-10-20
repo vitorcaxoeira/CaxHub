@@ -133,6 +133,10 @@ export function depexeLabel(depexe: number | null): string {
 export const DEPEXE_DIRETORIA = 0;
 export const DEPEXE_COMERCIAL = 2;
 
+// Departamentos cujos gestores, além do admin, gerem o Plano de Evolução PJ (Gestão de Projetos › Plano de Evolução PJ): Consultoria
+// ERP e Consultoria HCM (pedido do Vitor, 20/10/2026). Em sincronia com DEPEXES_PLANO_EVOLUCAO do frontend (auth/acessoPlanoEvolucao.ts).
+export const DEPEXES_PLANO_EVOLUCAO: readonly number[] = [8, 9];
+
 // Cliente (`clientes.codcli`) que representa a própria empresa: proposta com este cliente é
 // interna (trabalho da casa, não de cliente externo). Não existe flag no Senior pra isso —
 // decisão do Vitor (05/10/2026): interna = cliente da própria empresa. Medido no banco: codcli 1

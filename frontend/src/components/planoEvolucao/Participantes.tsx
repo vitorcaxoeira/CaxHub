@@ -1,8 +1,9 @@
 import axios from "axios";
 import { FormEvent, Fragment, useEffect, useMemo, useState } from "react";
+import { Avatar } from "../ui/Avatar";
 import { Modal } from "../ui/Modal";
 import { useToast } from "../ui/Toast";
-import { CiclosResposta, ParticipanteDto, ParticipantesResposta, brl2, dataBr } from "../../lib/planoEvolucao";
+import { CiclosResposta, OpcoesAdesao, ParticipanteDto, ParticipantesResposta, brl2, dataBr } from "../../lib/planoEvolucao";
 import { Cartao, Chip, Vazio } from "../eficiencia/comum";
 
 const campo =
@@ -16,7 +17,7 @@ const normalizar = (t: string) => t.normalize("NFD").replace(/\p{Diacritic}/gu, 
 
 type Dialogo = { tipo: "aderir" } | { tipo: "valor"; p: ParticipanteDto } | { tipo: "encerrar"; p: ParticipanteDto } | null;
 
-// Quem está no plano, com adesão, 1º ciclo e (só para o admin) o Valor Hora Base e o histórico dele. O gestor vê só o time dele, sem valores.
+// Quem está no plano, com adesão, 1º ciclo, Valor Hora Base e histórico. Admin e gestores da Consultoria ERP e HCM veem e mantêm tudo.
 export function Participantes({ dados, podeEditar, motivosValorBase, onMudou }: { dados: ParticipantesResposta; podeEditar: boolean; motivosValorBase: CiclosResposta["motivosValorBase"]; onMudou: () => void }) {
   const [dialogo, setDialogo] = useState<Dialogo>(null);
   const [aberto, setAberto] = useState<number | null>(null);
@@ -110,7 +111,7 @@ export function Participantes({ dados, podeEditar, motivosValorBase, onMudou }: 
             </table>
           </div>
         )}
-        {!mostraValores && <p className="mt-3 text-[12px] text-muted">Valor hora é dado sensível e só o administrador vê.</p>}
+        {!mostraValores && <p className="mt-3 text-[12px] text-muted">Valor hora é dado sensível: só o administrador e os gestores da Consultoria ERP e HCM veem.</p>}
       </Cartao>
 
       {dialogo?.tipo === "aderir" && <ModalAdesao onFechar={fechar} onSalvo={() => (fechar(), onMudou())} />}
@@ -135,27 +136,57 @@ function Rodape({ enviando, invalido, rotulo, onFechar }: { enviando: boolean; i
 
 const mensagemDe = (e: unknown, padrao: string) => (axios.isAxiosError(e) ? e.response?.data?.error ?? padrao : padrao);
 
+// Adesão em lote, no espírito da alocação de consultores: escolhe o departamento (só os da área do ciclo atual), marca vários
+// integrantes ativos (a marcação ACUMULA entre departamentos) e salva uma vez. Data de assinatura e ciclos já cumpridos valem para todos;
+// o Valor Hora Base é de cada um. Quem já está no plano aparece desabilitado. O POST /participantes/lote é tudo ou nada.
+type Marcado = { nome: string; valor: string };
+
+// "1.234,56" e "150,5" no formato brasileiro; sem vírgula, o ponto é decimal ("150.50").
+const valorDe = (texto: string) => {
+  const t = texto.replace(/R\$\s*/i, "").trim();
+  return Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t);
+};
+
 function ModalAdesao({ onFechar, onSalvo }: { onFechar: () => void; onSalvo: () => void }) {
   const { mostrar } = useToast();
-  const [opcoes, setOpcoes] = useState<{ codfor: number; nome: string; departamento: string | null }[] | null>(null);
+  const [opcoes, setOpcoes] = useState<OpcoesAdesao | null>(null);
+  const [depexe, setDepexe] = useState<number | "">("");
   const [busca, setBusca] = useState("");
-  const [codfor, setCodfor] = useState<number | "">("");
+  const [marcados, setMarcados] = useState<Record<number, Marcado>>({});
   const [dataAdesao, setDataAdesao] = useState("");
-  const [valor, setValor] = useState("");
   const [anteriores, setAnteriores] = useState("0");
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
   useEffect(() => {
     axios
-      .get<{ opcoes: { codfor: number; nome: string; departamento: string | null }[] }>("/api/plano-evolucao/participantes/opcoes")
-      .then(({ data }) => setOpcoes(data.opcoes))
-      .catch((e) => setErro(mensagemDe(e, "Não foi possível carregar os consultores.")));
+      .get<OpcoesAdesao>("/api/plano-evolucao/participantes/opcoes")
+      .then(({ data }) => setOpcoes(data))
+      .catch((e) => setErro(mensagemDe(e, "Não foi possível carregar os departamentos.")));
   }, []);
 
-  const filtradas = useMemo(() => (opcoes ?? []).filter((o) => normalizar(`${o.nome} ${o.departamento ?? ""}`).includes(normalizar(busca))).slice(0, 80), [opcoes, busca]);
-  const valorNum = Number(valor.replace(",", "."));
-  const invalido = codfor === "" || !/^\d{4}-\d{2}-\d{2}$/.test(dataAdesao) || !(valorNum > 0);
+  const departamento = opcoes?.departamentos.find((d) => d.depexe === depexe) ?? null;
+  const filtradas = useMemo(() => (departamento?.integrantes ?? []).filter((o) => normalizar(o.nome).includes(normalizar(busca))), [departamento, busca]);
+  const semCiclo = opcoes != null && opcoes.ciclo == null;
+  const lista = Object.entries(marcados).map(([codfor, m]) => ({ codfor: Number(codfor), ...m }));
+  const semValor = lista.filter((m) => !(valorDe(m.valor) > 0));
+  const invalido = semCiclo || lista.length === 0 || semValor.length > 0 || !/^\d{4}-\d{2}-\d{2}$/.test(dataAdesao);
+
+  function alternar(codfor: number, nome: string) {
+    setMarcados((atual) => {
+      const novo = { ...atual };
+      if (novo[codfor]) delete novo[codfor];
+      else novo[codfor] = { nome, valor: "" };
+      return novo;
+    });
+  }
+
+  // "Aplicar valor a todos": copia o primeiro valor preenchido para todas as linhas marcadas (o papel do "Distribuir igualmente").
+  function aplicarATodos() {
+    const base = lista.find((m) => valorDe(m.valor) > 0)?.valor;
+    if (!base) return;
+    setMarcados((atual) => Object.fromEntries(Object.entries(atual).map(([k, m]) => [k, { ...m, valor: base }])));
+  }
 
   async function enviar(e: FormEvent) {
     e.preventDefault();
@@ -163,11 +194,15 @@ function ModalAdesao({ onFechar, onSalvo }: { onFechar: () => void; onSalvo: () 
     setEnviando(true);
     setErro(null);
     try {
-      await axios.post("/api/plano-evolucao/participantes", { codfor, dataAdesao, valorHoraBase: valor, ciclosConsecutivosAntes: anteriores });
-      mostrar("Adesão registrada.", "success");
+      const { data } = await axios.post<{ criados: unknown[] }>("/api/plano-evolucao/participantes/lote", {
+        dataAdesao,
+        ciclosConsecutivosAntes: anteriores,
+        itens: lista.map((m) => ({ codfor: m.codfor, valorHoraBase: valorDe(m.valor) })),
+      });
+      mostrar(data.criados.length === 1 ? "Adesão registrada." : `${data.criados.length} adesões registradas.`, "success");
       onSalvo();
     } catch (e2) {
-      setErro(mensagemDe(e2, "Não foi possível registrar a adesão."));
+      setErro(mensagemDe(e2, "Não foi possível registrar as adesões."));
       setEnviando(false);
     }
   }
@@ -175,38 +210,106 @@ function ModalAdesao({ onFechar, onSalvo }: { onFechar: () => void; onSalvo: () 
   return (
     <Modal open onClose={onFechar} title="Registrar adesão ao plano" subtitulo="Termo de Ciência e Comprometimento assinado" fecharPorFora={false}>
       <form onSubmit={enviar} className="space-y-4">
-        <div>
-          <label htmlFor="ad-busca" className="mb-1 block text-[13px] font-medium text-foreground">Consultor</label>
-          <input id="ad-busca" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por nome ou departamento…" className={`${campo} mb-1.5`} autoFocus />
-          <select id="ad-consultor" size={6} value={codfor} onChange={(e) => setCodfor(e.target.value === "" ? "" : Number(e.target.value))} className={campo} aria-label="Consultor" required>
-            {opcoes == null && <option disabled>Carregando…</option>}
-            {filtradas.map((o) => (
-              <option key={o.codfor} value={o.codfor}>
-                {o.nome}
-                {o.departamento ? ` · ${o.departamento}` : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div>
-            <label htmlFor="ad-data" className="mb-1 block text-[13px] font-medium text-foreground">Assinatura do termo</label>
-            <input id="ad-data" type="date" value={dataAdesao} onChange={(e) => setDataAdesao(e.target.value)} className={campo} required />
-          </div>
-          <div>
-            <label htmlFor="ad-valor" className="mb-1 block text-[13px] font-medium text-foreground">Valor Hora Base (R$)</label>
-            <input id="ad-valor" inputMode="decimal" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="ex.: 150,00" className={campo} required />
-          </div>
-          <div>
-            <label htmlFor="ad-ant" className="mb-1 block text-[13px] font-medium text-foreground">Ciclos já cumpridos</label>
-            <input id="ad-ant" inputMode="numeric" value={anteriores} onChange={(e) => setAnteriores(e.target.value)} className={campo} />
-          </div>
-        </div>
+        {semCiclo ? (
+          <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-foreground">
+            Cadastre um ciclo (aba Ciclos e parâmetros) antes de registrar adesões: os departamentos vêm da área do ciclo.
+          </p>
+        ) : (
+          <>
+            <div>
+              <label htmlFor="ad-departamento" className="mb-1 block text-[13px] font-medium text-foreground">Departamento</label>
+              <select
+                id="ad-departamento"
+                value={depexe}
+                onChange={(e) => {
+                  setDepexe(e.target.value === "" ? "" : Number(e.target.value));
+                  setBusca("");
+                }}
+                className={campo}
+                disabled={opcoes == null}
+                autoFocus
+              >
+                <option value="">{opcoes == null ? "Carregando…" : "Escolha o departamento"}</option>
+                {opcoes?.departamentos.map((d) => (
+                  <option key={d.depexe} value={d.depexe}>
+                    {d.rotulo} · {d.integrantes.length} integrante{d.integrantes.length === 1 ? "" : "s"}
+                  </option>
+                ))}
+              </select>
+              {opcoes?.ciclo && <p className="mt-1 text-[11.5px] text-muted">Departamentos da área do ciclo {opcoes.ciclo.rotulo}; só integrantes ativos do time.</p>}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="ad-data" className="mb-1 block text-[13px] font-medium text-foreground">Assinatura do termo</label>
+                <input id="ad-data" type="date" value={dataAdesao} onChange={(e) => setDataAdesao(e.target.value)} className={campo} required />
+              </div>
+              <div>
+                <label htmlFor="ad-ant" className="mb-1 block text-[13px] font-medium text-foreground">Ciclos já cumpridos</label>
+                <input id="ad-ant" inputMode="numeric" value={anteriores} onChange={(e) => setAnteriores(e.target.value)} className={campo} />
+              </div>
+            </div>
+
+            {departamento && (
+              <div>
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <p className="text-[11.5px] font-medium text-muted">
+                    Consultores do time
+                    {/* Contador da seleção ACUMULADA: quem marcou gente em outro departamento não vê esses nomes na lista à vista. */}
+                    {lista.length > 0 && <span className="ml-1.5 text-primary">· {lista.length} selecionado{lista.length === 1 ? "" : "s"}</span>}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={aplicarATodos}
+                    disabled={lista.length < 2 || !lista.some((m) => valorDe(m.valor) > 0)}
+                    className="text-[11.5px] font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
+                  >
+                    Aplicar valor a todos
+                  </button>
+                </div>
+                {departamento.integrantes.length > 6 && (
+                  <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder={`Buscar em ${departamento.rotulo}…`} aria-label="Buscar consultor" className={`${campo} mb-1.5`} />
+                )}
+                {departamento.integrantes.length === 0 ? (
+                  <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-[13px] text-muted">Nenhum integrante ativo em {departamento.rotulo}.</p>
+                ) : (
+                  <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border p-1.5">
+                    {filtradas.map((o) => {
+                      const m = marcados[o.codfor];
+                      return (
+                        <label key={o.codfor} className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 transition ${o.jaNoPlano ? "opacity-60" : m ? "bg-primary/5" : "hover:bg-surface-2"}`}>
+                          <input type="checkbox" checked={!!m || o.jaNoPlano} disabled={o.jaNoPlano} onChange={() => alternar(o.codfor, o.nome)} className="h-4 w-4 flex-none accent-primary" />
+                          <Avatar nome={o.nome} fotoUrl={o.fotoUrl} size="sm" />
+                          <span className="min-w-0 flex-1 truncate text-sm text-foreground">{o.nome}</span>
+                          {o.jaNoPlano ? (
+                            <span className="flex-none text-[11.5px] text-muted">já no plano</span>
+                          ) : (
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              placeholder="R$ 0,00"
+                              aria-label={`Valor Hora Base de ${o.nome}`}
+                              value={m?.valor ?? ""}
+                              disabled={!m}
+                              onChange={(e) => setMarcados((atual) => ({ ...atual, [o.codfor]: { ...atual[o.codfor], valor: e.target.value } }))}
+                              className="w-24 flex-none rounded-md border border-border bg-surface px-2 py-1 text-right font-mono text-[12.5px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+                            />
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                {lista.length > 0 && semValor.length > 0 && <p className="mt-1.5 text-[12px] text-muted">Falta o Valor Hora Base de {semValor.map((m) => m.nome).join(", ")}.</p>}
+              </div>
+            )}
+          </>
+        )}
         <p className="text-[12px] text-muted">
           O 1º ciclo começa em 01/01/2027 para quem assina até essa data; depois, no primeiro dia do semestre seguinte. "Ciclos já cumpridos" só vale para histórico trazido de fora do CaxHub (normalmente 0).
         </p>
         {erro && <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">{erro}</p>}
-        <Rodape enviando={enviando} invalido={invalido} rotulo="Registrar adesão" onFechar={onFechar} />
+        <Rodape enviando={enviando} invalido={invalido} rotulo={lista.length > 1 ? `Registrar ${lista.length} adesões` : "Registrar adesão"} onFechar={onFechar} />
       </form>
     </Modal>
   );

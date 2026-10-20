@@ -32,7 +32,7 @@ export function ComoCalculamosPlano() {
     [
       "Apuração do ciclo",
       <>
-        Depois do corte de evidências, o admin <b>fecha o índice global</b> do ciclo (um só resultado para todos). O gestor lança o que depende de evidência (competências, certificações, avaliação de clientes, case e os
+        Depois do corte de evidências, o administrador do plano <b>fecha o índice global</b> do ciclo (um só resultado para todos). O gestor lança o que depende de evidência (competências, certificações, avaliação de clientes, case e os
         indicadores manuais) e o sistema junta com os indicadores automáticos. <b>Apurar congela o resultado</b>: o que foi apurado é o que se explica, mesmo que os dados mudem depois. A sequência do reforçador vem das
         apurações <b>encerradas</b> dos ciclos anteriores; um ciclo anterior ainda aberto bloqueia o seguinte.
       </>,
@@ -41,7 +41,7 @@ export function ComoCalculamosPlano() {
       "Devolutiva e contestação",
       <>
         O resultado só aparece para o consultor depois que o gestor registra a <b>devolutiva</b>, e vem com a <b>memória de cálculo</b> (tela e PDF): portão, os 5 requisitos, reforçador e valor hora. Se o consultor contestar,
-        o gestor registra a contestação e o desfecho. Contestação <b>procedente</b> (só o admin) reabre a apuração para corrigir os lançamentos, e a versão anterior fica guardada. Só se encerra com nenhuma contestação aberta; no
+        o gestor registra a contestação e o desfecho. Contestação <b>procedente</b> (administrador do plano) reabre a apuração para corrigir os lançamentos, e a versão anterior fica guardada. Só se encerra com nenhuma contestação aberta; no
         10º ciclo, encerrar <b>efetiva</b> o novo Valor Hora Base.
       </>,
     ],
@@ -90,7 +90,7 @@ export function ComoCalculamosPlano() {
     [
       "Quem vê o quê",
       <>
-        O <b>administrador</b> vê tudo, inclusive o Valor Hora Base e o valor projetado em R$. O <b>gestor</b> vê só o time dele e <b>sem valores em R$</b> (o valor hora é dado sensível, como a auditoria dele). O{" "}
+        O <b>administrador</b> e os <b>gestores da Consultoria ERP e HCM</b> administram o plano: veem e mantêm tudo, inclusive o Valor Hora Base e o valor projetado em R$ (o valor hora é dado sensível e não aparece para mais ninguém). O{" "}
         <b>consultor</b> vê só o próprio andamento, sem colegas.
       </>,
     ],

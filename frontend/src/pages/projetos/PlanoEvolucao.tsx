@@ -1,7 +1,6 @@
 import axios from "axios";
 import { useCallback, useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { useAuth } from "../../auth/AuthContext";
+import { useSearchParams } from "react-router-dom";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { TabDef, Tabs } from "../../components/ui/Tabs";
 import { Apuracao } from "../../components/planoEvolucao/Apuracao";
@@ -21,11 +20,10 @@ const ABAS: TabDef[] = [
 
 const mensagemDe = (e: unknown, padrao: string) => (axios.isAxiosError(e) ? e.response?.data?.error ?? padrao : padrao);
 
-// Plano de Evolução Profissional e Eficiência dos consultores PJ (Gestão de Projetos › Eficiência › Plano de evolução).
-// Admin: tudo. Gestor: lê o time dele, lança e apura o time dele, sempre sem valores em R$. Apuração: lançamentos, memória de cálculo, devolutiva, contestação e encerramento.
+// Plano de Evolução Profissional e Eficiência dos consultores PJ (Gestão de Projetos › Plano de Evolução PJ; até 20/10/2026 era um
+// botão dentro da Eficiência). Admin e gestores da Consultoria ERP e HCM têm os mesmos poderes (cadastram e ajustam tudo, com R$): quem
+// pode editar vem do servidor (`podeEditar` de GET /ciclos), não do papel. Apuração: lançamentos, memória de cálculo, devolutiva, contestação e encerramento.
 export function PlanoEvolucao() {
-  const { user } = useAuth();
-  const admin = user?.role === "admin";
   const [params, setParams] = useSearchParams();
   const aba = ABAS.some((a) => a.key === params.get("aba")) ? (params.get("aba") as string) : "previa";
   const mudarAba = useCallback(
@@ -40,6 +38,7 @@ export function PlanoEvolucao() {
   );
 
   const [ciclos, setCiclos] = useState<CiclosResposta | null>(null);
+  const admin = ciclos?.podeEditar ?? false;
   const [cicloId, setCicloId] = useState<number | null>(null);
   const [participantes, setParticipantes] = useState<ParticipantesResposta | null>(null);
   const [previa, setPrevia] = useState<PreviaResposta | null>(null);
@@ -89,23 +88,20 @@ export function PlanoEvolucao() {
   if (semAcesso) {
     return (
       <div>
-        <h1 className="font-display text-2xl font-bold text-foreground">Plano de Evolução</h1>
-        <p className="mt-3 rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted">Esta tela é do administrador e dos gestores de departamento.</p>
+        <h1 className="font-display text-2xl font-bold text-foreground">Plano de Evolução PJ</h1>
+        <p className="mt-3 rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted">Esta tela é do administrador e dos gestores da Consultoria ERP e da Consultoria HCM.</p>
       </div>
     );
   }
 
   return (
     <div>
-      <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Gestão de Projetos · Eficiência · Plano de evolução</p>
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-foreground">Plano de Evolução Profissional e Eficiência</h1>
-          <p className="mt-1 text-sm text-muted">Mérito dos consultores PJ por ciclo semestral: eficiência pelo item da proposta, apontamento online e valor hora projetado.</p>
-        </div>
-        <Link to="/projetos/eficiencia" className="rounded-md border border-border bg-surface px-3 py-1.5 text-[12.5px] font-medium text-foreground transition hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          ← Painel de Eficiência
-        </Link>
+      <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Gestão de Projetos · Plano de Evolução PJ</p>
+      <div className="mb-5">
+        <h1 className="font-display text-2xl font-bold text-foreground">Plano de Evolução PJ</h1>
+        <p className="mt-1 text-sm text-muted">
+          Plano de Evolução Profissional e Eficiência: mérito dos consultores PJ por ciclo semestral, com eficiência pelo item da proposta, apontamento online e valor hora projetado.
+        </p>
       </div>
 
       <Tabs tabs={ABAS} activeKey={aba} onChange={mudarAba} />
@@ -130,7 +126,7 @@ export function PlanoEvolucao() {
                       Crie o primeiro na aba Ciclos e parâmetros.
                     </button>
                   ) : (
-                    "O administrador precisa criar o primeiro ciclo."
+                    "O administrador ou um gestor da Consultoria precisa criar o primeiro ciclo."
                   )}
                 </div>
               ) : (

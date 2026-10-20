@@ -12,6 +12,7 @@ import { prisma } from "../src/db/prisma";
 import { signToken } from "../src/auth/jwt";
 import { attachCorrelationId } from "../src/audit/correlationId";
 import { codforsDoTime, resolverContextoConsultor } from "../src/domain/contextoProjeto";
+import { DEPEXES_PLANO_EVOLUCAO } from "../src/domain/propostasDominio";
 import { hojeIso } from "../src/domain/eficienciaAcoes";
 import { auditoriaRouter } from "../src/routes/auditoria";
 import { planoEvolucaoRouter } from "../src/routes/planoEvolucao";
@@ -79,11 +80,15 @@ async function main() {
       const u = await prisma.user.findFirst({ where: { email: { equals: c.email, mode: "insensitive" }, status: "ativo" }, select: { id: true, email: true, role: { select: { name: true } } } });
       if (!u || u.role.name === "admin") continue;
       gestoresIds.add(u.id);
-      if (!gestor) gestor = { userId: u.id, role: u.role.name, email: u.email };
+      // No Plano, gestor é só quem gerencia a Consultoria ERP ou HCM (routes/planoEvolucaoComum.ts, carregarAcesso).
+      if (!gestor && DEPEXES_PLANO_EVOLUCAO.includes(g.depexe)) gestor = { userId: u.id, role: u.role.name, email: u.email };
     }
-    if (!gestor) throw new Error("sem gestor com usuário no banco local");
+    if (!gestor) throw new Error("sem gestor da Consultoria ERP/HCM com usuário no banco local");
     const tGestor = signToken({ userId: gestor.userId, role: gestor.role });
-    const time = (await codforsDoTime("gestor", await resolverContextoConsultor(gestor.email))) ?? new Set<number>();
+    // Mesmo recorte da API: o time do gestor no Plano é só o dos departamentos da Consultoria que ele gerencia.
+    const ctxGestor = await resolverContextoConsultor(gestor.email);
+    ctxGestor.departamentosGerenciados = ctxGestor.departamentosGerenciados.filter((d) => DEPEXES_PLANO_EVOLUCAO.includes(d));
+    const time = (await codforsDoTime("gestor", ctxGestor)) ?? new Set<number>();
     const semGestao = await prisma.user.findFirst({ where: { role: { name: { in: ["consultoria", "suporte", "desenvolvimento"] } }, status: "ativo", id: { notIn: [...gestoresIds] } }, select: { id: true, role: { select: { name: true } } } });
 
     // ---- consultores de teste: A e B (os de mais horas, fora do time do gestor, se der) e C (do time do gestor, sem horas é o caso interessante) ----
@@ -156,19 +161,22 @@ async function main() {
     // ================== acesso ==================
     confere("sem token = 401", (await P(`/apuracoes/${R}/${pA}`)).status === 401);
     if (semGestao) confere("sem gestão = 403 na lista e no detalhe", (await P(`/ciclos/${R}/apuracao`, signToken({ userId: semGestao.id, role: semGestao.role.name }))).status === 403 && (await D(R, pA, signToken({ userId: semGestao.id, role: semGestao.role.name }))).status === 403);
-    confere("consultor fora do time = 404 pro gestor (detalhe, lançar e apurar)", (await D(R, pA, tGestor)).status === 404 && (await PUT(`/apuracoes/${R}/${pA}`, tGestor, { competenciasPct: 80 })).status === 404 && (await POST(`/apuracoes/${R}/${pA}/apurar`, tGestor)).status === 404);
+    // Desde 20/10/2026 o gestor da Consultoria ERP/HCM administra o Plano como o admin: vê qualquer participante da área, com R$.
+    const dGA = await D(R, pA, tGestor);
+    confere("gestor da Consultoria vê o detalhe de quem não é do time dele, com valores (admin do Plano)", dGA.status === 200 && dGA.corpo.mostraValores === true);
     confere("apuração inexistente = 404", (await D(R, 999999999)).status === 404 && (await D(999999999, pA)).status === 404);
 
     // ================== antes de apurar ==================
     const det0 = await D(R, pA);
     confere("detalhe inicial: rascunho, sete pendências e bloqueado pelo índice global", det0.status === 200 && det0.corpo.apuracao.status === "rascunho" && det0.corpo.apuracao.pendentes.length === 7 && det0.corpo.bloqueios.some((b: string) => b.includes("índice global")) && det0.corpo.podeApurar === false, JSON.stringify(det0.corpo.bloqueios));
-    confere("a lista do ciclo traz os participantes (admin vê tudo)", (await P(`/ciclos/${R}/apuracao`, tAdmin)).corpo.participantes.length === 3);
+    // Confere os 3 criados aqui (o banco local pode ter adesões reais de quem está testando a tela; não são do script).
+    const doCiclo: number[] = (await P(`/ciclos/${R}/apuracao`, tAdmin)).corpo.participantes.map((x: any) => x.participanteId);
+    confere("a lista do ciclo traz os participantes (admin vê tudo)", [pA, pB, pC].every((id) => doCiclo.includes(id)));
     const lg = await P(`/ciclos/${R}/apuracao`, tGestor);
-    confere("a lista do gestor só traz o time dele e sem valor hora", lg.status === 200 && lg.corpo.participantes.length === 1 && lg.corpo.participantes[0].codfor === cC && !temChaveDeValor(lg.corpo), JSON.stringify(lg.corpo.participantes?.map((x: any) => x.codfor)));
+    confere("a lista do gestor da Consultoria traz todos, com valor hora (igual ao admin)", lg.status === 200 && lg.corpo.mostraValores === true && [pA, pB, pC].every((id) => lg.corpo.participantes.some((x: any) => x.participanteId === id)), JSON.stringify(lg.corpo.participantes?.map((x: any) => x.codfor)));
 
-    // índice global: só o admin fecha, uma vez
-    confere("gestor NÃO fecha o índice global", (await POST(`/ciclos/${R}/global`, tGestor)).status === 403);
-    const g1 = await POST(`/ciclos/${R}/global`, tAdmin);
+    // índice global: fecha uma vez (aqui quem fecha é o gestor da Consultoria, que administra o Plano como o admin)
+    const g1 = await POST(`/ciclos/${R}/global`, tGestor);
     const direto = indicesDoCiclo(await carregarItensDoCiclo({ inicio: "2026-07-01", fim: "2027-01-01", departamentosArea: [8, 9] })).global;
     confere("fecha o índice global do ciclo (201) igual ao motor sobre os mesmos itens", g1.status === 201 && g1.corpo.executadoMin === direto.executado && g1.corpo.dentroMin === direto.dentro && g1.corpo.atingiu === true, JSON.stringify(g1.corpo));
     confere("fechar de novo sem 'refazer' = 409", (await POST(`/ciclos/${R}/global`, tAdmin)).status === 409);
@@ -202,10 +210,11 @@ async function main() {
     confere("lançar depois de apurar = 409; apurar de novo = 409", (await PUT(`/apuracoes/${R}/${pA}`, tAdmin, { competenciasPct: 50 })).status === 409 && (await POST(`/apuracoes/${R}/${pA}/apurar`, tAdmin)).status === 409);
     const idA = apA.corpo.apuracao.id as number;
 
-    // memória: admin com R$, gestor fora do time não vê, consultor só depois da devolutiva
+    // memória: admin e gestor da Consultoria com R$, consultor só depois da devolutiva
     const m1 = await P(`/apuracoes/${idA}/memoria`, tAdmin);
     confere("memória do admin traz o R$", m1.status === 200 && m1.corpo.mostraValores === true && JSON.stringify(m1.corpo).includes("R$"), `${m1.status} ${JSON.stringify(m1.corpo).slice(0, 400)}`);
-    confere("gestor fora do time = 404 na memória e no PDF", (await P(`/apuracoes/${idA}/memoria`, tGestor)).status === 404 && (await POST(`/apuracoes/${idA}/memoria/pdf`, tGestor)).status === 404);
+    const mG = await P(`/apuracoes/${idA}/memoria`, tGestor);
+    confere("gestor da Consultoria lê a memória de qualquer participante, com R$", mG.status === 200 && mG.corpo.mostraValores === true && JSON.stringify(mG.corpo).includes("R$"));
     if (tOwnerA) confere("o consultor NÃO vê o resultado antes da devolutiva (404)", (await P(`/apuracoes/${idA}/memoria`, tOwnerA)).status === 404 && (await P("/meu", tOwnerA)).corpo.historico.length === 0);
 
     // ================== devolutiva, contestação, desfecho e encerramento (A) ==================
@@ -244,8 +253,8 @@ async function main() {
     await POST(`/apuracoes/${R}/${pB}/devolutiva`, tAdmin, { devolutivaEm: hoje });
     await POST(`/apuracoes/${R}/${pB}/contestacao`, tAdmin, { recebidaEm: hoje, texto: "O case foi entregue no prazo" });
     const idB = apB.corpo.apuracao.id as number;
-    confere("só o ADMIN reabre (desfecho procedente do gestor = 404 por estar fora do time; do admin passa)", (await POST(`/apuracoes/${R}/${pB}/desfecho`, tGestor, { resultado: "procedente", texto: "x" })).status === 404);
-    const proc = await POST(`/apuracoes/${R}/${pB}/desfecho`, tAdmin, { resultado: "procedente", texto: "O case estava entregue: reabrir e corrigir o lançamento" });
+    // Quem reabre aqui é o gestor da Consultoria (administra o Plano como o admin).
+    const proc = await POST(`/apuracoes/${R}/${pB}/desfecho`, tGestor, { resultado: "procedente", texto: "O case estava entregue: reabrir e corrigir o lançamento" });
     confere("contestação procedente reabre: volta a rascunho, resultado limpo e a versão anterior fica guardada", proc.status === 200 && proc.corpo.apuracao.status === "rascunho" && proc.corpo.apuracao.resultado === null && proc.corpo.apuracao.revisoes === 1 && proc.corpo.apuracao.contestacao === null && proc.corpo.memoria === null, JSON.stringify(proc.corpo.apuracao));
     confere("os lançamentos continuam lá pra corrigir", proc.corpo.apuracao.lancamentos.caseCumpriu === true && proc.corpo.apuracao.pendentes.length === 0);
     confere("reaberta: a memória some (404) até apurar de novo", (await P(`/apuracoes/${idB}/memoria`, tAdmin)).status === 404);
@@ -267,12 +276,11 @@ async function main() {
     }
     const apC = await POST(`/apuracoes/${R}/${pC}/apurar`, tGestor);
     confere("gestor apura C (base R$ 100, sem histórico): 5% (os manuais lançados já dão nota, não precisa de decisão)", apC.status === 200 && apC.corpo.apuracao.resultado.percentualBp === 500 && JSON.stringify(apC.corpo.memoria).includes("dos pesos com base"), JSON.stringify(apC.corpo.apuracao?.resultado));
-    confere("o gestor NÃO recebe valor hora em nenhum lugar da resposta (detalhe nem memória)", !temChaveDeValor(apC.corpo) && !JSON.stringify(apC.corpo.memoria).includes("R$") && apC.corpo.mostraValores === false);
+    confere("o gestor da Consultoria recebe o valor hora (detalhe e memória), como o admin", apC.corpo.mostraValores === true && JSON.stringify(apC.corpo.memoria).includes("R$"));
     const idC = apC.corpo.apuracao.id as number;
-    confere("gestor lê a memória do time (sem R$) e o PDF não dá 404 de acesso", (await P(`/apuracoes/${idC}/memoria`, tGestor)).corpo.mostraValores === false);
+    confere("gestor da Consultoria lê a memória com R$", (await P(`/apuracoes/${idC}/memoria`, tGestor)).corpo.mostraValores === true);
     await POST(`/apuracoes/${R}/${pC}/devolutiva`, tGestor, { devolutivaEm: hoje });
     await POST(`/apuracoes/${R}/${pC}/contestacao`, tGestor, { recebidaEm: hoje, texto: "Contesto" });
-    confere("gestor NÃO reabre apuração (procedente = 403)", (await POST(`/apuracoes/${R}/${pC}/desfecho`, tGestor, { resultado: "procedente", texto: "reabrir" })).status === 403);
     confere("gestor registra o desfecho 'mantida'", (await POST(`/apuracoes/${R}/${pC}/desfecho`, tGestor, { resultado: "mantida", texto: "Mantida" })).status === 200);
 
     // ================== sequência entre ciclos (R2) ==================
@@ -303,7 +311,7 @@ async function main() {
     const csv = await chamar(`/plano-evolucao/ciclos/${R}/export`, tAdmin);
     confere("CSV do ciclo: ponto e vírgula, vírgula decimal e só apurações ENCERRADAS", csv.status === 200 && typeof csv.corpo === "string" && csv.corpo.startsWith("Ciclo;Ensaio;Consultor") && csv.corpo.includes("107,00") && csv.corpo.includes("219,00") && csv.corpo.split("\r\n").length === 4, typeof csv.corpo === "string" ? JSON.stringify(csv.corpo) : "");
     confere("o CSV marca quem efetiva", csv.corpo.split("\r\n").filter((l: string) => l.includes(";SIM;219,00;")).length === 1);
-    confere("CSV: gestor = 403 e ciclo inexistente = 404", (await chamar(`/plano-evolucao/ciclos/${R}/export`, tGestor)).status === 403 && (await chamar("/plano-evolucao/ciclos/999999999/export", tAdmin)).status === 404);
+    confere("CSV: gestor da Consultoria baixa (200) e ciclo inexistente = 404", (await chamar(`/plano-evolucao/ciclos/${R}/export`, tGestor)).status === 200 && (await chamar("/plano-evolucao/ciclos/999999999/export", tAdmin)).status === 404);
     confere("CSV de R2 não tem nada (nada encerrado): só o cabeçalho", (await chamar(`/plano-evolucao/ciclos/${R2}/export`, tAdmin)).corpo.split("\r\n").length === 1);
 
     // ================== ensaio: simulação, sem efeitos ==================

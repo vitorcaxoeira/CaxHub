@@ -5,7 +5,7 @@ import { criarEventoAuditoria, diffCampos } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EventoAuditoriaTipo } from "../audit/taxonomia";
 import { entidadeIdPlanoApuracao, entidadeIdPlanoCiclo, entidadeIdPlanoParticipante } from "../audit/identidadeEntidade";
 import { AcessoEficiencia, ehGestor, resolverAcesso } from "../domain/eficienciaAcesso";
-import { depexeLabel } from "../domain/propostasDominio";
+import { DEPEXES_PLANO_EVOLUCAO, depexeLabel } from "../domain/propostasDominio";
 import { INDICADORES } from "../domain/planoEvolucao/eficienciaIndividual";
 import { ParametrosDaPrevia } from "../domain/planoEvolucao/previa";
 import { pendenciasDePublicacao } from "../domain/planoEvolucao/validacao";
@@ -23,9 +23,20 @@ export function handleError(res: Response, error: unknown, label: string) {
 export const acessoDe = (res: Response) => res.locals.acesso as AcessoEficiencia;
 
 // Resolve o acesso uma vez por requisição (as guardas abaixo e os handlers leem de res.locals).
+// No Plano, quem gerencia a Consultoria ERP ou HCM (DEPEXES_PLANO_EVOLUCAO) é ADMINISTRADOR DO PLANO, com os mesmos poderes do admin
+// (pedido do Vitor, 20/10/2026): ciclos, participantes e apuração de qualquer consultor da área, valores em R$, índice global, contestação
+// procedente e CSV. Decidido AQUI, num ponto só: toda guarda e todo recorte do Plano que olham `acesso.admin` passam a valer para eles.
+// Gestor de outro departamento não entra (exigirAdminOuGestor). O consultor (/meu, a própria memória) não depende disto: usa
+// contexto.consultor. Fora do Plano (ex.: auditoria) o `admin` continua sendo só o papel admin.
 export async function carregarAcesso(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
   try {
-    res.locals.acesso = await resolverAcesso(req.user!.userId, req.user!.role);
+    const acesso = await resolverAcesso(req.user!.userId, req.user!.role);
+    acesso.contexto = {
+      ...acesso.contexto,
+      departamentosGerenciados: acesso.contexto.departamentosGerenciados.filter((d) => DEPEXES_PLANO_EVOLUCAO.includes(d)),
+    };
+    if (acesso.contexto.departamentosGerenciados.length > 0) acesso.admin = true;
+    res.locals.acesso = acesso;
     next();
   } catch (error) {
     handleError(res, error, "acesso");
@@ -34,7 +45,7 @@ export async function carregarAcesso(req: AuthenticatedRequest, res: Response, n
 
 export function exigirAdmin(_req: AuthenticatedRequest, res: Response, next: NextFunction): void {
   if (!acessoDe(res).admin) {
-    res.status(403).json({ error: "Somente o administrador pode fazer isto" });
+    res.status(403).json({ error: "Somente o administrador e os gestores da Consultoria ERP e HCM podem fazer isto" });
     return;
   }
   next();
@@ -43,7 +54,7 @@ export function exigirAdmin(_req: AuthenticatedRequest, res: Response, next: Nex
 export function exigirAdminOuGestor(_req: AuthenticatedRequest, res: Response, next: NextFunction): void {
   const a = acessoDe(res);
   if (!a.admin && !ehGestor(a)) {
-    res.status(403).json({ error: "Sem permissão para acessar este recurso" });
+    res.status(403).json({ error: "Só o administrador e os gestores da Consultoria ERP e da Consultoria HCM acessam o Plano de Evolução PJ" });
     return;
   }
   next();

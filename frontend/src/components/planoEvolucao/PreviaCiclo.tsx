@@ -132,7 +132,7 @@ export function PreviaCiclo({ previa }: { previa: PreviaResposta }) {
         )}
         <p className="mt-3 text-[12px] text-muted">
           Horas de cada consultor nos itens da área ({ciclo.departamentosAreaRotulos.join(" e ")}) no ciclo; abaixo de {ciclo.amostraMinimaHoras} h o indicador fica "sem base" e não reprova ninguém.
-          {!mostraValores && " Valores em R$ aparecem só para o administrador."}
+          {!mostraValores && " Valores em R$ aparecem só para o administrador e os gestores da Consultoria ERP e HCM."}
         </p>
       </Cartao>
     </div>

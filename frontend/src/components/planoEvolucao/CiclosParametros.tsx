@@ -46,7 +46,7 @@ const doCiclo = (c: CicloDto): Form => ({
 
 const toneDoStatus = { rascunho: "warn", publicado: "ok", encerrado: "off" } as const;
 
-// Ciclos e parâmetros do item 12 do regulamento. Só o administrador edita; o gestor lê. Ciclo publicado fica TRAVADO (o regulamento proíbe
+// Ciclos e parâmetros do item 12 do regulamento. Edita quem administra o Plano (admin e gestores da Consultoria ERP e HCM). Ciclo publicado fica TRAVADO (o regulamento proíbe
 // mudar parâmetro com o ciclo em andamento), então a tela mostra só leitura e o servidor também recusa a edição.
 export function CiclosParametros({ dados, podeEditar, selecionadoId, onSelecionar, onMudou }: { dados: CiclosResposta; podeEditar: boolean; selecionadoId: number | null; onSelecionar: (id: number) => void; onMudou: () => void }) {
   const { mostrar } = useToast();
@@ -207,7 +207,7 @@ export function CiclosParametros({ dados, podeEditar, selecionadoId, onSeleciona
                 <b className="text-foreground">Parâmetros travados.</b> O regulamento não permite mudar meta, indicadores ou área com o ciclo em andamento. Mudanças valem a partir do ciclo seguinte.
               </p>
             )}
-            {ciclo.editavel && !podeEditar && <p className="mb-4 text-[13px] text-muted">Só o administrador edita os parâmetros do ciclo.</p>}
+            {ciclo.editavel && !podeEditar && <p className="mb-4 text-[13px] text-muted">Só o administrador e os gestores da Consultoria ERP e HCM editam os parâmetros do ciclo.</p>}
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
