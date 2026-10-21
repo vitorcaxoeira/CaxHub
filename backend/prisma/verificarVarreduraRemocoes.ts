@@ -282,6 +282,8 @@ async function main() {
     await cenarioPoliticaDesligada();
   } finally {
     await limparDadosDeTeste();
+    // Desde 21/10/2026 toda varredura grava o resultado em varredura_resultados (inclusive a deste job de teste).
+    await prisma.varreduraResultado.deleteMany({ where: { jobName: JOB } });
     await prisma.$disconnect();
   }
 

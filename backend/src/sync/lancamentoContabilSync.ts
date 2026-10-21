@@ -13,7 +13,7 @@ export const JOB_NAME = "lancamentos_contabeis-sync";
 // sincronizar "alterados" do que filtrar por um campo que pode deixar linha de fora.
 export const CRON_EXPR = "0 5 * * *";
 export const CAMPO_DATA: string | null = null;
-export const QUERY =`SELECT codemp AS codemp, numlct AS numlct, sitlct AS sitlct, orilct AS orilct, cpllct AS cpllct, numlot AS numlot, codhpd AS codhpd FROM e640lct`;
+export const QUERY =`SELECT codemp AS codemp, numlct AS numlct, sitlct AS sitlct, orilct AS orilct, cpllct AS cpllct, numlot AS numlot, codhpd AS codhpd, DatLct AS datlct FROM e640lct`;
 
 interface LancamentoContabilRow {
   codemp: number;
@@ -26,6 +26,9 @@ interface LancamentoContabilRow {
   // montar o texto legível de `cpllct` (ver domain/historicoPadrao.ts). Adicionado em
   // 01/09/2026; linha pré-existente fica com codhpd null até o próximo sync rodar.
   codhpd?: number;
+  // Data do lançamento (E640LCT.DatLct), espelhada desde 21/10/2026: com ela o filtro da sync ("DatLct >= ...") vira recorte
+  // local e a varredura de removidos deixa de ser pulada (antes: "filtro ativo em campo não espelhado").
+  datlct?: string;
 }
 
 // Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
@@ -38,6 +41,7 @@ const COLUNAS: ColunaUpsert[] = [
   { nome: "cpllct", cast: "text" },
   { nome: "numlot", cast: "int" },
   { nome: "codhpd", cast: "int" },
+  { nome: "datlct", cast: "date" },
 ];
 
 // `!= null` (não `!== undefined`) pra tratar ausência de chave e null da mesma forma — os
@@ -53,6 +57,7 @@ function linhaDe(row: LancamentoContabilRow): LinhaUpsert {
       row.cpllct != null ? row.cpllct : null,
       row.numlot != null ? String(row.numlot) : null,
       row.codhpd != null ? String(row.codhpd) : null,
+      row.datlct != null ? String(row.datlct).slice(0, 10) : null,
     ],
   };
 }

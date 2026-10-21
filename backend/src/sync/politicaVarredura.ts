@@ -20,6 +20,8 @@ import { prisma } from "../db/prisma";
 export type ModoVarredura = "desligada" | "simular" | "marcar";
 
 let modosAtivos = new Map<string, ModoVarredura>();
+// Teto configurado por tabela (fração, ex.: 0.1 = 10%), mesmo snapshot dos modos. Sem entrada = padrão de varrerRemovidos.ts.
+let tetosAtivos = new Map<string, number>();
 
 export function modoVarredura(jobName: string): ModoVarredura {
   // Válvula de emergência: desliga a varredura de TODOS os jobs sem precisar de deploy, só
@@ -43,9 +45,34 @@ export function modoConfiguradoDoJob(jobName: string): ModoVarredura {
  * novo nunca começa a marcar registro sozinho). */
 export async function carregarModosVarreduraAtivos(): Promise<void> {
   const linhas = await prisma.configuracaoVarredura.findMany();
+  tetosAtivos = new Map(linhas.filter((l) => l.tetoPct != null).map((l) => [l.jobName, Number(l.tetoPct) / 100]));
   modosAtivos = new Map(
     linhas
       .filter((l): l is typeof l & { modo: ModoVarredura } => l.modo === "desligada" || l.modo === "simular" || l.modo === "marcar")
       .map((l) => [l.jobName, l.modo])
   );
+}
+
+/** Teto configurado na tela para este job, como FRAÇÃO (0.1 = 10%); `null` = usar o padrão de varrerRemovidos.ts. */
+export function tetoPctDoJob(jobName: string): number | null {
+  return tetosAtivos.get(jobName) ?? null;
+}
+
+// LIBERAÇÃO ÚNICA DO TETO (21/10/2026, pedido do Vitor): quando a varredura parou no teto, o admin confere os candidatos na tela de
+// importação e libera UMA execução sem o teto (POST /:jobName/varredura/liberar-teto). A liberação é consumida pela primeira varredura
+// do job que chegar à checagem do teto (a guarda de contagem na origem continua valendo) e expira em 30 min se nada rodar, para nunca
+// sobrar e valer sozinha numa sync agendada horas depois.
+const VALIDADE_LIBERACAO_MS = 30 * 60 * 1000;
+const liberacoesTeto = new Map<string, { userId: number; expira: number }>();
+
+export function liberarTetoUmaVez(jobName: string, userId: number): void {
+  liberacoesTeto.set(jobName, { userId, expira: Date.now() + VALIDADE_LIBERACAO_MS });
+}
+
+/** Devolve quem liberou (e apaga a liberação), ou `null` se não há liberação válida para este job. */
+export function consumirLiberacaoTeto(jobName: string): number | null {
+  const l = liberacoesTeto.get(jobName);
+  if (!l) return null;
+  liberacoesTeto.delete(jobName);
+  return l.expira >= Date.now() ? l.userId : null;
 }

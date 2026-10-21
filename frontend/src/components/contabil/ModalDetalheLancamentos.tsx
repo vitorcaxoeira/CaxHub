@@ -81,7 +81,7 @@ export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu
   const mostrarColunaConta = ctareds.length > 1;
 
   return (
-    <Modal open onClose={onClose} title={rotulo} subtitulo={formatarMes(mesReferencia)} className="max-w-5xl">
+    <Modal open onClose={onClose} title={rotulo} subtitulo={formatarMes(mesReferencia)} className="w-[calc(100%-2rem)] max-w-7xl">
       {loading && !dados ? (
         <div className="flex justify-center py-10">
           <Spinner className="h-6 w-6" />
@@ -120,15 +120,22 @@ export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu
                   <tr key={`${l.numlct}-${l.ctared}`} className="border-t border-border/60">
                     <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">{l.numlct}</td>
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{dataFormatter.format(new Date(l.datlct))}</td>
-                    {mostrarColunaConta && <td className="px-3 py-2 text-xs text-muted">{l.contaRotulo}</td>}
-                    <td className="max-w-[440px] truncate px-3 py-2 text-xs text-foreground" title={l.cpllct ?? undefined}>
+                    {/* Uma linha por lançamento: texto que não cabe termina em "…" e aparece inteiro ao passar o mouse (title). */}
+                    {mostrarColunaConta && (
+                      <td className="max-w-[220px] truncate whitespace-nowrap px-3 py-2 text-xs text-muted" title={l.contaRotulo}>
+                        {l.contaRotulo}
+                      </td>
+                    )}
+                    <td className="max-w-[520px] truncate whitespace-nowrap px-3 py-2 text-xs text-foreground" title={l.historico ?? l.cpllct ?? undefined}>
                       {l.historico ?? "—"}
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted">{l.orilctLabel}</td>
-                    <td className="max-w-[200px] truncate px-3 py-2 text-xs text-muted" title={l.codccuRotulo}>
+                    <td className="max-w-[180px] truncate whitespace-nowrap px-3 py-2 text-xs text-muted" title={l.orilctLabel}>
+                      {l.orilctLabel}
+                    </td>
+                    <td className="max-w-[200px] truncate whitespace-nowrap px-3 py-2 text-xs text-muted" title={l.codccuRotulo}>
                       {l.codccuRotulo}
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted">{l.debcreLabel}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">{l.debcreLabel}</td>
                     <td
                       className={`whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums ${
                         l.valor < 0 ? "text-destructive" : "text-foreground"

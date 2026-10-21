@@ -1,6 +1,7 @@
 import { runSqlViaSoap } from "../soap/client";
 import type { SistemaSenior } from "../config/sistemaSenior";
-import { modoVarredura, ModoVarredura } from "./politicaVarredura";
+import { consumirLiberacaoTeto, modoVarredura, ModoVarredura, tetoPctDoJob } from "./politicaVarredura";
+import { prisma } from "../db/prisma";
 import { filtroDoJob } from "./filtrosAtivos";
 import { montarQuerySenior } from "./consultaSenior";
 
@@ -41,7 +42,19 @@ export interface ResultadoVarredura {
   linhasOrigem: number | null;
   /** Frase pronta pro campo `message` do SyncLog e pro painel de administração. */
   resumo: string;
+  /**
+   * Por que a varredura NÃO marcou, quando foi barrada por uma guarda (21/10/2026): "teto" (candidatos acima do limite),
+   * "contagem" (origem x processado não bate), "puladas", "falha" (erro ao contar na origem). "filtro" só aparece no registro
+   * de `varredura_resultados`, gravado por executarVarreduraDoJob (lá o job nem chega aqui). Ausente = não houve bloqueio.
+   */
+  bloqueio?: BloqueioVarredura;
+  /** Teto em linhas calculado nesta execução (quando chegou a calcular). */
+  limite?: number;
+  /** Usuário que liberou o teto para esta execução (liberação única pela tela de importação). */
+  liberadoPor?: number;
 }
+
+export type BloqueioVarredura = "teto" | "filtro" | "contagem" | "puladas" | "falha";
 
 // Só o que a varredura precisa de um delegate do Prisma (prisma.pedido, prisma.rat, ...).
 // Declarado com sintaxe de MÉTODO (`count(args): ...`) e não de propriedade-função
@@ -120,6 +133,10 @@ export interface OpcoesVarredura<TWhere> {
 // piso absoluto (ex.: "tolere até 50") deixaria passar justamente o truncamento pequeno.
 const FOLGA_PADRAO = { deficit: 0.001, excesso: 0.05 };
 const TETO_PADRAO = { pct: 0.02, minimo: 50 };
+/** Teto padrão em % (para a tela mostrar o que vale quando a tabela não tem teto configurado). */
+export const TETO_PCT_PADRAO = TETO_PADRAO.pct * 100;
+// O percentual pode ser configurado por tabela na tela de importação (ConfiguracaoVarredura.tetoPct, 21/10/2026); o mínimo de 50
+// linhas é fixo, para tabela pequena não travar por meia dúzia de exclusões.
 
 /** Bloco que todo upsert de sync espalha no `data`, em create e update. */
 export function carimbo(inicio: Date) {
@@ -128,7 +145,44 @@ export function carimbo(inicio: Date) {
   return { vistoEmSync: inicio, removidoEmSenior: null as Date | null };
 }
 
+// Grava o resultado da ÚLTIMA varredura do job em `varredura_resultados` (21/10/2026). Fica num ponto só para nenhum dos ~45 jobs
+// precisar mudar. Nunca derruba a sync: falha ao gravar só vai para o console.
+export async function registrarResultadoVarredura(
+  jobName: string,
+  r: Pick<ResultadoVarredura, "modo" | "candidatos" | "marcados" | "totalEscopo" | "linhasOrigem" | "bloqueio" | "limite" | "liberadoPor"> & { motivo?: string | null }
+): Promise<void> {
+  const dados = {
+    em: new Date(),
+    modo: r.modo,
+    bloqueio: r.bloqueio ?? null,
+    motivo: r.motivo ?? null,
+    candidatos: r.candidatos,
+    limite: r.limite ?? null,
+    totalEscopo: r.totalEscopo,
+    linhasOrigem: r.linhasOrigem,
+    marcados: r.marcados,
+    liberadoPor: r.liberadoPor ?? null,
+  };
+  try {
+    await prisma.varreduraResultado.upsert({ where: { jobName }, create: { jobName, ...dados }, update: dados });
+  } catch (error) {
+    console.error(`[varredura:${jobName}] não gravou o resultado:`, error instanceof Error ? error.message : error);
+  }
+}
+
 export async function varrerRemovidos<TWhere extends object>(
+  delegate: DelegateEspelho<TWhere>,
+  opcoes: OpcoesVarredura<TWhere>
+): Promise<ResultadoVarredura> {
+  const r = await varrerRemovidosInterno(delegate, opcoes);
+  // "desligada" não é bloqueio, é política: nem registra (a tela já mostra o modo).
+  if (!(r.executada === false && r.motivo === "desligada por política")) {
+    await registrarResultadoVarredura(opcoes.jobName, { ...r, motivo: r.bloqueio ? r.motivo : null });
+  }
+  return r;
+}
+
+async function varrerRemovidosInterno<TWhere extends object>(
   delegate: DelegateEspelho<TWhere>,
   opcoes: OpcoesVarredura<TWhere>
 ): Promise<ResultadoVarredura> {
@@ -152,7 +206,7 @@ export async function varrerRemovidos<TWhere extends object>(
   // motivo ser técnico (ordem de execução dos jobs), não uma exclusão real. Melhor não
   // varrer este run inteiro do que marcar registro que existe no Senior.
   if (opcoes.puladas && opcoes.puladas > 0) {
-    return naoExecutou(`${opcoes.puladas} linha(s) pulada(s) por motivo técnico neste run`);
+    return naoExecutou(`${opcoes.puladas} linha(s) pulada(s) por motivo técnico neste run`, { bloqueio: "puladas" });
   }
 
   // GUARDA 1 (principal): a origem confirma quantas linhas deveriam ter vindo?
@@ -170,9 +224,9 @@ export async function varrerRemovidos<TWhere extends object>(
         : Number(((await runSqlViaSoap(opcoes.queryContagemOrigem as string, { sistema: opcoes.sistema })) as { total: number }[])?.[0]?.total);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return naoExecutou(`falha ao contar na origem: ${message}`);
+      return naoExecutou(`falha ao contar na origem: ${message}`, { bloqueio: "falha" });
     }
-    if (!Number.isFinite(linhasOrigem)) return naoExecutou("contagem de origem inválida");
+    if (!Number.isFinite(linhasOrigem)) return naoExecutou("contagem de origem inválida", { bloqueio: "contagem" });
 
     const folga = opcoes.folgaContagem ?? FOLGA_PADRAO;
     const total = linhasOrigem as number;
@@ -184,7 +238,7 @@ export async function varrerRemovidos<TWhere extends object>(
       return naoExecutou(
         `origem tem ${total} linha(s) e só ${opcoes.linhasProcessadas} foram processadas — ` +
           `resposta do SOAP provavelmente truncada, nada foi marcado`,
-        { linhasOrigem }
+        { linhasOrigem, bloqueio: "contagem" }
       );
     }
     // Sobrou linha muito além do esperado: não é perigoso pra varredura, mas indica que a
@@ -194,11 +248,11 @@ export async function varrerRemovidos<TWhere extends object>(
       return naoExecutou(
         `foram processadas ${opcoes.linhasProcessadas} linha(s) mas a origem só tem ${total} — ` +
           `a consulta de contagem provavelmente não bate com a do sync`,
-        { linhasOrigem }
+        { linhasOrigem, bloqueio: "contagem" }
       );
     }
   } else if (modo === "marcar") {
-    return naoExecutou("sem contagem na origem — só é possível simular");
+    return naoExecutou("sem contagem na origem — só é possível simular", { bloqueio: "contagem" });
   }
 
   const totalEscopo = await delegate.count({ where: escopoCom({ removidoEmSenior: null }) });
@@ -213,13 +267,15 @@ export async function varrerRemovidos<TWhere extends object>(
   // GUARDA 2 (secundária): teto do que se pode esconder de uma vez. Exclusão em massa
   // real existe, mas tem que passar por conferência humana — nunca acontecer sozinha às
   // 4 da manhã.
-  const teto = opcoes.teto ?? TETO_PADRAO;
+  const teto = opcoes.teto ?? { pct: tetoPctDoJob(opcoes.jobName) ?? TETO_PADRAO.pct, minimo: TETO_PADRAO.minimo };
   const limite = Math.max(teto.minimo, Math.floor(totalEscopo * teto.pct));
-  if (candidatos > limite) {
+  // Liberação única feita pelo admin depois de conferir os candidatos na tela: consumida aqui, vale só para esta execução.
+  const liberadoPor = consumirLiberacaoTeto(opcoes.jobName);
+  if (candidatos > limite && liberadoPor == null) {
     return naoExecutou(
       `${candidatos} candidato(s) acima do teto de ${limite} (${totalEscopo} vivos no escopo) — ` +
         `nada marcado, conferir manualmente`,
-      { candidatos, totalEscopo, linhasOrigem }
+      { candidatos, totalEscopo, linhasOrigem, bloqueio: "teto", limite }
     );
   }
 
@@ -233,6 +289,7 @@ export async function varrerRemovidos<TWhere extends object>(
       totalEscopo,
       linhasOrigem,
       resumo: `varredura SIMULADA: ${candidatos} sumiu(sumiram) do Senior (de ${totalEscopo}), nada marcado`,
+      limite,
     };
   }
 
@@ -248,7 +305,12 @@ export async function varrerRemovidos<TWhere extends object>(
     marcados: count,
     totalEscopo,
     linhasOrigem,
-    resumo: `varredura: ${count} marcado(s) como removido(s) no Senior (de ${totalEscopo})`,
+    limite,
+    liberadoPor: liberadoPor ?? undefined,
+    resumo:
+      liberadoPor != null && candidatos > limite
+        ? `varredura com o teto LIBERADO pelo admin (usuário ${liberadoPor}): ${count} marcado(s) como removido(s) no Senior (de ${totalEscopo}, teto era ${limite})`
+        : `varredura: ${count} marcado(s) como removido(s) no Senior (de ${totalEscopo})`,
   };
 }
 
@@ -295,7 +357,23 @@ export async function executarVarreduraDoJob<TWhere extends object>(
   // Filtro salvo toca campo NÃO espelhado localmente (escopoLocal === null) — sem isso a
   // varredura marcaria a base inteira como removida, porque não tem como escopar localmente
   // o que o filtro recortou lá na origem (mesmo motivo de pedidoSync.ts/runPedidoSync).
-  if (filtroTodos.predicadosSql.length > 0 && filtroTodos.escopoLocal === null) return null;
+  // Desde 21/10/2026 isso fica REGISTRADO como bloqueio "filtro" (a tela de importação mostra): era assim que o cabeçalho dos
+  // lançamentos contábeis passou mais de um mês sem varredura nenhuma, sem ninguém ver.
+  if (filtroTodos.predicadosSql.length > 0 && filtroTodos.escopoLocal === null) {
+    const modo = modoVarredura(opcoes.jobName);
+    if (modo !== "desligada") {
+      await registrarResultadoVarredura(opcoes.jobName, {
+        modo,
+        candidatos: 0,
+        marcados: 0,
+        totalEscopo: 0,
+        linhasOrigem: null,
+        bloqueio: "filtro",
+        motivo: `sem varredura: ${filtroTodos.motivoNaoEscopavel ?? "filtro ativo não pode ser recortado localmente"}`,
+      });
+    }
+    return null;
+  }
 
   return varrerRemovidos(delegate, {
     jobName: opcoes.jobName,

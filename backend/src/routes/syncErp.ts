@@ -15,9 +15,10 @@ import { AuthenticatedRequest } from "../auth/middleware";
 import { dimensoesDoSistema, dimensaoPorChave, jobsComDimensao, jobsSemDimensao } from "../sync/dimensoesFiltro";
 import { diagnosticarRecorte, marcarOrfaosDoRecorte, suportaMarcarRemovido } from "../sync/recorteRetroativo";
 import { listarDadosDoJob, PAGE_SIZE_MAXIMO } from "../sync/dadosSincronizados";
-import { modoConfiguradoDoJob, carregarModosVarreduraAtivos, ModoVarredura } from "../sync/politicaVarredura";
+import { modoConfiguradoDoJob, carregarModosVarreduraAtivos, ModoVarredura, liberarTetoUmaVez, tetoPctDoJob } from "../sync/politicaVarredura";
 import { tamanhoLoteConfigurado, carregarTamanhosLoteAtivos } from "../sync/politicaLote";
 import { TAMANHO_LOTE_PADRAO, TETO_PARAMS_PROTOCOLO } from "../sync/upsertEmLote";
+import { TETO_PCT_PADRAO } from "../sync/varrerRemovidos";
 
 // Painel de administração dos jobs de sincronização Senior -> CaxHub: quando cada
 // tabela sincronizou pela última vez, quando roda de novo automaticamente, e uma ação
@@ -125,13 +126,16 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
       // da varredura assim que roda um incremental, e o buraco fica invisível.
       // As duas leituras (e as contagens) vivem em sync/painelSincronizacao.ts: esta rota é chamada a cada
       // 10s e não pode crescer com o histórico do SyncLog.
-      const [{ ultimo: ultimoPorJob, varredura: ultimaVarreduraPorJob }, contagens, filtrosSalvos] = await Promise.all([
+      const [{ ultimo: ultimoPorJob, varredura: ultimaVarreduraPorJob }, contagens, filtrosSalvos, resultadosVarredura] = await Promise.all([
         ultimosLogsPorJob(jobNames),
         // Só os jobs com detecção de exclusão ligada contam removidos; os demais ficam com null
         // e a tela não mostra nada na coluna.
         contagensPorJobComCache(sistema, SYNC_JOBS),
         prisma.filtroSincronizacao.findMany({ select: { jobName: true, modo: true, predicados: true } }),
+        // Resultado da última varredura de cada job (uma linha por job, ~45 linhas): o bloqueio, quando houve (21/10/2026).
+        prisma.varreduraResultado.findMany(),
       ]);
+      const resultadoPorJob = new Map(resultadosVarredura.map((r) => [r.jobName, r]));
       // Fase 3/4/6 do plano de filtros — só pra decidir os indicadores "●" na tela (um por
       // modo) sem precisar abrir a aba de cada tabela. O CONTEÚDO do filtro só é buscado
       // quando a aba Filtro(Todos)/Filtro(Alterados) é aberta de verdade (GET .../filtro/:modo)
@@ -208,6 +212,17 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
             // de verdade ao mudar de modo).
             varreduraModo: modoConfiguradoDoJob(job.jobName),
             varreduraDisponivel: suportaMarcarRemovido(job) && job.contarRemovidos != null,
+            // Por que a ÚLTIMA varredura não marcou (21/10/2026): teto, filtro em campo não espelhado, contagem... `null` = a última
+            // varredura não foi barrada. A tela mostra um selo na coluna Detecção e, no teto, oferece a liberação única.
+            bloqueioVarredura: (() => {
+              const r = resultadoPorJob.get(job.jobName);
+              return r?.bloqueio
+                ? { tipo: r.bloqueio, motivo: r.motivo, candidatos: r.candidatos, limite: r.limite, totalEscopo: r.totalEscopo, em: r.em }
+                : null;
+            })(),
+            // Teto da varredura: o configurado na tela (% ou null) e o que vale de fato.
+            tetoPctConfigurado: tetoPctDoJob(job.jobName) != null ? Math.round((tetoPctDoJob(job.jobName) as number) * 10000) / 100 : null,
+            tetoPctEfetivo: tetoPctDoJob(job.jobName) != null ? Math.round((tetoPctDoJob(job.jobName) as number) * 10000) / 100 : TETO_PCT_PADRAO,
             // Tamanho de lote CONFIGURADO na tela (11/09/2026, porte do CaxHub_Atlas) — `null`
             // quando não há configuração salva. `tamanhoLoteEfetivo` é o número que de fato vale
             // (o configurado, ou o default de upsertEmLote.ts) — a tela mostra os dois pra
@@ -312,30 +327,81 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
         return;
       }
 
-      const modoNovo = req.body?.modo;
+      // Corpo: `{ modo }` e/ou `{ tetoPct }` (21/10/2026: teto por tabela, em % do que está vivo; `null` volta ao padrão de 2%).
+      const temTeto = req.body != null && Object.prototype.hasOwnProperty.call(req.body, "tetoPct");
+      let tetoPct: number | null | undefined;
+      if (temTeto) {
+        const bruto = req.body.tetoPct;
+        tetoPct = bruto === null || bruto === "" ? null : Number(String(bruto).replace(",", "."));
+        if (tetoPct !== null && (!Number.isFinite(tetoPct) || tetoPct <= 0 || tetoPct > 100)) {
+          res.status(400).json({ error: "O teto é um percentual maior que 0 e até 100 (vazio volta ao padrão de 2%)." });
+          return;
+        }
+        if (tetoPct !== null) tetoPct = Math.round(tetoPct * 100) / 100;
+      }
+      const modoAtual = modoConfiguradoDoJob(job.jobName);
+      const modoNovo = req.body?.modo === undefined && temTeto ? modoAtual : req.body?.modo;
       if (!MODOS_VARREDURA_VALIDOS.includes(modoNovo)) {
         res.status(400).json({ error: `Modo "${modoNovo}" inválido — use "desligada", "simular" ou "marcar".` });
         return;
       }
 
-      const modoAtual = modoConfiguradoDoJob(job.jobName);
-      if (modoNovo === "marcar" && modoAtual !== "simular") {
+      if (modoNovo === "marcar" && modoAtual !== "simular" && modoAtual !== "marcar") {
         res.status(400).json({
           error: `"${job.displayName}" está em "${modoAtual}" — passe por "Simular" primeiro e confira os candidatos antes de ligar "Marcar".`,
         });
         return;
       }
 
+      const dadosTeto = temTeto ? { tetoPct } : {};
       await prisma.configuracaoVarredura.upsert({
         where: { jobName: job.jobName },
-        update: { modo: modoNovo, atualizadoPor: req.user?.userId ?? null },
-        create: { jobName: job.jobName, modo: modoNovo, atualizadoPor: req.user?.userId ?? null },
+        update: { modo: modoNovo, atualizadoPor: req.user?.userId ?? null, ...dadosTeto },
+        create: { jobName: job.jobName, modo: modoNovo, atualizadoPor: req.user?.userId ?? null, ...dadosTeto },
       });
       await carregarModosVarreduraAtivos();
 
-      res.json({ modo: modoNovo });
+      res.json({ modo: modoNovo, tetoPct: tetoPctDoJob(job.jobName) != null ? Math.round((tetoPctDoJob(job.jobName) as number) * 10000) / 100 : null });
     } catch (error) {
       handleError(res, error, "varredura:put");
+    }
+  });
+
+  // POST /:jobName/varredura/liberar-teto — LIBERAÇÃO ÚNICA do teto (21/10/2026, pedido do Vitor). Quando a última varredura parou
+  // no teto, o admin confere os candidatos na aba "Removidos" e libera: a próxima varredura desta tabela ignora o teto UMA vez (a guarda
+  // de contagem na origem continua valendo) e a sync completa é disparada já. Quem liberou fica em varredura_resultados.liberado_por e
+  // no resumo do SyncLog. Só admin (o router inteiro é admin).
+  syncErpRouter.post("/:jobName/varredura/liberar-teto", async (req: AuthenticatedRequest, res) => {
+    try {
+      const job = SYNC_JOBS.find((j) => j.jobName === req.params.jobName);
+      if (!job) {
+        res.status(404).json({ error: "Job não encontrado" });
+        return;
+      }
+      const ultimo = await prisma.varreduraResultado.findUnique({ where: { jobName: job.jobName } });
+      if (ultimo?.bloqueio !== "teto") {
+        res.status(409).json({ error: "A última varredura desta tabela não parou no teto: não há o que liberar." });
+        return;
+      }
+      if (modoConfiguradoDoJob(job.jobName) !== "marcar") {
+        res.status(409).json({ error: 'A detecção desta tabela não está em "Marcar": liberar o teto não marcaria nada.' });
+        return;
+      }
+      if (sincronizandoTodos || jobsEmAndamento.has(job.jobName)) {
+        res.status(409).json({ error: "Sincronização já em andamento" });
+        return;
+      }
+      liberarTetoUmaVez(job.jobName, req.user!.userId);
+      jobsEmAndamento.add(job.jobName);
+      job
+        .run(undefined)
+        .catch((error) => {
+          console.error(`[sync-${sistema}:${job.jobName}] falhou:`, error instanceof Error ? error.message : error);
+        })
+        .finally(() => jobsEmAndamento.delete(job.jobName));
+      res.status(202).json({ status: "iniciado", candidatos: ultimo.candidatos, limite: ultimo.limite });
+    } catch (error) {
+      handleError(res, error, "varredura:liberar-teto");
     }
   });
 

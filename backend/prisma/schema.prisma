@@ -1822,6 +1822,9 @@ model LancamentoContabil {
   // `orilct`: o mesmo orilct (ex. CPR) usa códigos de histórico diferentes conforme a rotina
   // exata que gerou o lançamento, cada um com seu próprio número de parâmetros.
   codhpd           Int?
+  // Data do lançamento (E640LCT.DatLct), desde 21/10/2026: espelhada para o filtro da sync ("DatLct >= ...") virar recorte local
+  // e a varredura de removidos poder rodar. Linha antiga, fora do filtro, fica NULL (e fora do escopo da varredura).
+  datlct           DateTime? @db.Date
   // Carimbo da execução de sync que viu esta linha na origem pela última vez. NULL =
   // nunca vista por uma sync. A varredura compara com `lt` estrito, e `NULL < x` é NULL
   // em SQL — linha nunca carimbada é imune por construção, o que protege registro que
@@ -1832,6 +1835,7 @@ model LancamentoContabil {
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   @@id([codemp, numlct])
+  @@index([datlct])
   @@map("lancamentos_contabeis")
 }
 
@@ -2099,10 +2103,32 @@ model FiltroSincronizacao {
 model ConfiguracaoVarredura {
   jobName       String   @id @map("job_name")
   modo          String   @default("desligada")
+  /// Teto da varredura (% do que está vivo no escopo) que esta tabela pode marcar de uma vez. NULL = padrão (2%); mínimo de 50 fixo.
+  tetoPct       Decimal? @map("teto_pct") @db.Decimal(5, 2)
   atualizadoEm  DateTime @updatedAt @map("atualizado_em")
   atualizadoPor Int?     @map("atualizado_por")
 
   @@map("configuracoes_varredura")
+}
+
+// Resultado da ÚLTIMA varredura de removidos de cada job (sync/varrerRemovidos.ts grava ao fim de toda varredura, num ponto só, sem
+// depender de cada job). `bloqueio` diz por que NÃO marcou: teto (candidatos acima do limite), filtro (filtro em campo não espelhado),
+// contagem (origem x processado não bate), puladas, falha. A tela de importação mostra o bloqueio e libera o teto uma vez.
+model VarreduraResultado {
+  jobName      String   @id @map("job_name")
+  em           DateTime @db.Timestamptz(6)
+  modo         String   @db.VarChar(10)
+  bloqueio     String?  @db.VarChar(12)
+  motivo       String?
+  candidatos   Int      @default(0)
+  limite       Int?
+  totalEscopo  Int      @default(0) @map("total_escopo")
+  linhasOrigem Int?     @map("linhas_origem")
+  marcados     Int      @default(0)
+  /// Usuário que liberou o teto para esta execução (liberação única pela tela). NULL = execução normal.
+  liberadoPor  Int?     @map("liberado_por")
+
+  @@map("varredura_resultados")
 }
 
 // Tamanho do lote de upsert (sync/upsertEmLote.ts), configurado pelo admin, por job — mesmo

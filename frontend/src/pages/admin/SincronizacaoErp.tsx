@@ -62,7 +62,30 @@ interface JobSync {
   usaUpsertEmLote: boolean;
   tamanhoLoteConfigurado: number | null;
   tamanhoLoteEfetivo: number;
+  // Por que a ÚLTIMA varredura não marcou (21/10/2026): teto, filtro em campo não espelhado, contagem... `null` = não foi barrada.
+  bloqueioVarredura: BloqueioVarredura | null;
+  // Teto da varredura em % do que está vivo: o configurado na aba "Removidos" (null = padrão) e o que vale de fato.
+  tetoPctConfigurado: number | null;
+  tetoPctEfetivo: number;
 }
+
+interface BloqueioVarredura {
+  tipo: "teto" | "filtro" | "contagem" | "puladas" | "falha";
+  motivo: string | null;
+  candidatos: number;
+  limite: number | null;
+  totalEscopo: number;
+  em: string;
+}
+
+// Selo da coluna Detecção quando a última varredura foi barrada; o motivo completo vai no title.
+const ROTULO_BLOQUEIO: Record<BloqueioVarredura["tipo"], (b: BloqueioVarredura) => string> = {
+  teto: (b) => `teto · ${b.candidatos.toLocaleString("pt-BR")}`,
+  filtro: () => "sem varredura: filtro",
+  contagem: () => "contagem não bate",
+  puladas: () => "linhas puladas",
+  falha: () => "falha na contagem",
+};
 
 interface ItemRemovido {
   chave: string;
@@ -238,12 +261,13 @@ const statusTone: Record<string, string> = {
 
 // Filtros dos cards de resumo do topo — cada card é um botão. "todas" = sem filtro. Combina
 // (E) com a busca por texto, e os NÚMEROS dos cards continuam contando tudo, filtrado ou não.
-type FiltroKpi = "todas" | "erro" | "rodando" | "sumidos" | "desatualizada";
+type FiltroKpi = "todas" | "erro" | "rodando" | "sumidos" | "bloqueada" | "desatualizada";
 
 const ROTULO_FILTRO_KPI: Record<Exclude<FiltroKpi, "todas">, string> = {
   erro: "Com erro",
   rodando: "Sincronizando agora",
   sumidos: "Sumidos no Senior",
+  bloqueada: "Varredura bloqueada",
   desatualizada: "Mais desatualizada",
 };
 
@@ -318,6 +342,10 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
   // Modo de varredura sendo salvo agora (10/09/2026, porte do CaxHub_Atlas) — um jobName de
   // cada vez, mesmo padrão de `salvandoFiltro` abaixo.
   const [salvandoVarredura, setSalvandoVarredura] = useState<string | null>(null);
+  // Teto da varredura por tabela (21/10/2026): rascunho do campo (por jobName) e liberação única do teto em dois passos.
+  const [rascunhoTetoPorJob, setRascunhoTetoPorJob] = useState<Record<string, string>>({});
+  const [confirmandoLiberacao, setConfirmandoLiberacao] = useState<string | null>(null);
+  const [liberando, setLiberando] = useState<string | null>(null);
   // Tamanho de lote sendo salvo agora (11/09/2026, porte do CaxHub_Atlas), mesmo espírito de
   // salvandoVarredura. Valor do input enquanto o admin edita (chaveado por jobName) — só vira
   // PUT de verdade ao clicar "Salvar" (número livre merece confirmação, diferente do <select>
@@ -678,6 +706,44 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
   // Muda o tamanho do lote de upsert DESSA tabela (11/09/2026, porte do CaxHub_Atlas: campo
   // editável na tela em vez de deploy, mesmo padrão de salvarModoVarredura). `tamanhoLote:
   // null` restaura o default de upsertEmLote.ts — apaga a config salva.
+  // Teto da varredura DESSA tabela, em % do que está vivo (vazio = padrão). Mesmo PUT do modo.
+  async function salvarTeto(job: JobSync) {
+    const bruto = (rascunhoTetoPorJob[job.jobName] ?? "").trim();
+    setSalvandoVarredura(job.jobName);
+    setErro(null);
+    try {
+      await axios.put(`${API}/${job.jobName}/varredura`, { tetoPct: bruto === "" ? null : bruto });
+      setRascunhoTetoPorJob((r) => {
+        const { [job.jobName]: _descartado, ...resto } = r;
+        return resto;
+      });
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao salvar o teto da varredura");
+    } finally {
+      setSalvandoVarredura(null);
+    }
+  }
+
+  // Liberação única do teto, depois de conferir os candidatos: dispara a sync desta tabela ignorando o teto só nesta execução.
+  async function liberarTeto(job: JobSync) {
+    setLiberando(job.jobName);
+    setErro(null);
+    try {
+      await axios.post(`${API}/${job.jobName}/varredura/liberar-teto`);
+      setConfirmandoLiberacao(null);
+      setRemovidosPorJob((r) => {
+        const { [job.jobName]: _descartado, ...resto } = r;
+        return resto;
+      });
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao liberar o teto");
+    } finally {
+      setLiberando(null);
+    }
+  }
+
   async function salvarTamanhoLote(job: JobSync, tamanhoLote: number | null) {
     setSalvandoLote(job.jobName);
     setErro(null);
@@ -798,6 +864,8 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
     0
   );
   const rodandoAgora = jobs.filter((j) => j.emAndamento).length;
+  // Tabelas cuja última varredura de removidos foi barrada (teto, filtro, contagem): exclusão no Senior que NÃO está sendo marcada.
+  const varredurasBloqueadas = jobs.filter((j) => j.bloqueioVarredura != null).length;
   const maisDesatualizada = jobs.reduce<JobSync | null>((pior, job) => {
     if (!pior) return job;
     const tempoJob = job.ultimaSincronizacao ? new Date(job.ultimaSincronizacao).getTime() : -Infinity;
@@ -819,6 +887,8 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
         return j.emAndamento;
       case "sumidos":
         return temSumidos(j);
+      case "bloqueada":
+        return j.bloqueioVarredura != null;
       case "desatualizada":
         return j.jobName === maisDesatualizada?.jobName;
       default:
@@ -924,7 +994,7 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
       </Modal>
 
       {loading && (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-border bg-surface p-5">
               <Skeleton className="mb-2 h-3.5 w-28" />
@@ -935,7 +1005,7 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
       )}
 
       {!loading && jobs.length > 0 && (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <CardKpi ativo={filtroKpi === "todas"} onClick={() => setFiltroKpi("todas")} titulo="Mostrar todas as tabelas">
             <p className="mb-2 text-[11.5px] text-muted">Total de tabelas</p>
             <span className="block font-mono text-2xl font-semibold tabular-nums text-foreground">{totalTabelas}</span>
@@ -987,6 +1057,17 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
                 ? "detecção ainda não ligada"
                 : `em ${tabelasComDeteccao} tabela${tabelasComDeteccao === 1 ? "" : "s"} com detecção`}
             </p>
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "bloqueada"}
+            onClick={() => alternarFiltroKpi("bloqueada")}
+            titulo="Mostrar só as tabelas cuja última varredura de removidos foi barrada (teto, filtro ou contagem)"
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Varredura bloqueada</p>
+            <span className={`block font-mono text-2xl font-semibold tabular-nums ${varredurasBloqueadas > 0 ? "text-destructive" : "text-foreground"}`}>
+              {varredurasBloqueadas}
+            </span>
+            <p className="mt-1 text-[11px] text-muted">{varredurasBloqueadas > 0 ? "exclusões no Senior sem marcar" : "nenhuma barrada"}</p>
           </CardKpi>
           <CardKpi
             ativo={filtroKpi === "desatualizada"}
@@ -1232,6 +1313,19 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
                             atrasada
                           </span>
                         )}
+                        {job.bloqueioVarredura && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              abrirPainel(job, "removidos");
+                            }}
+                            className="inline-block whitespace-nowrap rounded bg-destructive/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide text-destructive hover:underline"
+                            title={`Varredura de ${dateTimeFormatter.format(new Date(job.bloqueioVarredura.em))} não marcou nada: ${job.bloqueioVarredura.motivo ?? job.bloqueioVarredura.tipo}. Clique para ver e decidir.`}
+                          >
+                            {ROTULO_BLOQUEIO[job.bloqueioVarredura.tipo](job.bloqueioVarredura)}
+                          </button>
+                        )}
                       </span>
                     )}
                   </td>
@@ -1467,7 +1561,72 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
                               </option>
                             </select>
                             {salvandoVarredura === job.jobName && <span className="text-[11px] text-muted">salvando...</span>}
+                            {job.varreduraDisponivel && (
+                              <span className="ml-3 inline-flex items-center gap-1.5">
+                                <label htmlFor={`teto-${job.jobName}`} className="text-[11.5px] text-muted">
+                                  Teto por execução:
+                                </label>
+                                <input
+                                  id={`teto-${job.jobName}`}
+                                  inputMode="decimal"
+                                  value={rascunhoTetoPorJob[job.jobName] ?? (job.tetoPctConfigurado != null ? String(job.tetoPctConfigurado).replace(".", ",") : "")}
+                                  onChange={(e) => setRascunhoTetoPorJob((r) => ({ ...r, [job.jobName]: e.target.value }))}
+                                  placeholder={String(job.tetoPctEfetivo).replace(".", ",")}
+                                  disabled={salvandoVarredura === job.jobName}
+                                  className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-right text-[12.5px] text-foreground disabled:opacity-40"
+                                />
+                                <span className="text-[11.5px] text-muted">% do que está vivo</span>
+                                {rascunhoTetoPorJob[job.jobName] !== undefined && (
+                                  <button type="button" onClick={() => salvarTeto(job)} className="rounded-md bg-primary px-2 py-1 text-[11.5px] font-medium text-primary-foreground hover:opacity-90">
+                                    Salvar
+                                  </button>
+                                )}
+                                <span className="text-[11px] text-muted" title="Nunca menos que 50 linhas, para tabela pequena não travar por poucas exclusões.">
+                                  {job.tetoPctConfigurado == null ? `(padrão ${String(job.tetoPctEfetivo).replace(".", ",")}%)` : "(configurado)"}
+                                </span>
+                              </span>
+                            )}
                           </div>
+                          {job.bloqueioVarredura && (
+                            <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-[12.5px] text-foreground">
+                              <p className="font-medium text-destructive">
+                                {job.bloqueioVarredura.tipo === "teto"
+                                  ? `A última varredura (${dateTimeFormatter.format(new Date(job.bloqueioVarredura.em))}) encontrou ${numberFormatter.format(job.bloqueioVarredura.candidatos)} registro(s) que sumiram do Senior, acima do teto de ${numberFormatter.format(job.bloqueioVarredura.limite ?? 0)} (${numberFormatter.format(job.bloqueioVarredura.totalEscopo)} vivos). Nada foi marcado.`
+                                  : `A última varredura (${dateTimeFormatter.format(new Date(job.bloqueioVarredura.em))}) não marcou nada.`}
+                              </p>
+                              {job.bloqueioVarredura.motivo && <p className="mt-1 text-[12px] text-muted">{job.bloqueioVarredura.motivo}</p>}
+                              {job.bloqueioVarredura.tipo === "teto" && (
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <span className="text-[12px] text-muted">Confira alguns candidatos abaixo direto no Senior. Se sumiram mesmo, libere a marcação uma vez:</span>
+                                  {confirmandoLiberacao === job.jobName ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => liberarTeto(job)}
+                                        disabled={liberando === job.jobName || job.varreduraModo !== "marcar"}
+                                        className="rounded-md bg-destructive px-2.5 py-1 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                                      >
+                                        {liberando === job.jobName ? "Liberando…" : `Sim, sincronizar e marcar os ${numberFormatter.format(job.bloqueioVarredura.candidatos)}`}
+                                      </button>
+                                      <button type="button" onClick={() => setConfirmandoLiberacao(null)} className="rounded-md border border-border px-2.5 py-1 text-[12px] text-foreground hover:bg-surface-2">
+                                        Cancelar
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmandoLiberacao(job.jobName)}
+                                      disabled={job.varreduraModo !== "marcar" || job.emAndamento}
+                                      title={job.varreduraModo !== "marcar" ? 'A detecção precisa estar em "Marcar".' : undefined}
+                                      className="rounded-md border border-destructive/40 bg-surface px-2.5 py-1 text-[12px] font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                                    >
+                                      Conferi, liberar a marcação desta vez
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
                           <p className="mb-2 text-[11.5px] text-muted">
                             Registros que não vieram mais na consulta ao Senior. Confira alguns direto no ERP: se eles
                             realmente não existem mais lá, a detecção está correta.
