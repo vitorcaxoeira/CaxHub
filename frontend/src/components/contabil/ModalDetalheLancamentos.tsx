@@ -102,6 +102,8 @@ export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu
             <table className="w-full border-collapse text-left">
               <thead>
                 <tr className="bg-surface-2">
+                  {/* Número do lançamento no Senior (E640LCT.NumLct): primeira coluna, para achar o lançamento lá. */}
+                  <th className="px-3 py-2 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Nº lanç.</th>
                   <th className="px-3 py-2 font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Data</th>
                   {mostrarColunaConta && (
                     <th className="px-3 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Conta</th>
@@ -116,6 +118,7 @@ export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu
               <tbody>
                 {dados.lancamentos.map((l) => (
                   <tr key={`${l.numlct}-${l.ctared}`} className="border-t border-border/60">
+                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">{l.numlct}</td>
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{dataFormatter.format(new Date(l.datlct))}</td>
                     {mostrarColunaConta && <td className="px-3 py-2 text-xs text-muted">{l.contaRotulo}</td>}
                     <td className="max-w-[440px] truncate px-3 py-2 text-xs text-foreground" title={l.cpllct ?? undefined}>
