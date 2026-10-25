@@ -4,12 +4,14 @@
 // `Prisma.dmmf` a partir da `tabelaLocal` do job (mesmo truque de recorteRetroativo.ts), então
 // um job novo em registry.ts ganha a tela sem nenhum código específico.
 //
-// Padrão herdado do "Ver dados" do Kyria (CaxHub): a tela decide o modo pelo TAMANHO real da
-// tabela — pequena: carrega tudo e filtra/pagina no cliente (funil por coluna); grande: busca e
-// paginação no servidor.
+// Desde 21/10/2026 tudo é no SERVIDOR, para qualquer tamanho de tabela: busca, filtro por coluna com operador (filtroColunaLocal.ts),
+// valores mais frequentes de uma coluna sob demanda (valoresDaColuna) e paginação. Antes a tela carregava as tabelas pequenas
+// inteiras e filtrava no cliente, e as grandes ficavam só com a busca.
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import type { SyncJobDescriptor } from "./registry";
+import { ColunaFiltravel, FiltroColuna, OperadorColuna, TipoColuna, operadoresDaColuna, whereDosFiltros } from "./filtroColunaLocal";
+import { OpcaoDominio, catalogoDeDominios, dominioDoCampo } from "./dominioDoSchema";
 
 // Teto de linhas por chamada — protege contra tabelas enormes (itens, movimentos) mesmo que o
 // cliente peça mais.
@@ -26,6 +28,21 @@ export interface ColunaDados {
   ehChave: boolean;
   // Coluna de controle do espelho (visto_em_sync/removido_em_senior), não dado do Senior.
   ehControle: boolean;
+  // Não aceita nulo (sem "vazio"/"não vazio" no filtro).
+  obrigatoria: boolean;
+  // Operadores que o funil da coluna oferece (vazio = coluna sem filtro, ex.: json).
+  operadores: OperadorColuna[];
+  // Lista fechada de valores documentada no schema (/// Domínio "X": 1=..., ver dominioDoSchema.ts): o funil oferece a lista e a
+  // tabela/chips mostram "código · rótulo". Ausente = coluna sem domínio.
+  dominio?: OpcaoDominio[];
+}
+
+// Catálogo nome do domínio -> itens, de TODOS os campos documentados do schema (para o campo que só cita o nome, ex.: 'Domínio
+// "LSimNao"'). Montado uma vez: o schema não muda em tempo de execução.
+let catalogo: ReturnType<typeof catalogoDeDominios> | null = null;
+function catalogoDoSchema() {
+  if (!catalogo) catalogo = catalogoDeDominios(Prisma.dmmf.datamodel.models.flatMap((m) => m.fields.map((f) => f.documentation)));
+  return catalogo;
 }
 
 const CAMPOS_CONTROLE = new Set(["vistoEmSync", "removidoEmSenior"]);
@@ -64,11 +81,31 @@ function camposEscalares(model: ModeloDmmf): CampoDmmf[] {
 export function colunasDoJob(job: SyncJobDescriptor): ColunaDados[] {
   const model = modeloDaTabela(job.tabelaLocal);
   const chaves = new Set(model.primaryKey?.fields?.length ? model.primaryKey.fields : model.fields.filter((f) => f.isId).map((f) => f.name));
+  return camposEscalares(model).map((campo) => {
+    const tipo = tipoDaColuna(campo) as TipoColuna;
+    return {
+      nome: campo.name,
+      tipo,
+      ehChave: chaves.has(campo.name),
+      ehControle: CAMPOS_CONTROLE.has(campo.name),
+      obrigatoria: campo.isRequired,
+      operadores: operadoresDaColuna({ tipo, obrigatoria: campo.isRequired }),
+      ...(() => {
+        const d = dominioDoCampo(campo.documentation, campo.type, catalogoDoSchema());
+        return d ? { dominio: d.opcoes } : {};
+      })(),
+    };
+  });
+}
+
+/** Colunas com o tipo do schema, para validar e montar o filtro (filtroColunaLocal.ts). */
+export function colunasFiltraveis(job: SyncJobDescriptor): ColunaFiltravel[] {
+  const model = modeloDaTabela(job.tabelaLocal);
   return camposEscalares(model).map((campo) => ({
     nome: campo.name,
-    tipo: tipoDaColuna(campo),
-    ehChave: chaves.has(campo.name),
-    ehControle: CAMPOS_CONTROLE.has(campo.name),
+    tipo: tipoDaColuna(campo) as TipoColuna,
+    obrigatoria: campo.isRequired,
+    prisma: campo.type,
   }));
 }
 
@@ -105,21 +142,91 @@ export interface ResultadoDados {
   itens: Record<string, unknown>[];
 }
 
-export async function listarDadosDoJob(
-  job: SyncJobDescriptor,
-  opcoes: { page: number; pageSize: number; busca: string }
-): Promise<ResultadoDados> {
-  const model = modeloDaTabela(job.tabelaLocal);
+/**
+ * Recorte de "removidos" da tela de dados (21/10/2026, pedido do Vitor: a lista de removidos virou uma tela igual ao "Ver dados"):
+ *  - "removidos": já marcados (`removidoEmSenior` preenchido);
+ *  - "candidatos": os que a ÚLTIMA varredura acharia sumidos (vivos, carimbo anterior ao início dela) DENTRO do recorte do filtro da
+ *    sincronização — a mesma conta da varredura, para o número bater com o selo "teto · N";
+ *  - "sumidos": os dois juntos.
+ */
+export type SituacaoRemovidos = "removidos" | "candidatos" | "sumidos";
+
+// Tabelas de MÃO DUPLA (e Pedido) chamam varrerRemovidos() direto, sem `incluirNuncaCarimbados`: lá carimbo NULL é registro nascido
+// no CaxHub e nunca é candidato. Nas de espelho puro (executarVarreduraDoJob) NULL também é candidato.
+const MODELOS_NULL_IMUNE = new Set(["AtividadeConsultor", "Pedido", "Rat", "RatItem", "RegistroDespesaViagem"]);
+
+function filtroDeSituacao(
+  model: ModeloDmmf,
+  situacao: SituacaoRemovidos,
+  candidatosDesde: Date | null,
+  escopo: Record<string, unknown> | null
+): Record<string, unknown> {
+  const marcados = { removidoEmSenior: { not: null } };
+  // Sem varredura registrada, ou com filtro que não dá para recortar localmente, não há como dizer quem é candidato.
+  if (situacao === "removidos" || !candidatosDesde || escopo === null) return situacao === "candidatos" ? { AND: [{ removidoEmSenior: null }, { removidoEmSenior: { not: null } }] } : marcados;
+  const carimbo = MODELOS_NULL_IMUNE.has(model.name)
+    ? { vistoEmSync: { lt: candidatosDesde } }
+    : { OR: [{ vistoEmSync: { lt: candidatosDesde } }, { vistoEmSync: null }] };
+  const candidatos = { AND: [escopo, { removidoEmSenior: null }, carimbo] };
+  return situacao === "candidatos" ? candidatos : { OR: [marcados, candidatos] };
+}
+
+// Recorte comum à listagem e aos valores de uma coluna: busca + situação (removidos) + filtros de coluna, tudo em E.
+interface OpcoesRecorte {
+  busca: string;
+  /** Só na tela de removidos: recorte por situação (ver SituacaoRemovidos). */
+  situacao?: SituacaoRemovidos;
+  /** Início da última varredura (SyncLog.varreduraInicio): quem tem carimbo anterior não veio nela. */
+  candidatosDesde?: Date | null;
+  /** Recorte local do filtro da sincronização (filtroDoJob().escopoLocal); `null` = filtro não recortável. */
+  escopo?: Record<string, unknown> | null;
+  /** Filtros de coluna já validados (validarFiltrosColuna). */
+  filtros?: FiltroColuna[];
+}
+
+function whereDoRecorte(job: SyncJobDescriptor, model: ModeloDmmf, opcoes: OpcoesRecorte): Record<string, unknown> | undefined {
+  const partes = [
+    filtroDeBusca(model, opcoes.busca),
+    opcoes.situacao
+      ? filtroDeSituacao(model, opcoes.situacao, opcoes.candidatosDesde ?? null, opcoes.escopo === undefined ? {} : opcoes.escopo)
+      : undefined,
+    whereDosFiltros(colunasFiltraveis(job), opcoes.filtros ?? []),
+  ].filter((p): p is Record<string, unknown> => p !== undefined);
+  return partes.length === 0 ? undefined : partes.length === 1 ? partes[0] : { AND: partes };
+}
+
+function delegateDoModelo(model: ModeloDmmf, tabelaLocal: string) {
   const nomeDelegate = model.name.charAt(0).toLowerCase() + model.name.slice(1);
   const delegate = (prisma as unknown as Record<string, unknown>)[nomeDelegate] as {
     count: (args: { where?: unknown }) => Promise<number>;
     findMany: (args: { where?: unknown; orderBy?: unknown; skip?: number; take?: number }) => Promise<Record<string, unknown>[]>;
+    groupBy: (args: { by: string[]; where?: unknown; _count: Record<string, boolean>; orderBy?: unknown; take?: number }) => Promise<Record<string, unknown>[]>;
   };
-  if (!delegate) throw new Error(`prisma.${nomeDelegate} não existe (esperado pra tabela "${job.tabelaLocal}").`);
+  if (!delegate) throw new Error(`prisma.${nomeDelegate} não existe (esperado pra tabela "${tabelaLocal}").`);
+  return delegate;
+}
+
+export async function listarDadosDoJob(
+  job: SyncJobDescriptor,
+  opcoes: {
+    page: number;
+    pageSize: number;
+    busca: string;
+    filtros?: FiltroColuna[];
+    /** Só na tela de removidos: recorte por situação (ver SituacaoRemovidos). */
+    situacao?: SituacaoRemovidos;
+    /** Início da última varredura (SyncLog.varreduraInicio): quem tem carimbo anterior não veio nela. */
+    candidatosDesde?: Date | null;
+    /** Recorte local do filtro da sincronização (filtroDoJob().escopoLocal); `null` = filtro não recortável. */
+    escopo?: Record<string, unknown> | null;
+  }
+): Promise<ResultadoDados> {
+  const model = modeloDaTabela(job.tabelaLocal);
+  const delegate = delegateDoModelo(model, job.tabelaLocal);
 
   const pageSize = Math.min(PAGE_SIZE_MAXIMO, Math.max(1, Math.floor(opcoes.pageSize) || 30));
   const page = Math.max(1, Math.floor(opcoes.page) || 1);
-  const where = filtroDeBusca(model, opcoes.busca);
+  const where = whereDoRecorte(job, model, opcoes);
   const chaves = model.primaryKey?.fields?.length ? [...model.primaryKey.fields] : model.fields.filter((f) => f.isId).map((f) => f.name);
 
   const [total, linhas] = await Promise.all([
@@ -133,4 +240,45 @@ export async function listarDadosDoJob(
     total,
     itens: linhas.map((linha) => Object.fromEntries(colunas.map((c) => [c.nome, serializar(linha[c.nome])]))),
   };
+}
+
+const MAX_VALORES_COLUNA = 200;
+
+export interface ValoresDaColuna {
+  coluna: string;
+  /** Valores mais frequentes (no máximo 200), já serializados; `null` = vazio. */
+  valores: { valor: unknown; quantidade: number }[];
+  /** Há mais valores distintos além dos devolvidos (a tela avisa e pede para refinar com a busca). */
+  temMais: boolean;
+}
+
+/**
+ * Valores mais frequentes de UMA coluna dentro do recorte atual (aba "Valores" do funil). O filtro da própria coluna fica de fora, como
+ * no Excel, para dar para trocar a seleção. `termo` restringe os valores: `contains` em texto, igualdade em número.
+ */
+export async function valoresDaColuna(job: SyncJobDescriptor, coluna: string, opcoes: OpcoesRecorte & { termo: string }): Promise<ValoresDaColuna> {
+  const model = modeloDaTabela(job.tabelaLocal);
+  const delegate = delegateDoModelo(model, job.tabelaLocal);
+  const col = colunasFiltraveis(job).find((c) => c.nome === coluna);
+  if (!col || col.tipo === "json") throw new Error(`A coluna "${coluna}" não tem filtro.`);
+  const semAPropria = { ...opcoes, filtros: (opcoes.filtros ?? []).filter((f) => f.coluna !== coluna) };
+  const recorte = whereDoRecorte(job, model, semAPropria);
+  const termo = opcoes.termo.trim();
+  let doTermo: Record<string, unknown> | undefined;
+  if (termo) {
+    if (col.tipo === "texto") doTermo = { [coluna]: { contains: termo, mode: "insensitive" } };
+    else if (col.tipo === "inteiro" && /^-?\d{1,18}$/.test(termo)) doTermo = { [coluna]: col.prisma === "BigInt" ? BigInt(termo) : Number(termo) };
+    else if (col.tipo === "decimal" && /^-?\d+(\.\d+)?$/.test(termo)) doTermo = { [coluna]: termo };
+    else doTermo = { AND: [{ [coluna]: null }, { [coluna]: { not: null } }] }; // termo que não casa com o tipo: nenhum valor
+  }
+  const where = recorte && doTermo ? { AND: [recorte, doTermo] } : recorte ?? doTermo;
+  // Um a mais que o teto só para saber se há mais: contar todos os distintos traria centenas de milhares de grupos numa coluna quase
+  // única (numlct).
+  const grupos = await delegate.groupBy({ by: [coluna], where, _count: { _all: true }, orderBy: { _count: { [coluna]: "desc" } }, take: MAX_VALORES_COLUNA + 1 });
+  // `_count` por coluna não conta nulos; a quantidade real de cada grupo vem de `_all`. Reordena por ela (nulos podem ser muitos).
+  const valores = grupos
+    .slice(0, MAX_VALORES_COLUNA)
+    .map((g) => ({ valor: serializar(g[coluna]), quantidade: Number((g._count as { _all: number })._all) }))
+    .sort((a, b) => b.quantidade - a.quantidade);
+  return { coluna, valores, temMais: grupos.length > MAX_VALORES_COLUNA };
 }

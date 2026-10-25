@@ -87,13 +87,6 @@ const ROTULO_BLOQUEIO: Record<BloqueioVarredura["tipo"], (b: BloqueioVarredura) 
   falha: () => "falha na contagem",
 };
 
-interface ItemRemovido {
-  chave: string;
-  rotulo: string;
-  removidoEmSenior: string | null;
-  marcado: boolean;
-}
-
 // Catálogo de campos filtráveis (Fase 2 do plano de filtros na importação) — só leitura,
 // nenhum filtro é aplicado ainda. `fonte: "espelhado"` é o caminho instantâneo (sem SOAP,
 // GET /:jobName/campos); `fonte: "erp"` é o dicionário completo do Senior, sob demanda
@@ -338,7 +331,6 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
   // com busca — "Filtro(Todos)" é a aba padrão agora, único requisito é `job.suportaFiltro`
   // (true nos 35 jobs hoje).
   const [abaExpandida, setAbaExpandida] = useState<"removidos" | "lote" | "filtroTodos" | "filtroAlterados">("filtroTodos");
-  const [removidosPorJob, setRemovidosPorJob] = useState<Record<string, ItemRemovido[] | "carregando" | "erro">>({});
   // Modo de varredura sendo salvo agora (10/09/2026, porte do CaxHub_Atlas) — um jobName de
   // cada vez, mesmo padrão de `salvandoFiltro` abaixo.
   const [salvandoVarredura, setSalvandoVarredura] = useState<string | null>(null);
@@ -571,25 +563,8 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
     // sempre, não só na aba de filtro, pro seletor de campo do predicado (Filtro Todos/
     // Alterados) já estar pronto assim que o admin chegar lá. Idempotente, não duplica round-trip.
     carregarCampos(job, "espelhado");
-    if (aba === "removidos") carregarRemovidos(job);
-    else if (aba === "filtroTodos") carregarFiltro(job, "todos");
+    if (aba === "filtroTodos") carregarFiltro(job, "todos");
     else if (aba === "filtroAlterados") carregarFiltro(job, "alterados");
-  }
-
-  function carregarRemovidos(job: JobSync) {
-    if (removidosPorJob[job.jobName]) return;
-    // Tabela sem execução de varredura ligada (!job.varreduraDisponivel) não tem nada pra
-    // buscar — a rota devolveria 400 ("esta tabela ainda não tem detecção") e isso virava
-    // sempre "Falha ao carregar", escondendo a mensagem amigável que já existe pra esse caso.
-    // Como a linha inteira agora abre o painel (e por padrão vai pra "Filtro(Todos)", mas a
-    // aba "Removidos" continua alcançável em qualquer tabela), essa checagem local evita o
-    // round-trip inútil.
-    if (!job.varreduraDisponivel) return;
-    setRemovidosPorJob((r) => ({ ...r, [job.jobName]: "carregando" }));
-    axios
-      .get<{ itens: ItemRemovido[] }>(`${API}/${job.jobName}/removidos`)
-      .then(({ data }) => setRemovidosPorJob((r) => ({ ...r, [job.jobName]: data.itens })))
-      .catch(() => setRemovidosPorJob((r) => ({ ...r, [job.jobName]: "erro" })));
   }
 
   // `fonte: "erp"` é sob demanda (botão "ver todos os campos do ERP" dentro do painel) — 1
@@ -732,10 +707,6 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
     try {
       await axios.post(`${API}/${job.jobName}/varredura/liberar-teto`);
       setConfirmandoLiberacao(null);
-      setRemovidosPorJob((r) => {
-        const { [job.jobName]: _descartado, ...resto } = r;
-        return resto;
-      });
       carregar();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao liberar o teto");
@@ -1260,7 +1231,7 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            abrirPainel(job, "removidos");
+                            navigate(`${ROTA}/removidos/${job.jobName}?situacao=${simulados > 0 ? "sumidos" : "removidos"}`);
                           }}
                           className="font-mono text-sm font-semibold tabular-nums text-warning hover:underline"
                           title="Ver quais registros sumiram do Senior"
@@ -1597,7 +1568,12 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
                               {job.bloqueioVarredura.motivo && <p className="mt-1 text-[12px] text-muted">{job.bloqueioVarredura.motivo}</p>}
                               {job.bloqueioVarredura.tipo === "teto" && (
                                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  <span className="text-[12px] text-muted">Confira alguns candidatos abaixo direto no Senior. Se sumiram mesmo, libere a marcação uma vez:</span>
+                                  <span className="text-[12px] text-muted">
+                                    <button type="button" onClick={() => navigate(`${ROTA}/removidos/${job.jobName}?situacao=candidatos`)} className="font-medium text-primary hover:underline">
+                                      Confira os candidatos
+                                    </button>{" "}
+                                    direto no Senior. Se sumiram mesmo, libere a marcação uma vez:
+                                  </span>
                                   {confirmandoLiberacao === job.jobName ? (
                                     <>
                                       <button
@@ -1627,38 +1603,29 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
                               )}
                             </div>
                           )}
-                          <p className="mb-2 text-[11.5px] text-muted">
-                            Registros que não vieram mais na consulta ao Senior. Confira alguns direto no ERP: se eles
-                            realmente não existem mais lá, a detecção está correta.
-                          </p>
-                          {removidosPorJob[job.jobName] === "carregando" && (
-                            <p className="py-2 text-sm text-muted">Carregando...</p>
-                          )}
-                          {removidosPorJob[job.jobName] === "erro" && (
-                            <p className="py-2 text-sm text-destructive">Falha ao carregar os registros removidos.</p>
-                          )}
-                          {!job.varreduraDisponivel && !removidosPorJob[job.jobName] && (
+                          {!job.varreduraDisponivel ? (
                             <p className="py-2 text-sm text-muted">
                               Detecção de exclusão ainda não disponível nesta tabela (falta ligar a execução no código,
                               não é só a coluna no banco) — não é possível controlar o modo aqui.
                             </p>
-                          )}
-                          {Array.isArray(removidosPorJob[job.jobName]) && (
-                            <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
-                              {(removidosPorJob[job.jobName] as ItemRemovido[]).map((item) => (
-                                <li key={item.chave} className="flex items-baseline gap-2 text-[12.5px]">
-                                  <span className="font-mono font-semibold text-foreground">{item.chave}</span>
-                                  <span className="truncate text-muted" title={item.rotulo}>
-                                    {item.rotulo}
-                                  </span>
-                                  <span className="ml-auto shrink-0 font-mono text-[11px] text-muted">
-                                    {item.marcado && item.removidoEmSenior
-                                      ? dateTimeFormatter.format(new Date(item.removidoEmSenior))
-                                      : "candidato"}
-                                  </span>
-                                </li>
-                              ))}
-                            </ul>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
+                              <span className="text-muted">Registros que não vieram mais na consulta ao Senior:</span>
+                              <button
+                                type="button"
+                                onClick={() => navigate(`${ROTA}/removidos/${job.jobName}?situacao=candidatos`)}
+                                className="rounded-md border border-border bg-surface px-2.5 py-1 font-medium text-foreground hover:border-primary hover:text-primary"
+                              >
+                                Ver candidatos da última varredura
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => navigate(`${ROTA}/removidos/${job.jobName}?situacao=removidos`)}
+                                className="rounded-md border border-border bg-surface px-2.5 py-1 font-medium text-foreground hover:border-primary hover:text-primary"
+                              >
+                                Ver marcados como removidos
+                              </button>
+                            </div>
                           )}
                         </>
                       )}

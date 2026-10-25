@@ -14,11 +14,41 @@ import { montarQuerySenior } from "../sync/consultaSenior";
 import { AuthenticatedRequest } from "../auth/middleware";
 import { dimensoesDoSistema, dimensaoPorChave, jobsComDimensao, jobsSemDimensao } from "../sync/dimensoesFiltro";
 import { diagnosticarRecorte, marcarOrfaosDoRecorte, suportaMarcarRemovido } from "../sync/recorteRetroativo";
-import { listarDadosDoJob, PAGE_SIZE_MAXIMO } from "../sync/dadosSincronizados";
+import { colunasFiltraveis, listarDadosDoJob, PAGE_SIZE_MAXIMO, SituacaoRemovidos, valoresDaColuna } from "../sync/dadosSincronizados";
+import { validarFiltrosColuna } from "../sync/filtroColunaLocal";
+import { filtroDoJob } from "../sync/filtrosAtivos";
 import { modoConfiguradoDoJob, carregarModosVarreduraAtivos, ModoVarredura, liberarTetoUmaVez, tetoPctDoJob } from "../sync/politicaVarredura";
 import { tamanhoLoteConfigurado, carregarTamanhosLoteAtivos } from "../sync/politicaLote";
 import { TAMANHO_LOTE_PADRAO, TETO_PARAMS_PROTOCOLO } from "../sync/upsertEmLote";
 import { TETO_PCT_PADRAO } from "../sync/varrerRemovidos";
+
+// Contexto comum das rotas da tela "Ver dados"/"Removidos" (21/10/2026): situação (removidos), recorte do filtro da sincronização,
+// início da última varredura e filtros de coluna (JSON em `filtros`, validados por filtroColunaLocal.ts). Erro de entrada vira 400.
+async function contextoDosDados(job: SyncJobDescriptor, query: Record<string, unknown>) {
+  const situacaoBruta = query.situacao;
+  const situacao: SituacaoRemovidos | undefined =
+    situacaoBruta === "removidos" || situacaoBruta === "candidatos" || situacaoBruta === "sumidos" ? situacaoBruta : undefined;
+  if (situacao && !suportaMarcarRemovido(job)) return { erro: "Esta tabela não tem detecção de exclusão no Senior" } as const;
+  let filtros;
+  try {
+    const bruto = typeof query.filtros === "string" && query.filtros.trim() ? JSON.parse(query.filtros) : [];
+    filtros = validarFiltrosColuna(colunasFiltraveis(job), bruto);
+  } catch (error) {
+    return { erro: error instanceof SyntaxError ? "Filtros inválidos." : error instanceof Error ? error.message : "Filtros inválidos." } as const;
+  }
+  // `situacao`: a mesma tela vira a lista de REMOVIDOS (marcados, candidatos da última varredura ou os dois), com o mesmo recorte do
+  // filtro da sincronização que a varredura usa — senão os "candidatos" incluiriam o que o filtro nem busca.
+  const filtro = situacao ? filtroDoJob(job.jobName, "todos") : null;
+  const ultimaVarredura = situacao
+    ? await prisma.syncLog.findFirst({
+        where: { jobName: job.jobName, varreduraInicio: { not: null } },
+        orderBy: { runAt: "desc" },
+        select: { varreduraInicio: true },
+      })
+    : null;
+  const extras = situacao ? { candidatosDesde: ultimaVarredura?.varreduraInicio ?? null, escopo: filtro!.escopoLocal } : {};
+  return { situacao, filtro, ultimaVarredura, extras, filtros };
+}
 
 // Painel de administração dos jobs de sincronização Senior -> CaxHub: quando cada
 // tabela sincronizou pela última vez, quando roda de novo automaticamente, e uma ação
@@ -285,11 +315,25 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
         res.status(404).json({ error: "Job não encontrado" });
         return;
       }
-      const resultado = await listarDadosDoJob(job, {
+      const ctx = await contextoDosDados(job, req.query);
+      if ("erro" in ctx) {
+        res.status(400).json({ error: ctx.erro });
+        return;
+      }
+      const { situacao, filtro, ultimaVarredura, extras, filtros } = ctx;
+      const base = {
         page: Number(req.query.page) || 1,
         pageSize: Number(req.query.pageSize) || 30,
         busca: typeof req.query.busca === "string" ? req.query.busca : "",
-      });
+      };
+      const resultado = await listarDadosDoJob(job, { ...base, situacao, ...extras, filtros });
+      // Contagem de cada situação (sem busca) para as abas da tela de removidos.
+      const contagens = situacao
+        ? {
+            removidos: (await listarDadosDoJob(job, { page: 1, pageSize: 1, busca: "", situacao: "removidos", ...extras })).total,
+            candidatos: (await listarDadosDoJob(job, { page: 1, pageSize: 1, busca: "", situacao: "candidatos", ...extras })).total,
+          }
+        : undefined;
       res.json({
         jobName: job.jobName,
         displayName: job.displayName,
@@ -297,9 +341,53 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
         tabelaLocal: job.tabelaLocal,
         limiteIndice: PAGE_SIZE_MAXIMO,
         ...resultado,
+        ...(situacao
+          ? {
+              situacao,
+              contagens,
+              candidatosDesde: ultimaVarredura?.varreduraInicio ?? null,
+              // Recorte do filtro da sincronização (texto SQL dos predicados) e se ele dá para aplicar localmente.
+              recorte: filtro!.predicadosSql,
+              recorteLocal: filtro!.escopoLocal !== null,
+              motivoSemRecorte: filtro!.motivoNaoEscopavel,
+            }
+          : {}),
       });
     } catch (error) {
       handleError(res, error, "dados");
+    }
+  });
+
+  // GET /:jobName/dados/valores?coluna=&termo= — valores mais frequentes de UMA coluna no recorte atual (aba "Valores" do funil da tela
+  // "Ver dados"/"Removidos", 21/10/2026). Mesmo recorte de /dados (busca, situação, filtros), sem o filtro da própria coluna.
+  syncErpRouter.get("/:jobName/dados/valores", async (req, res) => {
+    try {
+      const job = SYNC_JOBS.find((j) => j.jobName === req.params.jobName);
+      if (!job) {
+        res.status(404).json({ error: "Job não encontrado" });
+        return;
+      }
+      const ctx = await contextoDosDados(job, req.query);
+      if ("erro" in ctx) {
+        res.status(400).json({ error: ctx.erro });
+        return;
+      }
+      const coluna = typeof req.query.coluna === "string" ? req.query.coluna : "";
+      if (!colunasFiltraveis(job).some((c) => c.nome === coluna && c.tipo !== "json")) {
+        res.status(400).json({ error: `A coluna "${coluna}" não tem filtro.` });
+        return;
+      }
+      res.json(
+        await valoresDaColuna(job, coluna, {
+          busca: typeof req.query.busca === "string" ? req.query.busca : "",
+          termo: typeof req.query.termo === "string" ? req.query.termo : "",
+          situacao: ctx.situacao,
+          ...ctx.extras,
+          filtros: ctx.filtros,
+        })
+      );
+    } catch (error) {
+      handleError(res, error, "dados:valores");
     }
   });
 

@@ -14,7 +14,7 @@ import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
 import { Login } from "./pages/Login";
 import { AceitarConvite } from "./pages/AceitarConvite";
-import { Home } from "./pages/Home";
+import { Inicio } from "./pages/Inicio";
 import { Perfil } from "./pages/Perfil";
 import { ContasReceber } from "./pages/financeiro/ContasReceber";
 import { ContasPagar } from "./pages/financeiro/ContasPagar";
@@ -188,7 +188,7 @@ export default function App() {
                 </ProtectedRoute>
               }
             >
-              <Route path="/" element={<Home />} />
+              <Route path="/" element={<Inicio />} />
               <Route path="/perfil" element={<Perfil />} />
               <Route path="/projetos/atividades" element={<Atividades />} />
               <Route path="/projetos/apontamentos" element={<MeusApontamentos />} />
@@ -298,8 +298,10 @@ export default function App() {
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
                 <Route path="/admin/sincronizacao-erp/dados/:jobName" element={<DadosErp />} />
+                <Route path="/admin/sincronizacao-erp/removidos/:jobName" element={<DadosErp />} />
                 <Route path="/admin/sincronizacao-hcm" element={<SincronizacaoHcm />} />
                 <Route path="/admin/sincronizacao-hcm/dados/:jobName" element={<DadosErp />} />
+                <Route path="/admin/sincronizacao-hcm/removidos/:jobName" element={<DadosErp />} />
                 <Route path="/admin/sincronizacao-kyria" element={<SincronizacaoKyria />} />
                 <Route path="/admin/mapeamento-kyria" element={<MapeamentoKyria />} />
                 <Route path="/admin/sincronizacao-kyria/dados/:jobName" element={<DadosKyria />} />
