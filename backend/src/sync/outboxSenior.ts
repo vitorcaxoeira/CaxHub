@@ -36,6 +36,8 @@ import {
   MOTIVO_ENVIO_INTERROMPIDO_BLOQUEADO,
   destinoDaPendenciaInterrompida,
   escolherAncoraRat,
+  motivoBloqueioAlterarSemSeqAti,
+  motivoSeqAtiDeOutraAlocacao,
 } from "./regrasFilaSenior";
 
 const JOB_NAME = "outbox_senior-sync";
@@ -169,6 +171,10 @@ export async function prepararReenvioItem(
 // voltam a fluir sozinhos, sem precisar reprocessar um por um.
 class CanalIndisponivelError extends Error {}
 
+// Falha que reenviar não resolve (e pode piorar, gravando de novo no lugar errado do Senior):
+// a pendência vai direto pra "bloqueado", sem gastar as tentativas restantes.
+class FalhaDefinitivaError extends Error {}
+
 // O ideExt do cabeçalho é o que faz o Senior ANEXAR o item a uma RAT já criada em vez de
 // abrir outra; o do item é a alça pra casar a resposta. Definidos em soap/client.ts junto
 // do resto do contrato.
@@ -184,7 +190,8 @@ class CanalIndisponivelError extends Error {}
 // TAMBÉM pode gerar esse mesmo write-back (18/08/2026): o Senior aceita "Alterar" pra um
 // registro que ainda não existe do lado dele — insere e devolve `seqAti`, igual a um
 // "Incluir" — então `enviarEditarAtividade` devolve o mesmo formato quando a alocação local
-// ainda não tinha `seqAti` antes do envio.
+// ainda não tinha `seqAti` antes do envio. Antes de gravar, `varrerFila` confere se o seqAti
+// devolvido já não é de outra alocação local (ver motivoSeqAtiDeOutraAlocacao).
 interface ResultadoEnvioApontamento {
   tipo: "apontamento";
   ratId: number;
@@ -598,10 +605,28 @@ async function enviarCriarAtividade(item: SincronizacaoPendente): Promise<Result
 // esse create pode ter sido marcado "invalido" ou ficado "bloqueado", e o editar ficaria
 // pendente para sempre por uma dependência morta). O Senior aceita "Alterar" pra um registro
 // que ainda não existe do lado dele — insere e devolve `seqAti`, igual a um "Incluir" — então
-// este envio FAZ o papel do create que faltou quando for o caso.
+// este envio FAZ o papel do create que faltou quando for o caso. Exceção (23/10/2026): se o
+// consultor já tem outra alocação confirmada no mesmo item, o Senior aplica o "Alterar" NELA
+// em vez de inserir — então nesse caso não envia (ver motivoBloqueioAlterarSemSeqAti).
 async function enviarEditarAtividade(item: SincronizacaoPendente): Promise<ResultadoEnvioAlocacaoCriada | null> {
   const alocacao = await buscarAlocacao(item.atividadeId);
   const jaTinhaSeqAti = alocacao.seqati != null;
+
+  if (!jaTinhaSeqAti) {
+    const irmas = await prisma.atividadeConsultor.findMany({
+      where: {
+        codemp: alocacao.codemp,
+        codpro: alocacao.codpro,
+        seqite: alocacao.seqite,
+        codfor: alocacao.codfor,
+        id: { not: alocacao.id },
+        seqati: { not: null },
+      },
+      select: { seqati: true },
+    });
+    const bloqueio = motivoBloqueioAlterarSemSeqAti(irmas.map((i) => i.seqati));
+    if (bloqueio) throw new FalhaDefinitivaError(bloqueio);
+  }
 
   const meuIdeExt = ideExtAlocacao(alocacao.id);
   const resposta = await alocarAtividadesViaSoap(
@@ -790,6 +815,17 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
 
       const registrado = await enviarParaSenior(item);
       const duracaoMs = Date.now() - inicioEnvio;
+
+      // seqAti devolvido que já é de outra alocação local: o Senior gravou numa alocação existente
+      // em vez de criar esta. Sem esta checagem, o write-back abaixo estourava o UNIQUE(seqati) com
+      // a mensagem crua do Prisma e a pendência reenviava até 5 vezes, gravando de novo na outra.
+      if (registrado?.tipo === "alocacao_criada") {
+        const dona = await prisma.atividadeConsultor.findFirst({
+          where: { seqati: BigInt(registrado.seqAti), id: { not: registrado.atividadeConsultorId } },
+          select: { id: true, estruturaAtividadeId: true, sitreg: true },
+        });
+        if (dona) throw new FalhaDefinitivaError(motivoSeqAtiDeOutraAlocacao(registrado.seqAti, dona));
+      }
 
       // "ratNovo" (enfileirado em prepararReenvioItem) é só um rótulo NOSSO — não vai no
       // payload SOAP (montarPayloadApontamento não tem esse campo) e não controla nada do
@@ -1008,7 +1044,7 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
           data: {
             tentativas,
             ultimoErro: message,
-            status: tentativas >= MAX_TENTATIVAS ? "bloqueado" : "pendente",
+            status: tentativas >= MAX_TENTATIVAS || error instanceof FalhaDefinitivaError ? "bloqueado" : "pendente",
           },
         }),
         criarEventoAuditoria({

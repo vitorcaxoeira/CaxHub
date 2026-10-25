@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { destinoDaPendenciaInterrompida, escolherAncoraRat } from "./regrasFilaSenior";
+import {
+  destinoDaPendenciaInterrompida,
+  escolherAncoraRat,
+  motivoBloqueioAlterarSemSeqAti,
+  motivoSeqAtiDeOutraAlocacao,
+} from "./regrasFilaSenior";
 
 test("RAT local com número: manda esse número, sem olhar o Senior", () => {
   assert.deepEqual(escolherAncoraRat(851299, []), { numRat: 851299, deSenior: false, ambigua: false });
@@ -35,4 +40,24 @@ test("após reinício: criar/editar alocação só volta pra fila se a alocaçã
     assert.equal(destinoDaPendenciaInterrompida(tipo, null), "bloqueado", tipo);
     assert.equal(destinoDaPendenciaInterrompida(tipo, 0n), "bloqueado", tipo);
   }
+});
+
+test("Alterar sem seqAti: libera quando o consultor não tem outra alocação confirmada no item", () => {
+  assert.equal(motivoBloqueioAlterarSemSeqAti([]), null);
+  assert.equal(motivoBloqueioAlterarSemSeqAti([null, 0n]), null);
+});
+
+test("Alterar sem seqAti: bloqueia quando já existe irmã confirmada e cita os seqAti dela", () => {
+  const motivo = motivoBloqueioAlterarSemSeqAti([14176n, null, 6474n, 6474n]);
+  assert.ok(motivo);
+  assert.match(motivo, /seqAti 6474, 14176\)/);
+});
+
+test("seqAti devolvido de outra alocação: motivo cita a dona, o nó e se ela está inativa", () => {
+  assert.match(
+    motivoSeqAtiDeOutraAlocacao(6474, { id: 47518, estruturaAtividadeId: 2189, sitreg: "A" }),
+    /seqAti 6474, que já pertence à alocação 47518 \(Est\. 2189\): /
+  );
+  const inativa = motivoSeqAtiDeOutraAlocacao(9, { id: 1, estruturaAtividadeId: null, sitreg: "I" });
+  assert.match(inativa, /alocação 1, hoje inativa no CaxHub:/);
 });

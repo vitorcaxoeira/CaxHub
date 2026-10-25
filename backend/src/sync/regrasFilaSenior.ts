@@ -40,3 +40,34 @@ export const MOTIVO_ENVIO_INTERROMPIDO =
 
 export const MOTIVO_ENVIO_INTERROMPIDO_BLOQUEADO =
   "Envio interrompido por reinício do servidor e não há como saber se o Senior gravou a alocação — confira no Senior antes de reprocessar.";
+
+// "Alterar" (tipEve A) sem `seqAti` só é seguro quando o consultor não tem outra alocação no mesmo
+// item. Com uma irmã já confirmada, o Senior aplicou o "Alterar" NELA e devolveu o seqAti dela
+// (23/10/2026, proposta 8638, item 3: a alocação 461252, nova, gravou as horas em cima da 6474, que
+// já estava 100% realizada). Devolve o motivo do bloqueio, ou null quando pode enviar.
+export function motivoBloqueioAlterarSemSeqAti(seqatisDasIrmas: (bigint | null)[]): string | null {
+  const confirmadas = [...new Set(seqatisDasIrmas.filter((s): s is bigint => s != null && s > 0n))].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0
+  );
+  if (confirmadas.length === 0) return null;
+  return (
+    `Alocação ainda sem confirmação do Senior e o consultor já tem outra neste item (seqAti ${confirmadas.join(", ")}). ` +
+    `Um "Alterar" sem seqAti gravaria as horas nessa outra alocação, por isso não foi enviado. ` +
+    `Confira no Senior e reprocesse a criação desta alocação.`
+  );
+}
+
+// O Senior respondeu sucesso, mas o seqAti devolvido já pertence a outra alocação local: ele gravou
+// numa alocação existente em vez de criar esta. Não adianta reenviar (cada reenvio grava de novo na
+// mesma), então a pendência vai direto pra "bloqueado" com este motivo.
+export function motivoSeqAtiDeOutraAlocacao(
+  seqAti: number,
+  dona: { id: number; estruturaAtividadeId: number | null; sitreg: string | null }
+): string {
+  const ondeEsta = dona.estruturaAtividadeId != null ? ` (Est. ${dona.estruturaAtividadeId})` : "";
+  const inativa = dona.sitreg === "I" ? ", hoje inativa no CaxHub" : "";
+  return (
+    `O Senior devolveu o seqAti ${seqAti}, que já pertence à alocação ${dona.id}${ondeEsta}${inativa}: ` +
+    `ele gravou nessa alocação em vez de criar esta. Confira as horas da alocação ${seqAti} no Senior antes de reprocessar.`
+  );
+}
