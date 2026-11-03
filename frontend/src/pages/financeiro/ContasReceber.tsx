@@ -3,8 +3,10 @@ import { useEffect, useState } from "react";
 import { AgingDashboard } from "../../components/financeiro/AgingDashboard";
 import { FiltrosBar, Filtros, FiltroOpcoes } from "../../components/financeiro/FiltrosBar";
 import { SituacaoFilter } from "../../components/financeiro/SituacaoFilter";
-import { TitulosTable, TituloRow } from "../../components/financeiro/TitulosTable";
+import { TitulosTable } from "../../components/financeiro/TitulosTable";
 import { SincronizacaoStatus } from "../../components/financeiro/SincronizacaoStatus";
+import { camposTitulos } from "../../components/financeiro/padroesTitulos";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 
 const API_BASE = "/api/financeiro/contas-a-receber";
 
@@ -34,16 +36,6 @@ interface Bucket {
   tone: "success" | "warning" | "destructive";
 }
 
-interface TitulosResponse {
-  rows: TituloRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-  totalVencido: number;
-  totalAVencer: number;
-  totalPago: number;
-}
-
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtMoney = (v: number) => `R$ ${currency.format(v)}`;
 const fmtPct = (v: number) => `${v.toFixed(1)}%`;
@@ -54,16 +46,6 @@ function toneByThreshold(value: number, good: number, warn: number): "success" |
   if (value <= warn) return "warning";
   return "destructive";
 }
-
-const TITULOS_VAZIO: TitulosResponse = {
-  rows: [],
-  page: 1,
-  pageSize: 50,
-  total: 0,
-  totalVencido: 0,
-  totalAVencer: 0,
-  totalPago: 0,
-};
 
 export function ContasReceber() {
   const [kpis, setKpis] = useState<Kpis | null>(null);
@@ -80,12 +62,18 @@ export function ContasReceber() {
     datemiFim: null,
   });
   const [faixa, setFaixa] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [titulos, setTitulos] = useState<TitulosResponse>(TITULOS_VAZIO);
   const [loadingResumo, setLoadingResumo] = useState(true);
-  const [loadingTabela, setLoadingTabela] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+
+  // Padrão de cada filtro (estrela): aplicado uma vez ao abrir, antes da 1ª consulta.
+  const p = usePadroesTela({
+    tela: "financeiro.contas-a-receber",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    campos: camposTitulos(filtros, setFiltros, opcoes, { campo: "clientes", rotulo: "Cliente", chave: "codcli" }),
+  });
 
   const clienteIds = filtros.clientes.map((c) => c.codcli).join(",") || undefined;
   const situacaoIds = filtros.situacao.join(",") || undefined;
@@ -96,10 +84,14 @@ export function ContasReceber() {
     axios
       .get(`${API_BASE}/opcoes-filtro`)
       .then(({ data }) => setOpcoes(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar empresas/filiais"));
+      .catch((err) => {
+        setOpcoesFalharam(true);
+        setErro(err.response?.data?.error ?? "Falha ao carregar empresas/filiais");
+      });
   }, []);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoadingResumo(true);
     const params = {
       empFil: empFilIds,
@@ -130,34 +122,11 @@ export function ContasReceber() {
     filtros.datemiInicio,
     filtros.datemiFim,
     refreshKey,
+    p.pronto,
   ]);
-
-  useEffect(() => {
-    setLoadingTabela(true);
-    axios
-      .get(`${API_BASE}/titulos`, {
-        params: {
-          empFil: empFilIds,
-          situacao: situacaoIds,
-          clientes: clienteIds,
-          portadores: portadorIds,
-          vctproInicio: filtros.vctproInicio ?? undefined,
-          vctproFim: filtros.vctproFim ?? undefined,
-          datemiInicio: filtros.datemiInicio ?? undefined,
-          datemiFim: filtros.datemiFim ?? undefined,
-          faixa: faixa ?? undefined,
-          page,
-          pageSize: 50,
-        },
-      })
-      .then(({ data }) => setTitulos(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a lista de títulos"))
-      .finally(() => setLoadingTabela(false));
-  }, [filtros, clienteIds, situacaoIds, portadorIds, faixa, page, refreshKey]);
 
   function handleFiltrosChange(novos: Filtros) {
     setFiltros(novos);
-    setPage(1);
   }
 
   function handleSincronizado() {
@@ -166,7 +135,6 @@ export function ContasReceber() {
 
   function handleBucketClick(key: string) {
     setFaixa((atual) => (atual === key ? null : key));
-    setPage(1);
   }
 
   const kpiCards = kpis
@@ -229,7 +197,7 @@ export function ContasReceber() {
         <SincronizacaoStatus onAtualizado={handleSincronizado} />
       </div>
 
-      <FiltrosBar opcoes={opcoes} filtros={filtros} onChange={handleFiltrosChange} />
+      <FiltrosBar opcoes={opcoes} filtros={filtros} onChange={handleFiltrosChange} estrela={p.estrela} />
 
       {erro && (
         <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
@@ -250,21 +218,12 @@ export function ContasReceber() {
         <SituacaoFilter
           selecionados={filtros.situacao}
           onChange={(situacao) => handleFiltrosChange({ ...filtros, situacao })}
+          acessorio={p.estrela("situacao")}
         />
       </div>
 
       <div className="mt-3">
-        <TitulosTable
-          rows={titulos.rows}
-          page={titulos.page}
-          pageSize={titulos.pageSize}
-          total={titulos.total}
-          totalVencido={titulos.totalVencido}
-          totalAVencer={titulos.totalAVencer}
-          totalPago={titulos.totalPago}
-          loading={loadingTabela}
-          onPageChange={setPage}
-        />
+        {p.pronto && <TitulosTable url={`${API_BASE}/titulos`} recarga={refreshKey} params={{ empFil: empFilIds, situacao: situacaoIds, clientes: clienteIds, portadores: portadorIds, vctproInicio: filtros.vctproInicio ?? undefined, vctproFim: filtros.vctproFim ?? undefined, datemiInicio: filtros.datemiInicio ?? undefined, datemiFim: filtros.datemiFim ?? undefined, faixa: faixa ?? undefined }} />}
       </div>
     </div>
   );

@@ -1,4 +1,6 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
+import { col, registrarListaConsultavel } from "./listaConsultavel";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import {
@@ -320,21 +322,20 @@ const SITTIT_LABELS: Record<string, string> = {
   PE: "Aberto PE (Pagamento Eletrônico)",
 };
 
-function situacaoLabel(sittit: string, diasAtraso: number): string {
-  if (sittit === "AB") return diasAtraso > 0 ? "Vencido" : "A Vencer";
-  return SITTIT_LABELS[sittit] ?? sittit;
-}
-
-function situacaoTone(sittit: string, diasAtraso: number): "success" | "warning" | "destructive" {
-  if (sittit === "AB") return diasAtraso > 0 ? "destructive" : "success";
-  if (sittit.startsWith("L")) return "success";
-  if (sittit === "CA") return "destructive";
-  return "warning";
-}
+// Rótulo e tom da situação em SQL (a lista filtra e ordena pela situação no servidor). Mesma regra do CaxHub_Dash (pagarComum.ts).
+const situacaoSql = {
+  rotulo: Prisma.sql`(CASE WHEN t.sittit = 'AB' THEN (CASE WHEN t.vctpro < CURRENT_DATE THEN 'Vencido' ELSE 'A Vencer' END)
+    ${Prisma.join(Object.entries(SITTIT_LABELS).map(([k, v]) => Prisma.sql`WHEN t.sittit = ${k} THEN ${v}`), " ")} ELSE t.sittit END)`,
+  tom: Prisma.sql`(CASE WHEN t.sittit = 'AB' THEN (CASE WHEN t.vctpro < CURRENT_DATE THEN 'destructive' ELSE 'success' END)
+    WHEN t.sittit LIKE 'L%' THEN 'success' WHEN t.sittit = 'CA' THEN 'destructive' ELSE 'warning' END)`,
+};
 
 // ---------- Lista paginada (Aging List) ----------
-financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
-  try {
+// Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts): a consulta é a da tela, vira subconsulta.
+registrarListaConsultavel(
+  financeiroRouter,
+  "/contas-a-receber/titulos",
+  (req) => {
     const empFil = parseStringListParam(req.query.empFil);
     const situacao = parseStringListParam(req.query.situacao);
     const faixa = typeof req.query.faixa === "string" && req.query.faixa !== "" ? req.query.faixa : null;
@@ -344,34 +345,19 @@ financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
     const vctproFim = parseDateParam(req.query.vctproFim);
     const datemiInicio = parseDateParam(req.query.datemiInicio);
     const datemiFim = parseDateParam(req.query.datemiFim);
-    const page = Math.max(1, parseIntParam(req.query.page) ?? 1);
-    const pageSize = Math.min(200, Math.max(1, parseIntParam(req.query.pageSize) ?? 50));
-    const offset = (page - 1) * pageSize;
-
-    const [rows, totalsRows] = await Promise.all([
-      prisma.$queryRaw<
-        {
-          codemp: number;
-          codfil: number;
-          numtit: string;
-          codtpt: string;
-          abrtpt: string;
-          codcli: number;
-          nomcli: string;
-          nomemp: string;
-          nomfil: string;
-          datemi: Date;
-          vctpro: Date;
-          vlrori: number;
-          vlrabe: number;
-          sittit: string;
-          dias_atraso: number;
-        }[]
-      >`
-        SELECT t.codemp, t.codfil, t.numtit, t.codtpt, tt.abrtpt,
-               t.codcli, c.nomcli, e.nomemp, f.nomfil,
+    return {
+      interna: Prisma.sql`
+        SELECT t.codemp, t.codfil, t.numtit, t.codtpt, tt.abrtpt, (t.codemp || '/' || t.codfil) AS unidade, (t.numtit || '·' || tt.abrtpt) AS titulo,
+               t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente, e.nomemp, f.nomfil,
                t.datemi, t.vctpro, t.vlrori::float8 AS vlrori, t.vlrabe::float8 AS vlrabe, t.sittit,
-               GREATEST(0, (CURRENT_DATE - t.vctpro))::int AS dias_atraso
+               GREATEST(0, (CURRENT_DATE - t.vctpro))::int AS dias_atraso,
+               ${situacaoSql.rotulo} AS situacao,
+               ${situacaoSql.tom} AS tom,
+               NULL::text AS moeda_sigla,
+               (CASE WHEN t.sittit = 'AB' AND t.vctpro < CURRENT_DATE THEN t.vlrabe ELSE 0 END)::float8 AS vlr_vencido,
+               (CASE WHEN t.sittit = 'AB' AND t.vctpro >= CURRENT_DATE THEN t.vlrabe ELSE 0 END)::float8 AS vlr_a_vencer,
+               COALESCE((SELECT SUM(m.vlrliq) FROM movimentos_receber m JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
+                          WHERE m.codemp = t.codemp AND m.codfil = t.codfil AND m.numtit = t.numtit AND m.codtpt = t.codtpt AND tr.rectpb = 'PG'), 0)::float8 AS vlr_pago
         FROM titulos_receber t
         JOIN clientes c ON c.codcli = t.codcli
         JOIN tipos_titulo tt ON tt.codtpt = t.codtpt
@@ -397,75 +383,28 @@ financeiroRouter.get("/contas-a-receber/titulos", async (req, res) => {
             (${faixa} = 'd61_90' AND CURRENT_DATE - t.vctpro BETWEEN 61 AND 90) OR
             (${faixa} = 'd91_180' AND CURRENT_DATE - t.vctpro BETWEEN 91 AND 180) OR
             (${faixa} = 'd180_mais' AND CURRENT_DATE - t.vctpro > 180)
-          ))
-        ORDER BY dias_atraso DESC
-        LIMIT ${pageSize} OFFSET ${offset}
-      `,
-      prisma.$queryRaw<
-        { total: number; total_vencido: number; total_a_vencer: number; total_pago: number }[]
-      >`
-        WITH titulos_filtrados AS (
-          SELECT t.codemp, t.codfil, t.numtit, t.codtpt, t.sittit, t.vctpro, t.vlrabe
-          FROM titulos_receber t
-          WHERE (${situacao}::text[] IS NOT NULL OR t.vlrabe > 0)
-            AND (${empFil}::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY(${empFil}::text[]))
-            AND (${situacao}::text[] IS NULL OR (
-              t.sittit = ANY(${situacao}::text[]) OR
-              ('AB_VENCER' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND t.vctpro >= CURRENT_DATE) OR
-              ('AB_VENCIDO' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND t.vctpro < CURRENT_DATE)
-            ))
-            AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))
-            AND (${portadores}::text[] IS NULL OR t.codpor = ANY(${portadores}::text[]))
-            AND (${vctproInicio}::date IS NULL OR t.vctpro >= ${vctproInicio}::date)
-            AND (${vctproFim}::date IS NULL OR t.vctpro <= ${vctproFim}::date)
-            AND (${datemiInicio}::date IS NULL OR t.datemi >= ${datemiInicio}::date)
-            AND (${datemiFim}::date IS NULL OR t.datemi <= ${datemiFim}::date)
-            AND (${faixa}::text IS NULL OR (
-              (${faixa} = 'a_vencer' AND t.vctpro >= CURRENT_DATE) OR
-              (${faixa} = 'd1_30' AND CURRENT_DATE - t.vctpro BETWEEN 1 AND 30) OR
-              (${faixa} = 'd31_60' AND CURRENT_DATE - t.vctpro BETWEEN 31 AND 60) OR
-              (${faixa} = 'd61_90' AND CURRENT_DATE - t.vctpro BETWEEN 61 AND 90) OR
-              (${faixa} = 'd91_180' AND CURRENT_DATE - t.vctpro BETWEEN 91 AND 180) OR
-              (${faixa} = 'd180_mais' AND CURRENT_DATE - t.vctpro > 180)
-            ))
-        )
-        SELECT
-          (SELECT COUNT(*) FROM titulos_filtrados)::int AS total,
-          (SELECT COALESCE(SUM(CASE WHEN sittit = 'AB' AND vctpro < CURRENT_DATE THEN vlrabe END), 0)
-             FROM titulos_filtrados)::float8 AS total_vencido,
-          (SELECT COALESCE(SUM(CASE WHEN sittit = 'AB' AND vctpro >= CURRENT_DATE THEN vlrabe END), 0)
-             FROM titulos_filtrados)::float8 AS total_a_vencer,
-          (
-            SELECT COALESCE(SUM(m.vlrliq), 0)
-            FROM titulos_filtrados tf
-            JOIN movimentos_receber m ON m.codemp = tf.codemp AND m.codfil = tf.codfil AND m.numtit = tf.numtit AND m.codtpt = tf.codtpt
-            JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
-            WHERE tr.rectpb = 'PG'
-          )::float8 AS total_pago
-      `,
-    ]);
-
-    const rowsComLabel = rows.map((row) => ({
-      ...row,
-      situacaoLabel: situacaoLabel(row.sittit, row.dias_atraso),
-      situacaoTone: situacaoTone(row.sittit, row.dias_atraso),
-    }));
-
-    const totals = totalsRows[0];
-
-    res.json({
-      rows: rowsComLabel,
-      page,
-      pageSize,
-      total: totals?.total ?? 0,
-      totalVencido: totals?.total_vencido ?? 0,
-      totalAVencer: totals?.total_a_vencer ?? 0,
-      totalPago: totals?.total_pago ?? 0,
-    });
-  } catch (error) {
-    handleError(res, error, "titulos");
-  }
-});
+          ))`,
+      colunas: [
+        col.texto("unidade", { obrigatoria: true }),
+        col.texto("titulo", { obrigatoria: true }),
+        col.texto("cliente", { obrigatoria: true }),
+        col.data("datemi", { obrigatoria: true }),
+        col.data("vctpro", { obrigatoria: true }),
+        col.decimal("vlrori", { obrigatoria: true }),
+        col.decimal("vlrabe", { obrigatoria: true }),
+        col.inteiro("dias_atraso", { obrigatoria: true }),
+        col.texto("situacao", { obrigatoria: true }),
+        // Somadas só para o rodapé de totais da tela (não são colunas da tabela).
+        col.decimal("vlr_vencido", { obrigatoria: true, semValores: true }),
+        col.decimal("vlr_a_vencer", { obrigatoria: true, semValores: true }),
+        col.decimal("vlr_pago", { obrigatoria: true, semValores: true }),
+      ],
+      totais: ["vlr_vencido", "vlr_a_vencer", "vlr_pago"],
+      ordemPadrao: Prisma.sql`x."dias_atraso" DESC`,
+    };
+  },
+  "titulos-receber",
+);
 
 // ---------- Sincronização manual (status + disparo) ----------
 financeiroRouter.get("/contas-a-receber/sincronizacao", async (_req, res) => {
