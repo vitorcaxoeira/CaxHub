@@ -1,4 +1,7 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
+import { col, registrarListaConsultavel } from "./listaConsultavel";
+import { situacaoSql } from "./financeiroComum";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 
@@ -500,78 +503,53 @@ fluxoCaixaRouter.get("/concentracao", async (req, res) => {
 });
 
 // ---------- Clientes em risco (paginada, ordenável, score normalizado) ----------
-fluxoCaixaRouter.get("/clientes-risco", async (req, res) => {
-  try {
+// ---------- Clientes em risco (paginada, ordenável, score normalizado) ----------
+registrarListaConsultavel(
+  fluxoCaixaRouter,
+  "/clientes-risco",
+  (req) => {
     const { empFil } = lerFiltros(req);
     const bucket = typeof req.query.bucket === "string" && req.query.bucket !== "" ? req.query.bucket : null;
-    const page = Math.max(1, parseIntParam(req.query.page) ?? 1);
-    const pageSize = Math.min(100, Math.max(1, parseIntParam(req.query.pageSize) ?? 20));
-    const offset = (page - 1) * pageSize;
-    const ordenacao = ordenacaoClientesRisco(req.query.sort, req.query.dir);
-
-    const rows = await prisma.$queryRawUnsafe<
-      {
-        codcli: number;
-        nomcli: string;
-        valor_aberto: number;
-        valor_vencido: number;
-        atraso_medio: number;
-        maior_atraso: number;
-        score: number;
-        total_geral: number;
-      }[]
-    >(
-      `
-      WITH base AS (
-        SELECT t.codcli, c.nomcli,
-          SUM(t.vlrabe)::float8 AS valor_aberto,
-          COALESCE(SUM(t.vlrabe) FILTER (WHERE t.vctpro < CURRENT_DATE), 0)::float8 AS valor_vencido,
-          COALESCE(AVG(CURRENT_DATE - t.vctpro) FILTER (WHERE t.vctpro < CURRENT_DATE), 0)::float8 AS atraso_medio,
-          COALESCE(MAX(CURRENT_DATE - t.vctpro) FILTER (WHERE t.vctpro < CURRENT_DATE), 0)::int AS maior_atraso
-        FROM titulos_receber t
-        JOIN clientes c ON c.codcli = t.codcli
-        WHERE t.vlrabe > 0
-          AND ($1::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY($1::text[]))
-          AND ($2::text IS NULL OR ${bucketRiscoSql("t.vctpro")} = $2)
-        GROUP BY t.codcli, c.nomcli
-        HAVING COALESCE(SUM(t.vlrabe) FILTER (WHERE t.vctpro < CURRENT_DATE), 0) > 0
-      ),
-      scored AS (
-        SELECT *, (valor_vencido * atraso_medio) AS raw_score FROM base
-      )
-      SELECT codcli, nomcli, valor_aberto, valor_vencido, atraso_medio, maior_atraso,
-        CASE WHEN MAX(raw_score) OVER () = MIN(raw_score) OVER () THEN 50
-             ELSE ROUND((((raw_score - MIN(raw_score) OVER ()) / (MAX(raw_score) OVER () - MIN(raw_score) OVER ())) * 100)::numeric)
-        END::int AS score,
-        COUNT(*) OVER ()::int AS total_geral
-      FROM scored
-      ORDER BY ${ordenacao}
-      LIMIT $3 OFFSET $4
-      `,
-      empFil,
-      bucket,
-      pageSize,
-      offset
-    );
-
-    res.json({
-      rows: rows.map((r) => ({
-        codcli: r.codcli,
-        nomcli: r.nomcli,
-        valorAberto: r.valor_aberto,
-        valorVencido: r.valor_vencido,
-        atrasoMedio: r.atraso_medio,
-        maiorAtraso: r.maior_atraso,
-        score: r.score,
-      })),
-      page,
-      pageSize,
-      total: rows[0]?.total_geral ?? 0,
-    });
-  } catch (error) {
-    handleError(res, error, "clientes-risco");
-  }
-});
+    return {
+      pageSizePadrao: 20,
+      // O score é relativo a todos os clientes em atraso do recorte (janela sobre a base inteira): por isso é calculado aqui dentro e os
+      // filtros de coluna entram por fora, sem mudar o score de ninguém.
+      interna: Prisma.sql`
+        WITH base AS (
+          SELECT t.codcli, c.nomcli,
+            SUM(t.vlrabe)::float8 AS valor_aberto,
+            COALESCE(SUM(t.vlrabe) FILTER (WHERE t.vctpro < CURRENT_DATE), 0)::float8 AS valor_vencido,
+            COALESCE(AVG(CURRENT_DATE - t.vctpro) FILTER (WHERE t.vctpro < CURRENT_DATE), 0)::float8 AS atraso_medio,
+            COALESCE(MAX(CURRENT_DATE - t.vctpro) FILTER (WHERE t.vctpro < CURRENT_DATE), 0)::int AS maior_atraso
+          FROM titulos_receber t
+          JOIN clientes c ON c.codcli = t.codcli
+          WHERE t.vlrabe > 0
+            AND (${empFil}::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY(${empFil}::text[]))
+            AND (${bucket}::text IS NULL OR ${Prisma.raw(bucketRiscoSql("t.vctpro"))} = ${bucket})
+          GROUP BY t.codcli, c.nomcli
+          HAVING COALESCE(SUM(t.vlrabe) FILTER (WHERE t.vctpro < CURRENT_DATE), 0) > 0
+        ),
+        scored AS (
+          SELECT *, (valor_vencido * atraso_medio) AS raw_score FROM base
+        )
+        SELECT codcli, nomcli, (codcli || ' - ' || nomcli) AS cliente, valor_aberto, valor_vencido, atraso_medio, maior_atraso,
+          CASE WHEN MAX(raw_score) OVER () = MIN(raw_score) OVER () THEN 50
+               ELSE ROUND((((raw_score - MIN(raw_score) OVER ()) / (MAX(raw_score) OVER () - MIN(raw_score) OVER ())) * 100)::numeric)
+          END::int AS score
+        FROM scored`,
+      colunas: [
+        col.texto("cliente", { obrigatoria: true }),
+        col.decimal("valor_aberto", { obrigatoria: true }),
+        col.decimal("valor_vencido", { obrigatoria: true }),
+        col.decimal("atraso_medio", { obrigatoria: true }),
+        col.inteiro("maior_atraso", { obrigatoria: true }),
+        col.inteiro("score", { obrigatoria: true }),
+      ],
+      ordemPadrao: Prisma.sql`x."score" DESC, x."valor_vencido" DESC`,
+    };
+  },
+  "clientes-risco",
+);
 
 // ---------- Drill-down: títulos em aberto de um cliente ----------
 fluxoCaixaRouter.get("/clientes-risco/:codcli/titulos", async (req, res) => {
@@ -663,139 +641,54 @@ fluxoCaixaRouter.get("/operacional/kpis", async (req, res) => {
 });
 
 // ---------- Tabela do corte ativo (busca + paginação + export CSV) ----------
-fluxoCaixaRouter.get("/operacional/titulos", async (req, res) => {
-  try {
+// Lista do corte ativo (busca + paginação) com filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts).
+registrarListaConsultavel(
+  fluxoCaixaRouter,
+  "/operacional/titulos",
+  (req) => {
     const { empFil } = lerFiltros(req);
     const corte = typeof req.query.corte === "string" ? req.query.corte : "vencendo_hoje";
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const busca = q === "" ? null : `%${q}%`;
-    const formato = req.query.formato === "csv" ? "csv" : "json";
-    const page = Math.max(1, parseIntParam(req.query.page) ?? 1);
-    const pageSize = Math.min(200, Math.max(1, parseIntParam(req.query.pageSize) ?? 50));
-    const limite = formato === "csv" ? 50000 : pageSize;
-    const offset = formato === "csv" ? 0 : (page - 1) * pageSize;
-
-    type Linha = {
-      numtit: string;
-      codtpt: string;
-      codcli: number;
-      nomcli: string;
-      datemi: Date;
-      vctpro: Date;
-      valor: number;
-      sittit: string;
-      dias_atraso: number;
-    };
-
-    let rows: Linha[];
-    let total: number;
-
+    const colunas = [
+      col.texto("titulo", { obrigatoria: true }),
+      col.texto("cliente", { obrigatoria: true }),
+      col.data("datemi", { obrigatoria: true }),
+      col.data("vctpro", { obrigatoria: true }),
+      col.decimal("valor", { obrigatoria: true }),
+      col.inteiro("dias_atraso", { obrigatoria: true }),
+      col.texto("situacao", { obrigatoria: true }),
+    ];
     if (corte === "recebido_hoje") {
-      const [linhas, totalRows] = await Promise.all([
-        prisma.$queryRaw<Linha[]>`
-          SELECT t.numtit, t.codtpt, t.codcli, c.nomcli, t.datemi, t.vctpro, m.vlrliq::float8 AS valor, t.sittit,
-                 0::int AS dias_atraso
+      return {
+        interna: Prisma.sql`
+          SELECT t.numtit, t.codtpt, (t.numtit || ' - ' || t.codtpt) AS titulo, t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente,
+                 t.datemi, t.vctpro, m.vlrliq::float8 AS valor, t.sittit, 0::int AS dias_atraso,
+                 ${situacaoSql.rotulo} AS situacao, ${situacaoSql.tom} AS tom
           FROM movimentos_receber m
           JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
           JOIN titulos_receber t ON t.codemp = m.codemp AND t.codfil = m.codfil AND t.numtit = m.numtit AND t.codtpt = m.codtpt
           JOIN clientes c ON c.codcli = t.codcli
           WHERE tr.rectpb = 'PG' AND m.datpgt = CURRENT_DATE
             AND (${empFil}::text[] IS NULL OR (m.codemp::text || ':' || m.codfil::text) = ANY(${empFil}::text[]))
-            AND (${busca}::text IS NULL OR c.nomcli ILIKE ${busca} OR t.numtit ILIKE ${busca})
-          ORDER BY t.vctpro DESC
-          LIMIT ${limite} OFFSET ${offset}
-        `,
-        prisma.$queryRaw<{ total: number }[]>`
-          SELECT COUNT(*)::int AS total
-          FROM movimentos_receber m
-          JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
-          JOIN titulos_receber t ON t.codemp = m.codemp AND t.codfil = m.codfil AND t.numtit = m.numtit AND t.codtpt = m.codtpt
-          JOIN clientes c ON c.codcli = t.codcli
-          WHERE tr.rectpb = 'PG' AND m.datpgt = CURRENT_DATE
-            AND (${empFil}::text[] IS NULL OR (m.codemp::text || ':' || m.codfil::text) = ANY(${empFil}::text[]))
-            AND (${busca}::text IS NULL OR c.nomcli ILIKE ${busca} OR t.numtit ILIKE ${busca})
-        `,
-      ]);
-      rows = linhas;
-      total = totalRows[0]?.total ?? 0;
-    } else {
-      const condicao = condicaoCorte(corte);
-      const [linhas, totalRows] = await Promise.all([
-        prisma.$queryRawUnsafe<Linha[]>(
-          `
-          SELECT t.numtit, t.codtpt, t.codcli, c.nomcli, t.datemi, t.vctpro, t.vlrabe::float8 AS valor, t.sittit,
-                 GREATEST(0, CURRENT_DATE - t.vctpro)::int AS dias_atraso
-          FROM titulos_receber t
-          JOIN clientes c ON c.codcli = t.codcli
-          WHERE ${condicao}
-            AND ($1::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY($1::text[]))
-            AND ($2::text IS NULL OR c.nomcli ILIKE $2 OR t.numtit ILIKE $2)
-          ORDER BY t.vctpro ASC
-          LIMIT $3 OFFSET $4
-          `,
-          empFil,
-          busca,
-          limite,
-          offset
-        ),
-        prisma.$queryRawUnsafe<{ total: number }[]>(
-          `
-          SELECT COUNT(*)::int AS total
-          FROM titulos_receber t
-          JOIN clientes c ON c.codcli = t.codcli
-          WHERE ${condicao}
-            AND ($1::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY($1::text[]))
-            AND ($2::text IS NULL OR c.nomcli ILIKE $2 OR t.numtit ILIKE $2)
-          `,
-          empFil,
-          busca
-        ),
-      ]);
-      rows = linhas;
-      total = totalRows[0]?.total ?? 0;
-    }
-
-    const linhasFormatadas = rows.map((r) => ({
-      numtit: r.numtit,
-      codtpt: r.codtpt,
-      codcli: r.codcli,
-      nomcli: r.nomcli,
-      datemi: r.datemi,
-      vctpro: r.vctpro,
-      valor: r.valor,
-      diasAtraso: r.dias_atraso,
-      situacaoLabel: situacaoLabel(r.sittit, r.dias_atraso),
-      situacaoTone: situacaoTone(r.sittit, r.dias_atraso),
-    }));
-
-    if (formato === "csv") {
-      const dateFmt = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
-      const moneyFmt = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const csvEscape = (v: string | number) => {
-        const s = String(v);
-        return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+            AND (${busca}::text IS NULL OR c.nomcli ILIKE ${busca} OR t.numtit ILIKE ${busca})`,
+        colunas,
+        ordemPadrao: Prisma.sql`x."vctpro" DESC`,
       };
-      const cabecalho = ["Título", "Cliente", "Emissão", "Vencimento", "Valor", "Dias de Atraso", "Situação"].join(";");
-      const linhasCsv = linhasFormatadas.map((r) =>
-        [
-          csvEscape(`${r.numtit}-${r.codtpt}`),
-          csvEscape(`${r.codcli} - ${r.nomcli}`),
-          csvEscape(dateFmt.format(new Date(r.datemi))),
-          csvEscape(dateFmt.format(new Date(r.vctpro))),
-          csvEscape(moneyFmt.format(r.valor)),
-          csvEscape(r.diasAtraso),
-          csvEscape(r.situacaoLabel),
-        ].join(";")
-      );
-      const csv = [cabecalho, ...linhasCsv].join("\r\n");
-      res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="fluxo-caixa-${corte}-${hojeISO()}.csv"`);
-      res.send("﻿" + csv);
-      return;
     }
-
-    res.json({ rows: linhasFormatadas, page, pageSize, total });
-  } catch (error) {
-    handleError(res, error, "operacional-titulos");
-  }
-});
+    return {
+      interna: Prisma.sql`
+        SELECT t.numtit, t.codtpt, (t.numtit || ' - ' || t.codtpt) AS titulo, t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente,
+               t.datemi, t.vctpro, t.vlrabe::float8 AS valor, t.sittit, GREATEST(0, CURRENT_DATE - t.vctpro)::int AS dias_atraso,
+               ${situacaoSql.rotulo} AS situacao, ${situacaoSql.tom} AS tom
+        FROM titulos_receber t
+        JOIN clientes c ON c.codcli = t.codcli
+        WHERE ${Prisma.raw(condicaoCorte(corte))}
+          AND (${empFil}::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY(${empFil}::text[]))
+          AND (${busca}::text IS NULL OR c.nomcli ILIKE ${busca} OR t.numtit ILIKE ${busca})`,
+      colunas,
+      ordemPadrao: Prisma.sql`x."vctpro" ASC`,
+    };
+  },
+  "operacional-receber",
+);

@@ -1,4 +1,5 @@
-import { Skeleton } from "../ui/Skeleton";
+import { ListaServidor } from "../colunas/ListaServidor";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 
 export interface InadimplenciaRow {
   codemp: number;
@@ -6,120 +7,34 @@ export interface InadimplenciaRow {
   numtit: string;
   codcli: number;
   nomcli: string;
+  cliente: string;
   vctpro: string;
   vlrabe: number;
   dias_atraso: number;
 }
 
-interface InadimplenciaTableProps {
-  rows: InadimplenciaRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-  loading: boolean;
-  onPageChange: (page: number) => void;
-}
-
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export function InadimplenciaTable({ rows, page, pageSize, total, loading, onPageChange }: InadimplenciaTableProps) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+// Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (ListaServidor, 29/10/2026).
+const COLUNAS: DefColuna<InadimplenciaRow>[] = [
+  { nome: "numtit", titulo: "Título", fixa: true, classe: "font-mono text-muted", largura: 130, render: (r) => r.numtit },
+  { nome: "cliente", titulo: "Cliente", classe: "text-foreground", largura: 300, texto: (r) => r.cliente, render: (r) => r.cliente },
+  { nome: "vctpro", titulo: "Vencimento", classe: "font-mono text-muted", largura: 110, render: (r) => dateFormatter.format(new Date(r.vctpro)) },
+  { nome: "dias_atraso", titulo: "Dias Atraso", direita: true, classe: "font-mono font-semibold tabular-nums text-destructive", largura: 110, render: (r) => r.dias_atraso },
+  { nome: "vlrabe", titulo: "Valor Vencido", direita: true, classe: "font-semibold text-foreground", largura: 150, formatarResumo: (v) => currency.format(v), render: (r) => currency.format(r.vlrabe) },
+];
 
+export function InadimplenciaTable({ url, params }: { url: string; params: Record<string, unknown> }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-surface">
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              <th className="hidden whitespace-nowrap bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                Título
-              </th>
-              <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Cliente
-              </th>
-              <th className="hidden whitespace-nowrap bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                Vencimento
-              </th>
-              <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Dias Atraso
-              </th>
-              <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Valor Vencido
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading &&
-              Array.from({ length: 6 }).map((_, i) => (
-                <tr key={i} className="border-t border-border/60">
-                  <td className="hidden px-5 py-3.5 sm:table-cell">
-                    <Skeleton className="h-4 w-16" />
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <Skeleton className="h-4 w-36" />
-                  </td>
-                  <td className="hidden px-5 py-3.5 sm:table-cell">
-                    <Skeleton className="h-4 w-16" />
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <Skeleton className="ml-auto h-4 w-10" />
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <Skeleton className="ml-auto h-4 w-20" />
-                  </td>
-                </tr>
-              ))}
-            {!loading &&
-              rows.map((row) => (
-              <tr key={`${row.codemp}-${row.codfil}-${row.numtit}`} className="border-t border-border/60 transition hover:bg-surface-2">
-                <td className="hidden whitespace-nowrap px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">{row.numtit}</td>
-                <td className="px-5 py-3.5 text-sm text-foreground">
-                  {row.codcli} - {row.nomcli}
-                </td>
-                <td className="hidden whitespace-nowrap px-5 py-3.5 font-mono text-sm text-muted sm:table-cell">
-                  {dateFormatter.format(new Date(row.vctpro))}
-                </td>
-                <td className="px-5 py-3.5 text-right font-mono text-sm font-semibold tabular-nums text-destructive">
-                  {row.dias_atraso}
-                </td>
-                <td className="px-5 py-3.5 text-right font-mono text-sm font-semibold tabular-nums text-foreground">
-                  {currency.format(row.vlrabe)}
-                </td>
-              </tr>
-            ))}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-5 py-8 text-center text-sm text-muted">
-                  Nenhum título vencido encontrado com os filtros atuais.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-border px-5 py-3">
-        <p className="text-[11.5px] text-muted">
-          {total.toLocaleString("pt-BR")} títulos vencidos · página {page} de {totalPages}
-        </p>
-        <div className="flex gap-2">
-          <button
-            onClick={() => onPageChange(page - 1)}
-            disabled={page <= 1 || loading}
-            className="rounded-md border border-border px-3 py-1.5 text-[11.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Anterior
-          </button>
-          <button
-            onClick={() => onPageChange(page + 1)}
-            disabled={page >= totalPages || loading}
-            className="rounded-md border border-border px-3 py-1.5 text-[11.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Próxima
-          </button>
-        </div>
-      </div>
-    </div>
+    <ListaServidor<InadimplenciaRow>
+      chave="financeiro.inadimplencia"
+      url={url}
+      params={params}
+      defs={COLUNAS}
+      chaveLinha={(r) => `${r.codemp}-${r.codfil}-${r.numtit}`}
+      rotulo="títulos vencidos"
+      vazio="Nenhum título vencido encontrado com os filtros atuais."
+    />
   );
 }

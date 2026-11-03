@@ -1,4 +1,6 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
+import { col, registrarListaConsultavel } from "./listaConsultavel";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 
@@ -233,31 +235,18 @@ recebimentosRouter.get("/por-conta", async (req, res) => {
 });
 
 // ---------- Lista paginada ----------
-recebimentosRouter.get("/", async (req, res) => {
-  try {
+// ---------- Lista paginada ----------
+// Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts): a consulta é a da tela, vira subconsulta.
+registrarListaConsultavel(
+  recebimentosRouter,
+  "/",
+  (req) => {
     const { empFil, portadores, contas, clientes, datpgtInicio, datpgtFim } = lerFiltros(req);
-    const page = Math.max(1, parseIntParam(req.query.page) ?? 1);
-    const pageSize = Math.min(200, Math.max(1, parseIntParam(req.query.pageSize) ?? 50));
-    const offset = (page - 1) * pageSize;
-
-    const [rows, totalRows] = await Promise.all([
-      prisma.$queryRaw<
-        {
-          codemp: number;
-          codfil: number;
-          numtit: string;
-          codtpt: string;
-          codcli: number;
-          nomcli: string;
-          datpgt: Date;
-          vlrliq: number;
-          codpor: string | null;
-          despor: string | null;
-          descco: string | null;
-        }[]
-      >`
-        SELECT m.codemp, m.codfil, m.numtit, m.codtpt, t.codcli, c.nomcli, m.datpgt, m.vlrliq::float8 AS vlrliq,
-               m.codpor, p.despor, cc.descco
+    return {
+      interna: Prisma.sql`
+        SELECT m.codemp, m.codfil, m.numtit, m.codtpt, (m.numtit || ' - ' || m.codtpt) AS titulo, t.codcli, c.nomcli,
+               (t.codcli || ' - ' || c.nomcli) AS cliente, m.datpgt, m.vlrliq::float8 AS vlrliq,
+               m.codpor, p.despor, cc.descco, NULL::text AS moeda_sigla
         FROM movimentos_receber m
         JOIN titulos_receber t ON t.codemp = m.codemp AND t.codfil = m.codfil AND t.numtit = m.numtit AND t.codtpt = m.codtpt
         JOIN clientes c ON c.codcli = t.codcli
@@ -270,27 +259,17 @@ recebimentosRouter.get("/", async (req, res) => {
           AND (${empFil}::text[] IS NULL OR (m.codemp::text || ':' || m.codfil::text) = ANY(${empFil}::text[]))
           AND (${portadores}::text[] IS NULL OR m.codpor = ANY(${portadores}::text[]))
           AND (${contas}::text[] IS NULL OR m.numcco = ANY(${contas}::text[]))
-          AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))
-        ORDER BY m.datpgt DESC
-        LIMIT ${pageSize} OFFSET ${offset}
-      `,
-      prisma.$queryRaw<{ total: number }[]>`
-        SELECT COUNT(*)::int AS total
-        FROM movimentos_receber m
-        JOIN titulos_receber t ON t.codemp = m.codemp AND t.codfil = m.codfil AND t.numtit = m.numtit AND t.codtpt = m.codtpt
-        JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
-        WHERE tr.rectpb = 'PG'
-          AND m.datpgt >= ${datpgtInicio}::date
-          AND m.datpgt <= ${datpgtFim}::date
-          AND (${empFil}::text[] IS NULL OR (m.codemp::text || ':' || m.codfil::text) = ANY(${empFil}::text[]))
-          AND (${portadores}::text[] IS NULL OR m.codpor = ANY(${portadores}::text[]))
-          AND (${contas}::text[] IS NULL OR m.numcco = ANY(${contas}::text[]))
-          AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))
-      `,
-    ]);
-
-    res.json({ rows, page, pageSize, total: totalRows[0]?.total ?? 0 });
-  } catch (error) {
-    handleError(res, error, "lista");
-  }
-});
+          AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))`,
+      colunas: [
+        col.data("datpgt", { obrigatoria: true }),
+        col.texto("titulo", { obrigatoria: true }),
+        col.texto("cliente", { obrigatoria: true }),
+        col.texto("despor"),
+        col.texto("descco"),
+        col.decimal("vlrliq", { obrigatoria: true }),
+      ],
+      ordemPadrao: Prisma.sql`x."datpgt" DESC`,
+    };
+  },
+  "recebimentos-lista",
+);

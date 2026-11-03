@@ -1,4 +1,6 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
+import { col, registrarListaConsultavel } from "./listaConsultavel";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 
@@ -178,48 +180,32 @@ inadimplenciaRouter.get("/curva-abc", async (req, res) => {
 });
 
 // ---------- Lista paginada (títulos vencidos) ----------
-inadimplenciaRouter.get("/", async (req, res) => {
-  try {
+// ---------- Lista paginada (títulos vencidos) ----------
+// Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts): a consulta é a da tela, vira subconsulta.
+registrarListaConsultavel(
+  inadimplenciaRouter,
+  "/",
+  (req) => {
     const { empFil, faixa } = lerFiltros(req);
-    const page = Math.max(1, parseIntParam(req.query.page) ?? 1);
-    const pageSize = Math.min(200, Math.max(1, parseIntParam(req.query.pageSize) ?? 50));
-    const offset = (page - 1) * pageSize;
-
-    const rows = await prisma.$queryRawUnsafe<
-      {
-        codemp: number;
-        codfil: number;
-        numtit: string;
-        codcli: number;
-        nomcli: string;
-        vctpro: Date;
-        vlrabe: number;
-        dias_atraso: number;
-      }[]
-    >(`
-      SELECT t.codemp, t.codfil, t.numtit, t.codcli, c.nomcli, t.vctpro, t.vlrabe::float8 AS vlrabe,
-             (CURRENT_DATE - t.vctpro)::int AS dias_atraso
-      FROM titulos_receber t
-      JOIN clientes c ON c.codcli = t.codcli
-      WHERE t.vlrabe > 0
-        AND t.vctpro < CURRENT_DATE
-        AND ($1::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY($1::text[]))
-        AND (${condicaoFaixa(faixa)})
-      ORDER BY dias_atraso DESC
-      LIMIT ${pageSize} OFFSET ${offset}
-    `, empFil);
-
-    const totalRows = await prisma.$queryRawUnsafe<{ total: number }[]>(`
-      SELECT COUNT(*)::int AS total
-      FROM titulos_receber t
-      WHERE t.vlrabe > 0
-        AND t.vctpro < CURRENT_DATE
-        AND ($1::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY($1::text[]))
-        AND (${condicaoFaixa(faixa)})
-    `, empFil);
-
-    res.json({ rows, page, pageSize, total: totalRows[0]?.total ?? 0 });
-  } catch (error) {
-    handleError(res, error, "lista");
-  }
-});
+    return {
+      interna: Prisma.sql`
+        SELECT t.codemp, t.codfil, t.numtit, t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente, t.vctpro, t.vlrabe::float8 AS vlrabe,
+               (CURRENT_DATE - t.vctpro)::int AS dias_atraso
+        FROM titulos_receber t
+        JOIN clientes c ON c.codcli = t.codcli
+        WHERE t.vlrabe > 0
+          AND t.vctpro < CURRENT_DATE
+          AND (${empFil}::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY(${empFil}::text[]))
+          AND (${Prisma.raw(condicaoFaixa(faixa))})`,
+      colunas: [
+        col.texto("numtit", { obrigatoria: true }),
+        col.texto("cliente", { obrigatoria: true }),
+        col.data("vctpro", { obrigatoria: true }),
+        col.inteiro("dias_atraso", { obrigatoria: true }),
+        col.decimal("vlrabe", { obrigatoria: true }),
+      ],
+      ordemPadrao: Prisma.sql`x."dias_atraso" DESC`,
+    };
+  },
+  "inadimplencia-lista",
+);

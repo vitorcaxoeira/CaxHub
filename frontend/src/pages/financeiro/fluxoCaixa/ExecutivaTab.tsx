@@ -2,7 +2,7 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { PrevistoRealizadoAcumuladoChart, PontoAcumulado } from "../../../components/financeiro/PrevistoRealizadoAcumuladoChart";
 import { CurvaProjetadaChart, PontoProjecao } from "../../../components/financeiro/CurvaProjetadaChart";
-import { Skeleton } from "../../../components/ui/Skeleton";
+import { KpiTile, KpiTileSkeleton } from "../../../components/ui/KpiTile";
 
 const API_BASE = "/api/financeiro/fluxo-caixa";
 
@@ -25,8 +25,6 @@ const fmtMoney = (v: number) => `R$ ${currency.format(v)}`;
 const fmtPct = (v: number) => `${v.toFixed(1)}%`;
 const fmtDias = (v: number) => `${Math.round(v)} dias`;
 
-const toneText: Record<string, string> = { success: "text-success", warning: "text-warning", destructive: "text-destructive", neutral: "text-foreground" };
-const toneBg: Record<string, string> = { success: "bg-success", warning: "bg-warning", destructive: "bg-destructive", neutral: "bg-muted" };
 
 function toneAcuracidade(pct: number | null): "success" | "warning" | "destructive" | "neutral" {
   if (pct === null) return "neutral";
@@ -139,25 +137,14 @@ export function ExecutivaTab({ empFilIds, periodoParams, refreshKey }: Executiva
       {loadingKpis ? (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="rounded-lg border border-border bg-surface p-5">
-              <Skeleton className="mb-2 h-3.5 w-32" />
-              <Skeleton className="h-7 w-20" />
-              <Skeleton className="mt-2 h-3 w-28" />
-            </div>
+            <KpiTileSkeleton key={i} />
           ))}
         </div>
       ) : (
         kpis && (
           <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
             {kpiCards.map((kpi) => (
-              <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
-                <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
-                <span className={`block font-mono text-2xl font-semibold tabular-nums ${toneText[kpi.tone]}`}>{kpi.value}</span>
-                <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted">
-                  <span className={`h-1.5 w-1.5 flex-none rounded-full ${toneBg[kpi.tone]}`} />
-                  {kpi.sub}
-                </p>
-              </div>
+              <KpiTile key={kpi.label} label={kpi.label} value={kpi.value} sub={kpi.sub} tone={kpi.tone} />
             ))}
           </div>
         )

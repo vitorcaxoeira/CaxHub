@@ -1,15 +1,16 @@
 import axios from "axios";
-import { useState } from "react";
-import { Pagination } from "../ui/Pagination";
-import { Skeleton } from "../ui/Skeleton";
+import { useEffect, useState } from "react";
+import { ListaServidor } from "../colunas/ListaServidor";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 
 export interface ClienteRiscoRow {
   codcli: number;
   nomcli: string;
-  valorAberto: number;
-  valorVencido: number;
-  atrasoMedio: number;
-  maiorAtraso: number;
+  cliente: string;
+  valor_aberto: number;
+  valor_vencido: number;
+  atraso_medio: number;
+  maior_atraso: number;
   score: number;
 }
 
@@ -21,19 +22,6 @@ interface TituloDrillDown {
   diasAtraso: number;
   situacaoLabel: string;
   situacaoTone: "success" | "warning" | "destructive";
-}
-
-interface ClientesRiscoTableProps {
-  rows: ClienteRiscoRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-  loading: boolean;
-  onPageChange: (page: number) => void;
-  sort: string;
-  dir: "asc" | "desc";
-  onSortChange: (sort: string, dir: "asc" | "desc") => void;
-  empFilIds?: string;
 }
 
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -52,178 +40,88 @@ function toneScore(score: number): "success" | "warning" | "destructive" {
   return "destructive";
 }
 
-const COLUNAS: { chave: string; label: string; alinhar?: "right" }[] = [
-  { chave: "nomcli", label: "Cliente" },
-  { chave: "valorAberto", label: "Valor Aberto", alinhar: "right" },
-  { chave: "valorVencido", label: "Valor Vencido", alinhar: "right" },
-  { chave: "atrasoMedio", label: "Atraso Médio", alinhar: "right" },
-  { chave: "maiorAtraso", label: "Maior Atraso", alinhar: "right" },
-  { chave: "score", label: "Score", alinhar: "right" },
+// Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (ListaServidor, 29/10/2026). Clique na linha abre os títulos do cliente.
+const COLUNAS: DefColuna<ClienteRiscoRow>[] = [
+  { nome: "cliente", titulo: "Cliente", fixa: true, classe: "text-foreground", largura: 320, texto: (r) => r.cliente, render: (r) => r.cliente },
+  { nome: "valor_aberto", titulo: "Valor Aberto", direita: true, largura: 150, classe: "text-foreground", formatarResumo: fmtMoney, render: (r) => fmtMoney(r.valor_aberto) },
+  { nome: "valor_vencido", titulo: "Valor Vencido", direita: true, largura: 150, classe: "text-destructive", formatarResumo: fmtMoney, render: (r) => fmtMoney(r.valor_vencido) },
+  {
+    nome: "atraso_medio",
+    titulo: "Atraso Médio",
+    direita: true,
+    largura: 120,
+    classe: "text-muted",
+    formatarResumo: (v) => `${Math.round(v)} dias`,
+    render: (r) => `${Math.round(r.atraso_medio)} dias`,
+  },
+  { nome: "maior_atraso", titulo: "Maior Atraso", direita: true, largura: 120, classe: "text-muted", formatarResumo: (v) => `${Math.round(v)} dias`, render: (r) => `${r.maior_atraso} dias` },
+  {
+    nome: "score",
+    titulo: "Score",
+    direita: true,
+    largura: 100,
+    dica: "Vencido × atraso médio, de 0 a 100 entre os clientes do recorte",
+    formatarResumo: (v) => String(Math.round(v)),
+    render: (r) => <span className={`rounded-full px-2 py-0.5 font-mono text-xs font-semibold ${toneBadge[toneScore(r.score)]}`}>{r.score}</span>,
+  },
 ];
 
-export function ClientesRiscoTable({
-  rows,
-  page,
-  pageSize,
-  total,
-  loading,
-  onPageChange,
-  sort,
-  dir,
-  onSortChange,
-  empFilIds,
-}: ClientesRiscoTableProps) {
-  const [expandido, setExpandido] = useState<number | null>(null);
-  const [titulosPorCliente, setTitulosPorCliente] = useState<Map<number, TituloDrillDown[]>>(new Map());
-  const [carregandoDrillDown, setCarregandoDrillDown] = useState(false);
-
-  function handleSort(coluna: string) {
-    if (coluna === "nomcli") return; // cliente não é ordenável no backend
-    if (sort === coluna) {
-      onSortChange(coluna, dir === "asc" ? "desc" : "asc");
-    } else {
-      onSortChange(coluna, "desc");
-    }
-  }
-
-  function handleExpandir(codcli: number) {
-    if (expandido === codcli) {
-      setExpandido(null);
-      return;
-    }
-    setExpandido(codcli);
-    if (!titulosPorCliente.has(codcli)) {
-      setCarregandoDrillDown(true);
-      axios
-        .get(`/api/financeiro/fluxo-caixa/clientes-risco/${codcli}/titulos`, { params: { empFil: empFilIds } })
-        .then(({ data }) => {
-          setTitulosPorCliente((atual) => new Map(atual).set(codcli, data.rows));
-        })
-        .catch(() => {})
-        .finally(() => setCarregandoDrillDown(false));
-    }
-  }
-
+function TitulosDoCliente({ codcli, empFilIds, base }: { codcli: number; empFilIds?: string; base: string }) {
+  const [titulos, setTitulos] = useState<TituloDrillDown[] | null>(null);
+  useEffect(() => {
+    let cancelado = false;
+    axios
+      .get(`${base}/${codcli}/titulos`, { params: { empFil: empFilIds } })
+      .then(({ data }) => !cancelado && setTitulos(data.rows))
+      .catch(() => !cancelado && setTitulos([]));
+    return () => {
+      cancelado = true;
+    };
+  }, [codcli, empFilIds, base]);
+  if (!titulos) return <p className="text-[11.5px] text-muted">Carregando títulos...</p>;
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-surface">
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              <th className="w-8 bg-surface-2" />
-              {COLUNAS.map((col) => (
-                <th
-                  key={col.chave}
-                  onClick={() => handleSort(col.chave)}
-                  className={`bg-surface-2 px-5 py-3 font-mono text-[10px] font-medium uppercase tracking-wider text-muted ${
-                    col.alinhar === "right" ? "text-right" : "text-left"
-                  } ${col.chave !== "nomcli" ? "cursor-pointer select-none hover:text-foreground" : ""}`}
-                >
-                  {col.label}
-                  {sort === col.chave && <span className="ml-1">{dir === "asc" ? "▲" : "▼"}</span>}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {loading &&
-              Array.from({ length: 6 }).map((_, i) => (
-                <tr key={i} className="border-t border-border/60">
-                  <td className="px-2" />
-                  <td className="px-5 py-3.5">
-                    <Skeleton className="h-4 w-36" />
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <Skeleton className="ml-auto h-4 w-20" />
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <Skeleton className="ml-auto h-4 w-20" />
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <Skeleton className="ml-auto h-4 w-14" />
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <Skeleton className="ml-auto h-4 w-14" />
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <Skeleton className="ml-auto h-5 w-10 rounded-full" />
-                  </td>
-                </tr>
-              ))}
-            {!loading &&
-              rows.map((row) => (
-              <>
-                <tr
-                  key={row.codcli}
-                  onClick={() => handleExpandir(row.codcli)}
-                  className="cursor-pointer border-t border-border/60 transition hover:bg-surface-2"
-                >
-                  <td className="px-2 text-center text-muted">{expandido === row.codcli ? "▾" : "▸"}</td>
-                  <td className="px-5 py-3.5 text-sm text-foreground">
-                    {row.codcli} - {row.nomcli}
-                  </td>
-                  <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">{fmtMoney(row.valorAberto)}</td>
-                  <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-destructive">{fmtMoney(row.valorVencido)}</td>
-                  <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{Math.round(row.atrasoMedio)} dias</td>
-                  <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">{row.maiorAtraso} dias</td>
-                  <td className="px-5 py-3.5 text-right">
-                    <span className={`rounded-full px-2 py-0.5 font-mono text-xs font-semibold ${toneBadge[toneScore(row.score)]}`}>
-                      {row.score}
-                    </span>
-                  </td>
-                </tr>
-                {expandido === row.codcli && (
-                  <tr key={`${row.codcli}-detalhe`} className="border-t border-border/60 bg-surface-2/40">
-                    <td colSpan={COLUNAS.length + 1} className="px-5 py-3">
-                      {carregandoDrillDown && !titulosPorCliente.has(row.codcli) ? (
-                        <p className="text-[11.5px] text-muted">Carregando títulos...</p>
-                      ) : (
-                        <table className="w-full border-collapse text-[12.5px]">
-                          <thead>
-                            <tr className="text-left text-muted">
-                              <th className="pb-1.5 pr-4 font-medium">Título</th>
-                              <th className="pb-1.5 pr-4 font-medium">Vencimento</th>
-                              <th className="pb-1.5 pr-4 text-right font-medium">Valor</th>
-                              <th className="pb-1.5 pr-4 text-right font-medium">Dias Atraso</th>
-                              <th className="pb-1.5 font-medium">Situação</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(titulosPorCliente.get(row.codcli) ?? []).map((t) => (
-                              <tr key={`${t.numtit}-${t.codtpt}`} className="border-t border-border/40">
-                                <td className="py-1.5 pr-4 font-mono text-foreground">
-                                  {t.numtit} - {t.codtpt}
-                                </td>
-                                <td className="py-1.5 pr-4 font-mono text-muted">{dateFormatter.format(new Date(t.vctpro))}</td>
-                                <td className="py-1.5 pr-4 text-right font-mono tabular-nums text-foreground">{fmtMoney(t.valor)}</td>
-                                <td className="py-1.5 pr-4 text-right font-mono tabular-nums text-destructive">{t.diasAtraso}</td>
-                                <td className="py-1.5">
-                                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${toneBadge[t.situacaoTone]}`}>
-                                    {t.situacaoLabel}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                    </td>
-                  </tr>
-                )}
-              </>
-            ))}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td colSpan={COLUNAS.length + 1} className="px-5 py-8 text-center text-sm text-muted">
-                  Nenhum cliente em risco encontrado com os filtros atuais.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+    <table className="w-full border-collapse text-[12.5px]">
+      <thead>
+        <tr className="text-left text-muted">
+          <th className="pb-1.5 pr-4 font-medium">Título</th>
+          <th className="pb-1.5 pr-4 font-medium">Vencimento</th>
+          <th className="pb-1.5 pr-4 text-right font-medium">Valor</th>
+          <th className="pb-1.5 pr-4 text-right font-medium">Dias Atraso</th>
+          <th className="pb-1.5 font-medium">Situação</th>
+        </tr>
+      </thead>
+      <tbody>
+        {titulos.map((t) => (
+          <tr key={`${t.numtit}-${t.codtpt}`} className="border-t border-border/40">
+            <td className="py-1.5 pr-4 font-mono text-foreground">
+              {t.numtit} - {t.codtpt}
+            </td>
+            <td className="py-1.5 pr-4 font-mono text-muted">{dateFormatter.format(new Date(t.vctpro))}</td>
+            <td className="py-1.5 pr-4 text-right font-mono tabular-nums text-foreground">{fmtMoney(t.valor)}</td>
+            <td className="py-1.5 pr-4 text-right font-mono tabular-nums text-destructive">{t.diasAtraso}</td>
+            <td className="py-1.5">
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${toneBadge[t.situacaoTone]}`}>{t.situacaoLabel}</span>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
-      <Pagination page={page} pageSize={pageSize} total={total} loading={loading} onPageChange={onPageChange} label="clientes" />
-    </div>
+export function ClientesRiscoTable({ url, params, empFilIds, recarga }: { url: string; params: Record<string, unknown>; empFilIds?: string; recarga?: unknown }) {
+  return (
+    <ListaServidor<ClienteRiscoRow>
+      chave="financeiro.fluxo-caixa.clientes-risco"
+      url={url}
+      params={params}
+      recarga={recarga}
+      defs={COLUNAS}
+      pageSize={20}
+      chaveLinha={(r) => String(r.codcli)}
+      rotulo="clientes"
+      vazio="Nenhum cliente em risco encontrado com os filtros atuais."
+      detalhe={(r) => <TitulosDoCliente codcli={r.codcli} empFilIds={empFilIds} base={url} />}
+    />
   );
 }
