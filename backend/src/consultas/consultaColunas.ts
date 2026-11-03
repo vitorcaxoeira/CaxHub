@@ -56,7 +56,15 @@ function filtraveis(colunas: ColunaConsulta[]): ColunaFiltravel[] {
   return colunas.map((c) => ({ nome: c.nome, tipo: c.tipo, obrigatoria: !!c.obrigatoria, prisma: PRISMA_POR_TIPO[c.tipo] }));
 }
 
-export class ErroEntradaConsulta extends Error {}
+/** Erro de entrada (400 por padrão) ou de acesso (`status` 403/404) que a rota devolve como está, com a mensagem em português. */
+export class ErroEntradaConsulta extends Error {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
+    super(message);
+  }
+}
 
 /** Lê `filtros` (JSON) e `ordem` da query de uma rota e valida contra as colunas declaradas. Lança ErroEntradaConsulta em português (400). */
 export function lerFiltrosEOrdemConsulta(colunas: ColunaConsulta[], query: Record<string, unknown>): { filtros: FiltroColuna[]; ordem: OrdemColuna[] } {

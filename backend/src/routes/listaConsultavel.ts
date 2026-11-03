@@ -93,7 +93,7 @@ function limpar(linha: Record<string, unknown>): Record<string, unknown> {
 }
 
 function erroHttp(res: Response, erro: unknown, rotulo: string) {
-  if (erro instanceof ErroEntradaConsulta) return res.status(400).json({ error: erro.message });
+  if (erro instanceof ErroEntradaConsulta) return res.status(erro.status).json({ error: erro.message });
   const mensagem = erro instanceof Error ? erro.message : String(erro);
   console.error(`[lista:${rotulo}]`, mensagem);
   return res.status(500).json({ error: mensagem });
