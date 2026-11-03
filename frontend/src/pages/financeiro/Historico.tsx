@@ -1,8 +1,12 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
+import { campoEmpFil } from "../../components/ui/padroesFiltros/campos";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { SelectFiltro } from "../../components/ui/ControlesFiltro";
 import { EmpresaFilialFilter, EmpresaOption, FilialOption } from "../../components/financeiro/EmpresaFilialFilter";
 import { SerieTemporalBarra, SeriePonto } from "../../components/ui/SerieTemporalBarra";
-import { Skeleton } from "../../components/ui/Skeleton";
+import { KpiTile, KpiTileSkeleton } from "../../components/ui/KpiTile";
 
 const API_BASE = "/api/financeiro/historico";
 
@@ -30,6 +34,18 @@ export function Historico() {
 
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+
+  // Padrão de cada filtro (estrela): aplicado uma vez ao abrir, antes da 1ª consulta.
+  const p = usePadroesTela({
+    tela: "financeiro.historico",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    campos: {
+      empFil: campoEmpFil(empresasFiliais, setEmpresasFiliais, opcoes?.filiais),
+      meses: { rotulo: "Período", atual: meses, aplicar: setMeses, validar: regras.valorUnico("number", [12, 24, 36]), semOpcoes: true },
+    },
+  });
 
   const empFilIds = empresasFiliais.join(",") || undefined;
 
@@ -37,10 +53,14 @@ export function Historico() {
     axios
       .get(`${API_BASE}/opcoes-filtro`)
       .then(({ data }) => setOpcoes(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro"));
+      .catch((err) => {
+        setOpcoesFalharam(true);
+        setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro");
+      });
   }, []);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoading(true);
     const params = { empFil: empFilIds, meses };
     Promise.all([axios.get(`${API_BASE}/kpis`, { params }), axios.get(`${API_BASE}/serie`, { params })])
@@ -56,7 +76,7 @@ export function Historico() {
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os indicadores"))
       .finally(() => setLoading(false));
-  }, [empFilIds, meses]);
+  }, [empFilIds, meses, p.pronto]);
 
   const kpiCards = kpis
     ? [
@@ -78,16 +98,19 @@ export function Historico() {
           filiais={opcoes?.filiais ?? []}
           selecionados={empresasFiliais}
           onChange={setEmpresasFiliais}
+          acessorio={p.estrela("empFil")}
         />
-        <select
+        <SelectFiltro
+          aria-label="Período"
+          className="w-52"
           value={meses}
           onChange={(e) => setMeses(Number(e.target.value) as 12 | 24 | 36)}
-          className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          acessorio={p.estrela("meses")}
         >
           <option value={12}>Últimos 12 meses</option>
           <option value={24}>Últimos 24 meses</option>
           <option value={36}>Últimos 36 meses</option>
-        </select>
+        </SelectFiltro>
       </div>
 
       {erro && (
@@ -99,11 +122,7 @@ export function Historico() {
       {loading ? (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="rounded-lg border border-border bg-surface p-5">
-              <Skeleton className="mb-2 h-3.5 w-32" />
-              <Skeleton className="h-7 w-20" />
-              <Skeleton className="mt-2 h-3 w-24" />
-            </div>
+            <KpiTileSkeleton key={i} />
           ))}
         </div>
       ) : (
@@ -111,11 +130,7 @@ export function Historico() {
           <>
             <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
               {kpiCards.map((kpi) => (
-                <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
-                  <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
-                  <span className="block font-mono text-2xl font-semibold tabular-nums text-foreground">{kpi.value}</span>
-                  <p className="mt-1.5 text-[11px] text-muted">{kpi.sub}</p>
-                </div>
+                <KpiTile key={kpi.label} label={kpi.label} value={kpi.value} sub={kpi.sub} />
               ))}
             </div>
 

@@ -1,8 +1,13 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
+import { campoEmpFil } from "../../components/ui/padroesFiltros/campos";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { ParDatasFiltro } from "../../components/ui/ControlesFiltro";
+import { campoParDatas } from "../../components/ui/padroesFiltros/campos";
 import { EmpresaFilialFilter, EmpresaOption, FilialOption } from "../../components/financeiro/EmpresaFilialFilter";
 import { RankingBarra, RankingItem } from "../../components/ui/RankingBarra";
-import { Skeleton } from "../../components/ui/Skeleton";
+import { KpiTile, KpiTileSkeleton } from "../../components/ui/KpiTile";
 
 const API_BASE = "/api/financeiro/clientes";
 
@@ -19,10 +24,6 @@ interface OpcoesFiltro {
 
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtMoney = (v: number) => `R$ ${currency.format(v)}`;
-
-function dateInputClass() {
-  return "rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-}
 
 function mapRows(rows: { codcli: number; nomcli: string; qtd: number; valor: number }[]): RankingItem[] {
   return rows.map((r) => ({ chave: r.codcli, nome: `${r.codcli} - ${r.nomcli}`, quantidade: r.qtd, valor: r.valor }));
@@ -41,6 +42,21 @@ export function Clientes() {
 
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+
+  // Padrão de cada filtro (estrela): aplicado uma vez ao abrir, antes da 1ª consulta.
+  const p = usePadroesTela({
+    tela: "financeiro.clientes",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    campos: {
+      empFil: campoEmpFil(empresasFiliais, setEmpresasFiliais, opcoes?.filiais),
+      periodo: campoParDatas("Período", periodoInicio, periodoFim, (de, ate) => {
+        setPeriodoInicio(de);
+        setPeriodoFim(ate);
+      }),
+    },
+  });
 
   const empFilIds = empresasFiliais.join(",") || undefined;
 
@@ -48,10 +64,14 @@ export function Clientes() {
     axios
       .get(`${API_BASE}/opcoes-filtro`)
       .then(({ data }) => setOpcoes(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro"));
+      .catch((err) => {
+        setOpcoesFalharam(true);
+        setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro");
+      });
   }, []);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoading(true);
     const params = {
       empFil: empFilIds,
@@ -73,7 +93,7 @@ export function Clientes() {
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os indicadores"))
       .finally(() => setLoading(false));
-  }, [empFilIds, periodoInicio, periodoFim]);
+  }, [empFilIds, periodoInicio, periodoFim, p.pronto]);
 
   const kpiCards = kpis
     ? [
@@ -96,25 +116,18 @@ export function Clientes() {
             filiais={opcoes?.filiais ?? []}
             selecionados={empresasFiliais}
             onChange={setEmpresasFiliais}
+            acessorio={p.estrela("empFil")}
           />
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted">Período (base p/ novos):</span>
-            <input
-              type="date"
-              className={dateInputClass()}
-              value={periodoInicio ?? ""}
-              onChange={(e) => setPeriodoInicio(e.target.value || null)}
-            />
-            <span className="text-sm text-muted">até</span>
-            <input
-              type="date"
-              className={dateInputClass()}
-              value={periodoFim ?? ""}
-              onChange={(e) => setPeriodoFim(e.target.value || null)}
-            />
-          </div>
+          <ParDatasFiltro
+            rotulo="Período (base p/ novos)"
+            de={periodoInicio ?? ""}
+            ate={periodoFim ?? ""}
+            onDe={(v) => setPeriodoInicio(v || null)}
+            onAte={(v) => setPeriodoFim(v || null)}
+            acessorio={p.estrela("periodo")}
+          />
         </div>
       </div>
 
@@ -127,11 +140,7 @@ export function Clientes() {
       {loading ? (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="rounded-lg border border-border bg-surface p-5">
-              <Skeleton className="mb-2 h-3.5 w-32" />
-              <Skeleton className="h-7 w-16" />
-              <Skeleton className="mt-2 h-3 w-24" />
-            </div>
+            <KpiTileSkeleton key={i} />
           ))}
         </div>
       ) : (
@@ -139,11 +148,7 @@ export function Clientes() {
           <>
             <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
               {kpiCards.map((kpi) => (
-                <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
-                  <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
-                  <span className="block font-mono text-2xl font-semibold tabular-nums text-foreground">{kpi.value}</span>
-                  <p className="mt-1.5 text-[11px] text-muted">{kpi.sub}</p>
-                </div>
+                <KpiTile key={kpi.label} label={kpi.label} value={kpi.value} sub={kpi.sub} />
               ))}
             </div>
 
