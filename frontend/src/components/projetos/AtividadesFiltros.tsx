@@ -1,5 +1,7 @@
 import { ColunaKanban } from "./KanbanBoard";
+import type { ReactNode } from "react";
 import { MultiSelectDropdown } from "../ui/MultiSelectDropdown";
+import { CaixaMarcacaoFiltro } from "../ui/ControlesFiltro";
 import type { SituacaoKpi } from "./IndicadoresProjetos";
 import type { FiltrosAtividades } from "./AtividadesTable";
 
@@ -43,6 +45,8 @@ interface AtividadesFiltrosProps {
   situacaoKpi: SituacaoKpi | null;
   onFiltros: (patch: Partial<FiltrosAtividades>) => void;
   onLimparKpi: () => void;
+  /** Estrela de padrão de cada filtro (depexe, colunaId, pripro, codfor, atrasada). */
+  estrela?: (campo: string) => ReactNode;
 }
 
 // Barra de filtros compartilhada entre a Lista (dentro de AtividadesTable) e o Quadro
@@ -57,6 +61,7 @@ export function AtividadesFiltros({
   situacaoKpi,
   onFiltros,
   onLimparKpi,
+  estrela,
 }: AtividadesFiltrosProps) {
   const selectClass =
     "rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -78,6 +83,7 @@ export function AtividadesFiltros({
         onChange={(valores) => onFiltros({ depexe: valores.join(",") })}
         labelTodos="Todos os departamentos"
         labelSufixo="departamentos"
+        acessorio={estrela?.("depexe")}
       />
       <MultiSelectDropdown
         opcoes={colunas.map((c) => ({ value: c.id, label: c.nome }))}
@@ -85,6 +91,7 @@ export function AtividadesFiltros({
         onChange={(valores) => onFiltros({ colunaId: valores.join(",") })}
         labelTodos="Todas as situações"
         labelSufixo="situações"
+        acessorio={estrela?.("colunaId")}
       />
       <MultiSelectDropdown
         opcoes={prioridades}
@@ -92,6 +99,7 @@ export function AtividadesFiltros({
         onChange={(valores) => onFiltros({ pripro: valores.join(",") })}
         labelTodos="Todas as prioridades"
         labelSufixo="prioridades"
+        acessorio={estrela?.("pripro")}
       />
       <MultiSelectDropdown
         opcoes={consultores}
@@ -99,6 +107,7 @@ export function AtividadesFiltros({
         onChange={(valores) => onFiltros({ codfor: valores.join(",") })}
         labelTodos="Todos os consultores"
         labelSufixo="consultores"
+        acessorio={estrela?.("codfor")}
       />
       {situacaoKpi ? (
         <button
@@ -108,10 +117,9 @@ export function AtividadesFiltros({
           Filtro do KPI ativo: {SITUACAO_KPI_LABEL[situacaoKpi]} <span aria-hidden>✕</span>
         </button>
       ) : (
-        <label className="flex items-center gap-2 text-sm text-muted">
-          <input type="checkbox" checked={filtros.atrasada} onChange={(e) => onFiltros({ atrasada: e.target.checked })} />
+        <CaixaMarcacaoFiltro marcado={filtros.atrasada} onChange={(atrasada) => onFiltros({ atrasada })} acessorio={estrela?.("atrasada")}>
           Só atrasadas
-        </label>
+        </CaixaMarcacaoFiltro>
       )}
     </div>
   );

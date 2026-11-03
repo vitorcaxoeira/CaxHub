@@ -4,6 +4,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { AutocompleteRemoto } from "../../components/ui/AutocompleteRemoto";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
+import { MolduraFiltro, DATA_EMBUTIDA } from "../../components/ui/ControlesFiltro";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { Pagination } from "../../components/ui/Pagination";
 import { toneBadge } from "../../components/ui/badges";
 import { StatusViagemBadge } from "../../components/solicitacoes/StatusViagemBadge";
@@ -81,7 +84,12 @@ const PADRAO_STATUS: Record<EscopoViagem, StatusViagem[]> = {
   aprovacao: ["aguardando_aprovacao"],
 };
 
+// A mesma página serve as três rotas: trocar de escopo monta a lista de novo (filtro do zero e o padrão salvo daquele escopo).
 export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
+  return <ListaSolicitacoes key={escopo} escopo={escopo} />;
+}
+
+function ListaSolicitacoes({ escopo }: { escopo: EscopoViagem }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const texto = TEXTOS[escopo];
@@ -104,15 +112,28 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
   const [erro, setErro] = useState<string | null>(null);
   const tamanho = 25;
 
-  // A mesma página serve as três rotas: trocar de escopo recomeça o filtro do zero.
-  useEffect(() => {
-    setStatus(PADRAO_STATUS[escopo]);
-    setFinalidades([]);
-    setCliente(null);
-    setTerminoDe("");
-    setBusca("");
-    setPagina(1);
-  }, [escopo]);
+  // Padrão de cada filtro (estrela, 03/11/2026): um por escopo (minhas, atendimento, aprovação), aplicado antes da 1ª consulta.
+  const p = usePadroesTela({
+    tela: `solicitacoes.${escopo}`,
+    campos: {
+      status: { rotulo: "Status", atual: status, aplicar: setStatus, validar: regras.lista("string", STATUS_OPCOES.map((o) => o.value)), semOpcoes: true },
+      finalidade: {
+        rotulo: "Finalidade",
+        atual: finalidades,
+        aplicar: setFinalidades,
+        validar: regras.lista("string", FINALIDADE_OPCOES.map((o) => o.value)),
+        semOpcoes: true,
+      },
+      cliente: { rotulo: "Cliente", atual: cliente, aplicar: setCliente, validar: regras.objeto("codcli"), semOpcoes: true },
+      terminoDe: {
+        rotulo: "Término a partir de",
+        atual: terminoDe || null,
+        aplicar: (v: string | null) => setTerminoDe(v ?? ""),
+        validar: regras.data(),
+        semOpcoes: true,
+      },
+    },
+  });
 
   // Chaveado em id/papel (não no objeto `user`): se o objeto for recriado, o filtro que a pessoa já
   // mexeu na tela não pode voltar ao padrão.
@@ -124,6 +145,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
       setPronto(true);
       return;
     }
+    if (!p.pronto) return;
     let cancelado = false;
     setPronto(false);
     axios
@@ -136,7 +158,8 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
           // Viagem/pedido que já terminou fica de fora; "Ver histórico" limpa a data. Sem status marcado de
           // propósito: quem recebe um pedido "Outros" acompanha desde a abertura, e é o servidor que limita
           // o que cada um enxerga (viagem só Reservada/Finalizada; pedido tudo, menos Cancelado).
-          setTerminoDe(hojeIso());
+          // Quem salvou um padrão para a data fica com ele.
+          if (!p.temPadrao("terminoDe")) setTerminoDe(hojeIso());
         }
       })
       .catch(() => {})
@@ -144,10 +167,11 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
     return () => {
       cancelado = true;
     };
-  }, [escopo, usuarioId, usuarioRole]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [escopo, usuarioId, usuarioRole, p.pronto]);
 
   const carregar = useCallback(async () => {
-    if (!pronto) return;
+    if (!pronto || !p.pronto) return;
     setCarregando(true);
     setErro(null);
     try {
@@ -171,7 +195,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
     } finally {
       setCarregando(false);
     }
-  }, [pronto, escopo, status, finalidades, cliente, terminoDe, buscaDebounced, pagina]);
+  }, [pronto, p.pronto, escopo, status, finalidades, cliente, terminoDe, buscaDebounced, pagina]);
 
   useEffect(() => {
     carregar();
@@ -219,6 +243,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
             Limpar status ({totalGeral} no total)
           </button>
         )}
+        <span className="relative inline-block h-7 w-7">{p.estrela("status")}</span>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -228,16 +253,15 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
           placeholder="Buscar por nº, motivo, destino, item, solicitante ou cliente"
           className={`${classeCampo} max-w-sm`}
         />
-        <label className="flex items-center gap-2 text-[12.5px] text-muted">
-          Término a partir de
-          <input type="date" value={terminoDe} onChange={(e) => setTerminoDe(e.target.value)} className={`${classeCampo} w-auto`} />
-        </label>
+        <MolduraFiltro rotulo="Término a partir de" acessorio={p.estrela("terminoDe")}>
+          <input type="date" aria-label="Término a partir de" value={terminoDe} onChange={(e) => setTerminoDe(e.target.value)} className={DATA_EMBUTIDA} />
+        </MolduraFiltro>
         {terminoDe && (
           <button onClick={() => setTerminoDe("")} className="text-[12.5px] text-primary hover:underline" title="Viagens já encerradas ficam fora; limpe a data para ver o histórico.">
             Ver histórico
           </button>
         )}
-        <MultiSelectDropdown opcoes={FINALIDADE_OPCOES} selecionados={finalidades} onChange={setFinalidades} labelTodos="Todas as finalidades" labelSufixo="finalidade(s)" />
+        <MultiSelectDropdown opcoes={FINALIDADE_OPCOES} selecionados={finalidades} onChange={setFinalidades} labelTodos="Todas as finalidades" labelSufixo="finalidade(s)"  acessorio={p.estrela("finalidade")} />
         <div className="w-64">
           <AutocompleteRemoto<ClienteOpcao>
             valor={cliente}
@@ -248,6 +272,7 @@ export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
             detalhe={(c) => c.nomcli}
             chave={(c) => c.codcli}
             placeholder="Todos os clientes"
+            acessorio={p.estrela("cliente")}
           />
         </div>
       </div>

@@ -80,3 +80,14 @@ describe("demais regras", () => {
     expect(regras.listaObjetos("cod")(["x"])).toEqual({ ok: false });
   });
 });
+
+describe("regras.objeto", () => {
+  it("objeto com a chave ou null; o resto é recusado", () => {
+    const v = regras.objeto("codcli");
+    expect(v({ codcli: 1, nomcli: "A" })).toEqual({ ok: true, valor: { codcli: 1, nomcli: "A" } });
+    expect(v(null)).toEqual({ ok: true, valor: null });
+    expect(v({ outro: 1 }).ok).toBe(false);
+    expect(v([{ codcli: 1 }]).ok).toBe(false);
+    expect(v("1").ok).toBe(false);
+  });
+});

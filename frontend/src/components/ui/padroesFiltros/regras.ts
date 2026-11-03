@@ -63,6 +63,11 @@ export const regras = {
       Array.isArray(v) && v.every((x) => typeof x === "object" && x !== null && !Array.isArray(x) && chave in x) ? ok(v as T[]) : falha;
   },
 
+  /** Um objeto plano com `chave` escolhido numa busca do servidor (ex.: o cliente de um autocomplete), ou null ("Todos"). */
+  objeto<T extends Record<string, unknown>>(chave: string): Validador<T | null> {
+    return (v) => (v === null ? ok(null) : typeof v === "object" && !Array.isArray(v) && chave in (v as object) ? ok(v as T) : falha);
+  },
+
   /** Select de valor único: um dos `existentes` (se informados); `nuloOk` aceita null ("Todas"). */
   valorUnico<T extends string | number>(tipo: Tipo, existentes?: readonly T[], opcoes: { nuloOk?: boolean } = {}): Validador<T | null> {
     return (v) => {
