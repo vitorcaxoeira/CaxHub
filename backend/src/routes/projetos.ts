@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { col, registrarListaConsultavel } from "./listaConsultavel";
+import { rotuloSql } from "../consultas/rotuloSql";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import {
@@ -854,12 +855,6 @@ projetosRouter.get("/propostas/aging", async (req, res) => {
 // Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts, trazido do CaxHub_Dash em 03/11/2026): a consulta
 // é a da tela (filtros do topo + alerta), vira subconsulta. Os rótulos (situação, depto., forma de faturamento, modalidade) saem em SQL
 // para o funil filtrar e ordenar por eles no servidor; mesmas regras de propostasDominio.ts.
-
-/** CASE de rótulo a partir de um mapa código → texto; código fora do mapa vira `<prefixo> <código>`, nulo vira `nulo`. */
-function rotuloSql(expr: Prisma.Sql, mapa: Record<number, string>, prefixo: string, nulo = "—"): Prisma.Sql {
-  const quando = Object.entries(mapa).map(([k, v]) => Prisma.sql`WHEN ${expr} = ${Number(k)} THEN ${v}`);
-  return Prisma.sql`(CASE WHEN ${expr} IS NULL THEN ${nulo} ${Prisma.join(quando, " ")} ELSE ${prefixo + " "} || ${expr}::text END)`;
-}
 
 function condicaoAlertaSql(alerta: string | null, estagnadaDias: number): Prisma.Sql {
   // "1900-12-31" é a sentinela de "sem data" do Senior em datenv/datret — NULLIF trata como NULL de verdade (ver /propostas/alertas).

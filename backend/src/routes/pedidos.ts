@@ -1,9 +1,11 @@
 import { Router } from "express";
-import { Pedido, Cliente } from "@prisma/client";
+import { Pedido, Cliente, Prisma } from "@prisma/client";
+import { col, registrarListaConsultavel } from "./listaConsultavel";
+import { rotuloSql } from "../consultas/rotuloSql";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { sitpedLabel, sitpedTone, SITPED_LABELS } from "../domain/pedidoDominio";
-import { forfatLabel, modproLabel, modproTone, sitproLabel, sitproTone } from "../domain/propostasDominio";
+import { FORFAT_LABELS, MODPRO_LABELS, SITPRO_LABELS, forfatLabel, modproLabel, modproTone, sitproLabel, sitproTone } from "../domain/propostasDominio";
 import { runPedidoSyncPorClientes, ResultadoSyncPorCliente } from "../sync/pedidoSync";
 
 // Tela "Mercado > Listar Pedidos" — espelho de E120PED (ver backend/src/sync/pedidoSync.ts).
@@ -274,57 +276,95 @@ function mapearPedido(p: Pedido, lookups: Lookups) {
   };
 }
 
-// GET / — lista de pedidos, com filtro de cliente (busca livre), número do pedido,
-// número da RAT, número da proposta e situação (multi-select). Mesmo padrão de
-// GET /rats: carrega tudo via Prisma, filtra em memória, pagina por último — não há
-// regra de visibilidade por usuário aqui (admin vê tudo).
-pedidosRouter.get("/", async (req, res) => {
-  try {
-    let pedidos = await prisma.pedido.findMany({
-      where: { removidoEmSenior: null },
-      orderBy: [{ datemi: "desc" }, { numped: "desc" }],
-    });
+// GET / — lista de pedidos (aba Lista). Desde 03/11/2026 (trazido do CaxHub_Dash) é uma lista consultável (listaConsultavel.ts): a
+// consulta resolve Pedido -> RAT -> Proposta -> Consultor e Forma/Condição de Pagamento em SQL, com os MESMOS filtros da barra de
+// lerFiltros/aplicarFiltros/filtrarPorProposta/filtrarPorModalidade, para o funil, a ordem por coluna e o rodapé de totais valerem sobre
+// todos os pedidos do filtro (não só a página). As outras rotas (Por Cliente, sincronizar) seguem com os filtros em memória.
+const SITPED_ROTULO_SQL = rotuloSql(Prisma.sql`p.sitped`, SITPED_LABELS, "Situação");
+// Mesmas regras de sitpedTone, modproTone e sitproTone.
+const SITPED_TOM_SQL = Prisma.sql`(CASE WHEN p.sitped = 5 THEN 'destructive' WHEN p.sitped = 4 THEN 'success'
+  WHEN p.sitped IN (1, 2, 7, 9) THEN 'warning' ELSE 'neutral' END)`;
+const MODPRO_TOM_SQL = Prisma.sql`(CASE WHEN pr.modpro = 1 THEN 'warning' WHEN pr.modpro = 2 THEN 'success' ELSE 'neutral' END)`;
+const SITPRO_TOM_SQL = Prisma.sql`(CASE WHEN pr.sitpro IN (4, 7, 8) THEN 'success' WHEN pr.sitpro IN (5, 6) THEN 'destructive'
+  WHEN pr.sitpro IN (1, 2, 3, 9) THEN 'warning' ELSE 'neutral' END)`;
+/** Algum termo da lista (busca "a,b,c") aparece no texto: mesma regra de termosBusca + includes. */
+const algumTermo = (termos: string[], texto: Prisma.Sql) =>
+  Prisma.sql`EXISTS (SELECT 1 FROM unnest(${termos}::text[]) AS termo WHERE position(termo IN ${texto}) > 0)`;
 
-    const codclisUnicos = [...new Set(pedidos.map((p) => p.codcli))];
-    const clientes = codclisUnicos.length > 0 ? await prisma.cliente.findMany({ where: { codcli: { in: codclisUnicos } } }) : [];
-    const clientePorCodcli = new Map(clientes.map((c) => [c.codcli, c]));
-
-    const filtros = lerFiltros(req);
-    pedidos = aplicarFiltros(pedidos, filtros, clientePorCodcli);
-
-    // RAT/Proposta/Consultor resolvidos ANTES da paginação (não só na página atual) —
-    // precisa disso pra saber se um pedido bate com o filtro de Nro. Proposta antes de
-    // paginar. Roda sobre o conjunto já reduzido pelos filtros "baratos" acima
-    // (cliente/pedido/RAT/situação), não a base inteira sem filtro nenhum.
-    const { ratPorChave, propostaPorChave, consultorPorCodfor } = await resolverRatEProposta(pedidos);
-    pedidos = filtrarPorProposta(pedidos, filtros.buscaCodpro, ratPorChave, propostaPorChave);
-    pedidos = filtrarPorModalidade(pedidos, filtros.modproFiltro, ratPorChave, propostaPorChave);
-
-    const total = pedidos.length;
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
-    const inicioPagina = (page - 1) * pageSize;
-    pedidos = pedidos.slice(inicioPagina, inicioPagina + pageSize);
-
-    // Forma/Condição de Pagamento só pra página atual, mesmo padrão de rats.ts.
-    const { formaPagamentoPorChave, condicaoPagamentoPorChave } = await resolverFormaECondicaoPagamento(pedidos);
-    const lookups: Lookups = {
-      clientePorCodcli,
-      ratPorChave,
-      propostaPorChave,
-      consultorPorCodfor,
-      formaPagamentoPorChave,
-      condicaoPagamentoPorChave,
+registrarListaConsultavel(
+  pedidosRouter,
+  "/",
+  (req) => {
+    const f = lerFiltros(req);
+    const numped = termosBusca(f.buscaNumped);
+    const numrat = termosBusca(f.buscaNumrat);
+    const codpro = termosBusca(f.buscaCodpro);
+    const sitped = f.sitpedFiltro.length ? f.sitpedFiltro : null;
+    const modpro = f.modproFiltro.length ? f.modproFiltro : null;
+    const de = f.datemiDe ? f.datemiDe.toISOString().slice(0, 10) : null;
+    const ate = f.datemiAte ? f.datemiAte.toISOString().slice(0, 10) : null;
+    return {
+      interna: Prisma.sql`
+        SELECT p.codemp, p.codfil, p.numped, p.codcli, p.datemi, p.datprv, p.obsped, NULLIF(trim(p.obsmot), '') AS obsmot,
+               p.vlrliq::float8 AS vlrliq, p.pedcli, p.sitped,
+               COALESCE(c.codcli || ' - ' || c.nomcli, p.codcli::text) AS cliente,
+               ${SITPED_ROTULO_SQL} AS situacao, ${SITPED_TOM_SQL} AS "sitpedTone",
+               p.numrat::text AS numrat, r.id AS "ratId",
+               CASE WHEN r.id IS NULL THEN NULL ELSE COALESCE(co.nomcom, co.nomfor, 'Fornecedor ' || r.codfor) END AS consultor,
+               r.codpro AS "propostaCodpro", pr.codlev2 AS "propostaCodlev2",
+               CASE WHEN r.codpro IS NULL THEN NULL
+                    WHEN pr.codlev2 IS NOT NULL AND pr.codlev2 <> 0 THEN r.codpro || ' → ' || pr.codlev2
+                    ELSE r.codpro::text END AS proposta,
+               CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${rotuloSql(Prisma.sql`pr.modpro`, MODPRO_LABELS, "Modalidade")} END AS modalidade,
+               CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${MODPRO_TOM_SQL} END AS "modalidadeTone",
+               CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${rotuloSql(Prisma.sql`pr.sitpro`, SITPRO_LABELS, "Situação", "Sem situação")} END AS "situacaoProposta",
+               CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${SITPRO_TOM_SQL} END AS "situacaoPropostaTone",
+               CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${rotuloSql(Prisma.sql`pr.forfat`, FORFAT_LABELS, "Forma")} END AS faturamento,
+               fp.desfpg AS "formaPagamento", cp.descpg AS "condicaoPagamento"
+        FROM pedidos p
+        LEFT JOIN clientes c ON c.codcli = p.codcli
+        LEFT JOIN LATERAL (
+          SELECT r.id, r.codemp, r.codpro, r.codfor FROM rats r WHERE r.codemp = p.codemp AND r.numrat = p.numrat ORDER BY r.id DESC LIMIT 1
+        ) r ON p.numrat IS NOT NULL
+        LEFT JOIN propostas pr ON pr.codemp = r.codemp AND pr.codpro = r.codpro
+        LEFT JOIN LATERAL (SELECT co.nomcom, co.nomfor FROM consultores co WHERE co.codfor = r.codfor LIMIT 1) co ON r.id IS NOT NULL
+        LEFT JOIN formas_pagamento fp ON fp.codemp = p.codemp AND fp.codfpg = p.codfpg
+        LEFT JOIN condicoes_pagamento cp ON cp.codemp = p.codemp AND cp.codcpg = p.codcpg
+        WHERE p.removido_em_senior IS NULL
+          AND (${f.buscaCliente} = '' OR position(${f.buscaCliente} IN lower(COALESCE(c.codcli || ' - ' || c.nomcli, p.codcli::text))) > 0)
+          AND (${numped.length === 0} OR ${algumTermo(numped, Prisma.sql`p.numped::text`)})
+          AND (${numrat.length === 0} OR (p.numrat IS NOT NULL AND ${algumTermo(numrat, Prisma.sql`p.numrat::text`)}))
+          AND (${codpro.length === 0} OR ${algumTermo(codpro, Prisma.sql`r.codpro::text`)}
+               OR (pr.codlev2 IS NOT NULL AND pr.codlev2 <> 0 AND ${algumTermo(codpro, Prisma.sql`pr.codlev2::text`)}))
+          AND (${sitped}::int[] IS NULL OR p.sitped = ANY(${sitped}::int[]))
+          AND (${modpro}::int[] IS NULL OR pr.modpro = ANY(${modpro}::int[]))
+          AND (${de}::date IS NULL OR p.datemi >= ${de}::date)
+          AND (${ate}::date IS NULL OR p.datemi <= ${ate}::date)`,
+      colunas: [
+        col.inteiro("numped", { obrigatoria: true }),
+        col.texto("cliente", { obrigatoria: true }),
+        col.texto("situacao", { obrigatoria: true }),
+        col.texto("numrat"),
+        col.texto("consultor"),
+        col.texto("proposta"),
+        col.texto("modalidade"),
+        col.texto("situacaoProposta"),
+        col.texto("faturamento"),
+        col.decimal("vlrliq"),
+        col.texto("obsmot"),
+        col.data("datemi", { obrigatoria: true }),
+        col.data("datprv"),
+        col.texto("pedcli"),
+        col.texto("formaPagamento"),
+        col.texto("condicaoPagamento"),
+      ],
+      totais: ["vlrliq"],
+      ordemPadrao: Prisma.sql`x."datemi" DESC, x."numped" DESC`,
+      pageSizePadrao: 30,
     };
-
-    res.json({
-      total,
-      pedidos: pedidos.map((p) => mapearPedido(p, lookups)),
-    });
-  } catch (error) {
-    handleError(res, error, "listar");
-  }
-});
+  },
+  "pedidos",
+);
 
 // Pedidos que passam nos filtros da barra da tela, já com os vínculos resolvidos. É a
 // base comum de GET /por-cliente/indice e POST /sincronizar — os dois TÊM que enxergar
