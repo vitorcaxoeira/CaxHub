@@ -1,8 +1,10 @@
 import { useSyncExternalStore } from "react";
 
-// Filtro único das telas de RH. Fica em um store de módulo (e no localStorage) para que o recorte
-// escolhido numa tela continue valendo ao trocar de tela: quem está olhando "Suporte Sapiens" em
-// Turnover quer ver o mesmo recorte em Absenteísmo.
+// Filtro único das telas de RH. Fica em um store de módulo para que o recorte escolhido numa tela
+// continue valendo ao trocar de tela: quem está olhando "Suporte Sapiens" em Turnover quer ver o
+// mesmo recorte em Absenteísmo. O que fica de uma visita para outra não é mais a memória do navegador
+// (localStorage) e sim o padrão de cada filtro que o USUÁRIO salva com a estrela (03/11/2026, servidor,
+// tela "rh": ver usePadroesRh.ts).
 
 export type PresetPeriodo = "12m" | "6m" | "3m" | "ano" | "mesAnterior" | "personalizado";
 
@@ -18,7 +20,8 @@ export interface FiltroRhEstado {
   cargo: string | null;
 }
 
-const CHAVE = "caxhub.rh.filtro.v1";
+// Chave da memória antiga do navegador: apagada na carga do módulo (o padrão agora é por usuário, no servidor).
+const CHAVE_ANTIGA = "caxhub.rh.filtro.v1";
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -53,28 +56,17 @@ function padrao(): FiltroRhEstado {
 
 function carregar(): FiltroRhEstado {
   try {
-    const bruto = localStorage.getItem(CHAVE);
-    if (!bruto) return padrao();
-    const salvo = JSON.parse(bruto) as Partial<FiltroRhEstado>;
-    const base = padrao();
-    const estado: FiltroRhEstado = { ...base, ...salvo };
-    // Preset relativo ("12m") é recalculado a cada abertura: "últimos 12 meses" de ontem não é o de hoje.
-    if (estado.preset !== "personalizado") Object.assign(estado, periodoDoPreset(estado.preset));
-    return estado;
+    localStorage.removeItem(CHAVE_ANTIGA);
   } catch {
-    return padrao();
+    // localStorage indisponível (navegação privada): nada a apagar.
   }
+  return padrao();
 }
 
 let estado: FiltroRhEstado = carregar();
 const ouvintes = new Set<() => void>();
 
 function publicar() {
-  try {
-    localStorage.setItem(CHAVE, JSON.stringify(estado));
-  } catch {
-    // localStorage indisponível (navegação privada): o filtro só não persiste entre recargas.
-  }
   ouvintes.forEach((o) => o());
 }
 

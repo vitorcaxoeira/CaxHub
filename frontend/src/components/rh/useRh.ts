@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { paramsDoFiltro, useFiltroRh } from "./filtroStore";
+import { useAplicarPadroesRh } from "./usePadroesRh";
 
 // Busca uma tela do módulo RH com o filtro único aplicado. Cada mudança de filtro refaz a busca e
 // descarta a resposta de uma busca anterior que chegue atrasada (a mais nova sempre vence).
@@ -12,6 +13,8 @@ export interface RespostaBase {
 
 export function useRh<T extends RespostaBase>(endpoint: string) {
   const filtro = useFiltroRh();
+  // O padrão de cada filtro (estrela) é aplicado antes da 1ª consulta da sessão.
+  const pronto = useAplicarPadroesRh();
   const [dados, setDados] = useState<T | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -39,8 +42,8 @@ export function useRh<T extends RespostaBase>(endpoint: string) {
   }, [endpoint, chave]);
 
   useEffect(() => {
-    buscar();
-  }, [buscar]);
+    if (pronto) buscar();
+  }, [buscar, pronto]);
 
   return { dados, carregando, erro, recarregar: buscar };
 }

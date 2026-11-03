@@ -115,9 +115,10 @@ export function PontoHoras() {
             {d.maioresSaldos && (
               <Painel titulo="Maiores saldos de banco" descricao="Lista nominal, só para o papel RH.">
                 <Tabela
+                  chave="rh.ponto.maiores-saldos"
                   colunas={[
-                    { titulo: "Colaborador", render: (l) => l.nome },
-                    { titulo: "Saldo", render: (l) => fmtHoras(l.saldoHoras), alinhar: "dir" },
+                    { nome: "nome", tipo: "texto", titulo: "Colaborador", render: (l) => l.nome },
+                    { nome: "saldoHoras", tipo: "decimal", titulo: "Saldo", render: (l) => fmtHoras(l.saldoHoras), alinhar: "dir", formatarResumo: (v) => fmtHoras(v) },
                   ]}
                   linhas={d.maioresSaldos}
                 />

@@ -140,11 +140,12 @@ export function Absenteismo() {
           {d.ranking ? (
             <Painel titulo="Quem mais se ausentou" descricao="Lista nominal, só para o papel RH.">
               <Tabela
+                chave="rh.absenteismo.ranking"
                 colunas={[
-                  { titulo: "Colaborador", render: (l) => l.nome },
-                  { titulo: "Dias com ausência", render: (l) => fmtInt(l.dias), alinhar: "dir" },
-                  { titulo: "Horas", render: (l) => fmtHoras(l.horasAusencia), alinhar: "dir" },
-                  { titulo: "Índice", render: (l) => fmtPct(l.indice), alinhar: "dir" },
+                  { nome: "nome", tipo: "texto", titulo: "Colaborador", render: (l) => l.nome },
+                  { nome: "dias", tipo: "inteiro", titulo: "Dias com ausência", render: (l) => fmtInt(l.dias), alinhar: "dir", formatarResumo: (v) => fmtInt(v) },
+                  { nome: "horasAusencia", tipo: "decimal", titulo: "Horas", render: (l) => fmtHoras(l.horasAusencia), alinhar: "dir", formatarResumo: (v) => fmtHoras(v) },
+                  { nome: "indice", tipo: "decimal", titulo: "Índice", render: (l) => fmtPct(l.indice), alinhar: "dir", formatarResumo: (v) => fmtPct(v) },
                 ]}
                 linhas={d.ranking}
                 vazio="Ninguém com ausência no período."

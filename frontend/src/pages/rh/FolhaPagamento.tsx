@@ -127,22 +127,24 @@ export function FolhaPagamento() {
           <GradeDePaineis>
             <Painel titulo="Maiores eventos" descricao="Proventos e descontos que mais pesam no período.">
               <Tabela
+                chave="rh.folha.maiores-eventos"
                 colunas={[
-                  { titulo: "Evento", render: (l) => l.evento },
-                  { titulo: "Tipo", render: (l) => <span className="text-muted">{l.tipo}</span> },
-                  { titulo: "Pessoas", render: (l) => fmtInt(l.colaboradores), alinhar: "dir" },
-                  { titulo: "Valor", render: (l) => fmtMoeda(l.valor), alinhar: "dir" },
+                  { nome: "evento", tipo: "texto", titulo: "Evento", render: (l) => l.evento },
+                  { nome: "tipo", tipo: "texto", titulo: "Tipo", render: (l) => <span className="text-muted">{l.tipo}</span> },
+                  { nome: "colaboradores", tipo: "inteiro", titulo: "Pessoas", render: (l) => fmtInt(l.colaboradores), alinhar: "dir" },
+                  { nome: "valor", tipo: "decimal", titulo: "Valor", render: (l) => fmtMoeda(l.valor), alinhar: "dir", formatarResumo: (v) => fmtMoeda(v) },
                 ]}
                 linhas={d.topEventos}
               />
             </Painel>
             <Painel titulo={`Por centro de custo${u ? ` (${u.rotulo})` : ""}`} descricao="Folha bruta da última competência e custo médio por pessoa.">
               <Tabela
+                chave="rh.folha.por-centro-custo"
                 colunas={[
-                  { titulo: "Centro de custo", render: (l) => l.rotulo },
-                  { titulo: "Pessoas", render: (l) => fmtInt(l.qtd), alinhar: "dir" },
-                  { titulo: "Bruto", render: (l) => fmtMoeda(l.bruto), alinhar: "dir" },
-                  { titulo: "Médio", render: (l) => (l.bruto != null && l.qtd ? fmtMoeda(l.bruto / l.qtd) : "—"), alinhar: "dir" },
+                  { nome: "rotulo", tipo: "texto", titulo: "Centro de custo", render: (l) => l.rotulo },
+                  { nome: "qtd", tipo: "inteiro", titulo: "Pessoas", render: (l) => fmtInt(l.qtd), alinhar: "dir", formatarResumo: (v) => fmtInt(v) },
+                  { nome: "bruto", tipo: "decimal", titulo: "Bruto", render: (l) => fmtMoeda(l.bruto), alinhar: "dir", formatarResumo: (v) => fmtMoeda(v) },
+                  { nome: "medio", tipo: "decimal", titulo: "Médio", render: (l) => (l.bruto != null && l.qtd ? fmtMoeda(l.bruto / l.qtd) : "—"), valor: (l) => (l.bruto != null && l.qtd ? l.bruto / l.qtd : null), alinhar: "dir" },
                 ]}
                 linhas={d.porCentroCusto}
               />

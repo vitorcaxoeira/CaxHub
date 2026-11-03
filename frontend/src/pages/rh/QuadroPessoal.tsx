@@ -143,10 +143,11 @@ export function QuadroPessoal() {
             <Painel titulo="Aniversários de empresa no mês" descricao="Quem completa mais um ano de casa no mês da data final.">
               {Array.isArray(aniversarios) ? (
                 <Tabela
+                  chave="rh.quadro.aniversarios"
                   colunas={[
-                    { titulo: "Colaborador", render: (l) => l.nome },
-                    { titulo: "Anos de casa", render: (l) => fmtInt(l.anos), alinhar: "dir" },
-                    { titulo: "Admissão", render: (l) => fmtData(l.admissao), alinhar: "dir" },
+                    { nome: "nome", tipo: "texto", titulo: "Colaborador", render: (l) => l.nome },
+                    { nome: "anos", tipo: "inteiro", titulo: "Anos de casa", render: (l) => fmtInt(l.anos), alinhar: "dir", formatarResumo: (v) => fmtInt(v) },
+                    { nome: "admissao", tipo: "data", titulo: "Admissão", render: (l) => fmtData(l.admissao), alinhar: "dir" },
                   ]}
                   linhas={aniversarios}
                   vazio="Ninguém completa ano de casa neste mês."
