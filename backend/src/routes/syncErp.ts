@@ -14,7 +14,9 @@ import { montarQuerySenior } from "../sync/consultaSenior";
 import { AuthenticatedRequest } from "../auth/middleware";
 import { dimensoesDoSistema, dimensaoPorChave, jobsComDimensao, jobsSemDimensao } from "../sync/dimensoesFiltro";
 import { diagnosticarRecorte, marcarOrfaosDoRecorte, suportaMarcarRemovido } from "../sync/recorteRetroativo";
-import { colunasFiltraveis, listarDadosDoJob, PAGE_SIZE_MAXIMO, SituacaoRemovidos, valoresDaColuna } from "../sync/dadosSincronizados";
+import { colunasFiltraveis, FUNCOES_RESUMO_DADOS, listarDadosDoJob, PAGE_SIZE_MAXIMO, resumoDosDados, SituacaoRemovidos, valoresDaColuna } from "../sync/dadosSincronizados";
+import { validarOrdem } from "../sync/ordemColuna";
+import { validarPedidosResumo } from "../sync/resumoColuna";
 import { validarFiltrosColuna } from "../sync/filtroColunaLocal";
 import { filtroDoJob } from "../sync/filtrosAtivos";
 import { modoConfiguradoDoJob, carregarModosVarreduraAtivos, ModoVarredura, liberarTetoUmaVez, tetoPctDoJob } from "../sync/politicaVarredura";
@@ -30,9 +32,12 @@ async function contextoDosDados(job: SyncJobDescriptor, query: Record<string, un
     situacaoBruta === "removidos" || situacaoBruta === "candidatos" || situacaoBruta === "sumidos" ? situacaoBruta : undefined;
   if (situacao && !suportaMarcarRemovido(job)) return { erro: "Esta tabela não tem detecção de exclusão no Senior" } as const;
   let filtros;
+  let ordem;
   try {
     const bruto = typeof query.filtros === "string" && query.filtros.trim() ? JSON.parse(query.filtros) : [];
     filtros = validarFiltrosColuna(colunasFiltraveis(job), bruto);
+    // Ordem por coluna da tela (`coluna:desc,outra`, 03/11/2026): só colunas que têm filtro (json não ordena).
+    ordem = validarOrdem(colunasFiltraveis(job).filter((c) => c.tipo !== "json").map((c) => c.nome), query.ordem);
   } catch (error) {
     return { erro: error instanceof SyntaxError ? "Filtros inválidos." : error instanceof Error ? error.message : "Filtros inválidos." } as const;
   }
@@ -47,7 +52,7 @@ async function contextoDosDados(job: SyncJobDescriptor, query: Record<string, un
       })
     : null;
   const extras = situacao ? { candidatosDesde: ultimaVarredura?.varreduraInicio ?? null, escopo: filtro!.escopoLocal } : {};
-  return { situacao, filtro, ultimaVarredura, extras, filtros };
+  return { situacao, filtro, ultimaVarredura, extras, filtros, ordem };
 }
 
 // Painel de administração dos jobs de sincronização Senior -> CaxHub: quando cada
@@ -320,13 +325,13 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
         res.status(400).json({ error: ctx.erro });
         return;
       }
-      const { situacao, filtro, ultimaVarredura, extras, filtros } = ctx;
+      const { situacao, filtro, ultimaVarredura, extras, filtros, ordem } = ctx;
       const base = {
         page: Number(req.query.page) || 1,
         pageSize: Number(req.query.pageSize) || 30,
         busca: typeof req.query.busca === "string" ? req.query.busca : "",
       };
-      const resultado = await listarDadosDoJob(job, { ...base, situacao, ...extras, filtros });
+      const resultado = await listarDadosDoJob(job, { ...base, situacao, ...extras, filtros, ordem });
       // Contagem de cada situação (sem busca) para as abas da tela de removidos.
       const contagens = situacao
         ? {
@@ -355,6 +360,43 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
       });
     } catch (error) {
       handleError(res, error, "dados");
+    }
+  });
+
+  // GET /:jobName/dados/resumo?resumo=[{coluna,funcao}] — rodapé de totais da tela "Ver dados"/"Removidos" (03/11/2026, trazido do
+  // CaxHub_Dash): sobre TODAS as linhas do mesmo recorte de /dados (busca, situação, filtros), não só a página.
+  syncErpRouter.get("/:jobName/dados/resumo", async (req, res) => {
+    try {
+      const job = SYNC_JOBS.find((j) => j.jobName === req.params.jobName);
+      if (!job) {
+        res.status(404).json({ error: "Job não encontrado" });
+        return;
+      }
+      const ctx = await contextoDosDados(job, req.query);
+      if ("erro" in ctx) {
+        res.status(400).json({ error: ctx.erro });
+        return;
+      }
+      let pedidos;
+      try {
+        const bruto = typeof req.query.resumo === "string" && req.query.resumo.trim() ? JSON.parse(req.query.resumo) : [];
+        pedidos = validarPedidosResumo(colunasFiltraveis(job), bruto);
+        const indisponivel = pedidos.find((p) => !FUNCOES_RESUMO_DADOS.has(p.funcao));
+        if (indisponivel) throw new Error(`Resumo ${indisponivel.funcao} não está disponível nesta tela.`);
+      } catch (error) {
+        res.status(400).json({ error: error instanceof SyntaxError ? "Resumo inválido." : error instanceof Error ? error.message : "Resumo inválido." });
+        return;
+      }
+      res.json(
+        await resumoDosDados(job, pedidos, {
+          busca: typeof req.query.busca === "string" ? req.query.busca : "",
+          situacao: ctx.situacao,
+          ...ctx.extras,
+          filtros: ctx.filtros,
+        })
+      );
+    } catch (error) {
+      handleError(res, error, "dados:resumo");
     }
   });
 

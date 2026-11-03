@@ -102,6 +102,10 @@ const decimal = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maxim
 export function formatarResumo(valor: number | string | null, funcao: FuncaoResumo, tipo: TipoResumo, formatarNaUnidade?: (v: number) => string): string {
   if (valor === null) return "—";
   if (typeof valor === "string") {
+    // Data pura (@db.Date) chega como meia-noite UTC: dd/mm/aaaa direto do texto, sem passar por fuso (senão vira o dia anterior em
+    // America/Sao_Paulo).
+    const dia = /^(\d{4})-(\d{2})-(\d{2})(T00:00:00(\.000)?Z)?$/.exec(valor);
+    if (dia) return `${dia[3]}/${dia[2]}/${dia[1]}`;
     const d = new Date(valor);
     return Number.isNaN(d.getTime()) ? valor : d.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
   }

@@ -49,3 +49,10 @@ describe("formatarResumo", () => {
     expect(formatarResumo("2026-03-01T03:00:00Z", "maximo", "data")).toBe("01/03/2026");
   });
 });
+
+describe("formatarResumo de datas", () => {
+  it("data pura (meia-noite UTC) não volta um dia no fuso de Brasília", () => {
+    expect(formatarResumo("2026-12-01T00:00:00.000Z", "maximo", "data")).toBe("01/12/2026");
+    expect(formatarResumo("2026-12-01", "minimo", "data")).toBe("01/12/2026");
+  });
+});

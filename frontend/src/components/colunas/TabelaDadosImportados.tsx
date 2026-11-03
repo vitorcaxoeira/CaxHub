@@ -5,11 +5,13 @@ import { ChipOrdem, ChipsFiltros } from "./ChipsFiltros";
 import type { ColunaComFiltro, RespostaValores } from "./FiltroColunaServidor";
 import { type DefColuna, useColunasConfiguraveis } from "./useColunasConfiguraveis";
 import { useFiltroOrdemNaUrl } from "./useFiltroOrdemNaUrl";
+import type { FuncaoResumo } from "./resumo";
+import { useResumoServidor } from "./useResumoServidor";
 
 // Tabela das telas "Ver dados" (ERP, HCM e Plannix), 24/10/2026: tudo no SERVIDOR, para qualquer tamanho de tabela. Busca de texto (com
 // debounce), funil por coluna com as abas Condição e Valores (FiltroColunaServidor), ordenação por até 4 colunas (Shift+clique), chips dos
-// filtros ativos e paginação. Filtro e ordem ficam na URL (`?f=`, `?o=`), então F5, "voltar" e link mantêm o recorte. Portado do CaxHub
-// (DadosErp.tsx), onde nasceu, e unificado aqui porque DadosErp e DadosPlannix eram a mesma tela copiada.
+// filtros ativos, paginação e rodapé de totais. Filtro e ordem ficam na URL (`?f=`, `?o=`), então F5, "voltar" e link mantêm o recorte.
+// Trazido de volta do CaxHub_Dash em 03/11/2026 (lá unificou DadosErp e DadosPlannix).
 
 export interface ColunaDados extends ColunaComFiltro {
   ehChave: boolean;
@@ -23,6 +25,11 @@ export interface RespostaDadosBase {
 }
 
 const PAGE_SIZE = 30;
+
+// Resumos do rodapé que a rota `<endpoint>/resumo` calcula (agregação do Prisma: sem mediana nem distintos; ver
+// backend/src/sync/dadosSincronizados.ts, FUNCOES_RESUMO_DADOS). Coluna com domínio é código: só contagem/vazios.
+const RESUMOS_DADOS: FuncaoResumo[] = ["soma", "media", "minimo", "maximo", "contagem", "vazios", "sim", "nao", "pctSim"];
+const RESUMOS_CODIGO: FuncaoResumo[] = ["contagem", "vazios"];
 
 // Data-só-dia (@db.Date chega como meia-noite UTC) vira dd/mm/aaaa; data com hora vira dd/mm/aaaa hh:mm no fuso local. Texto de data é
 // montado na mão, sem `new Date(...)` no caso de dia puro, pra não deslocar o dia em America/Sao_Paulo.
@@ -154,6 +161,7 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
             render: (l) => formatarValorDado(l[c.nome], c),
             formatarValor: (v) => formatarValorDado(v, c),
             semOrdenar: c.tipo === "json",
+            resumos: c.dominio ? RESUMOS_CODIGO : RESUMOS_DADOS,
           };
         },
       ),
@@ -161,6 +169,8 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
     [esqueleto, tituloControle],
   );
   const tc = useColunasConfiguraveis(chaveDaTabela(reinicia), defs, { th: "px-2.5 py-2", td: "px-2.5 py-2 text-[12.5px]" });
+  // Rodapé de totais (03/11/2026): sobre TODAS as linhas da busca e dos filtros, não só a página.
+  const resumo = useResumoServidor(`${endpoint}/resumo`, { ...JSON.parse(extras), busca, filtros: filtrosParam }, tc.pedidosResumo);
 
   return (
     <>
@@ -213,6 +223,7 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
                 </tr>
               ))}
             </tbody>
+            <tfoot className="sticky bottom-0 z-10">{tc.rodape({ colunas, ...resumo })}</tfoot>
           </table>
         </div>
       </div>

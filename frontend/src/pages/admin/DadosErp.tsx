@@ -1,8 +1,6 @@
-import axios from "axios";
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
-import { Skeleton } from "../../components/ui/Skeleton";
-import { ColunaComFiltro, FiltroColuna, FiltroColunaServidor, OperadorColuna, RespostaValores } from "../../components/admin/FiltroColunaServidor";
+import { TabelaDadosImportados, type RespostaDadosBase } from "../../components/colunas/TabelaDadosImportados";
 
 // Consulta dos dados JÁ IMPORTADOS de uma tabela do Senior (Administração > Importados do
 // Senior > "Ver dados") e, na rota /removidos/, a lista de REMOVIDOS. Somente leitura — o espelho
@@ -11,19 +9,11 @@ import { ColunaComFiltro, FiltroColuna, FiltroColunaServidor, OperadorColuna, Re
 // texto, funil por coluna com operador e valor (FiltroColunaServidor, nada carregado antes de abrir)
 // e paginação. Os filtros ficam na URL (`?f=`), para F5/voltar/link manterem o recorte.
 
-interface ColunaDados extends ColunaComFiltro {
-  ehChave: boolean;
-  ehControle: boolean;
-}
-
-interface RespostaDados {
+interface RespostaDados extends RespostaDadosBase {
   jobName: string;
   displayName: string;
   tabelaSenior: string;
   tabelaLocal: string;
-  colunas: ColunaDados[];
-  total: number;
-  itens: Record<string, unknown>[];
   // Só na lista de removidos (?situacao=): contagem de cada situação, início da última varredura e o recorte do filtro da sync.
   situacao?: Situacao;
   contagens?: { removidos: number; candidatos: number };
@@ -42,8 +32,6 @@ const SITUACOES: { valor: Situacao; rotulo: string }[] = [
   { valor: "sumidos", rotulo: "Todos os sumidos" },
 ];
 
-const PAGE_SIZE = 30;
-
 // Data-só-dia (@db.Date chega como meia-noite UTC) vira dd/mm/aaaa; data com hora vira
 // dd/mm/aaaa hh:mm no fuso local. Texto de data é montado na mão, sem `new Date(...)` no caso
 // de dia puro, pra não deslocar o dia em America/Sao_Paulo.
@@ -53,59 +41,6 @@ function formatarData(iso: string): string {
     return `${dia}/${mes}/${ano}`;
   }
   return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
-}
-
-function formatarValor(valor: unknown, coluna: Pick<ColunaDados, "tipo" | "dominio">): string {
-  if (valor === null || valor === undefined) return "—";
-  // Coluna com domínio documentado no schema: "código · rótulo" (código fora do domínio fica só o código).
-  if (coluna.dominio) {
-    const op = coluna.dominio.find((o) => o.valor === String(valor));
-    if (op) return `${op.valor} · ${op.rotulo}`;
-  }
-  if (coluna.tipo === "data" && typeof valor === "string") return formatarData(valor);
-  if (coluna.tipo === "booleano") return valor ? "sim" : "não";
-  if (typeof valor === "object") return JSON.stringify(valor);
-  return String(valor);
-}
-
-// Chip de um filtro ativo: "datlct entre 01/01/2026 e 31/03/2026".
-const ROTULO_CHIP: Record<OperadorColuna, string> = {
-  "=": "=",
-  "≠": "≠",
-  IN: "em",
-  "≥": "≥",
-  "≤": "≤",
-  entre: "entre",
-  contém: "contém",
-  "começa com": "começa com",
-  vazio: "vazio",
-  "não vazio": "não vazio",
-};
-function textoDoChip(f: FiltroColuna, coluna: ColunaDados | undefined): string {
-  const fmt = (v: string) => {
-    const op = coluna?.dominio?.find((o) => o.valor === v);
-    if (op) return `${op.valor} · ${op.rotulo}`;
-    return coluna?.tipo === "data" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v.split("-").reverse().join("/") : coluna?.tipo === "booleano" ? (v === "true" ? "sim" : "não") : v;
-  };
-  const vals =
-    f.operador === "entre"
-      ? `${fmt(f.valores[0])} e ${fmt(f.valores[1])}`
-      : f.operador === "IN"
-        ? f.valores.length > 3
-          ? `${f.valores.slice(0, 3).map(fmt).join(", ")} +${f.valores.length - 3}`
-          : f.valores.map(fmt).join(", ")
-        : f.valores.map(fmt).join("");
-  return `${f.coluna} ${ROTULO_CHIP[f.operador]}${vals ? ` ${vals}` : ""}`;
-}
-
-function lerFiltros(bruto: string | null): FiltroColuna[] {
-  if (!bruto) return [];
-  try {
-    const v = JSON.parse(bruto);
-    return Array.isArray(v) ? (v as FiltroColuna[]) : [];
-  } catch {
-    return [];
-  }
 }
 
 export function DadosErp() {
@@ -125,78 +60,17 @@ export function DadosErp() {
       ? situacaoParam
       : "sumidos"
     : undefined;
-  const filtrosTexto = params.get("f");
-  const filtros = useMemo(() => lerFiltros(filtrosTexto), [filtrosTexto]);
-
   const [resposta, setResposta] = useState<RespostaDados | null>(null);
-  const [pagina, setPagina] = useState(1);
-  const [busca, setBusca] = useState("");
-  const [carregando, setCarregando] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
 
-  // Troca de tabela zera busca e página (filtros e situação vêm da URL).
-  useEffect(() => {
-    setBusca("");
-    setPagina(1);
-    setResposta(null);
-  }, [jobName, API]);
-
-  function atualizarUrl(mudar: (n: URLSearchParams) => void) {
+  const trocarSituacao = (valor: Situacao) =>
     setParams(
       (p) => {
         const n = new URLSearchParams(p);
-        mudar(n);
+        n.set("situacao", valor);
         return n;
       },
       { replace: true }
     );
-    setPagina(1);
-  }
-  const trocarSituacao = (valor: Situacao) => atualizarUrl((n) => n.set("situacao", valor));
-  function definirFiltros(novos: FiltroColuna[]) {
-    atualizarUrl((n) => (novos.length > 0 ? n.set("f", JSON.stringify(novos)) : n.delete("f")));
-  }
-  function aplicarFiltroDaColuna(coluna: string, filtro: FiltroColuna | null) {
-    const outros = filtros.filter((f) => f.coluna !== coluna);
-    definirFiltros(filtro ? [...outros, filtro] : outros);
-  }
-
-  // Tudo no servidor: busca (com debounce), filtros, situação e página.
-  useEffect(() => {
-    if (!jobName) return;
-    let cancelado = false;
-    const timer = window.setTimeout(() => {
-      setCarregando(true);
-      axios
-        .get<RespostaDados>(`${API}/${jobName}/dados`, {
-          params: { busca, page: pagina, pageSize: PAGE_SIZE, situacao, filtros: filtros.length > 0 ? JSON.stringify(filtros) : undefined },
-        })
-        .then(({ data }) => {
-          if (cancelado) return;
-          setResposta(data);
-          setErro(null);
-        })
-        .catch((err) => !cancelado && setErro(err.response?.data?.error ?? "Falha ao carregar os dados"))
-        .finally(() => !cancelado && setCarregando(false));
-    }, busca ? 250 : 0);
-    return () => {
-      cancelado = true;
-      window.clearTimeout(timer);
-    };
-  }, [jobName, API, busca, pagina, situacao, filtros]);
-
-  const colunas = resposta?.colunas ?? [];
-  const itens = resposta?.itens ?? [];
-  const totalRegistros = resposta?.total ?? 0;
-  const totalPaginas = Math.max(1, Math.ceil(totalRegistros / PAGE_SIZE));
-  const colunaPorNome = (nome: string) => colunas.find((c) => c.nome === nome);
-
-  const carregarValores = (coluna: string) => (termo: string) =>
-    axios
-      .get<RespostaValores>(`${API}/${jobName}/dados/valores`, {
-        params: { coluna, termo, busca, situacao, filtros: filtros.length > 0 ? JSON.stringify(filtros) : undefined },
-      })
-      .then(({ data }) => data);
 
   return (
     <div>
@@ -235,9 +109,6 @@ export function DadosErp() {
         </Link>
       </div>
 
-      {erro && (
-        <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{erro}</p>
-      )}
 
       {modoRemovidos && (
         <div className="mb-4 space-y-2">
@@ -282,126 +153,16 @@ export function DadosErp() {
         </div>
       )}
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <input
-          value={busca}
-          onChange={(e) => {
-            setBusca(e.target.value);
-            setPagina(1);
-          }}
-          placeholder="Buscar..."
-          className="w-full max-w-sm rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        />
-        {filtros.map((f) => (
-          <span key={f.coluna} className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 text-[11.5px] font-medium text-primary">
-            <span className="max-w-[320px] truncate" title={textoDoChip(f, colunaPorNome(f.coluna))}>
-              {textoDoChip(f, colunaPorNome(f.coluna))}
-            </span>
-            <button type="button" onClick={() => aplicarFiltroDaColuna(f.coluna, null)} aria-label={`Remover filtro de ${f.coluna}`} className="hover:text-foreground">
-              ✕
-            </button>
-          </span>
-        ))}
-        {filtros.length > 0 && (
-          <button onClick={() => definirFiltros([])} className="text-[11.5px] text-muted hover:text-foreground hover:underline">
-            Limpar filtros
-          </button>
-        )}
-      </div>
-
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="relative overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                {colunas.map((c) => (
-                  <th
-                    key={c.nome}
-                    className={`whitespace-nowrap bg-surface-2 px-2.5 py-2 font-mono text-[10px] font-medium uppercase tracking-wider text-muted ${
-                      (c.tipo === "inteiro" || c.tipo === "decimal") && !c.dominio ? "text-right" : "text-left"
-                    }`}
-                  >
-                    <span className="inline-flex items-center gap-1">
-                      <span title={c.ehChave ? "Chave" : c.ehControle ? "Controle do espelho" : undefined}>
-                        {c.nome}
-                        {c.ehChave ? " ★" : ""}
-                      </span>
-                      {c.operadores.length > 0 && (
-                        <FiltroColunaServidor
-                          coluna={c}
-                          filtro={filtros.find((f) => f.coluna === c.nome) ?? null}
-                          onAplicar={(f) => aplicarFiltroDaColuna(c.nome, f)}
-                          carregarValores={carregarValores(c.nome)}
-                          formatarValor={(v) => formatarValor(v, c)}
-                        />
-                      )}
-                    </span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {carregando &&
-                !resposta &&
-                Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i} className="border-t border-border/60">
-                    <td colSpan={colunas.length || 1} className="px-2.5 py-3">
-                      <Skeleton className="h-4 w-full" />
-                    </td>
-                  </tr>
-                ))}
-              {resposta && itens.length === 0 && (
-                <tr>
-                  <td colSpan={colunas.length || 1} className="px-2.5 py-4 text-center text-sm text-muted">
-                    {busca || filtros.length > 0
-                      ? "Nenhum registro bate com a busca/filtro."
-                      : modoRemovidos
-                        ? "Nenhum registro nesta situação."
-                        : "Nenhum registro importado ainda."}
-                  </td>
-                </tr>
-              )}
-              {itens.map((linha, i) => (
-                <tr key={i} className={`border-t border-border/60 ${carregando ? "opacity-60" : ""}`}>
-                  {colunas.map((c) => {
-                    const texto = formatarValor(linha[c.nome], c);
-                    return (
-                      <td
-                        key={c.nome}
-                        // Domínio: "código · rótulo" alinhado à esquerda, cortado com "…" e inteiro no mouse.
-                        title={c.dominio ? texto : undefined}
-                        className={`whitespace-nowrap px-2.5 py-2 text-[12.5px] ${c.ehControle ? "text-muted" : "text-foreground"} ${
-                          c.dominio ? "max-w-[220px] truncate" : c.tipo === "inteiro" || c.tipo === "decimal" ? "text-right tabular-nums" : ""
-                        }`}
-                      >
-                        {texto}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {totalRegistros > 0 && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted">
-          <button onClick={() => setPagina((p) => Math.max(1, p - 1))} disabled={pagina <= 1} className="hover:text-foreground disabled:opacity-40">
-            ← Anterior
-          </button>
-          <span>
-            página {pagina} de {totalPaginas.toLocaleString("pt-BR")} ({totalRegistros.toLocaleString("pt-BR")} registros)
-          </span>
-          <button
-            onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
-            disabled={pagina >= totalPaginas}
-            className="hover:text-foreground disabled:opacity-40"
-          >
-            Próxima →
-          </button>
-        </div>
-      )}
+      {/* Busca, funil e ordem por coluna, colunas configuráveis, rodapé de totais e paginação: tudo no servidor (TabelaDadosImportados,
+          trazido do CaxHub_Dash em 03/11/2026). A situação dos removidos vai junto como parâmetro fixo. */}
+      <TabelaDadosImportados<RespostaDados>
+        endpoint={`${API}/${jobName}/dados`}
+        paramsExtras={{ situacao }}
+        reinicia={`${API}/${jobName}`}
+        mensagemVazio={modoRemovidos ? "Nenhum registro nesta situação." : "Nenhum registro importado ainda."}
+        tituloControle="Controle do espelho"
+        onResposta={setResposta}
+      />
     </div>
   );
 }
