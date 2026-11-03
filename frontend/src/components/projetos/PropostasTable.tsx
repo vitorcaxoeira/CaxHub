@@ -1,13 +1,18 @@
 import axios from "axios";
-import { Fragment, useState } from "react";
+import { useEffect, useState } from "react";
 import { formatHoras } from "../../utils/horas";
-import { Skeleton } from "../ui/Skeleton";
+import { ListaServidor } from "../colunas/ListaServidor";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
+
+// Lista de propostas com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (ListaServidor, trazido
+// do CaxHub_Dash em 03/11/2026). Os rótulos (situação, depto., modalidade, forma de faturamento) já vêm do servidor, que filtra por eles.
 
 export interface PropostaRow {
   codemp: number;
   codpro: number;
   codcli: number;
   nomcli: string;
+  cliente: string;
   datpro: string | null;
   datret: string | null;
   sitpro: number | null;
@@ -15,12 +20,12 @@ export interface PropostaRow {
   valor: number;
   horas: number;
   pripro: number | null;
-  depexeLabel: string;
-  modproLabel: string;
-  forfatLabel: string;
+  depexe: string;
+  modalidade: string;
+  forfat: string;
   despro: string | null;
-  situacaoLabel: string;
-  situacaoTone: "success" | "warning" | "destructive" | "neutral";
+  situacao: string;
+  tom: "success" | "warning" | "destructive" | "neutral";
 }
 
 interface PropostaItemDrillDown {
@@ -33,18 +38,10 @@ interface PropostaItemDrillDown {
   depexeLabel: string;
 }
 
-interface PropostasTableProps {
-  rows: PropostaRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-  loading: boolean;
-  onPageChange: (page: number) => void;
-}
-
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtMoney = (v: number) => `R$ ${currency.format(v)}`;
+const fmtData = (v: string | null) => (v ? dateFormatter.format(new Date(v)) : "—");
 
 const toneTag: Record<string, string> = {
   success: "bg-success/15 text-success",
@@ -53,248 +50,137 @@ const toneTag: Record<string, string> = {
   neutral: "bg-muted/15 text-muted",
 };
 
-function chaveProposta(codemp: number, codpro: number): string {
-  return `${codemp}-${codpro}`;
+const COLUNAS: DefColuna<PropostaRow>[] = [
+  {
+    nome: "codpro",
+    titulo: "Proposta",
+    fixa: true,
+    largura: 100,
+    resumos: ["contagem", "distintos"],
+    render: (r) => (
+      <>
+        <div className="text-sm font-semibold text-foreground">{r.codpro}</div>
+        {r.numprj != null && r.numprj !== 0 && <div className="mt-0.5 font-mono text-[11px] text-muted">Projeto {r.numprj}</div>}
+      </>
+    ),
+  },
+  { nome: "numprj", titulo: "Projeto", largura: 90, classe: "font-mono text-muted", resumos: ["contagem", "distintos", "vazios"], render: (r) => r.numprj ?? "—" },
+  { nome: "cliente", titulo: "Cliente", largura: 260, classe: "text-foreground", texto: (r) => r.cliente, render: (r) => r.cliente },
+  { nome: "datpro", titulo: "Data", largura: 100, classe: "font-mono text-muted", render: (r) => fmtData(r.datpro) },
+  { nome: "datret", titulo: "Aprovação", largura: 100, classe: "font-mono text-muted", render: (r) => fmtData(r.datret) },
+  { nome: "despro", titulo: "Descrição", largura: 200, classe: "text-muted", texto: (r) => r.despro, render: (r) => r.despro ?? "—" },
+  { nome: "depexe", titulo: "Depto. Executor", largura: 160, classe: "text-muted", texto: (r) => r.depexe, render: (r) => r.depexe },
+  { nome: "modalidade", titulo: "Modalidade", largura: 140, classe: "text-muted", texto: (r) => r.modalidade, render: (r) => r.modalidade },
+  { nome: "forfat", titulo: "Forma Fat.", largura: 130, classe: "text-muted", texto: (r) => r.forfat, render: (r) => r.forfat },
+  {
+    nome: "horas",
+    titulo: "Horas",
+    direita: true,
+    largura: 90,
+    classe: "font-mono tabular-nums text-muted",
+    formatarResumo: (v) => formatHoras(v),
+    render: (r) => formatHoras(r.horas),
+  },
+  {
+    nome: "valor",
+    titulo: "Valor",
+    direita: true,
+    largura: 140,
+    classe: "font-mono font-semibold tabular-nums text-foreground",
+    formatarResumo: fmtMoney,
+    render: (r) => fmtMoney(r.valor),
+  },
+  {
+    nome: "situacao",
+    titulo: "Situação",
+    largura: 170,
+    texto: (r) => r.situacao,
+    render: (r) => (
+      <span className={`inline-block whitespace-nowrap rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${toneTag[r.tom]}`}>
+        {r.situacao}
+      </span>
+    ),
+  },
+];
+
+/** Itens de uma proposta (linha aberta da lista). */
+function ItensProposta({ codemp, codpro }: { codemp: number; codpro: number }) {
+  const [itens, setItens] = useState<PropostaItemDrillDown[] | null>(null);
+  const [erro, setErro] = useState(false);
+
+  useEffect(() => {
+    let cancelado = false;
+    axios
+      .get(`/api/projetos/propostas/${codemp}/${codpro}/itens`)
+      .then(({ data }) => !cancelado && setItens(data.rows))
+      .catch(() => !cancelado && setErro(true));
+    return () => {
+      cancelado = true;
+    };
+  }, [codemp, codpro]);
+
+  if (erro) return <p className="text-[11.5px] text-destructive">Falha ao carregar os itens.</p>;
+  if (!itens) return <p className="text-[11.5px] text-muted">Carregando itens...</p>;
+  return (
+    <table className="w-full border-collapse text-[12.5px]">
+      <thead>
+        <tr className="text-left text-muted">
+          <th className="pb-1.5 pr-4 font-medium">Seq.</th>
+          <th className="pb-1.5 pr-4 font-medium">Serviço</th>
+          <th className="pb-1.5 pr-4 font-medium">Descrição</th>
+          <th className="pb-1.5 pr-4 font-medium">Depto. Executor</th>
+          <th className="pb-1.5 pr-4 text-right font-medium">Horas</th>
+          <th className="pb-1.5 pr-4 text-right font-medium">Valor/Hora</th>
+          <th className="pb-1.5 text-right font-medium">Valor</th>
+        </tr>
+      </thead>
+      <tbody>
+        {itens.map((item) => (
+          <tr key={item.seqite} className="border-t border-border/40">
+            <td className="py-1.5 pr-4 font-mono text-muted">{item.seqite}</td>
+            <td className="py-1.5 pr-4 font-mono text-foreground">{item.codser}</td>
+            <td className="py-1.5 pr-4 text-foreground">{item.despro ?? "—"}</td>
+            <td className="py-1.5 pr-4 text-muted">{item.depexeLabel}</td>
+            <td className="py-1.5 pr-4 text-right font-mono tabular-nums text-muted">{formatHoras(item.horas)}</td>
+            <td className="py-1.5 pr-4 text-right font-mono tabular-nums text-muted">{fmtMoney(item.valhor)}</td>
+            <td className="py-1.5 text-right font-mono tabular-nums text-foreground">{fmtMoney(item.valor)}</td>
+          </tr>
+        ))}
+        {itens.length === 0 && (
+          <tr>
+            <td colSpan={7} className="py-2 text-center text-muted">
+              Sem itens cadastrados.
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  );
 }
 
-export function PropostasTable({ rows, page, pageSize, total, loading, onPageChange }: PropostasTableProps) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const [expandida, setExpandida] = useState<string | null>(null);
-  const [itensPorProposta, setItensPorProposta] = useState<Map<string, PropostaItemDrillDown[]>>(new Map());
-  const [carregandoItens, setCarregandoItens] = useState(false);
-
-  function handleExpandir(codemp: number, codpro: number) {
-    const chave = chaveProposta(codemp, codpro);
-    if (expandida === chave) {
-      setExpandida(null);
-      return;
-    }
-    setExpandida(chave);
-    if (!itensPorProposta.has(chave)) {
-      setCarregandoItens(true);
-      axios
-        .get(`/api/projetos/propostas/${codemp}/${codpro}/itens`)
-        .then(({ data }) => {
-          setItensPorProposta((atual) => new Map(atual).set(chave, data.rows));
-        })
-        .catch(() => {})
-        .finally(() => setCarregandoItens(false));
-    }
-  }
-
+export function PropostasTable({ url, params }: { url: string; params: Record<string, unknown> }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-surface">
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              <th className="w-8 bg-surface-2" />
-              <th className="bg-surface-2 px-2 py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Proposta
-              </th>
-              <th className="bg-surface-2 px-2 py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Cliente
-              </th>
-              <th className="hidden bg-surface-2 px-2 py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                Data
-              </th>
-              <th className="hidden bg-surface-2 px-2 py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                Aprovação
-              </th>
-              <th className="hidden bg-surface-2 px-2 py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted xl:table-cell">
-                Descrição
-              </th>
-              <th className="hidden bg-surface-2 px-2 py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
-                Depto. Executor
-              </th>
-              <th className="hidden bg-surface-2 px-2 py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                Forma Fat.
-              </th>
-              <th className="bg-surface-2 px-2 py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Horas
-              </th>
-              <th className="bg-surface-2 px-2 py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Valor
-              </th>
-              <th className="bg-surface-2 px-2 py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                Situação
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading &&
-              Array.from({ length: 6 }).map((_, i) => (
-                <tr key={i} className="border-t border-border/60">
-                  <td className="px-1" />
-                  <td className="px-2 py-1.5">
-                    <Skeleton className="h-4 w-14" />
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <Skeleton className="h-4 w-32" />
-                  </td>
-                  <td className="hidden px-2 py-1.5 sm:table-cell">
-                    <Skeleton className="h-4 w-16" />
-                  </td>
-                  <td className="hidden px-2 py-1.5 lg:table-cell">
-                    <Skeleton className="h-4 w-16" />
-                  </td>
-                  <td className="hidden px-2 py-1.5 xl:table-cell">
-                    <Skeleton className="h-4 w-24" />
-                  </td>
-                  <td className="hidden px-2 py-1.5 md:table-cell">
-                    <Skeleton className="h-4 w-20" />
-                  </td>
-                  <td className="hidden px-2 py-1.5 lg:table-cell">
-                    <Skeleton className="h-4 w-16" />
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    <Skeleton className="ml-auto h-4 w-10" />
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    <Skeleton className="ml-auto h-4 w-16" />
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    <Skeleton className="ml-auto h-5 w-16 rounded" />
-                  </td>
-                </tr>
-              ))}
-            {!loading &&
-              rows.map((row) => {
-              const chave = chaveProposta(row.codemp, row.codpro);
-              const expandido = expandida === chave;
-              return (
-                <Fragment key={chave}>
-                  <tr
-                    onClick={() => handleExpandir(row.codemp, row.codpro)}
-                    className={`cursor-pointer transition ${
-                      expandido ? "border-t border-primary bg-primary/5" : "border-t border-border/60 hover:bg-surface-2"
-                    }`}
-                  >
-                    <td className={`px-1 text-center text-muted ${expandido ? "border-l border-primary" : ""}`}>
-                      {expandido ? "▾" : "▸"}
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <div className="text-sm font-semibold text-foreground">{row.codpro}</div>
-                      {row.numprj != null && (
-                        <div className="mt-0.5 font-mono text-[11px] text-muted">Projeto {row.numprj}</div>
-                      )}
-                    </td>
-                    <td className="max-w-[150px] px-2 py-1.5">
-                      <div className="truncate text-sm text-foreground" title={`${row.codcli} - ${row.nomcli}`}>
-                        {row.codcli} - {row.nomcli}
-                      </div>
-                    </td>
-                    <td className="hidden px-2 py-1.5 font-mono text-sm text-muted sm:table-cell">
-                      {row.datpro ? dateFormatter.format(new Date(row.datpro)) : "—"}
-                    </td>
-                    <td className="hidden px-2 py-1.5 font-mono text-sm text-muted lg:table-cell">
-                      {row.datret ? dateFormatter.format(new Date(row.datret)) : "—"}
-                    </td>
-                    <td className="hidden max-w-[130px] truncate px-2 py-1.5 text-sm text-muted xl:table-cell" title={row.despro ?? undefined}>
-                      {row.despro ?? "—"}
-                    </td>
-                    <td className="hidden px-2 py-1.5 text-sm text-muted md:table-cell">
-                      <div>{row.depexeLabel}</div>
-                      <div className="mt-0.5 font-mono text-[10.5px] text-muted/70">{row.modproLabel}</div>
-                    </td>
-                    <td
-                      className="hidden max-w-[95px] truncate px-2 py-1.5 text-sm text-muted lg:table-cell"
-                      title={row.forfatLabel}
-                    >
-                      {row.forfatLabel}
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono text-sm tabular-nums text-muted">{formatHoras(row.horas)}</td>
-                    <td className="px-2 py-1.5 text-right font-mono text-sm font-semibold tabular-nums text-foreground">
-                      {fmtMoney(row.valor)}
-                    </td>
-                    <td className={`px-2 py-1.5 text-right ${expandido ? "border-r border-primary" : ""}`}>
-                      <span
-                        className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
-                          toneTag[row.situacaoTone]
-                        }`}
-                      >
-                        {row.situacaoLabel}
-                      </span>
-                    </td>
-                  </tr>
-                  {expandido && (
-                    <tr className="border-t border-border/60 bg-surface-2/40">
-                      <td colSpan={11} className="border-b border-l border-r border-primary px-5 py-3">
-                        {carregandoItens && !itensPorProposta.has(chave) ? (
-                          <p className="text-[11.5px] text-muted">Carregando itens...</p>
-                        ) : (
-                          <table className="w-full border-collapse text-[12.5px]">
-                            <thead>
-                              <tr className="text-left text-muted">
-                                <th className="pb-1.5 pr-4 font-medium">Seq.</th>
-                                <th className="pb-1.5 pr-4 font-medium">Serviço</th>
-                                <th className="pb-1.5 pr-4 font-medium">Descrição</th>
-                                <th className="pb-1.5 pr-4 font-medium">Depto. Executor</th>
-                                <th className="pb-1.5 pr-4 text-right font-medium">Horas</th>
-                                <th className="pb-1.5 pr-4 text-right font-medium">Valor/Hora</th>
-                                <th className="pb-1.5 text-right font-medium">Valor</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {(itensPorProposta.get(chave) ?? []).map((item) => (
-                                <tr key={item.seqite} className="border-t border-border/40">
-                                  <td className="py-1.5 pr-4 font-mono text-muted">{item.seqite}</td>
-                                  <td className="py-1.5 pr-4 font-mono text-foreground">{item.codser}</td>
-                                  <td className="py-1.5 pr-4 text-foreground">{item.despro ?? "—"}</td>
-                                  <td className="py-1.5 pr-4 text-muted">{item.depexeLabel}</td>
-                                  <td className="py-1.5 pr-4 text-right font-mono tabular-nums text-muted">{formatHoras(item.horas)}</td>
-                                  <td className="py-1.5 pr-4 text-right font-mono tabular-nums text-muted">{fmtMoney(item.valhor)}</td>
-                                  <td className="py-1.5 text-right font-mono tabular-nums text-foreground">{fmtMoney(item.valor)}</td>
-                                </tr>
-                              ))}
-                              {(itensPorProposta.get(chave) ?? []).length === 0 && (
-                                <tr>
-                                  <td colSpan={7} className="py-2 text-center text-muted">
-                                    Sem itens cadastrados.
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-            {rows.length === 0 && !loading && (
-              <tr>
-                <td colSpan={11} className="px-5 py-8 text-center text-sm text-muted">
-                  Nenhuma proposta encontrada com os filtros atuais.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-border px-5 py-3">
-        <p className="text-[11.5px] text-muted">
-          {total.toLocaleString("pt-BR")} propostas · página {page} de {totalPages}
-        </p>
-        <div className="flex gap-2">
-          <button
-            onClick={() => onPageChange(page - 1)}
-            disabled={page <= 1 || loading}
-            className="rounded-md border border-border px-3 py-1.5 text-[11.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Anterior
-          </button>
-          <button
-            onClick={() => onPageChange(page + 1)}
-            disabled={page >= totalPages || loading}
-            className="rounded-md border border-border px-3 py-1.5 text-[11.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Próxima
-          </button>
+    <ListaServidor<PropostaRow>
+      chave="projetos.propostas"
+      url={url}
+      params={params}
+      defs={COLUNAS}
+      chaveLinha={(r) => `${r.codemp}-${r.codpro}`}
+      rotulo="propostas"
+      vazio="Nenhuma proposta encontrada com os filtros atuais."
+      detalhe={(r) => <ItensProposta codemp={r.codemp} codpro={r.codpro} />}
+      rodape={(d) => (
+        <div className="grid grid-cols-1 gap-px border-t border-border bg-border sm:grid-cols-2">
+          <div className="bg-surface px-5 py-3">
+            <p className="text-[10.5px] text-muted">Valor total (filtro atual)</p>
+            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{fmtMoney(d?.totais?.valor ?? 0)}</p>
+          </div>
+          <div className="bg-surface px-5 py-3">
+            <p className="text-[10.5px] text-muted">Horas totais (filtro atual)</p>
+            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatHoras(d?.totais?.horas ?? 0)}</p>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    />
   );
 }

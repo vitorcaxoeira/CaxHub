@@ -1,4 +1,6 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
+import { col, registrarListaConsultavel } from "./listaConsultavel";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import {
@@ -20,6 +22,8 @@ import {
   depexeLabel,
   forfatLabel,
   modproLabel,
+  DEPEXE_LABELS,
+  FORFAT_LABELS,
 } from "../domain/propostasDominio";
 
 export const projetosRouter = Router();
@@ -846,136 +850,93 @@ projetosRouter.get("/propostas/aging", async (req, res) => {
 // caso normal. $8/$9 são posições fixas nos params passados pelas duas queries
 // abaixo (estagnadaDias e o array "em decisão"), sempre enviadas mesmo quando
 // o branch escolhido não as usa.
-function condicaoAlertaPropostas(alerta: string | null): string {
-  // "1900-12-31" é a sentinela de "sem data" do Senior em datenv/datret — NULLIF
-  // trata como NULL de verdade (ver mesmo comentário em /propostas/alertas).
+// ---------- Lista paginada ----------
+// Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts, trazido do CaxHub_Dash em 03/11/2026): a consulta
+// é a da tela (filtros do topo + alerta), vira subconsulta. Os rótulos (situação, depto., forma de faturamento, modalidade) saem em SQL
+// para o funil filtrar e ordenar por eles no servidor; mesmas regras de propostasDominio.ts.
+
+/** CASE de rótulo a partir de um mapa código → texto; código fora do mapa vira `<prefixo> <código>`, nulo vira `nulo`. */
+function rotuloSql(expr: Prisma.Sql, mapa: Record<number, string>, prefixo: string, nulo = "—"): Prisma.Sql {
+  const quando = Object.entries(mapa).map(([k, v]) => Prisma.sql`WHEN ${expr} = ${Number(k)} THEN ${v}`);
+  return Prisma.sql`(CASE WHEN ${expr} IS NULL THEN ${nulo} ${Prisma.join(quando, " ")} ELSE ${prefixo + " "} || ${expr}::text END)`;
+}
+
+function condicaoAlertaSql(alerta: string | null, estagnadaDias: number): Prisma.Sql {
+  // "1900-12-31" é a sentinela de "sem data" do Senior em datenv/datret — NULLIF trata como NULL de verdade (ver /propostas/alertas).
   switch (alerta) {
     case "estagnadas":
-      return "p.sitpro = ANY($9::int[]) AND NULLIF(p.datenv, '1900-12-31') IS NOT NULL AND NULLIF(p.datret, '1900-12-31') IS NULL AND CURRENT_DATE - NULLIF(p.datenv, '1900-12-31') > $8";
+      return Prisma.sql`p.sitpro = ANY(${SITPRO_EM_DECISAO}::int[]) AND NULLIF(p.datenv, '1900-12-31') IS NOT NULL AND NULLIF(p.datret, '1900-12-31') IS NULL AND CURRENT_DATE - NULLIF(p.datenv, '1900-12-31') > ${estagnadaDias}`;
     case "enviadas_sem_retorno":
-      return "p.sitpro = 3 AND NULLIF(p.datret, '1900-12-31') IS NULL";
+      return Prisma.sql`p.sitpro = 3 AND NULLIF(p.datret, '1900-12-31') IS NULL`;
     case "vencidas":
-      return "p.sitpro = ANY($9::int[]) AND p.datval IS NOT NULL AND p.datval < CURRENT_DATE";
+      return Prisma.sql`p.sitpro = ANY(${SITPRO_EM_DECISAO}::int[]) AND p.datval IS NOT NULL AND p.datval < CURRENT_DATE`;
     case "paradas_abertura":
-      return "p.sitpro = 1 AND p.datpro IS NOT NULL AND CURRENT_DATE - p.datpro > 7";
+      return Prisma.sql`p.sitpro = 1 AND p.datpro IS NOT NULL AND CURRENT_DATE - p.datpro > 7`;
     default:
-      return "TRUE";
+      return Prisma.sql`TRUE`;
   }
 }
 
-// ---------- Lista paginada ----------
-projetosRouter.get("/propostas", async (req, res) => {
-  try {
+const SITUACAO_PROPOSTA_SQL = rotuloSql(Prisma.sql`p.sitpro`, SITPRO_LABELS, "Situação", "Sem situação");
+// Mesma regra de sitproTone.
+const TOM_PROPOSTA_SQL = Prisma.sql`(CASE WHEN p.sitpro IN (4, 7, 8) THEN 'success' WHEN p.sitpro IN (5, 6) THEN 'destructive'
+  WHEN p.sitpro IN (1, 2, 3, 9) THEN 'warning' ELSE 'neutral' END)`;
+
+registrarListaConsultavel(
+  projetosRouter,
+  "/propostas",
+  (req) => {
     const situacao = parseIdsParam(req.query.situacao);
     const { clientes, representantes, tipven, modpro, datproInicio, datproFim } = lerFiltrosComuns(req);
-    const page = Math.max(1, parseIntParam(req.query.page) ?? 1);
-    const pageSize = Math.min(200, Math.max(1, parseIntParam(req.query.pageSize) ?? 50));
-    const offset = (page - 1) * pageSize;
     const alerta = typeof req.query.alerta === "string" && req.query.alerta !== "" ? req.query.alerta : null;
     const estagnadaDias = Math.max(1, Math.min(365, parseIntParam(req.query.estagnadaDias) ?? 15));
-    const condicaoAlerta = condicaoAlertaPropostas(alerta);
-
-    const [rows, totalRows] = await Promise.all([
-      prisma.$queryRawUnsafe<
-        {
-          codemp: number;
-          codpro: number;
-          codcli: number;
-          nomcli: string;
-          datpro: Date | null;
-          datret: Date | null;
-          sitpro: number | null;
-          numprj: number | null;
-          valor: number;
-          horas: number;
-          pripro: number | null;
-          depexe: number | null;
-          forfat: number | null;
-          despro: string | null;
-          modpro: number | null;
-        }[]
-      >(
-        `
-        WITH item_valor AS (
+    return {
+      com: Prisma.sql`WITH item_valor AS (
           SELECT codemp, codpro,
                  SUM(qtdhor::numeric / 60 * COALESCE(valhor, 0))::float8 AS valor,
                  SUM(qtdhor::numeric / 60)::float8 AS horas
           FROM propostas_itens
           GROUP BY codemp, codpro
-        )
-        SELECT p.codemp, p.codpro, p.codcli, c.nomcli, p.datpro, p.datret, p.sitpro, p.numprj,
-               COALESCE(iv.valor, 0) AS valor, COALESCE(iv.horas, 0) AS horas, p.pripro, p.depexe,
-               p.forfat, p.despro, p.modpro
+        )`,
+      interna: Prisma.sql`
+        SELECT p.codemp, p.codpro, p.codcli, c.nomcli, (p.codcli || ' - ' || c.nomcli) AS cliente, p.datpro, p.datret, p.sitpro, p.numprj,
+               COALESCE(iv.valor, 0)::float8 AS valor, COALESCE(iv.horas, 0)::float8 AS horas, p.pripro, p.despro,
+               ${rotuloSql(Prisma.sql`p.depexe`, DEPEXE_LABELS, "Depto.")} AS depexe,
+               ${rotuloSql(Prisma.sql`p.modpro`, MODPRO_LABELS, "Modalidade")} AS modalidade,
+               ${rotuloSql(Prisma.sql`p.forfat`, FORFAT_LABELS, "Forma")} AS forfat,
+               ${SITUACAO_PROPOSTA_SQL} AS situacao,
+               ${TOM_PROPOSTA_SQL} AS tom
         FROM propostas p
         JOIN clientes c ON c.codcli = p.codcli
         LEFT JOIN item_valor iv ON iv.codemp = p.codemp AND iv.codpro = p.codpro
-        WHERE ($1::int[] IS NULL OR p.sitpro = ANY($1::int[]))
-          AND ($2::int[] IS NULL OR p.codcli = ANY($2::int[]))
-          AND ($3::int[] IS NULL OR p.codrep = ANY($3::int[]))
-          AND ($4::int[] IS NULL OR p.tipven = ANY($4::int[]))
-          AND ($5::int[] IS NULL OR p.modpro = ANY($5::int[]))
-          AND ($6::date IS NULL OR p.datpro >= $6::date)
-          AND ($7::date IS NULL OR p.datpro <= $7::date)
-          AND (${condicaoAlerta})
-        ORDER BY p.datpro DESC NULLS LAST, p.codpro DESC
-        LIMIT $10 OFFSET $11
-        `,
-        situacao,
-        clientes,
-        representantes,
-        tipven,
-        modpro,
-        datproInicio,
-        datproFim,
-        estagnadaDias,
-        SITPRO_EM_DECISAO,
-        pageSize,
-        offset
-      ),
-      prisma.$queryRawUnsafe<{ total: number }[]>(
-        `
-        SELECT COUNT(*)::int AS total
-        FROM propostas p
-        WHERE ($1::int[] IS NULL OR p.sitpro = ANY($1::int[]))
-          AND ($2::int[] IS NULL OR p.codcli = ANY($2::int[]))
-          AND ($3::int[] IS NULL OR p.codrep = ANY($3::int[]))
-          AND ($4::int[] IS NULL OR p.tipven = ANY($4::int[]))
-          AND ($5::int[] IS NULL OR p.modpro = ANY($5::int[]))
-          AND ($6::date IS NULL OR p.datpro >= $6::date)
-          AND ($7::date IS NULL OR p.datpro <= $7::date)
-          AND (${condicaoAlerta})
-        `,
-        situacao,
-        clientes,
-        representantes,
-        tipven,
-        modpro,
-        datproInicio,
-        datproFim,
-        estagnadaDias,
-        SITPRO_EM_DECISAO
-      ),
-    ]);
-
-    const rowsComLabel = rows.map((row) => ({
-      ...row,
-      situacaoLabel: sitproLabel(row.sitpro),
-      situacaoTone: sitproTone(row.sitpro),
-      depexeLabel: depexeLabel(row.depexe),
-      forfatLabel: forfatLabel(row.forfat),
-      modproLabel: modproLabel(row.modpro),
-    }));
-
-    res.json({
-      rows: rowsComLabel,
-      page,
-      pageSize,
-      total: totalRows[0]?.total ?? 0,
-    });
-  } catch (error) {
-    handleError(res, error, "propostas");
-  }
-});
+        WHERE (${situacao}::int[] IS NULL OR p.sitpro = ANY(${situacao}::int[]))
+          AND (${clientes}::int[] IS NULL OR p.codcli = ANY(${clientes}::int[]))
+          AND (${representantes}::int[] IS NULL OR p.codrep = ANY(${representantes}::int[]))
+          AND (${tipven}::int[] IS NULL OR p.tipven = ANY(${tipven}::int[]))
+          AND (${modpro}::int[] IS NULL OR p.modpro = ANY(${modpro}::int[]))
+          AND (${datproInicio}::date IS NULL OR p.datpro >= ${datproInicio}::date)
+          AND (${datproFim}::date IS NULL OR p.datpro <= ${datproFim}::date)
+          AND (${condicaoAlertaSql(alerta, estagnadaDias)})`,
+      colunas: [
+        col.inteiro("codpro", { obrigatoria: true }),
+        col.inteiro("numprj"),
+        col.texto("cliente", { obrigatoria: true }),
+        col.data("datpro"),
+        col.data("datret"),
+        col.texto("despro"),
+        col.texto("depexe", { obrigatoria: true }),
+        col.texto("modalidade", { obrigatoria: true }),
+        col.texto("forfat", { obrigatoria: true }),
+        col.decimal("horas", { obrigatoria: true }),
+        col.decimal("valor", { obrigatoria: true }),
+        col.texto("situacao", { obrigatoria: true }),
+      ],
+      totais: ["valor", "horas"],
+      ordemPadrao: Prisma.sql`x."datpro" DESC NULLS LAST, x."codpro" DESC`,
+    };
+  },
+  "propostas",
+);
 
 // ---------- Drill-down: itens de uma proposta, ordenados pela sequência ----------
 projetosRouter.get("/propostas/:codemp/:codpro/itens", async (req, res) => {
