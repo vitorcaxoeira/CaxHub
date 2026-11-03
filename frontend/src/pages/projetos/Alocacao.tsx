@@ -12,6 +12,9 @@ import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useSincronizarErp } from "../../hooks/useSincronizarErp";
 import { useToast } from "../../components/ui/Toast";
 import { DropdownMenu } from "../../components/ui/DropdownMenu";
+import { CaixaMarcacaoFiltro } from "../../components/ui/ControlesFiltro";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 
 interface OpcaoFiltro {
   value: number;
@@ -237,6 +240,9 @@ export function Alocacao() {
     Record<string, ConsultorResumo[] | "carregando" | "erro">
   >({});
   const [consultores, setConsultores] = useState<OpcaoFiltro[]>([]);
+  const [deptosProntos, setDeptosProntos] = useState(false);
+  const [consultoresProntos, setConsultoresProntos] = useState(false);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -260,7 +266,8 @@ export function Alocacao() {
       .then((departamentos) => {
         if (!cancelado) setDepartamentos(departamentos);
       })
-      .catch(() => {});
+      .catch(() => !cancelado && setOpcoesFalharam(true))
+      .finally(() => !cancelado && setDeptosProntos(true));
     return () => {
       cancelado = true;
     };
@@ -272,8 +279,39 @@ export function Alocacao() {
     axios
       .get("/api/atividades/opcoes-filtro")
       .then(({ data }) => setConsultores(data.consultores as OpcaoFiltro[]))
-      .catch(() => {});
+      .catch(() => setOpcoesFalharam(true))
+      .finally(() => setConsultoresProntos(true));
   }, []);
+
+  // Padrão de cada filtro (estrela, 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta. O que veio na URL (voltar do detalhe
+  // da proposta, link) vale mais. Setters direto no estado: atualizarFiltros lê o render atual e chamadas seguidas desfariam umas às outras.
+  const [daUrlPadroes] = useState(() =>
+    (["depexe", "codfor", "modpro", "apenasComSaldo"] as const).filter((c) => searchParams.has(c) || (c === "apenasComSaldo" && searchParams.has("situacao")))
+  );
+  const padroes = usePadroesTela({
+    tela: "projetos.alocacao",
+    opcoesProntas: deptosProntos && consultoresProntos,
+    opcoesFalharam,
+    daUrl: daUrlPadroes,
+    campos: {
+      depexe: { rotulo: "Departamento", atual: depexe, aplicar: setDepexeState, validar: regras.lista("number", departamentos.map((o) => o.value)) },
+      codfor: { rotulo: "Consultor", atual: codfor, aplicar: setCodforState, validar: regras.lista("number", consultores.map((o) => o.value)) },
+      modpro: {
+        rotulo: "Modalidade",
+        atual: modpro,
+        aplicar: setModproState,
+        validar: regras.lista("number", MODPRO_OPCOES.map((o) => o.value)),
+        semOpcoes: true,
+      },
+      apenasComSaldo: {
+        rotulo: "Só com saldo pendente",
+        atual: apenasComSaldo,
+        aplicar: setApenasComSaldoState,
+        validar: regras.booleano(),
+        semOpcoes: true,
+      },
+    },
+  });
 
   function carregar() {
     setLoading(true);
@@ -336,9 +374,10 @@ export function Alocacao() {
   }
 
   useEffect(() => {
+    if (!padroes.pronto) return;
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [depexe, codfor, modpro, busca, apenasComSaldo, situacao, page]);
+  }, [padroes.pronto, depexe, codfor, modpro, busca, apenasComSaldo, situacao, page]);
 
   function toggleExpandir(row: PropostaRow) {
     const chave = `${row.codemp}-${row.codpro}`;
@@ -506,6 +545,7 @@ export function Alocacao() {
             onChange={(selecionados) => atualizarFiltros({ depexe: selecionados })}
             labelTodos="Todos os departamentos"
             labelSufixo="departamentos"
+            acessorio={padroes.estrela("depexe")}
           />
         )}
         {consultores.length > 1 && (
@@ -515,6 +555,7 @@ export function Alocacao() {
             onChange={(selecionados) => atualizarFiltros({ codfor: selecionados })}
             labelTodos="Todos os consultores"
             labelSufixo="consultores"
+            acessorio={padroes.estrela("codfor")}
           />
         )}
         <MultiSelectDropdown
@@ -523,6 +564,7 @@ export function Alocacao() {
           onChange={(selecionados) => atualizarFiltros({ modpro: selecionados })}
           labelTodos="Todas as modalidades"
           labelSufixo="modalidades"
+          acessorio={padroes.estrela("modpro")}
         />
         {situacao ? (
           <button
@@ -533,14 +575,13 @@ export function Alocacao() {
           </button>
         ) : (
           <>
-            <label className="flex items-center gap-2 text-sm text-muted">
-              <input
-                type="checkbox"
-                checked={apenasComSaldo}
-                onChange={(e) => atualizarFiltros({ apenasComSaldo: e.target.checked })}
-              />
+            <CaixaMarcacaoFiltro
+              marcado={apenasComSaldo}
+              onChange={(marcado) => atualizarFiltros({ apenasComSaldo: marcado })}
+              acessorio={padroes.estrela("apenasComSaldo")}
+            >
               Só propostas com saldo pendente
-            </label>
+            </CaixaMarcacaoFiltro>
           </>
         )}
       </div>

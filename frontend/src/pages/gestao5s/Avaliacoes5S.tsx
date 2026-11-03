@@ -4,6 +4,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { TendenciaSeta } from "../../components/gestao5s/TendenciaSeta";
 import { classeBotaoPrimario, classeCampo, classeRotulo } from "../../components/gestao5s/campos";
 import { Pagination } from "../../components/ui/Pagination";
+import { campoParDatas } from "../../components/ui/padroesFiltros/campos";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Tabs } from "../../components/ui/Tabs";
 import { cn } from "../../lib/cn";
@@ -88,6 +91,22 @@ export function Avaliacoes5S() {
 function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean }) {
   const navigate = useNavigate();
   const [filtros, setFiltros] = useState({ areaId: "", status: "", de: "", ate: "" });
+  // Padrão de cada filtro (estrela, 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta. O setor só confere o formato (as áreas
+  // chegam pela tela de cima); setor que não existir mais simplesmente não traz avaliação.
+  const p = usePadroesTela({
+    tela: "gestao5s.avaliacoes",
+    campos: {
+      areaId: { rotulo: "Setor / ambiente", atual: filtros.areaId, aplicar: (v: string) => setFiltros((f) => ({ ...f, areaId: v })), validar: regras.texto(), semOpcoes: true },
+      status: {
+        rotulo: "Situação",
+        atual: filtros.status,
+        aplicar: (v: string) => setFiltros((f) => ({ ...f, status: v })),
+        validar: (v: unknown) => (v === "" || v === "em_andamento" || v === "finalizada" ? { ok: true as const, valor: v as string } : { ok: false as const }),
+        semOpcoes: true,
+      },
+      periodo: campoParDatas("Período", filtros.de || null, filtros.ate || null, (de, ate) => setFiltros((f) => ({ ...f, de: de ?? "", ate: ate ?? "" }))),
+    },
+  });
   const [page, setPage] = useState(1);
   const [dados, setDados] = useState<{ total: number; itens: Linha[] } | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -95,6 +114,7 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
   const pageSize = 20;
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoading(true);
     axios
       .get<{ total: number; itens: Linha[] }>("/api/5s/avaliacoes", {
@@ -106,7 +126,7 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
       })
       .catch((err) => setErro(mensagemDeErro(err, "Falha ao carregar as avaliações")))
       .finally(() => setLoading(false));
-  }, [filtros, page]);
+  }, [p.pronto, filtros, page]);
 
   function mudar(campo: keyof typeof filtros, valor: string) {
     setFiltros((f) => ({ ...f, [campo]: valor }));
@@ -116,7 +136,8 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
   return (
     <>
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div className="col-span-2 md:col-span-1">
+        <div className="relative col-span-2 md:col-span-1">
+          {p.estrela("areaId")}
           <label className={classeRotulo}>Setor / ambiente</label>
           <select className={classeCampo} value={filtros.areaId} onChange={(e) => mudar("areaId", e.target.value)}>
             <option value="">Todos</option>
@@ -128,7 +149,8 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
           </select>
         </div>
         {!ehLider && (
-          <div>
+          <div className="relative">
+            {p.estrela("status")}
             <label className={classeRotulo}>Situação</label>
             <select className={classeCampo} value={filtros.status} onChange={(e) => mudar("status", e.target.value)}>
               <option value="">Todas</option>
@@ -137,7 +159,8 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
             </select>
           </div>
         )}
-        <div>
+        <div className="relative">
+          {p.estrela("periodo")}
           <label className={classeRotulo}>De</label>
           <input type="date" className={classeCampo} value={filtros.de} onChange={(e) => mudar("de", e.target.value)} />
         </div>

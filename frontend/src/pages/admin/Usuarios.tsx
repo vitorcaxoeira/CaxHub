@@ -6,6 +6,11 @@ import { Skeleton } from "../../components/ui/Skeleton";
 import { copiarParaAreaDeTransferencia } from "../../utils/clipboard";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { ModalComputadoresUsuario } from "../../components/admin/ModalComputadoresUsuario";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 
 interface Role {
   id: number;
@@ -62,6 +67,118 @@ function rotuloComputadores(n: number): string {
   if (n === 0) return "Nenhum computador conectado";
   return n === 1 ? "1 computador conectado" : `${n} computadores conectados`;
 }
+
+/** O que cada linha da tabela de usuários pode fazer (as ações vivem na tela). */
+interface AcoesUsuario {
+  logadoId: number | undefined;
+  computadores: (u: Usuario) => void;
+  reenviarConvite: (u: Usuario) => void;
+  inativar: (u: Usuario) => void;
+  reativar: (u: Usuario) => void;
+  gerarToken: (u: Usuario) => void;
+  editar: (u: Usuario) => void;
+  excluir: (u: Usuario) => void;
+}
+
+// Tabela de usuários com filtro e ordem por coluna, colunas configuráveis e resumo no rodapé (TabelaLocal, 03/11/2026): a lista já vem
+// inteira do servidor (filtrada pela busca, papel e situação do topo).
+const COLUNAS_LOCAIS: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "email", tipo: "texto", obrigatoria: true },
+  { nome: "roleName", tipo: "texto", obrigatoria: true },
+  { nome: "situacao", tipo: "texto", obrigatoria: true },
+  { nome: "desktopConectados", tipo: "inteiro", obrigatoria: true },
+];
+
+const COLUNAS_USUARIOS: DefColuna<Usuario, AcoesUsuario>[] = [
+  { nome: "nome", titulo: "Nome", fixa: true, largura: 220, classe: "text-sm font-semibold text-foreground", texto: (u) => u.nome, render: (u) => u.nome },
+  { nome: "email", titulo: "E-mail", largura: 260, classe: "text-sm text-muted", texto: (u) => u.email, render: (u) => u.email },
+  {
+    nome: "roleName",
+    titulo: "Papel",
+    largura: 130,
+    render: (u) => (
+      <span className="inline-block rounded bg-muted/15 px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide text-muted">{u.roleName}</span>
+    ),
+  },
+  {
+    nome: "situacao",
+    titulo: "Status",
+    largura: 110,
+    render: (u) => (
+      <span className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${statusTone[u.status] ?? statusTone.ativo}`}>
+        {statusRotulo[u.status] ?? "Ativo"}
+      </span>
+    ),
+  },
+  {
+    nome: "desktopConectados",
+    titulo: "Desktop",
+    centro: true,
+    largura: 90,
+    render: (u, a) => (
+      // Verde = há computador conectado (clique abre a lista); cinza apagado = nenhum.
+      <button
+        onClick={() => a.computadores(u)}
+        disabled={u.desktopConectados === 0}
+        aria-label={rotuloComputadores(u.desktopConectados)}
+        title={rotuloComputadores(u.desktopConectados)}
+        className={`inline-flex rounded p-1 transition ${u.desktopConectados > 0 ? "text-success hover:bg-success/15" : "cursor-default text-muted/40"}`}
+      >
+        <IconeComputador />
+      </button>
+    ),
+  },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    direita: true,
+    semOrdenar: true,
+    largura: 300,
+    render: (u, a) => (
+      <>
+        {u.status === "pendente" && (
+          <button onClick={() => a.reenviarConvite(u)} className="mr-3 text-sm text-primary hover:underline">
+            Copiar link
+          </button>
+        )}
+        {u.status === "ativo" && (
+          <button
+            onClick={() => a.inativar(u)}
+            disabled={u.id === a.logadoId}
+            title={u.id === a.logadoId ? "Você não pode inativar seu próprio usuário" : undefined}
+            className="mr-3 text-sm text-warning hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Inativar
+          </button>
+        )}
+        {u.status === "inativo" && (
+          <button onClick={() => a.reativar(u)} className="mr-3 text-sm text-success hover:underline">
+            Reativar
+          </button>
+        )}
+        {u.roleName === "system" && (
+          <button onClick={() => a.gerarToken(u)} className="mr-3 text-sm text-primary hover:underline">
+            Gerar token
+          </button>
+        )}
+        <button onClick={() => a.editar(u)} className="mr-3 text-sm text-primary hover:underline">
+          Editar
+        </button>
+        <button
+          onClick={() => a.excluir(u)}
+          disabled={u.id === a.logadoId}
+          className="text-sm text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Excluir
+        </button>
+      </>
+    ),
+  },
+];
+
+/** Valor de cada coluna para filtrar e ordenar (a situação pelo rótulo, como aparece na tela). */
+const lerUsuario = (u: Usuario, nome: string): unknown => (nome === "situacao" ? statusRotulo[u.status] ?? "Ativo" : (u as unknown as Record<string, unknown>)[nome]);
 
 export function Usuarios() {
   const { user: usuarioLogado } = useAuth();
@@ -142,10 +259,18 @@ export function Usuarios() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Padrão do filtro de papel (estrela, 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta. Os papéis vêm junto da lista,
+  // então o padrão só confere o formato; papel que não existir mais simplesmente não traz ninguém.
+  const padroes = usePadroesTela({
+    tela: "admin.usuarios",
+    campos: { papel: { rotulo: "Papel", atual: roleFiltro, aplicar: setRoleFiltro, validar: regras.lista("number"), semOpcoes: true } },
+  });
+
   useEffect(() => {
+    if (!padroes.pronto) return;
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFiltro, roleFiltro, buscaDebounced, soDesktop]);
+  }, [padroes.pronto, statusFiltro, roleFiltro, buscaDebounced, soDesktop]);
 
   function alternarStatusFiltro(status: string) {
     setStatusFiltro((atual) => (atual === status ? null : status));
@@ -438,6 +563,7 @@ export function Usuarios() {
           onChange={setRoleFiltro}
           labelTodos="Todos os papéis"
           labelSufixo="papéis"
+          acessorio={padroes.estrela("papel")}
         />
         {statusFiltro && (
           <button
@@ -455,138 +581,27 @@ export function Usuarios() {
         </p>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Nome
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  E-mail
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Papel
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Status
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-center font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Desktop
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Ações
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading &&
-                Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i} className="border-t border-border/60">
-                    <td className="px-5 py-3.5">
-                      <Skeleton className="h-4 w-32" />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Skeleton className="h-4 w-40" />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Skeleton className="h-5 w-16 rounded" />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Skeleton className="h-5 w-14 rounded" />
-                    </td>
-                    <td className="px-5 py-3.5 text-center">
-                      <Skeleton className="mx-auto h-5 w-5 rounded" />
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      <Skeleton className="ml-auto h-4 w-20" />
-                    </td>
-                  </tr>
-                ))}
-              {!loading &&
-                usuarios.map((usuario) => (
-                <tr key={usuario.id} className="border-t border-border/60 transition hover:bg-surface-2">
-                  <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{usuario.nome}</td>
-                  <td className="px-5 py-3.5 text-sm text-muted">{usuario.email}</td>
-                  <td className="px-5 py-3.5">
-                    <span className="inline-block rounded bg-muted/15 px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide text-muted">
-                      {usuario.roleName}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <span
-                      className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
-                        statusTone[usuario.status] ?? statusTone.ativo
-                      }`}
-                    >
-                      {statusRotulo[usuario.status] ?? "Ativo"}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5 text-center">
-                    {/* Verde = há computador conectado (clique abre a lista); cinza apagado = nenhum. */}
-                    <button
-                      onClick={() => setComputadoresDe(usuario)}
-                      disabled={usuario.desktopConectados === 0}
-                      aria-label={rotuloComputadores(usuario.desktopConectados)}
-                      title={rotuloComputadores(usuario.desktopConectados)}
-                      className={`inline-flex rounded p-1 transition ${
-                        usuario.desktopConectados > 0 ? "text-success hover:bg-success/15" : "cursor-default text-muted/40"
-                      }`}
-                    >
-                      <IconeComputador />
-                    </button>
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    {usuario.status === "pendente" && (
-                      <button onClick={() => reenviarConvite(usuario)} className="mr-3 text-sm text-primary hover:underline">
-                        Copiar link
-                      </button>
-                    )}
-                    {usuario.status === "ativo" && (
-                      <button
-                        onClick={() => inativar(usuario)}
-                        disabled={usuario.id === usuarioLogado?.id}
-                        title={usuario.id === usuarioLogado?.id ? "Você não pode inativar seu próprio usuário" : undefined}
-                        className="mr-3 text-sm text-warning hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Inativar
-                      </button>
-                    )}
-                    {usuario.status === "inativo" && (
-                      <button onClick={() => reativar(usuario)} className="mr-3 text-sm text-success hover:underline">
-                        Reativar
-                      </button>
-                    )}
-                    {usuario.roleName === "system" && (
-                      <button onClick={() => gerarTokenServico(usuario)} className="mr-3 text-sm text-primary hover:underline">
-                        Gerar token
-                      </button>
-                    )}
-                    <button onClick={() => abrirEditar(usuario)} className="mr-3 text-sm text-primary hover:underline">
-                      Editar
-                    </button>
-                    <button
-                      onClick={() => excluir(usuario)}
-                      disabled={usuario.id === usuarioLogado?.id}
-                      className="text-sm text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Excluir
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {!loading && usuarios.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-5 py-8 text-center text-sm text-muted">
-                    Nenhum usuário encontrado com esses filtros.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <TabelaLocal<Usuario, AcoesUsuario>
+        chave="admin.usuarios"
+        defs={COLUNAS_USUARIOS}
+        colunas={COLUNAS_LOCAIS}
+        linhas={usuarios}
+        ler={lerUsuario}
+        chaveLinha={(u) => String(u.id)}
+        loading={loading}
+        vazio="Nenhum usuário encontrado com esses filtros."
+        alturaMax="max-h-[70vh]"
+        ctx={{
+          logadoId: usuarioLogado?.id,
+          computadores: setComputadoresDe,
+          reenviarConvite,
+          inativar,
+          reativar,
+          gerarToken: gerarTokenServico,
+          editar: abrirEditar,
+          excluir,
+        }}
+      />
 
       {modalAberto && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4">

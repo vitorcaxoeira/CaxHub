@@ -8,6 +8,8 @@ import {
   SolicitacaoApontamento,
   SolicitacaoExcedente,
 } from "../../components/projetos/AtividadeDetalhe";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { IndicadorProgresso } from "../../components/cronograma/IndicadorProgresso";
 import { tomConsumo } from "../../lib/consumoHoras";
@@ -384,6 +386,11 @@ function ListaExcedentes({
   // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
   // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
   const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  // Padrão do filtro (estrela, 03/11/2026). Os nomes vêm da própria fila, então só o formato é conferido.
+  const padroes = usePadroesTela({
+    tela: "projetos.aprovacoes.excedentes",
+    campos: { consultor: { rotulo: "Consultor", atual: consultorFiltro, aplicar: setConsultorFiltro, validar: regras.lista("string"), semOpcoes: true } },
+  });
   const [processandoLote, setProcessandoLote] = useState(false);
 
   const carregar = useCallback(() => {
@@ -508,6 +515,7 @@ function ListaExcedentes({
             onChange={setConsultorFiltro}
             labelTodos="Todos os consultores"
             labelSufixo="consultores"
+            acessorio={padroes.estrela("consultor")}
           />
           {status === "pendente" && pendentesDecidiveis.length > 0 && (
             <div className="ml-auto flex items-center gap-2">
@@ -656,6 +664,11 @@ function ListaApontamentos({
   // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
   // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
   const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  // Padrão do filtro (estrela, 03/11/2026). Os nomes vêm da própria fila, então só o formato é conferido.
+  const padroes = usePadroesTela({
+    tela: "projetos.aprovacoes.apontamentos",
+    campos: { consultor: { rotulo: "Consultor", atual: consultorFiltro, aplicar: setConsultorFiltro, validar: regras.lista("string"), semOpcoes: true } },
+  });
   const [processandoLote, setProcessandoLote] = useState(false);
 
   const carregar = useCallback(() => {
@@ -790,6 +803,7 @@ function ListaApontamentos({
             onChange={setConsultorFiltro}
             labelTodos="Todos os consultores"
             labelSufixo="consultores"
+            acessorio={padroes.estrela("consultor")}
           />
           {/* Só faz sentido decidir em lote na aba Pendentes — nas outras os pedidos já
               foram decididos ou misturam situações diferentes. */}
@@ -974,6 +988,11 @@ function ListaAjustes({
   // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
   // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
   const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  // Padrão do filtro (estrela, 03/11/2026). Os nomes vêm da própria fila, então só o formato é conferido.
+  const padroes = usePadroesTela({
+    tela: "projetos.aprovacoes.ajustes",
+    campos: { consultor: { rotulo: "Consultor", atual: consultorFiltro, aplicar: setConsultorFiltro, validar: regras.lista("string"), semOpcoes: true } },
+  });
   const [processandoLote, setProcessandoLote] = useState(false);
 
   const carregar = useCallback(() => {
@@ -1101,6 +1120,7 @@ function ListaAjustes({
             onChange={setConsultorFiltro}
             labelTodos="Todos os consultores"
             labelSufixo="consultores"
+            acessorio={padroes.estrela("consultor")}
           />
           {status === "pendente" && pendentesDecidiveis.length > 0 && (
             <div className="ml-auto flex items-center gap-2">
@@ -1270,6 +1290,11 @@ function ListaConfigProposta({ status, onMudou }: { status: string; onMudou: () 
   // Filtro de solicitante: mesma ideia das outras 3 listas, recortando só o que já está na
   // tela (não é uma lista de todo mundo que poderia pedir).
   const [solicitanteFiltro, setSolicitanteFiltro] = useState<string[]>([]);
+  // Padrão do filtro (estrela, 03/11/2026). Os nomes vêm da própria fila, então só o formato é conferido.
+  const padroes = usePadroesTela({
+    tela: "projetos.aprovacoes.config-proposta",
+    campos: { solicitante: { rotulo: "Solicitante", atual: solicitanteFiltro, aplicar: setSolicitanteFiltro, validar: regras.lista("string"), semOpcoes: true } },
+  });
   const [processandoLote, setProcessandoLote] = useState(false);
 
   const carregar = useCallback(() => {
@@ -1378,6 +1403,7 @@ function ListaConfigProposta({ status, onMudou }: { status: string; onMudou: () 
             onChange={setSolicitanteFiltro}
             labelTodos="Todos os solicitantes"
             labelSufixo="solicitantes"
+            acessorio={padroes.estrela("solicitante")}
           />
           {status === "pendente" && pendentesDecidiveis.length > 0 && (
             <div className="ml-auto flex items-center gap-2">
