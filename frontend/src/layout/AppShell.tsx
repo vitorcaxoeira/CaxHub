@@ -3,9 +3,12 @@ import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { VigiaFimDeJornada } from "../components/projetos/VigiaFimDeJornada";
+import { useMenuLateralPadrao } from "../hooks/useMenuLateralPadrao";
 
 export function AppShell() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Menu lateral abre no padrão do usuário (aberto ou recolhido na faixa de ícones; estrela ao lado do botão no topo, 04/11/2026).
+  const menuPadrao = useMenuLateralPadrao();
+  const [sidebarOpen, setSidebarOpen] = useState(menuPadrao.padrao !== "recolhido");
   // Drawer mobile (abaixo do breakpoint `lg`) — separado de `sidebarOpen` (colapsa/expande o
   // painel de desktop): são ações diferentes, misturar os dois criaria casos estranhos ao
   // redimensionar a janela com o drawer aberto (28/08/2026, ver Sidebar.tsx).
@@ -32,7 +35,17 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar open={sidebarOpen} mobileOpen={mobileMenuOpen} onNavigate={() => setMobileMenuOpen(false)} onExpandir={() => setSidebarOpen(true)} />
+      {/* Escolher uma tela no menu volta o menu ao padrão do usuário: com o padrão "recolhido", quem expandiu o menu (pela faixa de
+          ícones ou pelo botão) para achar a tela o vê recolher de novo depois que ela abre. */}
+      <Sidebar
+        open={sidebarOpen}
+        mobileOpen={mobileMenuOpen}
+        onNavigate={() => {
+          setMobileMenuOpen(false);
+          if (menuPadrao.padrao === "recolhido") setSidebarOpen(false);
+        }}
+        onExpandir={() => setSidebarOpen(true)}
+      />
       {/* Fundo escurecido atrás do drawer mobile — só existe (não só invisível) enquanto
           aberto, e só abaixo de `lg` (no desktop o menu nunca é overlay). Clique fecha. */}
       {mobileMenuOpen && (
@@ -46,6 +59,9 @@ export function AppShell() {
         <Topbar
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          menuPadrao={menuPadrao.padrao}
+          salvandoMenuPadrao={menuPadrao.salvando}
+          onSalvarMenuPadrao={() => void menuPadrao.salvar(sidebarOpen ? "aberto" : "recolhido")}
           onToggleMobileMenu={() => setMobileMenuOpen((open) => !open)}
         />
         <main className="mx-auto w-full max-w-7xl flex-1 p-4 lg:p-6">

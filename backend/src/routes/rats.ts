@@ -45,6 +45,20 @@ import {
   moddesLabel,
   simNaoLabel,
 } from "../domain/rdvDominio";
+import {
+  consultaRatsLista,
+  ORDEM_PADRAO_RATS,
+  precisaCalcularConjunto,
+  ROTULOS_INTEGRACAO,
+  ROTULOS_SITRAT,
+  STATUS_INTEGRACAO,
+  type FiltrosTopoRats,
+  type OpcoesConsultaRats,
+  type VisibilidadeRats,
+} from "../domain/ratsListaSql";
+import { col, linhasFiltradasDaLista, registrarListaConsultavel, type ListaConsultavel } from "./listaConsultavel";
+import { converterHeicSeNecessario, ehHeic } from "../domain/comprovanteHeic";
+import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 
 // Tela "Meus Apontamentos": RATs agrupam os apontamentos (RatItem) de um consultor numa
 // proposta. Visibilidade: consultor vê só as próprias RATs; gestor do departamento
@@ -205,7 +219,7 @@ async function codforsVisiveis(role: string, contexto: Contexto): Promise<number
 // pra poder rodar em dois momentos diferentes de GET / conforme `busca` está ativa ou não (ver
 // comentário no handler), mesmo espírito de buscarItensEIntegracao já ser reaproveitada em dois
 // pontos. Também reaproveitado por ratsElegiveisFechamentoFiltradas.
-async function buscarPropostasPorChave(rats: { codemp: number; codpro: number | null }[]) {
+export async function buscarPropostasPorChave(rats: { codemp: number; codpro: number | null }[]) {
   const chaves = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
   // `IN` por codemp/codpro (superconjunto) + filtro exato pela chave, e não um `OR` com uma cláusula por RAT:
   // com milhares de pares o planejamento do Postgres explode (ver o mesmo ajuste em routes/alocacao.ts).
@@ -254,7 +268,7 @@ function podeFecharRat(role: string, contexto: Contexto, rat: { codfor: number; 
 // Recebe as RATs inteiras (não só o id) desde 09/09/2026 — precisa de codemp+numrat pra casar
 // com as pendências de despesa (RegistroDespesaViagem não referencia Rat.id, só a chave
 // natural do Senior).
-async function buscarItensEIntegracao(rats: { id: number; codemp: number; numrat: number | null }[]) {
+export async function buscarItensEIntegracao(rats: { id: number; codemp: number; numrat: number | null }[]) {
   const ratIds = rats.map((r) => r.id);
   const itens =
     ratIds.length > 0
@@ -552,6 +566,78 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     handleError(res, error, "listar");
   }
 });
+
+// ---------- Lista de RATs com filtro e ordem por coluna (04/11/2026) ----------
+// GET /lista (+ /lista/resumo e /lista/valores): a mesma lista de GET / com o kit de colunas do CaxHub_Dash (funil e ordem por coluna,
+// colunas configuráveis, resumo no rodapé, colunas calculadas), toda resolvida no banco: consulta em domain/ratsListaSql.ts, que calcula
+// também cliente, consultor, minutos e a integração com o Senior (a regra de calcularIntegracaoErp, em SQL). Os filtros do topo continuam
+// os mesmos (consultor, situação, busca, busca em itens, sincronização) e o recorte de visibilidade é o de ratsVisiveis.
+
+const dominioDe = (rotulos: string[]) => rotulos.map((r) => ({ valor: r, rotulo: r }));
+
+const COLUNAS_LISTA_RATS = [
+  col.inteiro("id", { obrigatoria: true }),
+  col.inteiro("numrat"),
+  col.inteiro("codpro"),
+  col.texto("cliente"),
+  col.texto("consultorNome", { obrigatoria: true }),
+  col.data("datemi"),
+  col.texto("sitratLabel", { obrigatoria: true, dominio: dominioDe(ROTULOS_SITRAT) }),
+  col.texto("integracaoLabel", { obrigatoria: true, dominio: dominioDe(ROTULOS_INTEGRACAO) }),
+  col.inteiro("totalItens", { obrigatoria: true }),
+  col.inteiro("totalMinutos", { obrigatoria: true }),
+];
+
+function filtrosTopoRats(query: AuthenticatedRequest["query"]): FiltrosTopoRats {
+  const integracao = (typeof query.integracao === "string" ? query.integracao : "")
+    .split(",")
+    .filter((v): v is IntegracaoErpStatus => (STATUS_INTEGRACAO as string[]).includes(v));
+  return {
+    codfors: listaDeInteirosNaoZero(query.codfor),
+    sitrats: listaDeInteirosNaoZero(query.sitrat),
+    busca: typeof query.busca === "string" ? query.busca : "",
+    buscaItem: typeof query.buscaItem === "string" ? query.buscaItem : "",
+    integracao,
+  };
+}
+
+function visibilidadeRats(role: string, contexto: Contexto): VisibilidadeRats {
+  return { todas: role === "admin", codfor: contexto.consultor?.codfor ?? null, depexes: contexto.departamentosGerenciados };
+}
+
+/** A lista de RATs do usuário da requisição, no formato de registrarListaConsultavel (também usada pelo "Fechar Todos"). */
+async function listaRatsDoUsuario(req: AuthenticatedRequest, opcoes: OpcoesConsultaRats = {}): Promise<ListaConsultavel> {
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) throw new ErroEntradaConsulta("Usuário não encontrado", 404);
+  const { contexto, role } = ctx;
+  const filtros = filtrosTopoRats(req.query);
+  const conjunto = precisaCalcularConjunto(req.query as Record<string, unknown>, filtros);
+  const { com, interna } = consultaRatsLista(visibilidadeRats(role, contexto), filtros, { ...opcoes, conjunto });
+  return {
+    com,
+    interna,
+    colunas: COLUNAS_LISTA_RATS,
+    ordemPadrao: ORDEM_PADRAO_RATS,
+    pageSizePadrao: 30,
+    paginaMaxima: 100,
+    // Só exibição (não filtra nem ordena): tons dos selos e se a pessoa pode fechar a RAT.
+    decorar: (linhas) =>
+      linhas.map((l) => {
+        const sitrat = l.sitrat as number | null;
+        const excluida = l.excluida === true;
+        const integracao = l.integracao as IntegracaoErpStatus;
+        return {
+          ...l,
+          sitratTone: sitratToneEfetivo({ sitrat, removidoEmSenior: excluida ? new Date(0) : null }),
+          integracaoTone: integracaoErpTone(integracao),
+          podeFechar:
+            sitrat === 9 && !excluida && podeFecharRat(role, contexto, { codfor: l.codfor as number, depexe: (l.depexe as number | null) ?? null }),
+        };
+      }),
+  };
+}
+
+registrarListaConsultavel(ratsRouter, "/lista", (req) => listaRatsDoUsuario(req as AuthenticatedRequest), "rats-lista");
 
 // GET /opcoes-filtro — consultores distintos entre as RATs visíveis, pro seletor da
 // tela (só faz diferença pra gestor/admin — consultor comum só vê a si mesmo).
@@ -1459,78 +1545,34 @@ ratsRouter.post("/fechar-lote", async (req: AuthenticatedRequest, res) => {
 // `sitrat` do filtro da tela é uma INTERSEÇÃO com a elegibilidade (sempre 9), não uma
 // substituição — fechar só faz sentido pra Digitado, então filtrar a tela por qualquer outra
 // situação (sem incluir Digitado) zera o resultado de propósito, em vez de ignorar o filtro.
-async function ratsElegiveisFechamentoFiltradas(role: string, contexto: Contexto, query: AuthenticatedRequest["query"]) {
-  // Só `sitrat = 9` e não removida no Senior é elegível: resolvido no banco (~25 RATs), em vez de carregar as
-  // 25 mil do admin para descartar quase todas em memória (a contagem do "Fechar Todos" abre a tela).
-  let rats = await ratsVisiveis(role, contexto, RAT_SELECT_LEVE, { sitrat: 9, removidoEmSenior: null });
-  // `removidoEmSenior == null`: RAT excluída no Senior fica com sitrat=9 congelado (última
-  // situação real conhecida antes de sumir), mas não é elegível pra fechar — mesma checagem
-  // de prepararFechamentoRat.
-  rats = rats.filter((r) => r.sitrat === 9 && r.removidoEmSenior == null && podeFecharRat(role, contexto, r));
-
-  const sitratFiltro = (typeof query.sitrat === "string" ? query.sitrat : "")
-    .split(",")
-    .map((v) => Number(v.trim()))
-    .filter((v) => Number.isFinite(v) && v !== 0);
-  if (sitratFiltro.length > 0 && !sitratFiltro.includes(9)) {
-    rats = [];
-  }
-
-  const codforsFiltro = (typeof query.codfor === "string" ? query.codfor : "")
-    .split(",")
-    .map((v) => Number(v.trim()))
-    .filter((v) => Number.isFinite(v) && v !== 0);
-  if (codforsFiltro.length > 0) {
-    rats = rats.filter((r) => codforsFiltro.includes(r.codfor));
-  }
-
-  // Proposta/cliente: o conjunto aqui já é pequeno (interseção com sitrat=9 — hoje só 13 RATs
-  // em produção), então resolver sempre não pesa como em GET / — buscarPropostasPorChave já
-  // tem sua própria guarda interna (não bate no banco se `rats` estiver vazio).
-  const busca = typeof query.busca === "string" ? query.busca.trim().toLowerCase() : "";
-  const propostaPorChave = await buscarPropostasPorChave(rats);
-  if (busca) {
-    rats = rats.filter((r) => {
-      const proposta = r.codpro != null ? propostaPorChave.get(`${r.codemp}-${r.codpro}`) : undefined;
-      const cliente = proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : "";
-      return (
-        cliente.toLowerCase().includes(busca) ||
-        String(r.codpro ?? "").includes(busca) ||
-        String(r.numrat ?? "").includes(busca)
-      );
-    });
-  }
-
-  const buscaItem = typeof query.buscaItem === "string" ? query.buscaItem.trim() : "";
-  if (buscaItem) {
-    const ratIdsCandidatos = rats.map((r) => r.id);
-    const buscaItemNumerica = /^\d+$/.test(buscaItem) ? Number(buscaItem) : null;
-    const itensCorrespondentes =
-      ratIdsCandidatos.length > 0
-        ? await prisma.ratItem.findMany({
-            where: {
-              ratId: { in: ratIdsCandidatos },
-              OR: [
-                { desati: { contains: buscaItem, mode: "insensitive" } },
-                ...(buscaItemNumerica !== null ? [{ sessoes: { some: { atividadeId: buscaItemNumerica } } }] : []),
-              ],
-            },
-            select: { ratId: true },
-          })
-        : [];
-    const ratIdsComItem = new Set(itensCorrespondentes.map((i) => i.ratId));
-    rats = rats.filter((r) => ratIdsComItem.has(r.id));
-  }
-
-  const integracaoFiltro = (typeof query.integracao === "string" ? query.integracao : "")
-    .split(",")
-    .filter((v): v is IntegracaoErpStatus => (["sincronizado", "enviando", "falha", "pendente"] as string[]).includes(v));
-  if (integracaoFiltro.length > 0) {
-    const { integracaoPorRat } = await buscarItensEIntegracao(rats);
-    rats = rats.filter((r) => integracaoFiltro.includes(integracaoPorRat.get(r.id)!));
-  }
-
-  return { rats, propostaPorChave };
+async function ratsElegiveisFechamentoFiltradas(req: AuthenticatedRequest, role: string, contexto: Contexto) {
+  // Mesma consulta da lista da tela (GET /lista, domain/ratsListaSql.ts), restrita a Digitado (9) e não removida no Senior, com os
+  // filtros do topo E os filtros de coluna (`f=`, 04/11/2026): o botão conta e fecha exatamente o que a pessoa filtrou. `sitrat` do
+  // topo é uma INTERSEÇÃO com a elegibilidade (filtrar por outra situação sem incluir Digitado zera o resultado de propósito).
+  // `removidoEmSenior == null`: RAT excluída no Senior fica com sitrat=9 congelado, mas não é elegível pra fechar (mesma checagem de
+  // prepararFechamentoRat).
+  const lista = await listaRatsDoUsuario(req, { somenteDigitadasAtivas: true });
+  const linhas = await linhasFiltradasDaLista(
+    lista,
+    req.query as Record<string, unknown>,
+    Prisma.sql`x.id, x.codemp, x.codfor, x.codpro, x.numrat, x.sitrat, x.depexe, x.cliente, x."consultorNome", x."totalMinutos"`,
+  );
+  const rats = linhas
+    .map((l) => ({
+      id: l.id as number,
+      codemp: l.codemp as number,
+      codfor: l.codfor as number,
+      codpro: (l.codpro as number | null) ?? null,
+      numrat: (l.numrat as number | null) ?? null,
+      sitrat: (l.sitrat as number | null) ?? null,
+      depexe: (l.depexe as number | null) ?? null,
+      cliente: (l.cliente as string | null) ?? null,
+      consultorNome: l.consultorNome as string,
+      totalMinutos: Number(l.totalMinutos ?? 0),
+    }))
+    .filter((r) => podeFecharRat(role, contexto, r))
+    .sort((a, b) => b.id - a.id);
+  return { rats };
 }
 
 // GET /elegiveis-fechamento — resumo completo (com cliente/consultor/minutos) das RATs
@@ -1546,41 +1588,17 @@ ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) =
     }
     const { contexto, role } = ctx;
 
-    const { rats, propostaPorChave } = await ratsElegiveisFechamentoFiltradas(role, contexto, req.query);
-    if (rats.length === 0) {
-      res.json({ rats: [] });
-      return;
-    }
-
-    const codforsUnicos = [...new Set(rats.map((r) => r.codfor))];
-    const consultores =
-      codforsUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } }) : [];
-    const consultorPorCodfor = new Map(consultores.map((c) => [c.codfor, c]));
-
-    // Só o total de minutos, sem o custo de despesa/pendência de buscarItensEIntegracao de
-    // novo — quando o filtro de integração está ativo ele já rodou acima; sem filtro, não
-    // precisa dele aqui (não entra na resposta, só no resumo do lote).
-    const ratIds = rats.map((r) => r.id);
-    const itens = await prisma.ratItem.findMany({ where: { ratId: { in: ratIds } }, select: { ratId: true, horini: true, horfim: true } });
-    const minutosPorRat = new Map<number, number>();
-    for (const item of itens) {
-      const minutos = item.horini != null && item.horfim != null ? item.horfim - item.horini : 0;
-      minutosPorRat.set(item.ratId, (minutosPorRat.get(item.ratId) ?? 0) + minutos);
-    }
-
+    // Cliente, consultor e minutos já vêm da consulta da lista (ratsElegiveisFechamentoFiltradas).
+    const { rats } = await ratsElegiveisFechamentoFiltradas(req, role, contexto);
     res.json({
-      rats: rats.map((r) => {
-        const proposta = r.codpro != null ? propostaPorChave.get(`${r.codemp}-${r.codpro}`) : undefined;
-        const consultor = consultorPorCodfor.get(r.codfor);
-        return {
-          id: r.id,
-          numrat: r.numrat,
-          codpro: r.codpro,
-          cliente: proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : null,
-          consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${r.codfor}`,
-          totalMinutos: minutosPorRat.get(r.id) ?? 0,
-        };
-      }),
+      rats: rats.map((r) => ({
+        id: r.id,
+        numrat: r.numrat,
+        codpro: r.codpro,
+        cliente: r.cliente,
+        consultorNome: r.consultorNome,
+        totalMinutos: r.totalMinutos,
+      })),
     });
   } catch (error) {
     handleError(res, error, "elegiveis-fechamento");
@@ -1599,7 +1617,7 @@ ratsRouter.get("/elegiveis-fechamento/contagem", async (req: AuthenticatedReques
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
-    const { rats } = await ratsElegiveisFechamentoFiltradas(ctx.role, ctx.contexto, req.query);
+    const { rats } = await ratsElegiveisFechamentoFiltradas(req, ctx.role, ctx.contexto);
     res.json({ total: rats.length });
   } catch (error) {
     handleError(res, error, "elegiveis-fechamento-contagem");
@@ -2285,8 +2303,9 @@ const uploadComprovante = multer({
   // "SeparaÃ§Ã£o.pdf". Os navegadores mandam UTF-8.
   defParamCharset: "utf8",
   fileFilter: (_req, file, cb) => {
-    if (MIMES_COMPROVANTE.has(file.mimetype)) cb(null, true);
-    else cb(new Error("Tipo de arquivo não permitido (use foto ou PDF)"));
+    // HEIC do iPhone também pela extensão: no Windows o navegador costuma mandá-lo sem tipo (ver domain/comprovanteHeic.ts).
+    if (MIMES_COMPROVANTE.has(file.mimetype) || ehHeic(file.originalname, file.mimetype)) cb(null, true);
+    else cb(new Error("Tipo de arquivo não permitido (use foto, inclusive HEIC do iPhone, ou PDF)"));
   },
 });
 
@@ -2568,6 +2587,9 @@ ratsRouter.post("/:id/comprovantes", receberComprovante, async (req: Authenticat
       res.status(400).json({ error: `Limite de ${MAX_COMPROVANTES_POR_RAT} comprovantes por RAT atingido` });
       return;
     }
+    // HEIC (iPhone) vira JPEG antes de gravar: Chrome/Edge não o mostram e o PDF único da RAT não o embute. Atualiza req.file (caminho,
+    // nome, tamanho, tipo), então o `descartar` acima continua apagando o arquivo certo se algo falhar daqui pra frente.
+    await converterHeicSeNecessario(req.file);
     const criado = await prisma.$transaction(async (tx) => {
       const c = await tx.comprovanteRat.create({
         data: {

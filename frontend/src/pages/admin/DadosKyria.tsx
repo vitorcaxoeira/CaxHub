@@ -441,7 +441,6 @@ export function DadosKyria() {
         chaveLinha={(l, i) => String(l.id ?? i)}
         loading={carregando}
         vazio="Nenhum registro sincronizado ainda."
-        alturaMax="max-h-[70vh]"
         ctx={{ descricoes: dados?.descricoes ?? {}, removendo, editar: setEdicaoAberta, remover: removerVinculo }}
       />
 

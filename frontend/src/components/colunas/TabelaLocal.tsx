@@ -28,13 +28,14 @@ interface Props<T, C> {
   onLinha?: (linha: T) => void;
 }
 
-export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, chaveLinha, vazio, ler, ctx, loading = false, alturaMax = "max-h-[60vh]", classeLinha, onLinha }: Props<T, C>) {
+export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, chaveLinha, vazio, ler, ctx, loading = false, alturaMax, classeLinha, onLinha }: Props<T, C>) {
   const titulos = useMemo(() => titulosDe(defs), [defs]);
   const { t, tc } = useTabelaLocalConfiguravel(chave, defs, linhas, colunas, { ler, titulos });
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface">
       {t.barra}
-      <div className={cn("overflow-auto", alturaMax)}>
+      {/* Sem altura máxima por padrão (04/11/2026): a tabela cresce com a página, como antes do kit de colunas. */}
+      <div className={cn(alturaMax ? "overflow-auto" : "overflow-x-auto", alturaMax)}>
         <table className={tc.classeTabela} style={tc.estiloTabela} aria-busy={loading}>
           {tc.colgroup}
           <thead className="sticky top-0 z-10">{tc.cabecalho({ colunas: t.colunas, estado: t.estado, valores: t.valores })}</thead>

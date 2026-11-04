@@ -104,6 +104,8 @@ model PreferenciaTela {
   /// Visão em que Gestão de Projetos › Atividades abre: quadro | lista | calendario | timeline | workload
   /// (VISOES_ATIVIDADES em src/domain/preferenciasTela.ts; CHECK no banco).
   atividadesVisao String   @default("quadro") @db.VarChar(12)
+  /// Menu lateral ao abrir o CaxHub: aberto | recolhido (MENUS_LATERAL em src/domain/preferenciasTela.ts; CHECK no banco).
+  menuLateral     String   @default("aberto") @db.VarChar(10)
   updatedAt       DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

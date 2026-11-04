@@ -63,6 +63,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import { cn } from "../lib/cn";
+import { abrirCaminho, abrirNoAcordeao, alternarNoAcordeao, irmaosDoMenu } from "./menuAcordeao";
 import { useAuth } from "../auth/AuthContext";
 import { DEPEXE_COMERCIAL } from "../auth/acessoComercial";
 import { DEPEXE_DHO } from "../auth/acessoRh";
@@ -385,7 +386,8 @@ function Seta({ aberto }: { aberto: boolean }) {
   );
 }
 
-const BASE_ITEM = "flex w-full items-center gap-3 rounded-md px-3 text-sm leading-snug transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+// Recuo enxuto (04/11/2026, pedido do Vitor): px-2 + gap-2 + ícone de 16 px. Cada nível do menu desloca ~16 px, como antes dos ícones.
+const BASE_ITEM = "flex w-full items-center gap-2 rounded-md px-2 text-sm leading-snug transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /** Tela (item de topo ou folha): selecionada em verde-escuro; as outras em cinza, escurecendo no hover. */
 const classeLink = (folha: boolean) => ({ isActive }: { isActive: boolean }) =>
@@ -399,11 +401,14 @@ const classeLink = (folha: boolean) => ({ isActive }: { isActive: boolean }) =>
 const classeGrupo = (destaque: boolean) =>
   cn(BASE_ITEM, "py-2 font-medium", destaque ? "text-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground");
 
-/** Lista de um nível abaixo: recuo alinhado ao centro do ícone do pai e uma linha guia fina. */
-const SUBLISTA = "ml-[21px] mt-0.5 space-y-0.5 border-l border-border pl-2.5";
+/** Lista de um nível abaixo: linha guia no centro do ícone do pai (px-2 + 16/2 = 16 px) e o filho logo depois dela: ~16 px por nível. */
+const SUBLISTA = "ml-[15px] mt-0.5 space-y-0.5 border-l border-border";
 
 /** Menu recolhido (só desktop): botão quadrado só com o ícone. */
 const BOTAO_FAIXA = "mx-auto flex h-10 w-10 items-center justify-center rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+// Menu em acordeão (04/11/2026, regra do CaxHub_Dash): abrir um grupo fecha o aberto do mesmo nível (ver menuAcordeao.ts).
+const IRMAOS_MENU = irmaosDoMenu(groups.map((g) => ({ label: g.label, subgrupos: g.items.filter(isSubgroup).map((i) => i.label) })));
 
 // Grupo (e sub-menu) que contém a rota atual — o item cujo caminho casa com o endereço (igual
 // ou prefixo seguido de "/"), preferindo o mais longo. Rota sem item no menu (ex.: detalhe de
@@ -438,13 +443,13 @@ interface SidebarProps {
 export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: SidebarProps) {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  // Abre o grupo da página atual (no carregamento e a cada navegação), sem fechar os que a
-  // pessoa abriu na mão. Antes começava sempre com "Financeiro a Receber" aberto, fixo.
-  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(gruposDaRota(pathname)));
+  // Abre o grupo da página atual (no carregamento e a cada navegação), em acordeão: o vizinho do mesmo nível fecha (04/11/2026, regra
+  // do CaxHub_Dash; antes os abertos na mão ficavam abertos e o menu crescia). Rota sem item no menu não mexe em nada.
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => abrirCaminho(new Set(), gruposDaRota(pathname), IRMAOS_MENU));
   useEffect(() => {
     const abrir = gruposDaRota(pathname);
     if (abrir.length === 0) return;
-    setOpenGroups((prev) => (abrir.every((l) => prev.has(l)) ? prev : new Set([...prev, ...abrir])));
+    setOpenGroups((prev) => abrirCaminho(prev, abrir, IRMAOS_MENU));
   }, [pathname]);
   const [ehGestorOuAdmin, setEhGestorOuAdmin] = useState(false);
   // Tem Consultor próprio (Consultor.email == o dele) — dinâmico, igual ehGestorOuAdmin,
@@ -552,13 +557,9 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
     // do filtro por item, não só o `roles` estático dele.
     .filter((group) => group.items.length > 0);
 
+  // Clique no grupo ou sub-menu: aberto fecha; fechado abre e fecha o vizinho do mesmo nível (acordeão).
   function toggleGroup(label: string) {
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      return next;
-    });
+    setOpenGroups((prev) => alternarNoAcordeao(prev, label, IRMAOS_MENU));
   }
 
   // Grupo (ou sub-menu) que contém a tela aberta: fica em destaque, aberto ou não.
@@ -571,7 +572,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
     >
       {topLevel.map((item) => (
         <NavLink key={item.to} to={item.to} end className={classeLink(false)} onClick={onNavigate}>
-          <IconeMenu icone={ICONE_DA_ROTA[item.to]} />
+          <IconeMenu icone={ICONE_DA_ROTA[item.to]} pequeno />
           <span className="min-w-0 flex-1 whitespace-normal">{item.label}</span>
         </NavLink>
       ))}
@@ -581,7 +582,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
         return (
           <div key={group.label}>
             <button type="button" onClick={() => toggleGroup(group.label)} aria-expanded={isOpen} className={classeGrupo(isOpen || rotaAtual.has(group.label))}>
-              <IconeMenu icone={ICONE_DO_GRUPO[group.label]} />
+              <IconeMenu icone={ICONE_DO_GRUPO[group.label]} pequeno />
               <span className="min-w-0 flex-1 whitespace-normal text-left">{group.label}</span>
               <Seta aberto={isOpen} />
             </button>
@@ -659,7 +660,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
           title={group.label}
           aria-label={`${group.label} (abre o menu)`}
           onClick={() => {
-            setOpenGroups((prev) => (prev.has(group.label) ? prev : new Set([...prev, group.label])));
+            setOpenGroups((prev) => (prev.has(group.label) ? prev : abrirNoAcordeao(prev, group.label, IRMAOS_MENU)));
             onExpandir?.();
           }}
           className={cn(BOTAO_FAIXA, rotaAtual.has(group.label) ? "bg-primary/10 text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
@@ -678,9 +679,9 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
     // Recolhido no desktop (04/11/2026, como no CaxHub_Dash): em vez de sumir, vira uma faixa de ícones de 64 px.
     <aside
       className={cn(
-        "fixed inset-y-0 left-0 z-40 flex h-dvh w-72 flex-none flex-col overflow-hidden border-r border-border bg-surface transition-transform duration-200 motion-reduce:transition-none lg:sticky lg:top-0 lg:z-auto lg:translate-x-0 lg:transition-[width]",
+        "fixed inset-y-0 left-0 z-40 flex h-dvh w-64 flex-none flex-col overflow-hidden border-r border-border bg-surface transition-transform duration-200 motion-reduce:transition-none lg:sticky lg:top-0 lg:z-auto lg:translate-x-0 lg:transition-[width]",
         mobileOpen ? "translate-x-0" : "-translate-x-full",
-        open ? "lg:w-72" : "lg:w-16"
+        open ? "lg:w-60" : "lg:w-16"
       )}
     >
       <div className={cn("flex h-16 flex-none items-center border-b border-border px-5", !open && "lg:justify-center lg:px-0")}>

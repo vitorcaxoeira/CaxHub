@@ -590,7 +590,6 @@ export function Usuarios() {
         chaveLinha={(u) => String(u.id)}
         loading={loading}
         vazio="Nenhum usuário encontrado com esses filtros."
-        alturaMax="max-h-[70vh]"
         ctx={{
           logadoId: usuarioLogado?.id,
           computadores: setComputadoresDe,

@@ -313,5 +313,5 @@ function TabelaRhConfiguravel<T>({ chave, colunas, linhas }: { chave: string; co
     },
     [],
   );
-  return <TabelaLocal<T> chave={chave} defs={defs} colunas={locais} linhas={linhas} ler={ler} chaveLinha={(_, i) => String(i)} vazio="" alturaMax="max-h-[420px]" />;
+  return <TabelaLocal<T> chave={chave} defs={defs} colunas={locais} linhas={linhas} ler={ler} chaveLinha={(_, i) => String(i)} vazio="" />;
 }

@@ -12,6 +12,7 @@ import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade, entidadeIdRat } from "../audit/identidadeEntidade";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
+import { confirmouExcluirAjuste, decidirExclusaoComAjuste } from "../domain/exclusaoApontamento";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
 // rastreou (ver AtividadeSessaoExecucao / PATCH /atividades/:id/mover) e confirma —
@@ -1348,6 +1349,19 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    // Pedido de ajuste de horário aguardando o gestor vai junto com o apontamento (04/11/2026), mas só depois do aviso: sem
+    // `?excluirAjuste=1` a resposta é 409 "ajuste_pendente" e nada muda (ver domain/exclusaoApontamento.ts).
+    const ajustes = await prisma.solicitacaoAjusteApontamento.findMany({
+      where: { sessaoId },
+      select: { id: true, status: true, inicioSolicitado: true, fimSolicitado: true, motivo: true, criadoEm: true },
+    });
+    const decisao = decidirExclusaoComAjuste(ajustes, confirmouExcluirAjuste(req.query.excluirAjuste));
+    if (!decisao.ok) {
+      res.status(decisao.status).json(decisao.body);
+      return;
+    }
+    const ajustesExcluidos = ajustes.filter((a) => decisao.ajustesAExcluir.includes(a.id));
+
     // Exclusão LÓGICA da sessão: antes isto desfazia a confirmação, e o apontamento voltava
     // pra fila de "a confirmar" — quem queria apagar via o item reaparecer. Agora a sessão
     // é marcada e sai de vista, do realizado e da fila de confirmação.
@@ -1356,7 +1370,9 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
     // e guardar um "excluído" que nunca chegou lá não descreve nada. Só existe quando a
     // sessão já tinha sido confirmada — a exclusão vale também pra sessão que nunca foi.
     const ratItemId = sessao.ratItem?.id ?? null;
-    const fato = `excluiu o apontamento de ${descreverIntervaloSessao(sessao.inicio, sessao.fim)}`;
+    const fato =
+      `excluiu o apontamento de ${descreverIntervaloSessao(sessao.inicio, sessao.fim)}` +
+      (ajustesExcluidos.length > 0 ? " e o pedido de ajuste de horário pendente" : "");
 
     await prisma.$transaction(async (tx) => {
       await tx.atividadeSessaoExecucao.update({
@@ -1365,6 +1381,13 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       });
       if (pendencia) await tx.sincronizacaoPendente.delete({ where: { id: pendencia.id } });
       if (ratItemId) await tx.ratItem.delete({ where: { id: ratItemId } });
+      // Exclusão física do pedido pendente (pedido do Vitor); o que foi pedido fica na auditoria abaixo (`ajustesExcluidos`).
+      // `status: "pendente"` de novo aqui: se o gestor decidiu entre a leitura acima e agora, o pedido decidido fica como histórico.
+      if (ajustesExcluidos.length > 0) {
+        await tx.solicitacaoAjusteApontamento.deleteMany({
+          where: { id: { in: ajustesExcluidos.map((a) => a.id) }, status: "pendente" },
+        });
+      }
       await tx.atividadeHistoricoMovimentacao.create({
         data: { atividadeId: sessao.atividadeId, tipo: "apontamento_excluido", descricao: fato, userId: ctx!.user.id },
       });
@@ -1384,6 +1407,17 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
             fim: sessao.fim?.toISOString() ?? null,
             estavaConfirmada: sessao.confirmada,
             ratItemRemovido: ratItemId,
+            ...(ajustesExcluidos.length > 0
+              ? {
+                  ajustesExcluidos: ajustesExcluidos.map((a) => ({
+                    id: a.id,
+                    inicioSolicitado: a.inicioSolicitado.toISOString(),
+                    fimSolicitado: a.fimSolicitado.toISOString(),
+                    motivo: a.motivo,
+                    criadoEm: a.criadoEm.toISOString(),
+                  })),
+                }
+              : {}),
           },
           correlationId: req.correlationId!,
         },

@@ -6,6 +6,9 @@ import type { FuncaoResumo } from "./resumo";
 
 const ESPERA_GRAVAR_MS = 600;
 
+// Estável (default de parâmetro novo a cada chamada quebraria os useMemo/useCallback).
+const SEM_OCULTAS: string[] = [];
+
 /**
  * Ordem, colunas ocultas e larguras de uma tabela, do usuário logado, guardadas no servidor (26/10/2026). Enquanto o GET não volta, vale o padrão
  * (a tabela aparece na hora, sem esqueleto). Cada mudança vale na tela na hora e é gravada depois de ESPERA_GRAVAR_MS sem mexer (arrastar
@@ -16,7 +19,7 @@ const ESPERA_GRAVAR_MS = 600;
  *   layout.visiveis.map((nome) => <ThColuna ... arrastar={layout.arrastar} />)
  *   <PainelColunas layout={layout} titulos={TITULOS} />
  */
-export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias: string[] = []) {
+export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias: string[] = [], ocultasPadrao: string[] = SEM_OCULTAS) {
   const { mostrar } = useToast();
   const [salvo, setSalvo] = useState<LayoutSalvo | null>(null);
   const mexeu = useRef(false);
@@ -40,8 +43,8 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
 
   const gravar = useCallback(
     (layout: LayoutSalvo) =>
-      (ehPadrao(padrao, layout) ? axios.delete(url) : axios.put(url, layout)).catch(() => mostrar("Não foi possível guardar a arrumação das colunas", "warning")),
-    [url, padrao, mostrar],
+      (ehPadrao(padrao, layout, ocultasPadrao) ? axios.delete(url) : axios.put(url, layout)).catch(() => mostrar("Não foi possível guardar a arrumação das colunas", "warning")),
+    [url, padrao, ocultasPadrao, mostrar],
   );
 
   // Sai da tela com gravação pendente: grava já.
@@ -55,7 +58,7 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
     [gravar],
   );
 
-  const resolvido = useMemo(() => resolverLayout(padrao, salvo, obrigatorias), [padrao, salvo, obrigatorias]);
+  const resolvido = useMemo(() => resolverLayout(padrao, salvo, obrigatorias, ocultasPadrao), [padrao, salvo, obrigatorias, ocultasPadrao]);
 
   const mudar = useCallback(
     (proximo: LayoutSalvo) => {
@@ -77,7 +80,7 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
   return {
     ...resolvido,
     obrigatorias,
-    personalizado: !ehPadrao(padrao, { ordem, ocultas, larguras }),
+    personalizado: !ehPadrao(padrao, { ordem, ocultas, larguras }, ocultasPadrao),
     /** Alguma largura ajustada: a tabela passa a ter larguras fixas (sem nenhuma, layout automático, como antes de qualquer ajuste). */
     comLarguras: Object.keys(larguras).length > 0,
     mover: (nome: string, destino: string) => com({ ordem: moverColuna(ordem, nome, destino) }),

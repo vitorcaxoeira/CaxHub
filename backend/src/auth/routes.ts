@@ -13,7 +13,7 @@ function toPublicUser(user: {
   nome: string;
   fotoUrl: string | null;
   role: { name: string };
-  preferenciaTela: { atividadesVisao: string } | null;
+  preferenciaTela: { atividadesVisao: string; menuLateral: string } | null;
 }) {
   return {
     id: user.id,

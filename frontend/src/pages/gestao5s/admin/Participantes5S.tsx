@@ -153,7 +153,6 @@ export function Participantes5S() {
         chaveLinha={(p) => String(p.id)}
         loading={!lista}
         vazio="Nenhum participante. Adicione avaliadores e líderes para liberar o acesso ao portal."
-        alturaMax="max-h-[70vh]"
       />
 
       {editando && (

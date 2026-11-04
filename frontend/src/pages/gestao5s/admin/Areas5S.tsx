@@ -137,7 +137,6 @@ export function Areas5S() {
         chaveLinha={(a) => String(a.id)}
         loading={!areas}
         vazio="Nenhuma área cadastrada."
-        alturaMax="max-h-[70vh]"
       />
 
       {editando && (

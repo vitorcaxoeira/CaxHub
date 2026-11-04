@@ -193,7 +193,8 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
 
       <div className="overflow-hidden rounded-lg border border-border bg-surface">
         {/* Altura limitada com rolagem própria: a barra horizontal fica sempre à vista e o cabeçalho acompanha as linhas. */}
-        <div className="relative max-h-[70vh] overflow-auto">
+        {/* Sem altura máxima (04/11/2026): a tabela cresce com a página, como antes do kit de colunas; só rola na horizontal. */}
+        <div className="relative overflow-x-auto">
           <table className={tc.classeTabela} style={tc.estiloTabela}>
             {tc.colgroup}
             <thead className="sticky top-0 z-10">

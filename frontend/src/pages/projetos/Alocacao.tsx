@@ -137,8 +137,8 @@ const COLUNAS_ALOCACAO: DefColuna<PropostaRow, AcoesAlocacao>[] = [
       </p>
     ),
   },
-  { nome: "sitproLabel", titulo: "Situação", largura: 130, classe: "text-sm text-muted", render: (r) => r.sitproLabel },
-  { nome: "numprj", titulo: "Projeto", largura: 90, classe: "font-mono text-sm text-muted", render: (r) => r.numprj || "—" },
+  { nome: "sitproLabel", ocultaPorPadrao: true, titulo: "Situação", largura: 130, classe: "text-sm text-muted", render: (r) => r.sitproLabel },
+  { nome: "numprj", ocultaPorPadrao: true, titulo: "Projeto", largura: 90, classe: "font-mono text-sm text-muted", render: (r) => r.numprj || "—" },
   { nome: "cliente", titulo: "Cliente", largura: 200, classe: "text-sm text-foreground", texto: (r) => r.cliente, render: (r) => r.cliente },
   { nome: "datret", titulo: "Data Aprovação", largura: 110, classe: "text-sm text-muted", render: (r) => formatData(r.datret) },
   { nome: "despro", titulo: "Descrição", largura: 200, classe: "text-sm text-muted", texto: (r) => r.despro, render: (r) => r.despro ?? "—" },

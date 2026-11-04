@@ -47,6 +47,17 @@ interface Props<T, C> {
   onLinha?: (linha: T) => void;
   /** Linha que abre ao clicar (uma por vez), com este conteúdo logo abaixo dela. Vale em lugar de `onLinha`. */
   detalhe?: (linha: T) => ReactNode;
+  /**
+   * Linhas abertas controladas pela tela (04/11/2026, RATs de Meus Apontamentos): várias ao mesmo tempo, e a tela pode abrir uma sozinha
+   * (ex.: depois de confirmar um apontamento). Com isto, o clique chama `onAlternarAberta` em vez de abrir uma por vez, e trocar filtro
+   * ou página não fecha nada (quem decide é a tela).
+   */
+  abertas?: ReadonlySet<string>;
+  onAlternarAberta?: (linha: T, chave: string) => void;
+  /** Ajuste da linha feito pela tela sem recarregar a lista (ex.: número da RAT que o Senior acabou de devolver). */
+  ajustarLinha?: (linha: T) => T;
+  /** Avisa a tela quando os filtros de coluna (ou as calculadas) mudam, no formato dos parâmetros da API (ex.: ação em lote que respeita o filtro). */
+  aoMudarConsulta?: (consulta: { filtros?: string; calculadas?: string }) => void;
   classeLinha?: (linha: T) => string | undefined;
   /** Mostrado acima da tabela, ao lado dos chips (ex.: totais da lista). */
   topo?: (dados: Resposta<T> | null) => ReactNode;
@@ -56,7 +67,7 @@ interface Props<T, C> {
   aoCarregar?: (dados: Resposta<T>) => void;
   /** Avisa a tela quando a lista falha (ex.: 403 vira a mensagem de "sem acesso" da própria tela). */
   aoErro?: (status: number | undefined, mensagem: string) => void;
-  /** Altura máxima da área rolável. */
+  /** Altura máxima da área rolável (com rolagem vertical própria). Sem ela, a tabela cresce com a página, como antes do kit de colunas. */
   alturaMax?: string;
 }
 
@@ -74,12 +85,16 @@ export function ListaServidor<T extends object, C = undefined>({
   recarga,
   onLinha,
   detalhe,
+  abertas,
+  onAlternarAberta,
+  ajustarLinha,
+  aoMudarConsulta,
   classeLinha,
   topo,
   rodape,
   aoCarregar,
   aoErro,
-  alturaMax = "max-h-[70vh]",
+  alturaMax,
 }: Props<T, C>) {
   const titulosBase = useMemo(() => titulosDe(base), [base]);
   const estado = useFiltroOrdemLocal();
@@ -103,6 +118,14 @@ export function ListaServidor<T extends object, C = undefined>({
     setPage(1);
     setAberta(null);
   }, [chaveParams, estado.chave]);
+
+  useEffect(() => {
+    aoMudarConsulta?.({ filtros: estado.filtrosParam, calculadas: calc.param });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estado.filtrosParam, calc.param]);
+
+  const controladas = abertas != null;
+  const estaAberta = (chaveL: string) => (controladas ? abertas.has(chaveL) : aberta === chaveL);
 
   useEffect(() => {
     let cancelado = false;
@@ -148,26 +171,34 @@ export function ListaServidor<T extends object, C = undefined>({
         </div>
       )}
       {erro && <p className="px-3 py-2 text-sm text-destructive">{erro}</p>}
-      <div className={cn("overflow-auto", alturaMax)}>
+      <div className={cn(alturaMax ? "overflow-auto" : "overflow-x-auto", alturaMax)}>
         <table className={tc.classeTabela} style={tc.estiloTabela} aria-busy={loading}>
           {tc.colgroup}
           <thead className="sticky top-0 z-10">{tc.cabecalho({ colunas: dados?.colunas, estado, valores })}</thead>
           <tbody>
             {loading && <SkeletonLinhas linhas={6} colunas={tc.nColunas} />}
             {!loading &&
-              dados?.itens.map((l, i) => {
+              dados?.itens.map((original, i) => {
+                const l = ajustarLinha ? ajustarLinha(original) : original;
                 const chaveL = chaveLinha(l, i);
                 const clicavel = !!(onLinha || detalhe);
-                const aoClicar = detalhe ? () => setAberta((a) => (a === chaveL ? null : chaveL)) : onLinha ? () => onLinha(l) : undefined;
+                const aoClicar = detalhe
+                  ? controladas
+                    ? () => onAlternarAberta?.(l, chaveL)
+                    : () => setAberta((a) => (a === chaveL ? null : chaveL))
+                  : onLinha
+                    ? () => onLinha(l)
+                    : undefined;
+                const abertaAqui = detalhe != null && estaAberta(chaveL);
                 return (
                   <Fragment key={chaveL}>
                     <tr
-                      className={cn("border-t border-border/60", clicavel && "cursor-pointer hover:bg-surface-2", aberta === chaveL && "bg-surface-2", classeLinha?.(l))}
+                      className={cn("border-t border-border/60", clicavel && "cursor-pointer hover:bg-surface-2", abertaAqui && "bg-surface-2", classeLinha?.(l))}
                       onClick={aoClicar}
                     >
                       {tc.celulas(l, ctx as C)}
                     </tr>
-                    {detalhe && aberta === chaveL && (
+                    {detalhe && abertaAqui && (
                       <tr className="border-t border-border/60 bg-surface-2/40">
                         <td colSpan={tc.nColunas} className="px-5 py-3">
                           {detalhe(l)}
