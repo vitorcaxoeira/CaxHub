@@ -121,7 +121,9 @@ export function Painel({
   children: ReactNode;
 }) {
   return (
-    <section className={cn("rounded-lg border border-border bg-surface p-4", className)}>
+    // min-w-0: o Painel costuma ser item de grid (GradeDePaineis); sem ele, a tabela de colunas configuráveis (largura fixa por coluna)
+    // alarga o painel inteiro e estoura a página no celular, em vez de rolar dentro da própria tabela.
+    <section className={cn("min-w-0 rounded-lg border border-border bg-surface p-4", className)}>
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h2 className="font-display text-[15px] font-semibold text-foreground">{titulo}</h2>
