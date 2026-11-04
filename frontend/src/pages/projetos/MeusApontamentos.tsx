@@ -554,6 +554,7 @@ const ENVIO_INTERVALO_MS = 1500;
 const ENVIO_MAX_TENTATIVAS = 13;
 
 // Aviso ao excluir um apontamento com pedido de ajuste de horário aguardando o gestor: o pedido é excluído junto (04/11/2026).
+const AVISO_EXCLUIR_COM_AJUSTE =
   "Este apontamento tem uma solicitação de ajuste de horário aguardando o gestor.\n\n" +
   "Ao excluir o apontamento, a solicitação também será excluída. Continuar?";
 
@@ -798,8 +799,8 @@ export function MeusApontamentos() {
     };
   }
 
-  function carregarRats() {
   // Recarrega a lista de RATs (ListaServidor) e, junto, o contador do "Fechar Todos" (efeito mais abaixo).
+  function carregarRats() {
     setRecargaRats((n) => n + 1);
   }
 
@@ -841,10 +842,10 @@ export function MeusApontamentos() {
     },
   });
 
-  useEffect(() => {
   // Contador do botão "Fechar Todos": endpoint LEVE (só o número, 14/09/2026, achado real de lentidão) com os MESMOS filtros da tabela,
   // do topo e de coluna (04/11/2026). Recalcula a cada troca de filtro e depois de qualquer ação que recarrega a lista. Silencioso em erro:
   // é só um contador auxiliar. O resumo completo (cliente/consultor/minutos) só é buscado quando o modal abre (abrirResumoFechamentoLote).
+  useEffect(() => {
     if (!padroesRats.pronto) return;
     let cancelado = false;
     axios
@@ -858,8 +859,8 @@ export function MeusApontamentos() {
   }, [padroesRats.pronto, codforsFiltro, sitratFiltro, integracaoFiltro, buscaDebounced, buscaItemDebounced, consultaColunasRats, recargaRats]);
 
   function onMudarFiltroConsultor(codfors: number[]) {
-    setCodforsFiltro(codfors);
     // A ListaServidor volta sozinha para a página 1 quando um filtro do topo muda.
+    setCodforsFiltro(codfors);
   }
 
   function onMudarFiltroSitrat(valores: number[]) {
@@ -1165,7 +1166,6 @@ export function MeusApontamentos() {
     });
   }
 
-  // Troca a aba (Atividades/RDVs) da linha expandida de uma RAT. `rdvJaAberto` só cresce — a
   // Conteúdo da linha aberta de uma RAT (ListaServidor `detalhe`): abas Atividades (itens, carregados ao abrir) e RDVs.
   function renderDetalheRat(rat: RatRow) {
     const itens = itensPorRat[rat.id];
@@ -1302,6 +1302,7 @@ export function MeusApontamentos() {
     setConsultaColunasRats((atual) => (atual.filtros === consulta.filtros && atual.calculadas === consulta.calculadas ? atual : consulta));
   }
 
+  // Troca a aba (Atividades/RDVs) da linha expandida de uma RAT. `rdvJaAberto` só cresce — a
   // 1ª vez que a aba RDVs é aberta pra uma RAT, `DespesasRatPainel` monta e faz seu próprio
   // fetch; nas trocas seguintes ele continua montado (só oculto), sem novo fetch.
   function selecionarAbaRat(ratId: number, aba: "atividades" | "rdvs") {
@@ -1552,11 +1553,25 @@ export function MeusApontamentos() {
   // Exclusão de sessão ainda NÃO confirmada. Mesma rota do apontamento confirmado — ela
   // marca a sessão como excluída dos dois jeitos; a diferença é que aqui não há RatItem
   // nem RAT pra recarregar.
-  async function excluirSessao(sessaoId: number) {
-    if (!confirm("Excluir este apontamento? Ele sai da lista e deixa de contar nas horas da atividade.")) return;
-    setExcluindoSessao(sessaoId);
+  //
+  // Com pedido de ajuste de horário aguardando o gestor (04/11/2026), o aviso diz que o pedido vai junto e a exclusão manda
+  // `excluirAjuste=1`. Se a tela estiver desatualizada (pedido feito depois de a lista carregar), o servidor responde 409
+  // "ajuste_pendente" sem excluir nada, e o mesmo aviso aparece antes de tentar de novo (ver backend/src/domain/exclusaoApontamento.ts).
+  async function excluirSessao(sessao: SessaoPendente) {
+    const temAjuste = sessao.ajustePendente != null;
+    if (!confirm(temAjuste ? AVISO_EXCLUIR_COM_AJUSTE : "Excluir este apontamento? Ele sai da lista e deixa de contar nas horas da atividade.")) return;
+    setExcluindoSessao(sessao.id);
     try {
-      await axios.delete(`/api/apontamentos/${sessaoId}`);
+      try {
+        await axios.delete(`/api/apontamentos/${sessao.id}`, { params: temAjuste ? { excluirAjuste: 1 } : undefined });
+      } catch (err: any) {
+        if (err.response?.status !== 409 || err.response?.data?.codigo !== "ajuste_pendente") throw err;
+        if (!confirm(AVISO_EXCLUIR_COM_AJUSTE)) {
+          carregar(); // traz o destaque do pedido que a tela ainda não mostrava
+          return;
+        }
+        await axios.delete(`/api/apontamentos/${sessao.id}`, { params: { excluirAjuste: 1 } });
+      }
       carregar();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao excluir o apontamento");
@@ -1846,7 +1861,7 @@ export function MeusApontamentos() {
                   </DropdownMenu.Item>
                   {/* Antes daqui não havia como apagar uma sessão rastreada errada — só
                       restava confirmar e desfazer depois. */}
-                  <DropdownMenu.Item onSelect={() => excluirSessao(s.id)} disabled={excluindoSessao === s.id} destructive>
+                  <DropdownMenu.Item onSelect={() => excluirSessao(s)} disabled={excluindoSessao === s.id} destructive>
                     {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
                   </DropdownMenu.Item>
                 </>
@@ -1959,7 +1974,7 @@ export function MeusApontamentos() {
                   pro admin sobre sessão de qualquer consultor — backend confere de novo em
                   DELETE /:id, isto só evita oferecer um botão que ele recusaria. */}
               {s.podeExcluir && (
-                <DropdownMenu.Item onSelect={() => excluirSessao(s.id)} disabled={excluindoSessao === s.id} destructive>
+                <DropdownMenu.Item onSelect={() => excluirSessao(s)} disabled={excluindoSessao === s.id} destructive>
                   {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
                 </DropdownMenu.Item>
               )}
