@@ -1,6 +1,68 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import {
+  Award,
+  BookOpen,
+  Banknote,
+  Briefcase,
+  CalendarClock,
+  CalendarRange,
+  CalendarX,
+  ChartBar,
+  ChartColumn,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  CircleHelp,
+  CirclePlus,
+  ClipboardList,
+  ClipboardPlus,
+  Clock,
+  CreditCard,
+  Database,
+  DatabaseZap,
+  FileText,
+  FolderKanban,
+  Gauge,
+  HandCoins,
+  Headset,
+  History,
+  House,
+  IdCard,
+  Inbox,
+  LayoutDashboard,
+  ListChecks,
+  ListTodo,
+  type LucideIcon,
+  MapPin,
+  MessageSquare,
+  Network,
+  PencilLine,
+  Plane,
+  Plug,
+  ReceiptText,
+  RefreshCw,
+  Repeat,
+  Settings,
+  Settings2,
+  Sheet,
+  ShieldCheck,
+  Sparkles,
+  SquareKanban,
+  Store,
+  Target,
+  Timer,
+  TreePalm,
+  TrendingUp,
+  Upload,
+  UserMinus,
+  Users,
+  UsersRound,
+  Wallet,
+  Waypoints,
+} from "lucide-react";
+import { cn } from "../lib/cn";
 import { useAuth } from "../auth/AuthContext";
 import { DEPEXE_COMERCIAL } from "../auth/acessoComercial";
 import { DEPEXE_DHO } from "../auth/acessoRh";
@@ -229,23 +291,119 @@ const groups: NavGroup[] = [
   },
 ];
 
-function ChevronIcon({ open }: { open: boolean }) {
+// Ícones do menu (04/11/2026, trazidos da modernização visual do CaxHub_Dash): um ícone lucide por tela (pela rota) e por grupo/sub-menu
+// (pelo rótulo). As telas que existem nos dois produtos usam o mesmo ícone do Dash. Sem ícone, o item fica com um espaço do mesmo
+// tamanho, alinhado aos outros.
+const ICONE_DA_ROTA: Record<string, LucideIcon> = {
+  "/": House,
+  "/projetos/propostas": FileText,
+  "/comercial/metas": LayoutDashboard,
+  "/comercial/metas/lancamentos": PencilLine,
+  "/comercial/metas/planejamento": CalendarRange,
+  "/comercial/metas/indicadores": ListChecks,
+  "/projetos/atividades": SquareKanban,
+  "/projetos/apontamentos": Clock,
+  "/projetos/minhas-acoes": ListTodo,
+  "/projetos/meu-plano": Award,
+  "/projetos/aprovacoes": CircleCheck,
+  "/projetos/alocacao": UsersRound,
+  "/projetos/eficiencia": Gauge,
+  "/projetos/plano-evolucao": TrendingUp,
+  "/projetos/jornadas": CalendarClock,
+  "/projetos/auditoria": History,
+  "/solicitacoes/nova": CirclePlus,
+  "/solicitacoes/minhas": Inbox,
+  "/solicitacoes/atendimento": Headset,
+  "/solicitacoes/aprovacoes": CircleCheck,
+  "/5s": ChartBar,
+  "/5s/nova": ClipboardPlus,
+  "/5s/avaliacoes": ClipboardList,
+  "/5s/observacoes": MessageSquare,
+  "/5s/cadastros/areas": MapPin,
+  "/5s/cadastros/perguntas": CircleHelp,
+  "/5s/cadastros/participantes": Users,
+  "/financeiro/contas-a-receber": ReceiptText,
+  "/financeiro/recebimentos": Banknote,
+  "/financeiro/inadimplencia": CircleAlert,
+  "/financeiro/clientes": Users,
+  "/financeiro/fluxo-caixa": TrendingUp,
+  "/financeiro/historico": History,
+  "/financeiro/contas-a-pagar": ReceiptText,
+  "/contabil/resultado-analitico": ChartColumn,
+  "/mercado/pedidos": ClipboardList,
+  "/mercado/analise-faturamento": ChartColumn,
+  "/rh/quadro": IdCard,
+  "/rh/folha": Wallet,
+  "/rh/rescisoes": UserMinus,
+  "/rh/reajustes": TrendingUp,
+  "/rh/turnover": Repeat,
+  "/rh/absenteismo": CalendarX,
+  "/rh/ponto": Timer,
+  "/rh/jornada": ShieldCheck,
+  "/rh/ferias": TreePalm,
+  "/rh/dre": Sheet,
+  "/admin/usuarios": Users,
+  "/admin/sincronizacao": Upload,
+  "/admin/sincronizacao-erp": Database,
+  "/admin/sincronizacao-hcm": DatabaseZap,
+  "/admin/sincronizacao-kyria": RefreshCw,
+  "/admin/mapeamento-kyria": Waypoints,
+  "/admin/departamento-grupo-contabil": Network,
+};
+const ICONE_DO_GRUPO: Record<string, LucideIcon> = {
+  Comercial: Briefcase,
+  "Gestão de Metas": Target,
+  "Gestão de Projetos": FolderKanban,
+  "Gestão de Solicitações": Plane,
+  "Gestão 5S": Sparkles,
+  "Cadastros 5S": Settings2,
+  "Financeiro a Receber": HandCoins,
+  "Financeiro a Pagar": CreditCard,
+  Contábil: BookOpen,
+  Mercado: Store,
+  Pessoas: Users,
+  Jornada: Clock,
+  Administração: Settings,
+  "Integração Kyria": Plug,
+};
+
+/** Ícone do menu: mesmo tamanho e traço em todo lugar; sem ícone, um espaço do mesmo tamanho para o texto não desalinhar. */
+function IconeMenu({ icone: Icone, pequeno = false }: { icone?: LucideIcon; pequeno?: boolean }) {
+  const tamanho = pequeno ? 16 : 18;
+  if (!Icone) return <span aria-hidden="true" className="shrink-0" style={{ width: tamanho }} />;
+  return <Icone size={tamanho} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />;
+}
+
+function Seta({ aberto }: { aberto: boolean }) {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={`shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-    >
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
+    <ChevronRight
+      size={16}
+      strokeWidth={1.75}
+      aria-hidden="true"
+      className={cn("ml-auto shrink-0 text-muted transition-transform duration-150 motion-reduce:transition-none", aberto && "rotate-90")}
+    />
   );
 }
+
+const BASE_ITEM = "flex w-full items-center gap-3 rounded-md px-3 text-sm leading-snug transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+/** Tela (item de topo ou folha): selecionada em verde-escuro; as outras em cinza, escurecendo no hover. */
+const classeLink = (folha: boolean) => ({ isActive }: { isActive: boolean }) =>
+  cn(
+    BASE_ITEM,
+    folha ? "py-1.5" : "py-2",
+    isActive ? "bg-primary font-medium text-primary-foreground shadow-sm" : "text-muted hover:bg-surface-2 hover:text-foreground"
+  );
+
+/** Grupo ou sub-menu: expandido ou com a tela aberta fica em texto escuro; recolhido, cinza. */
+const classeGrupo = (destaque: boolean) =>
+  cn(BASE_ITEM, "py-2 font-medium", destaque ? "text-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground");
+
+/** Lista de um nível abaixo: recuo alinhado ao centro do ícone do pai e uma linha guia fina. */
+const SUBLISTA = "ml-[21px] mt-0.5 space-y-0.5 border-l border-border pl-2.5";
+
+/** Menu recolhido (só desktop): botão quadrado só com o ícone. */
+const BOTAO_FAIXA = "mx-auto flex h-10 w-10 items-center justify-center rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 // Grupo (e sub-menu) que contém a rota atual — o item cujo caminho casa com o endereço (igual
 // ou prefixo seguido de "/"), preferindo o mais longo. Rota sem item no menu (ex.: detalhe de
@@ -264,10 +422,6 @@ function gruposDaRota(pathname: string): string[] {
   return melhor?.labels ?? [];
 }
 
-const linkClass = ({ isActive }: { isActive: boolean }) =>
-  `block rounded-md px-3 py-2 text-sm font-medium transition ${
-    isActive ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground"
-  }`;
 
 interface SidebarProps {
   open: boolean;
@@ -277,9 +431,11 @@ interface SidebarProps {
   // Fecha o drawer mobile ao navegar (clique num link). Sem efeito no desktop — lá não há
   // drawer pra fechar, é só um setState que não muda nada visualmente.
   onNavigate?: () => void;
+  /** Menu recolhido (faixa de ícones, desktop): clicar num grupo pede para abrir o menu. */
+  onExpandir?: () => void;
 }
 
-export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) {
+export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: SidebarProps) {
   const { user } = useAuth();
   const { pathname } = useLocation();
   // Abre o grupo da página atual (no carregamento e a cada navegação), sem fechar os que a
@@ -405,89 +561,146 @@ export function Sidebar({ open, mobileOpen = false, onNavigate }: SidebarProps) 
     });
   }
 
+  // Grupo (ou sub-menu) que contém a tela aberta: fica em destaque, aberto ou não.
+  const rotaAtual = new Set(gruposDaRota(pathname));
+
+  const navegacao = (
+    <nav
+      aria-label="Menu principal"
+      className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-3 py-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+    >
+      {topLevel.map((item) => (
+        <NavLink key={item.to} to={item.to} end className={classeLink(false)} onClick={onNavigate}>
+          <IconeMenu icone={ICONE_DA_ROTA[item.to]} />
+          <span className="min-w-0 flex-1 whitespace-normal">{item.label}</span>
+        </NavLink>
+      ))}
+
+      {visibleGroups.map((group) => {
+        const isOpen = openGroups.has(group.label);
+        return (
+          <div key={group.label}>
+            <button type="button" onClick={() => toggleGroup(group.label)} aria-expanded={isOpen} className={classeGrupo(isOpen || rotaAtual.has(group.label))}>
+              <IconeMenu icone={ICONE_DO_GRUPO[group.label]} />
+              <span className="min-w-0 flex-1 whitespace-normal text-left">{group.label}</span>
+              <Seta aberto={isOpen} />
+            </button>
+            {/* Sem fallback "Em breve" pra grupo vazio (28/08/2026): `visibleGroups` acima já
+                filtra fora qualquer grupo cujos itens zeraram depois do recorte por
+                gestorOuAdmin — chegar aqui com `group.items` vazio não acontece mais. */}
+            {isOpen && (
+              <div className={SUBLISTA}>
+                {group.items.map((item) => {
+                  if (!isSubgroup(item)) {
+                    return (
+                      <NavLink key={item.to} to={item.to} end={item.end} className={classeLink(true)} onClick={onNavigate}>
+                        <IconeMenu icone={ICONE_DA_ROTA[item.to]} pequeno />
+                        <span className="min-w-0 flex-1 whitespace-normal">{item.label}</span>
+                      </NavLink>
+                    );
+                  }
+                  // Mesmo mecanismo de collapse dos grupos de topo (openGroups/toggleGroup),
+                  // só reaproveitado um nível mais fundo — labels de grupo e sub-menu não
+                  // colidem hoje, não precisa de chave composta.
+                  const subOpen = openGroups.has(item.label);
+                  return (
+                    <div key={item.label}>
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(item.label)}
+                        aria-expanded={subOpen}
+                        className={classeGrupo(subOpen || rotaAtual.has(item.label))}
+                      >
+                        <IconeMenu icone={ICONE_DO_GRUPO[item.label]} pequeno />
+                        <span className="min-w-0 flex-1 whitespace-normal text-left">{item.label}</span>
+                        <Seta aberto={subOpen} />
+                      </button>
+                      {subOpen && (
+                        <div className={SUBLISTA}>
+                          {item.children.map((child) => (
+                            <NavLink key={child.to} to={child.to} end={child.end} className={classeLink(true)} onClick={onNavigate}>
+                              <IconeMenu icone={ICONE_DA_ROTA[child.to]} pequeno />
+                              <span className="min-w-0 flex-1 whitespace-normal">{child.label}</span>
+                            </NavLink>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </nav>
+  );
+
+  // Recolhido (desktop): só os ícones, centralizados. O nome vai na dica (title) e no rótulo acessível. Item de topo navega direto; grupo
+  // reabre o menu já com ele aberto.
+  const faixa = (
+    <nav aria-label="Menu principal (recolhido)" className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden py-4">
+      {topLevel.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end
+          title={item.label}
+          aria-label={item.label}
+          className={({ isActive }) => cn(BOTAO_FAIXA, isActive ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground")}
+        >
+          <IconeMenu icone={ICONE_DA_ROTA[item.to]} />
+        </NavLink>
+      ))}
+      {visibleGroups.map((group) => (
+        <button
+          key={group.label}
+          type="button"
+          title={group.label}
+          aria-label={`${group.label} (abre o menu)`}
+          onClick={() => {
+            setOpenGroups((prev) => (prev.has(group.label) ? prev : new Set([...prev, group.label])));
+            onExpandir?.();
+          }}
+          className={cn(BOTAO_FAIXA, rotaAtual.has(group.label) ? "bg-primary/10 text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
+        >
+          <IconeMenu icone={ICONE_DO_GRUPO[group.label]} />
+        </button>
+      ))}
+    </nav>
+  );
+
   return (
     // Dois comportamentos no mesmo elemento, um por breakpoint: abaixo de `lg` é um drawer
     // fixo que desliza por transform (`mobileOpen`); a partir de `lg` é o painel `sticky` (preso ao
     // topo, altura da tela), que só colapsa/expande a largura (`open`) — nunca os dois ao
     // mesmo tempo, o breakpoint decide (28/08/2026, ver AppShell.tsx pro backdrop/estado).
+    // Recolhido no desktop (04/11/2026, como no CaxHub_Dash): em vez de sumir, vira uma faixa de ícones de 64 px.
     <aside
-      className={`fixed inset-y-0 left-0 z-40 flex h-dvh w-64 flex-none flex-col overflow-hidden border-r border-border bg-surface transition-transform duration-200 lg:sticky lg:top-0 lg:z-auto lg:translate-x-0 lg:transition-[width] ${
-        mobileOpen ? "translate-x-0" : "-translate-x-full"
-      } ${open ? "lg:w-60 lg:border-r" : "lg:w-0 lg:border-r-0"}`}
+      className={cn(
+        "fixed inset-y-0 left-0 z-40 flex h-dvh w-72 flex-none flex-col overflow-hidden border-r border-border bg-surface transition-transform duration-200 motion-reduce:transition-none lg:sticky lg:top-0 lg:z-auto lg:translate-x-0 lg:transition-[width]",
+        mobileOpen ? "translate-x-0" : "-translate-x-full",
+        open ? "lg:w-72" : "lg:w-16"
+      )}
     >
-      <div className="flex h-16 items-center border-b border-border px-5">
-        <img src="/marca/icone-128.png" alt="" className="mr-2.5 h-8 w-8 flex-none rounded-lg" />
-        <p className="whitespace-nowrap font-display text-lg font-bold text-foreground">CaxHub</p>
+      <div className={cn("flex h-16 flex-none items-center border-b border-border px-5", !open && "lg:justify-center lg:px-0")}>
+        <img src="/marca/icone-128.png" alt="CaxHub" className={cn("h-8 w-8 flex-none rounded-lg", open ? "mr-2.5" : "mr-2.5 lg:mr-0")} />
+        <p className={cn("whitespace-nowrap font-display text-lg font-bold text-foreground", !open && "lg:hidden")}>CaxHub</p>
       </div>
       {/* Rolagem própria (12/10/2026): no celular a gaveta é `fixed` com overflow-hidden e a altura da tela; sem
           `overflow-y-auto` + `min-h-0` o que passa da tela era cortado e os últimos itens de um grupo aberto (ex.:
           Pessoas) ficavam inalcançáveis. `h-dvh` acompanha a barra do navegador do celular; o respiro embaixo
           cobre a barra home do iPhone. No desktop (`lg:`) o painel é `sticky` com a altura da tela: fica parado
-          enquanto a página rola e só o menu rola dentro dele (a pedido, 12/10/2026). */}
-      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain whitespace-nowrap px-3 py-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        {topLevel.map((item) => (
-          <NavLink key={item.to} to={item.to} end className={linkClass} onClick={onNavigate}>
-            {item.label}
-          </NavLink>
-        ))}
-
-        {visibleGroups.map((group) => {
-          const isOpen = openGroups.has(group.label);
-          return (
-            <div key={group.label}>
-              <button
-                onClick={() => toggleGroup(group.label)}
-                aria-expanded={isOpen}
-                className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm font-medium text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <span>{group.label}</span>
-                <ChevronIcon open={isOpen} />
-              </button>
-              {/* Sem fallback "Em breve" pra grupo vazio (28/08/2026): `visibleGroups` acima já
-                  filtra fora qualquer grupo cujos itens zeraram depois do recorte por
-                  gestorOuAdmin — chegar aqui com `group.items` vazio não acontece mais. */}
-              {isOpen && (
-                <div className="mt-1 space-y-1 border-l border-border pl-3">
-                  {group.items.map((item) => {
-                    if (!isSubgroup(item)) {
-                      return (
-                        <NavLink key={item.to} to={item.to} end={item.end} className={linkClass} onClick={onNavigate}>
-                          {item.label}
-                        </NavLink>
-                      );
-                    }
-                    // Mesmo mecanismo de collapse dos grupos de topo (openGroups/toggleGroup),
-                    // só reaproveitado um nível mais fundo — labels de grupo e sub-menu não
-                    // colidem hoje, não precisa de chave composta.
-                    const subOpen = openGroups.has(item.label);
-                    return (
-                      <div key={item.label}>
-                        <button
-                          onClick={() => toggleGroup(item.label)}
-                          aria-expanded={subOpen}
-                          className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm font-medium text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          <span>{item.label}</span>
-                          <ChevronIcon open={subOpen} />
-                        </button>
-                        {subOpen && (
-                          <div className="mt-1 space-y-1 border-l border-border pl-3">
-                            {item.children.map((child) => (
-                              <NavLink key={child.to} to={child.to} end={child.end} className={linkClass} onClick={onNavigate}>
-                                {child.label}
-                              </NavLink>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </nav>
+          enquanto a página rola e só o menu rola dentro dele (a pedido, 12/10/2026). Recolhido, só no desktop: a
+          gaveta do celular mostra sempre o menu completo. */}
+      {open ? (
+        navegacao
+      ) : (
+        <>
+          <div className="flex min-h-0 flex-1 flex-col lg:hidden">{navegacao}</div>
+          <div className="hidden min-h-0 flex-1 flex-col lg:flex">{faixa}</div>
+        </>
+      )}
     </aside>
   );
 }
