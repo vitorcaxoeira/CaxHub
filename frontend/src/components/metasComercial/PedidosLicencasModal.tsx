@@ -1,8 +1,11 @@
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../ui/Modal";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { Skeleton } from "../ui/Skeleton";
-import { MESES_LONGOS, PedidosLicencasResposta, SITUACAO_PEDIDO, fmtValor } from "../../lib/metasComercial";
+import { MESES_LONGOS, type PedidoLicenca, PedidosLicencasResposta, SITUACAO_PEDIDO, fmtValor } from "../../lib/metasComercial";
 import { Aviso, campo, mensagemDe } from "./comum";
 
 type Ordem = "valor" | "emissao";
@@ -11,6 +14,29 @@ const dataBr = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.sl
 
 // Pedidos de venda que formam as Licenças de um mês no painel da Gestão de Metas: mesma regra do total (emissão no mês, itens com
 // rateio na conta financeira 177, valor = preço unitário × quantidade, cancelado fora), então o rodapé confere com o valor clicado.
+
+// Lista com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026). A busca e a
+// ordem de cima continuam valendo: escolhem o que entra e em que ordem a tabela abre.
+const LOCAIS: ColunaLocal[] = [
+  { nome: "numped", tipo: "inteiro", obrigatoria: true },
+  { nome: "emissao", tipo: "data", obrigatoria: true, utc: true },
+  { nome: "cliente", tipo: "texto" },
+  { nome: "representante", tipo: "texto" },
+  { nome: "servicos", tipo: "texto" },
+  { nome: "situacao", tipo: "texto" },
+  { nome: "valor", tipo: "decimal", obrigatoria: true },
+];
+const lerPedido = (p: PedidoLicenca, nome: string): unknown => (nome === "situacao" ? SITUACAO_PEDIDO[p.sitped] ?? p.sitped : (p as unknown as Record<string, unknown>)[nome]);
+const brl = (v: number) => fmtValor("BRL", v);
+const COLUNAS: DefColuna<PedidoLicenca>[] = [
+  { nome: "numped", titulo: "Pedido", fixa: true, largura: 90, classe: "tabular-nums", resumos: ["contagem", "distintos"], render: (p) => p.numped },
+  { nome: "emissao", titulo: "Emissão", largura: 100, classe: "tabular-nums", render: (p) => dataBr(p.emissao) },
+  { nome: "cliente", titulo: "Cliente", largura: 240, texto: (p) => p.cliente ?? `Cliente ${p.codcli}`, render: (p) => p.cliente ?? `Cliente ${p.codcli}` },
+  { nome: "representante", titulo: "Representante", largura: 160, classe: "text-muted", texto: (p) => p.representante, render: (p) => p.representante ?? p.codrep ?? "—" },
+  { nome: "servicos", titulo: "Licença", largura: 180, classe: "text-muted", texto: (p) => p.servicos, render: (p) => p.servicos },
+  { nome: "situacao", titulo: "Situação", largura: 140, classe: "text-muted", render: (p) => SITUACAO_PEDIDO[p.sitped] ?? p.sitped },
+  { nome: "valor", titulo: "Valor", direita: true, largura: 130, classe: "tabular-nums", formatarResumo: brl, render: (p) => brl(p.valor) },
+];
 export function PedidosLicencasModal({ ano, mes, onClose }: { ano: number; mes: number; onClose: () => void }) {
   const [dados, setDados] = useState<PedidosLicencasResposta | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -77,39 +103,15 @@ export function PedidosLicencasModal({ ano, mes, onClose }: { ano: number; mes: 
                 {visiveis.length === dados.quantidade ? `${dados.quantidade} pedidos` : `${visiveis.length} de ${dados.quantidade} pedidos`}
               </span>
             </div>
-            <div className="relative max-h-[60vh] overflow-auto rounded-md border border-border">
-              <table className="w-full min-w-[760px] text-sm">
-                <thead className="sticky top-0 bg-surface">
-                  <tr className="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted">
-                    <th className="px-3 py-2 font-medium">Pedido</th>
-                    <th className="px-3 py-2 font-medium">Emissão</th>
-                    <th className="px-3 py-2 font-medium">Cliente</th>
-                    <th className="px-3 py-2 font-medium">Representante</th>
-                    <th className="px-3 py-2 font-medium">Licença</th>
-                    <th className="px-3 py-2 font-medium">Situação</th>
-                    <th className="px-3 py-2 text-right font-medium">Valor</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visiveis.map((p) => (
-                    <tr key={`${p.codemp}-${p.codfil}-${p.numped}`} className="border-b border-border/60">
-                      <td className="whitespace-nowrap px-3 py-1.5 tabular-nums">{p.numped}</td>
-                      <td className="whitespace-nowrap px-3 py-1.5 tabular-nums">{dataBr(p.emissao)}</td>
-                      <td className="max-w-[16rem] truncate px-3 py-1.5" title={p.cliente ?? undefined}>{p.cliente ?? `Cliente ${p.codcli}`}</td>
-                      <td className="max-w-[10rem] truncate px-3 py-1.5 text-muted" title={p.representante ?? undefined}>{p.representante ?? p.codrep ?? "—"}</td>
-                      <td className="max-w-[12rem] truncate px-3 py-1.5 text-muted" title={p.servicos}>{p.servicos}</td>
-                      <td className="whitespace-nowrap px-3 py-1.5 text-muted">{SITUACAO_PEDIDO[p.sitped] ?? p.sitped}</td>
-                      <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums">{fmtValor("BRL", p.valor)}</td>
-                    </tr>
-                  ))}
-                  {visiveis.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="px-3 py-6 text-center text-muted">Nenhum pedido com esse filtro.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <TabelaLocal<PedidoLicenca>
+              chave="comercial.metas.pedidos-licencas"
+              defs={COLUNAS}
+              colunas={LOCAIS}
+              linhas={visiveis}
+              ler={lerPedido}
+              chaveLinha={(p) => `${p.codemp}-${p.codfil}-${p.numped}`}
+              vazio="Nenhum pedido com esse filtro."
+            />
             <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 text-sm tabular-nums">
               {visiveis.length !== dados.quantidade && <span className="text-muted">Filtrado: {fmtValor("BRL", totalVisivel)}</span>}
               <span className="font-semibold text-foreground">Total do mês: {fmtValor("BRL", dados.total)}</span>
