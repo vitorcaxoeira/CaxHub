@@ -31,7 +31,9 @@ export interface ArquivoEmEspera {
   previa: string | null;
 }
 
-export const ACCEPT_COMPROVANTE = "image/*,application/pdf";
+// .heic/.heif explícitos (04/11/2026): no Windows o seletor de arquivos nem sempre trata HEIC como image/*, e a foto do iPhone não
+// aparecia para escolher. O servidor converte HEIC para JPEG no upload (backend/src/domain/comprovanteHeic.ts).
+export const ACCEPT_COMPROVANTE = "image/*,.heic,.heif,application/pdf";
 
 const classeBotao =
   "min-h-11 rounded-md border border-border px-3.5 py-1.5 text-sm text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";

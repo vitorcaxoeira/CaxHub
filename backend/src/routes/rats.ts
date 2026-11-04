@@ -57,6 +57,7 @@ import {
   type VisibilidadeRats,
 } from "../domain/ratsListaSql";
 import { col, linhasFiltradasDaLista, registrarListaConsultavel, type ListaConsultavel } from "./listaConsultavel";
+import { converterHeicSeNecessario, ehHeic } from "../domain/comprovanteHeic";
 import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 
 // Tela "Meus Apontamentos": RATs agrupam os apontamentos (RatItem) de um consultor numa
@@ -566,7 +567,6 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// GET /opcoes-filtro — consultores distintos entre as RATs visíveis, pro seletor da
 // ---------- Lista de RATs com filtro e ordem por coluna (04/11/2026) ----------
 // GET /lista (+ /lista/resumo e /lista/valores): a mesma lista de GET / com o kit de colunas do CaxHub_Dash (funil e ordem por coluna,
 // colunas configuráveis, resumo no rodapé, colunas calculadas), toda resolvida no banco: consulta em domain/ratsListaSql.ts, que calcula
@@ -639,6 +639,7 @@ async function listaRatsDoUsuario(req: AuthenticatedRequest, opcoes: OpcoesConsu
 
 registrarListaConsultavel(ratsRouter, "/lista", (req) => listaRatsDoUsuario(req as AuthenticatedRequest), "rats-lista");
 
+// GET /opcoes-filtro — consultores distintos entre as RATs visíveis, pro seletor da
 // tela (só faz diferença pra gestor/admin — consultor comum só vê a si mesmo).
 ratsRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
   try {
@@ -2302,8 +2303,9 @@ const uploadComprovante = multer({
   // "SeparaÃ§Ã£o.pdf". Os navegadores mandam UTF-8.
   defParamCharset: "utf8",
   fileFilter: (_req, file, cb) => {
-    if (MIMES_COMPROVANTE.has(file.mimetype)) cb(null, true);
-    else cb(new Error("Tipo de arquivo não permitido (use foto ou PDF)"));
+    // HEIC do iPhone também pela extensão: no Windows o navegador costuma mandá-lo sem tipo (ver domain/comprovanteHeic.ts).
+    if (MIMES_COMPROVANTE.has(file.mimetype) || ehHeic(file.originalname, file.mimetype)) cb(null, true);
+    else cb(new Error("Tipo de arquivo não permitido (use foto, inclusive HEIC do iPhone, ou PDF)"));
   },
 });
 
@@ -2585,9 +2587,11 @@ ratsRouter.post("/:id/comprovantes", receberComprovante, async (req: Authenticat
       res.status(400).json({ error: `Limite de ${MAX_COMPROVANTES_POR_RAT} comprovantes por RAT atingido` });
       return;
     }
+    // HEIC (iPhone) vira JPEG antes de gravar: Chrome/Edge não o mostram e o PDF único da RAT não o embute. Atualiza req.file (caminho,
+    // nome, tamanho, tipo), então o `descartar` acima continua apagando o arquivo certo se algo falhar daqui pra frente.
+    await converterHeicSeNecessario(req.file);
     const criado = await prisma.$transaction(async (tx) => {
       const c = await tx.comprovanteRat.create({
-    // nome, tamanho, tipo), então o `descartar` acima continua apagando o arquivo certo se algo falhar daqui pra frente.
         data: {
           ratId: rat.id,
           despesaId,
