@@ -32,7 +32,7 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar open={sidebarOpen} mobileOpen={mobileMenuOpen} onNavigate={() => setMobileMenuOpen(false)} />
+      <Sidebar open={sidebarOpen} mobileOpen={mobileMenuOpen} onNavigate={() => setMobileMenuOpen(false)} onExpandir={() => setSidebarOpen(true)} />
       {/* Fundo escurecido atrás do drawer mobile — só existe (não só invisível) enquanto
           aberto, e só abaixo de `lg` (no desktop o menu nunca é overlay). Clique fecha. */}
       {mobileMenuOpen && (

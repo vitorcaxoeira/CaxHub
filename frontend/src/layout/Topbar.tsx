@@ -1,3 +1,4 @@
+import { Menu, Moon, PanelLeft, Sun } from "lucide-react";
 import { useTheme } from "../theme/ThemeContext";
 import { UserMenu } from "./UserMenu";
 import { NotificacoesSino } from "./NotificacoesSino";
@@ -18,13 +19,11 @@ export function Topbar({ sidebarOpen, onToggleSidebar, onToggleMobileMenu }: Top
       <div className="flex items-center gap-3">
         <button
           onClick={onToggleSidebar}
-          aria-label={sidebarOpen ? "Esconder menu lateral" : "Mostrar menu lateral"}
+          aria-label={sidebarOpen ? "Recolher menu lateral" : "Expandir menu lateral"}
+          title={sidebarOpen ? "Recolher menu" : "Expandir menu"}
           className="hidden items-center justify-center rounded-md border border-border p-2 text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:inline-flex"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <line x1="9" y1="3" x2="9" y2="21" />
-          </svg>
+          <PanelLeft size={18} strokeWidth={1.75} aria-hidden="true" />
         </button>
         {/* Hambúrguer — só abaixo de `lg` (o oposto do botão acima, que é só desktop). Sem
             ele o menu não tinha nenhuma forma de abrir em tela estreita/celular. */}
@@ -33,11 +32,7 @@ export function Topbar({ sidebarOpen, onToggleSidebar, onToggleMobileMenu }: Top
           aria-label="Abrir menu"
           className="inline-flex items-center justify-center rounded-md border border-border p-2 text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="4" y1="6" x2="20" y2="6" />
-            <line x1="4" y1="12" x2="20" y2="12" />
-            <line x1="4" y1="18" x2="20" y2="18" />
-          </svg>
+          <Menu size={18} strokeWidth={1.75} aria-hidden="true" />
         </button>
         <div className="flex items-center gap-2 lg:hidden">
           <img src="/marca/icone-128.png" alt="" className="h-7 w-7 rounded-md" />
@@ -46,12 +41,14 @@ export function Topbar({ sidebarOpen, onToggleSidebar, onToggleMobileMenu }: Top
       </div>
 
       <div className="flex items-center gap-3">
+        {/* Mostra o tema atual (lua = escuro, sol = claro); o clique troca. Mesmo botão do CaxHub_Dash (04/11/2026). */}
         <button
           onClick={toggleTheme}
           aria-label={theme === "dark" ? "Mudar para tema claro" : "Mudar para tema escuro"}
-          className="rounded-md border border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title={theme === "dark" ? "Tema escuro (clique para o claro)" : "Tema claro (clique para o escuro)"}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {theme === "dark" ? "Escuro" : "Claro"}
+          {theme === "dark" ? <Moon size={18} strokeWidth={1.75} aria-hidden="true" /> : <Sun size={18} strokeWidth={1.75} aria-hidden="true" />}
         </button>
         <NotificacoesSino />
         <UserMenu />
