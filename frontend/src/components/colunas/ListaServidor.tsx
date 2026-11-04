@@ -54,6 +54,8 @@ interface Props<T, C> {
   rodape?: (dados: Resposta<T> | null) => ReactNode;
   /** Avisa a tela quando a resposta chega (ex.: total de registros em outro lugar). */
   aoCarregar?: (dados: Resposta<T>) => void;
+  /** Avisa a tela quando a lista falha (ex.: 403 vira a mensagem de "sem acesso" da própria tela). */
+  aoErro?: (status: number | undefined, mensagem: string) => void;
   /** Altura máxima da área rolável. */
   alturaMax?: string;
 }
@@ -76,6 +78,7 @@ export function ListaServidor<T extends object, C = undefined>({
   topo,
   rodape,
   aoCarregar,
+  aoErro,
   alturaMax = "max-h-[70vh]",
 }: Props<T, C>) {
   const titulosBase = useMemo(() => titulosDe(base), [base]);
@@ -112,7 +115,12 @@ export function ListaServidor<T extends object, C = undefined>({
         setErro(null);
         aoCarregar?.(data);
       })
-      .catch((err) => !cancelado && setErro(err.response?.data?.error ?? "Falha ao carregar a lista"))
+      .catch((err) => {
+        if (cancelado) return;
+        const mensagem = err.response?.data?.error ?? "Falha ao carregar a lista";
+        setErro(mensagem);
+        aoErro?.(err.response?.status, mensagem);
+      })
       .finally(() => !cancelado && setLoading(false));
     return () => {
       cancelado = true;

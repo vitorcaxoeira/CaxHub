@@ -3,7 +3,8 @@ import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
-import { Pagination } from "../../components/ui/Pagination";
+import { ListaServidor, type Resposta } from "../../components/colunas/ListaServidor";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { KpiCard } from "../../components/ui/KpiCard";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { toneBadge } from "../../components/ui/badges";
@@ -96,6 +97,176 @@ const formatHorasCompacto = (horasDecimais: number) => formatHoras(horasDecimais
 // muitos itens ficava perdida num feed único de itens misturados de propostas
 // diferentes) — aqui cada linha é uma proposta, com o total/alocado/saldo agregado;
 // o detalhe item-a-item fica na tela seguinte (AlocacaoPropostaDetalhe.tsx).
+interface AcoesAlocacao {
+  navegar: (rota: string) => void;
+  sincronizar: (row: PropostaRow) => void;
+  estaSincronizando: (chave: string) => boolean;
+}
+
+// Lista de propostas com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (ListaServidor + lista em
+// memória no servidor, 03/11/2026). Escopo de departamento, KPIs e filtros do topo continuam no servidor. A linha abre os consultores.
+const horas = (minutos: number) => formatHorasCompacto(minutos / 60);
+const COLUNAS_ALOCACAO: DefColuna<PropostaRow, AcoesAlocacao>[] = [
+  {
+    nome: "codpro",
+    titulo: "Proposta",
+    fixa: true,
+    largura: 220,
+    resumos: ["contagem", "distintos"],
+    render: (row, a) => (
+      // Número e badge de situação numa linha só: sem nowrap o badge desce sozinho e a linha dobra de altura.
+      <p className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-foreground">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            a.navegar(`/projetos/proposta/${row.codemp}/${row.codpro}`);
+          }}
+          className="text-primary hover:underline"
+        >
+          {row.codpro}
+        </button>
+        <span className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge[row.sitproTone]}`}>{row.sitproLabel}</span>
+        {!row.alocavel && (
+          <span
+            className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge.warning}`}
+            title="Situação fora do recorte de alocação (Aprovada/Em Execução) — rode o Sync. ERP para atualizar"
+          >
+            Fora do recorte
+          </span>
+        )}
+      </p>
+    ),
+  },
+  { nome: "sitproLabel", titulo: "Situação", largura: 130, classe: "text-sm text-muted", render: (r) => r.sitproLabel },
+  { nome: "numprj", titulo: "Projeto", largura: 90, classe: "font-mono text-sm text-muted", render: (r) => r.numprj || "—" },
+  { nome: "cliente", titulo: "Cliente", largura: 200, classe: "text-sm text-foreground", texto: (r) => r.cliente, render: (r) => r.cliente },
+  { nome: "datret", titulo: "Data Aprovação", largura: 110, classe: "text-sm text-muted", render: (r) => formatData(r.datret) },
+  { nome: "despro", titulo: "Descrição", largura: 200, classe: "text-sm text-muted", texto: (r) => r.despro, render: (r) => r.despro ?? "—" },
+  {
+    nome: "depexeLabel",
+    titulo: "Departamento",
+    largura: 160,
+    render: (r) => <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>{r.depexeLabel}</span>,
+  },
+  {
+    nome: "modproLabel",
+    titulo: "Modalidade",
+    largura: 130,
+    render: (r) => <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>{r.modproLabel}</span>,
+  },
+  { nome: "totalItens", titulo: "Itens", direita: true, largura: 70, classe: "font-mono text-sm tabular-nums text-muted", render: (r) => r.totalItens },
+  { nome: "qtdhorTotal", titulo: "Total", direita: true, largura: 90, classe: "font-mono text-sm tabular-nums text-muted", formatarResumo: horas, render: (r) => horas(r.qtdhorTotal) },
+  { nome: "horasAlocadas", titulo: "Alocado", direita: true, largura: 90, classe: "font-mono text-sm tabular-nums text-muted", formatarResumo: horas, render: (r) => horas(r.horasAlocadas) },
+  {
+    nome: "saldo",
+    titulo: "Saldo",
+    direita: true,
+    largura: 90,
+    classe: (r) => `font-mono text-sm tabular-nums ${r.saldo < 0 ? "text-destructive" : "text-foreground"}`,
+    formatarResumo: horas,
+    render: (r) => horas(r.saldo),
+  },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 60,
+    render: (row, a) => {
+      const chave = `${row.codemp}-${row.codpro}`;
+      return (
+        <span onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu placement="bottom-end">
+            <DropdownMenu.Trigger>
+              <button
+                className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Ações da proposta"
+              >
+                ⋯
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content>
+              <DropdownMenu.Item onSelect={() => a.sincronizar(row)} disabled={a.estaSincronizando(chave)}>
+                {a.estaSincronizando(chave) ? "Sincronizando..." : "Sync. ERP"}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onSelect={() => a.navegar(`/projetos/alocacao/${row.codemp}/${row.codpro}/cronograma`)} disabled={!row.alocavel}>
+                Cronograma
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu>
+        </span>
+      );
+    },
+  },
+];
+
+const TH_SUB = "whitespace-nowrap py-1.5 font-mono text-[10px] font-medium uppercase tracking-wider text-muted";
+
+/** Consultores alocados numa proposta (linha aberta da lista): quanto cada um tem alocado, excedente, realizado e saldo. */
+function ConsultoresDaProposta({ row }: { row: PropostaRow }) {
+  const [consultores, setConsultores] = useState<ConsultorResumo[] | "carregando" | "erro">("carregando");
+  useEffect(() => {
+    let cancelado = false;
+    axios
+      .get(`/api/alocacao/propostas/${row.codemp}/${row.codpro}/consultores`)
+      .then(({ data }) => !cancelado && setConsultores(data.consultores))
+      .catch(() => !cancelado && setConsultores("erro"));
+    return () => {
+      cancelado = true;
+    };
+  }, [row.codemp, row.codpro]);
+
+  if (consultores === "carregando") return <p className="py-2 text-sm text-muted">Carregando consultores...</p>;
+  if (consultores === "erro") return <p className="py-2 text-sm text-destructive">Falha ao carregar consultores desta proposta.</p>;
+  if (consultores.length === 0) return <p className="py-2 text-sm text-muted">Ninguém alocado ainda nesta proposta.</p>;
+  return (
+    <table className="w-full border-collapse">
+      <thead>
+        <tr>
+          <th className={`${TH_SUB} text-left`}>Consultor</th>
+          <th className={`${TH_SUB} text-left`}>Nome Consultor</th>
+          <th className={`${TH_SUB} text-left`}>Departamento</th>
+          <th className={`${TH_SUB} text-right`}>Horas Alocada</th>
+          <th className={`${TH_SUB} text-right`}>Excedente</th>
+          <th className={`${TH_SUB} text-right`}>Realizado</th>
+          <th className={`${TH_SUB} text-right`}>Saldo</th>
+          <th className={`${TH_SUB} text-right`}>% do Alocado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {consultores.map((c) => {
+          const pct = row.horasAlocadas > 0 ? Math.round((c.horasAlocadas / row.horasAlocadas) * 100) : 0;
+          return (
+            <tr key={c.codfor} className="border-t border-border/40">
+              <td className="whitespace-nowrap py-1.5 font-mono text-[12.5px] tabular-nums text-muted">{c.codfor}</td>
+              <td className="whitespace-nowrap py-1.5 text-[12.5px] text-foreground">{c.nome}</td>
+              <td className="whitespace-nowrap py-1.5">
+                <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>{c.depexeLabel}</span>
+              </td>
+              <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground">{formatHoras(c.horasAlocadas / 60)}</td>
+              <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
+                {c.horasExcedentes > 0 ? formatHoras(c.horasExcedentes / 60) : "—"}
+              </td>
+              <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-muted">{formatHoras(c.horasRealizadas / 60)}</td>
+              <td className={`whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums ${c.saldo < 0 ? "text-destructive" : "text-foreground"}`}>
+                {formatHoras(c.saldo / 60)}
+              </td>
+              <td className="whitespace-nowrap py-1.5 pl-4">
+                <div className="flex items-center justify-end gap-2">
+                  <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted/20">
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="w-9 font-mono text-[11px] tabular-nums text-muted">{pct}%</span>
+                </div>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 export function Alocacao() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -313,37 +484,9 @@ export function Alocacao() {
     },
   });
 
-  function carregar() {
-    setLoading(true);
-    axios
-      .get("/api/alocacao/propostas", {
-        params: {
-          depexe: depexe.length > 0 ? depexe.join(",") : undefined,
-          codfor: codfor.length > 0 ? codfor.join(",") : undefined,
-          modpro: modpro.length > 0 ? modpro.join(",") : undefined,
-          busca: busca || undefined,
-          apenasComSaldo: apenasComSaldo || undefined,
-          situacao: situacao || undefined,
-          page,
-          pageSize: PAGE_SIZE,
-        },
-      })
-      .then(({ data }) => {
-        setRows(data.rows);
-        setTotal(data.total);
-        setKpis(data.kpis);
-        setErro(null);
-        setSemAcesso(false);
-      })
-      .catch((err) => {
-        if (err.response?.status === 403) {
-          setSemAcesso(true);
-        } else {
-          setErro(err.response?.data?.error ?? "Falha ao carregar propostas");
-        }
-      })
-      .finally(() => setLoading(false));
-  }
+  // A lista (ListaServidor) busca sozinha; isto só força buscar de novo (depois de um Sync. ERP).
+  const [recarga, setRecarga] = useState(0);
+  const carregar = () => setRecarga((n) => n + 1);
 
   // "Sync. ERP" por número digitado (28/08/2026) — mesma rota da ação por linha, mas o
   // número pode não existir localmente ainda (codemp=1 fixo, única empresa hoje). Só
@@ -372,12 +515,6 @@ export function Alocacao() {
       toast.mostrar(resultado.erro, "destructive");
     }
   }
-
-  useEffect(() => {
-    if (!padroes.pronto) return;
-    carregar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [padroes.pronto, depexe, codfor, modpro, busca, apenasComSaldo, situacao, page]);
 
   function toggleExpandir(row: PropostaRow) {
     const chave = `${row.codemp}-${row.codpro}`;
@@ -592,312 +729,57 @@ export function Alocacao() {
         </p>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="whitespace-nowrap bg-surface-2 px-2 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Proposta
-                </th>
-                <th className="whitespace-nowrap bg-surface-2 px-2 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Cliente
-                </th>
-                <th className="hidden bg-surface-2 px-2 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted lg:table-cell">
-                  Data Aprovação
-                </th>
-                <th className="hidden whitespace-nowrap bg-surface-2 px-2 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
-                  Descrição
-                </th>
-                <th className="hidden whitespace-nowrap bg-surface-2 px-2 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
-                  Departamento
-                </th>
-                <th className="hidden whitespace-nowrap bg-surface-2 px-2 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted min-[1366px]:table-cell">
-                  Modalidade
-                </th>
-                <th className="whitespace-nowrap bg-surface-2 px-2 py-2 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Itens
-                </th>
-                <th className="whitespace-nowrap bg-surface-2 px-2 py-2 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Total
-                </th>
-                <th className="whitespace-nowrap bg-surface-2 px-2 py-2 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Alocado
-                </th>
-                <th className="whitespace-nowrap bg-surface-2 px-2 py-2 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Saldo
-                </th>
-                <th className="bg-surface-2 px-2 py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {loading &&
-                Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i} className="border-t border-border/60">
-                    <td className="px-2 py-1.5">
-                      <Skeleton className="h-4 w-24" />
-                      <Skeleton className="mt-1.5 h-3 w-16" />
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <Skeleton className="h-4 w-40" />
-                    </td>
-                    <td className="hidden px-2 py-1.5 lg:table-cell">
-                      <Skeleton className="h-4 w-20" />
-                    </td>
-                    <td className="hidden px-2 py-1.5 md:table-cell">
-                      <Skeleton className="h-4 w-32" />
-                    </td>
-                    <td className="hidden px-2 py-1.5 md:table-cell">
-                      <Skeleton className="h-4 w-20" />
-                    </td>
-                    <td className="hidden px-2 py-1.5 min-[1366px]:table-cell">
-                      <Skeleton className="h-4 w-20" />
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <Skeleton className="ml-auto h-4 w-8" />
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <Skeleton className="ml-auto h-4 w-14" />
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <Skeleton className="ml-auto h-4 w-14" />
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <Skeleton className="ml-auto h-4 w-14" />
-                    </td>
-                    <td className="px-2 py-1.5" />
-                  </tr>
-                ))}
-              {!loading &&
-                rows.map((row) => {
-                const chave = `${row.codemp}-${row.codpro}`;
-                const expandida = expandidas.has(chave);
-                const consultoresResumo = consultoresPorProposta[chave];
-                return (
-                  <Fragment key={chave}>
-                    <tr
-                      onClick={() => toggleExpandir(row)}
-                      className={`cursor-pointer transition ${
-                        expandida ? "border-t border-primary bg-primary/5" : "border-t border-border/60 hover:bg-surface-2"
-                      }`}
-                    >
-                      <td className={`px-2 py-1.5 ${expandida ? "border-l border-primary" : ""}`}>
-                        {/* Caret, número e badge de situação numa linha só: sem nowrap o
-                            badge desce sozinho e a linha dobra de altura. */}
-                        <p className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-foreground">
-                          <span className="text-muted">{expandida ? "▾" : "▸"}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate(`/projetos/proposta/${row.codemp}/${row.codpro}`);
-                            }}
-                            className="text-primary hover:underline"
-                          >
-                            {row.codpro}
-                          </button>
-                          <span
-                            className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge[row.sitproTone]}`}
-                          >
-                            {row.sitproLabel}
-                          </span>
-                          {!row.alocavel && (
-                            <span
-                              className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge.warning}`}
-                              title="Situação fora do recorte de alocação (Aprovada/Em Execução) — rode o Sync. ERP para atualizar"
-                            >
-                              Fora do recorte
-                            </span>
-                          )}
-                        </p>
-                      </td>
-                      <td className="max-w-[150px] truncate px-2 py-1.5 text-sm text-foreground min-[1440px]:max-w-[180px] min-[1700px]:max-w-[200px]" title={row.cliente}>
-                        {row.cliente}
-                      </td>
-                      <td className="hidden whitespace-nowrap px-2 py-1.5 text-sm text-muted lg:table-cell">{formatData(row.datret)}</td>
-                      <td
-                        className="hidden max-w-[150px] truncate px-2 py-1.5 text-sm text-muted md:table-cell min-[1440px]:max-w-[180px] min-[1700px]:max-w-[220px]"
-                        title={row.despro ?? undefined}
-                      >
-                        {row.despro ?? "—"}
-                      </td>
-                      <td className="hidden whitespace-nowrap px-2 py-1.5 md:table-cell">
-                        <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
-                          {row.depexeLabel}
-                        </span>
-                      </td>
-                      <td className="hidden whitespace-nowrap px-2 py-1.5 min-[1366px]:table-cell">
-                        <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
-                          {row.modproLabel}
-                        </span>
-                      </td>
-                      <td className="whitespace-nowrap px-2 py-1.5 text-right font-mono text-sm tabular-nums text-muted">{row.totalItens}</td>
-                      <td className="whitespace-nowrap px-2 py-1.5 text-right font-mono text-sm tabular-nums text-muted">
-                        {formatHorasCompacto(row.qtdhorTotal / 60)}
-                      </td>
-                      <td className="whitespace-nowrap px-2 py-1.5 text-right font-mono text-sm tabular-nums text-muted">
-                        {formatHorasCompacto(row.horasAlocadas / 60)}
-                      </td>
-                      <td
-                        className={`whitespace-nowrap px-2 py-1.5 text-right font-mono text-sm tabular-nums ${row.saldo < 0 ? "text-destructive" : "text-foreground"}`}
-                      >
-                        {formatHorasCompacto(row.saldo / 60)}
-                      </td>
-                      <td
-                        className={`whitespace-nowrap px-2 py-1.5 text-right ${expandida ? "border-r border-primary" : ""}`}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <DropdownMenu placement="bottom-end">
-                          <DropdownMenu.Trigger>
-                            <button
-                              className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              aria-label="Ações da proposta"
-                            >
-                              ⋯
-                            </button>
-                          </DropdownMenu.Trigger>
-                          <DropdownMenu.Content>
-                            <DropdownMenu.Item
-                              onSelect={async () => {
-                                const resultado = await sincronizar(
-                                  chave,
-                                  `/api/alocacao/propostas/${row.codemp}/${row.codpro}/sincronizar`
-                                );
-                                if (resultado.ok) {
-                                  toast.mostrar(
-                                    resultado.data.encontrada
-                                      ? `Sincronizado — ${resultado.data.totalItens} item(ns), ${resultado.data.totalAtividades} atividade(s) de consultor`
-                                      : "Proposta não encontrada mais no Senior",
-                                    resultado.data.encontrada ? "success" : "warning"
-                                  );
-                                  carregar();
-                                } else {
-                                  toast.mostrar(resultado.erro, "destructive");
-                                }
-                              }}
-                              disabled={estaSincronizando(chave)}
-                            >
-                              {estaSincronizando(chave) ? "Sincronizando..." : "Sync. ERP"}
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Item
-                              onSelect={() => navigate(`/projetos/alocacao/${row.codemp}/${row.codpro}/cronograma`)}
-                              disabled={!row.alocavel}
-                            >
-                              Cronograma
-                            </DropdownMenu.Item>
-                          </DropdownMenu.Content>
-                        </DropdownMenu>
-                      </td>
-                    </tr>
-                    {expandida && (
-                      <tr className="border-t border-border/60 bg-surface-2/40">
-                        <td colSpan={11} className="border-b border-l border-r border-primary px-2.5 py-2">
-                          {consultoresResumo === "carregando" && (
-                            <p className="py-2 text-sm text-muted">Carregando consultores...</p>
-                          )}
-                          {consultoresResumo === "erro" && (
-                            <p className="py-2 text-sm text-destructive">Falha ao carregar consultores desta proposta.</p>
-                          )}
-                          {Array.isArray(consultoresResumo) && consultoresResumo.length === 0 && (
-                            <p className="py-2 text-sm text-muted">Ninguém alocado ainda nesta proposta.</p>
-                          )}
-                          {Array.isArray(consultoresResumo) && consultoresResumo.length > 0 && (
-                            <table className="w-full border-collapse">
-                              <thead>
-                                <tr>
-                                  <th className="whitespace-nowrap py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                    Consultor
-                                  </th>
-                                  <th className="whitespace-nowrap py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                    Nome Consultor
-                                  </th>
-                                  <th className="whitespace-nowrap py-1.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                    Departamento
-                                  </th>
-                                  <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                    Horas Alocada
-                                  </th>
-                                  <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                    Excedente
-                                  </th>
-                                  <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                    Realizado
-                                  </th>
-                                  <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                    Saldo
-                                  </th>
-                                  <th className="whitespace-nowrap py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                    % do Alocado
-                                  </th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {consultoresResumo.map((c) => {
-                                  const pct = row.horasAlocadas > 0 ? Math.round((c.horasAlocadas / row.horasAlocadas) * 100) : 0;
-                                  return (
-                                    <tr key={c.codfor} className="border-t border-border/40">
-                                      <td className="whitespace-nowrap py-1.5 font-mono text-[12.5px] tabular-nums text-muted">{c.codfor}</td>
-                                      <td className="whitespace-nowrap py-1.5 text-[12.5px] text-foreground">{c.nome}</td>
-                                      <td className="whitespace-nowrap py-1.5">
-                                        <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
-                                          {c.depexeLabel}
-                                        </span>
-                                      </td>
-                                      <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground">
-                                        {formatHoras(c.horasAlocadas / 60)}
-                                      </td>
-                                      <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
-                                        {c.horasExcedentes > 0 ? formatHoras(c.horasExcedentes / 60) : "—"}
-                                      </td>
-                                      <td className="whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
-                                        {formatHoras(c.horasRealizadas / 60)}
-                                      </td>
-                                      <td
-                                        className={`whitespace-nowrap py-1.5 text-right font-mono text-[12.5px] tabular-nums ${
-                                          c.saldo < 0 ? "text-destructive" : "text-foreground"
-                                        }`}
-                                      >
-                                        {formatHoras(c.saldo / 60)}
-                                      </td>
-                                      <td className="whitespace-nowrap py-1.5 pl-4">
-                                        <div className="flex items-center justify-end gap-2">
-                                          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted/20">
-                                            <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
-                                          </div>
-                                          <span className="w-9 font-mono text-[11px] tabular-nums text-muted">{pct}%</span>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
+      {padroes.pronto && (
+        <ListaServidor<PropostaRow, AcoesAlocacao>
+          chave="projetos.alocacao.propostas"
+          url="/api/alocacao/propostas"
+          params={{
+            depexe: depexe.length > 0 ? depexe.join(",") : undefined,
+            codfor: codfor.length > 0 ? codfor.join(",") : undefined,
+            modpro: modpro.length > 0 ? modpro.join(",") : undefined,
+            busca: busca || undefined,
+            apenasComSaldo: apenasComSaldo || undefined,
+            situacao: situacao || undefined,
+          }}
+          recarga={recarga}
+          defs={COLUNAS_ALOCACAO}
+          ctx={{
+            navegar: navigate,
+            estaSincronizando,
+            sincronizar: async (row) => {
+              const chave = `${row.codemp}-${row.codpro}`;
+              const resultado = await sincronizar(chave, `/api/alocacao/propostas/${row.codemp}/${row.codpro}/sincronizar`);
+              if (resultado.ok) {
+                toast.mostrar(
+                  resultado.data.encontrada
+                    ? `Sincronizado — ${resultado.data.totalItens} item(ns), ${resultado.data.totalAtividades} atividade(s) de consultor`
+                    : "Proposta não encontrada mais no Senior",
+                  resultado.data.encontrada ? "success" : "warning"
                 );
-              })}
-              {rows.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={11} className="px-2.5 py-6 text-center text-sm text-muted">
-                    Nenhuma proposta encontrada com os filtros atuais.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <Pagination
-          page={page}
+                carregar();
+              } else {
+                toast.mostrar(resultado.erro, "destructive");
+              }
+            },
+          }}
+          chaveLinha={(r) => `${r.codemp}-${r.codpro}`}
+          detalhe={(r) => <ConsultoresDaProposta row={r} />}
+          rotulo="propostas"
+          vazio="Nenhuma proposta encontrada com os filtros atuais."
           pageSize={PAGE_SIZE}
-          total={total}
-          loading={loading}
-          onPageChange={(p) => atualizarFiltros({ page: p })}
-          label="propostas"
+          opcoesPorPagina={[PAGE_SIZE, 50, 100, 200]}
+          aoCarregar={(d) => {
+            setKpis((d as Resposta<PropostaRow> & { kpis: KpisResumo }).kpis);
+            setLoading(false);
+            setErro(null);
+            setSemAcesso(false);
+          }}
+          aoErro={(status) => {
+            setLoading(false);
+            if (status === 403) setSemAcesso(true);
+          }}
         />
-      </div>
+      )}
     </div>
   );
 }

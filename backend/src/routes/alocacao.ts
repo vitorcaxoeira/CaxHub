@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { registrarListaEmMemoria } from "./listaEmMemoria";
+import type { ColunaMemoria } from "../consultas/listaEmMemoria";
+import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
 import {
   resolverContextoConsultor,
@@ -286,19 +289,34 @@ async function codususAlocaveisNoItem(
 // num feed único de itens fica ruim de gerenciar). Esta lista é o ponto de entrada:
 // uma linha por proposta, com Total/Alocado/Saldo agregados sobre a proposta INTEIRA,
 // incluindo itens de outros departamentos (ver o bloco de escopo no topo do arquivo).
-alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
-  try {
+//
+// Desde 03/11/2026 (lista em memória, registrarListaEmMemoria): o escopo de departamento, os KPIs e os filtros do topo continuam todos aqui;
+// funil, ordem, página, resumo do rodapé e colunas calculadas são aplicados sobre as linhas que a rota monta.
+const COLUNAS_PROPOSTAS_ALOCACAO: ColunaMemoria[] = [
+  { nome: "codpro", tipo: "inteiro", obrigatoria: true },
+  { nome: "numprj", tipo: "inteiro" },
+  { nome: "cliente", tipo: "texto", obrigatoria: true },
+  { nome: "despro", tipo: "texto", semValores: true },
+  { nome: "sitproLabel", tipo: "texto", obrigatoria: true },
+  { nome: "datret", tipo: "data", utc: true },
+  { nome: "depexeLabel", tipo: "texto", obrigatoria: true },
+  { nome: "modproLabel", tipo: "texto", obrigatoria: true },
+  { nome: "totalItens", tipo: "inteiro", obrigatoria: true },
+  { nome: "qtdhorTotal", tipo: "decimal", obrigatoria: true },
+  { nome: "horasAlocadas", tipo: "decimal", obrigatoria: true },
+  { nome: "saldo", tipo: "decimal", obrigatoria: true },
+];
+
+registrarListaEmMemoria(
+  alocacaoRouter,
+  "/propostas",
+  async (reqBruto) => {
+    const req = reqBruto as AuthenticatedRequest;
     const ctx = await contextoDoUsuario(req);
-    if (!ctx) {
-      res.status(404).json({ error: "Usuário não encontrado" });
-      return;
-    }
+    if (!ctx) throw new ErroEntradaConsulta("Usuário não encontrado", 404);
     const { contexto, role } = ctx;
     const permitidos = await departamentosPermitidos(role, contexto);
-    if (permitidos.length === 0) {
-      res.status(403).json({ error: "Sem departamentos para gerenciar" });
-      return;
-    }
+    if (permitidos.length === 0) throw new ErroEntradaConsulta("Sem departamentos para gerenciar", 403);
 
     const depexeFiltro = parseIdsParam(req.query.depexe);
     const depexesConsultados =
@@ -318,8 +336,6 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     const situacao = situacoesValidas.includes(req.query.situacao as any)
       ? (req.query.situacao as (typeof situacoesValidas)[number])
       : null;
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 25));
 
     // Parte das PROPOSTAS alocáveis, não dos itens: o escopo padrão agora é
     // Proposta.depexe. São ~260 linhas na base inteira, então carregar todas e
@@ -365,19 +381,20 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
 
     if (origemPorProposta.size === 0) {
       const kpiZerado = { quantidade: 0, horas: 0 };
-      res.json({
-        rows: [],
-        total: 0,
-        kpis: {
+      return {
+        colunas: COLUNAS_PROPOSTAS_ALOCACAO,
+        linhas: [],
+        extras: {
+          kpis: {
           totalNoEscopo: 0,
           semAlocacao: kpiZerado,
           saldoPendente: kpiZerado,
           totalmenteAlocadas: kpiZerado,
           compartilhadasEmAberto: kpiZerado,
           horasDivergentes: kpiZerado,
+          },
         },
-      });
-      return;
+      };
     }
 
     // Alocações e estrutura só das propostas que entraram no escopo de quem está olhando: o gestor do
@@ -674,15 +691,10 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     }
     linhas.sort((a, b) => b.codpro - a.codpro);
 
-    const total = linhas.length;
-    const inicio = (page - 1) * pageSize;
-    const pagina = linhas.slice(inicio, inicio + pageSize);
-
-    res.json({ rows: pagina, total, kpis });
-  } catch (error) {
-    handleError(res, error, "propostas");
-  }
-});
+    return { colunas: COLUNAS_PROPOSTAS_ALOCACAO, linhas, totais: ["qtdhorTotal", "horasAlocadas", "saldo"], pageSizePadrao: 25, extras: { kpis } };
+  },
+  "alocacao-propostas",
+);
 
 // Resumo por consultor de uma proposta — usado no accordion da lista de propostas,
 // pra responder "quanto cada consultor já tem alocado nessa proposta" sem precisar
