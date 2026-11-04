@@ -575,111 +575,63 @@ projetosRouter.get("/propostas/composicao", async (req, res) => {
   }
 });
 
-// ---------- Seção 3: ranking de representantes (ordenável/paginado) ----------
-function ordenacaoRepresentantes(sort: unknown, dir: unknown): string {
-  const direcao = dir === "asc" ? "ASC" : "DESC";
-  switch (sort) {
-    case "valorPipeline":
-      return `valor_pipeline ${direcao}`;
-    case "winRate":
-      return `win_rate_pct ${direcao} NULLS LAST`;
-    case "cicloMedio":
-      return `ciclo_medio_dias ${direcao} NULLS LAST`;
-    case "propostasAbertas":
-    default:
-      return `propostas_abertas ${direcao}`;
-  }
-}
-
-projetosRouter.get("/propostas/representantes-ranking", async (req, res) => {
-  try {
+// Ranking de representantes com filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts, 03/11/2026): a
+// consulta agregada da tela vira subconsulta. Mesmos filtros do topo (sem o de situação, como antes).
+registrarListaConsultavel(
+  projetosRouter,
+  "/propostas/representantes-ranking",
+  (req) => {
     const { clientes, representantes, tipven, modpro, datproInicio, datproFim } = lerFiltrosComuns(req);
-    const page = Math.max(1, parseIntParam(req.query.page) ?? 1);
-    const pageSize = Math.min(100, Math.max(1, parseIntParam(req.query.pageSize) ?? 20));
-    const offset = (page - 1) * pageSize;
-    const ordenacao = ordenacaoRepresentantes(req.query.sort, req.query.dir);
-
-    const rows = await prisma.$queryRawUnsafe<
-      {
-        codrep: number;
-        nomrep: string;
-        propostas_abertas: number;
-        valor_pipeline: number;
-        ganhas: number;
-        perdidas: number;
-        ciclo_medio_dias: number | null;
-        win_rate_pct: number | null;
-        total_geral: number;
-      }[]
-    >(
-      `
-      WITH item_valor AS (
-        SELECT codemp, codpro, SUM(qtdhor::numeric / 60 * COALESCE(valhor, 0))::float8 AS valor
-        FROM propostas_itens GROUP BY codemp, codpro
-      ),
-      base AS (
-        -- "1900-12-31" é a sentinela de "sem data" do Senior em datenv/datret.
-        SELECT p.codrep, r.nomrep, p.sitpro,
-               NULLIF(p.datenv, '1900-12-31') AS datenv, NULLIF(p.datret, '1900-12-31') AS datret,
-               COALESCE(iv.valor, 0) AS valor
-        FROM propostas p
-        JOIN representantes r ON r.codrep = p.codrep
-        LEFT JOIN item_valor iv ON iv.codemp = p.codemp AND iv.codpro = p.codpro
-        WHERE ($1::int[] IS NULL OR p.codcli = ANY($1::int[]))
-          AND ($2::int[] IS NULL OR p.codrep = ANY($2::int[]))
-          AND ($3::int[] IS NULL OR p.tipven = ANY($3::int[]))
-          AND ($4::int[] IS NULL OR p.modpro = ANY($4::int[]))
-          AND ($5::date IS NULL OR p.datpro >= $5::date)
-          AND ($6::date IS NULL OR p.datpro <= $6::date)
-      ),
-      agregado AS (
-        SELECT codrep, nomrep,
-          COUNT(*) FILTER (WHERE sitpro = ANY($7::int[]))::int AS propostas_abertas,
-          COALESCE(SUM(valor) FILTER (WHERE sitpro = ANY($7::int[])), 0)::float8 AS valor_pipeline,
-          COUNT(*) FILTER (WHERE sitpro = ANY($8::int[]))::int AS ganhas,
-          COUNT(*) FILTER (WHERE sitpro = ANY($9::int[]))::int AS perdidas,
-          AVG(datret - datenv) FILTER (WHERE sitpro = ANY($10::int[]))::float8 AS ciclo_medio_dias
-        FROM base
-        GROUP BY codrep, nomrep
-      )
-      SELECT *,
-        CASE WHEN (ganhas + perdidas) > 0 THEN ROUND((ganhas::numeric / (ganhas + perdidas)) * 100, 1)::float8 ELSE NULL END AS win_rate_pct,
-        COUNT(*) OVER ()::int AS total_geral
-      FROM agregado
-      ORDER BY ${ordenacao}
-      LIMIT $11 OFFSET $12
-      `,
-      clientes,
-      representantes,
-      tipven,
-      modpro,
-      datproInicio,
-      datproFim,
-      SITPRO_EM_DECISAO,
-      SITPRO_GANHAS,
-      SITPRO_PERDIDAS,
-      SITPRO_DECIDIDAS,
-      pageSize,
-      offset
-    );
-
-    res.json({
-      rows: rows.map((r) => ({
-        codrep: r.codrep,
-        nomrep: r.nomrep,
-        propostasAbertas: r.propostas_abertas,
-        valorPipeline: r.valor_pipeline,
-        winRatePct: r.win_rate_pct,
-        cicloMedioDias: r.ciclo_medio_dias,
-      })),
-      page,
-      pageSize,
-      total: rows[0]?.total_geral ?? 0,
-    });
-  } catch (error) {
-    handleError(res, error, "representantes-ranking");
-  }
-});
+    return {
+      com: Prisma.sql`WITH item_valor AS (
+          SELECT codemp, codpro, SUM(qtdhor::numeric / 60 * COALESCE(valhor, 0))::float8 AS valor
+          FROM propostas_itens GROUP BY codemp, codpro
+        ),
+        base AS (
+          -- "1900-12-31" é a sentinela de "sem data" do Senior em datenv/datret.
+          SELECT p.codrep, r.nomrep, p.sitpro,
+                 NULLIF(p.datenv, '1900-12-31') AS datenv, NULLIF(p.datret, '1900-12-31') AS datret,
+                 COALESCE(iv.valor, 0) AS valor
+          FROM propostas p
+          JOIN representantes r ON r.codrep = p.codrep
+          LEFT JOIN item_valor iv ON iv.codemp = p.codemp AND iv.codpro = p.codpro
+          WHERE (${clientes}::int[] IS NULL OR p.codcli = ANY(${clientes}::int[]))
+            AND (${representantes}::int[] IS NULL OR p.codrep = ANY(${representantes}::int[]))
+            AND (${tipven}::int[] IS NULL OR p.tipven = ANY(${tipven}::int[]))
+            AND (${modpro}::int[] IS NULL OR p.modpro = ANY(${modpro}::int[]))
+            AND (${datproInicio}::date IS NULL OR p.datpro >= ${datproInicio}::date)
+            AND (${datproFim}::date IS NULL OR p.datpro <= ${datproFim}::date)
+        ),
+        agregado AS (
+          SELECT codrep, nomrep,
+            COUNT(*) FILTER (WHERE sitpro = ANY(${SITPRO_EM_DECISAO}::int[]))::int AS "propostasAbertas",
+            COALESCE(SUM(valor) FILTER (WHERE sitpro = ANY(${SITPRO_EM_DECISAO}::int[])), 0)::float8 AS "valorPipeline",
+            COUNT(*) FILTER (WHERE sitpro = ANY(${SITPRO_GANHAS}::int[]))::int AS ganhas,
+            COUNT(*) FILTER (WHERE sitpro = ANY(${SITPRO_PERDIDAS}::int[]))::int AS perdidas,
+            AVG(datret - datenv) FILTER (WHERE sitpro = ANY(${SITPRO_DECIDIDAS}::int[]))::float8 AS "cicloMedioDias"
+          FROM base
+          GROUP BY codrep, nomrep
+        )`,
+      interna: Prisma.sql`
+        SELECT a.*,
+          CASE WHEN (a.ganhas + a.perdidas) > 0 THEN ROUND((a.ganhas::numeric / (a.ganhas + a.perdidas)) * 100, 1)::float8 ELSE NULL END AS "winRatePct"
+        FROM agregado a`,
+      colunas: [
+        col.texto("nomrep", { obrigatoria: true }),
+        col.inteiro("propostasAbertas", { obrigatoria: true }),
+        col.decimal("valorPipeline", { obrigatoria: true }),
+        col.inteiro("ganhas", { obrigatoria: true }),
+        col.inteiro("perdidas", { obrigatoria: true }),
+        col.decimal("winRatePct"),
+        col.decimal("cicloMedioDias"),
+      ],
+      totais: ["propostasAbertas", "valorPipeline"],
+      ordemPadrao: Prisma.sql`x."propostasAbertas" DESC, x."nomrep" ASC`,
+      pageSizePadrao: 20,
+    };
+  },
+  "representantes-ranking",
+);
 
 // ---------- Seção 3: drill-down de propostas abertas de um representante ----------
 projetosRouter.get("/propostas/representantes-ranking/:codrep/propostas-abertas", async (req, res) => {

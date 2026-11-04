@@ -13,7 +13,7 @@ import { formatHoras } from "../../utils/horas";
 import { EficienciaComercialCards, EficienciaComercial } from "../../components/projetos/EficienciaComercialCards";
 import { AlertasComerciais, AlertasComerciaisDados } from "../../components/projetos/AlertasComerciais";
 import { ComposicaoPipeline, ComposicaoTipoVenda, ComposicaoProduto, ComposicaoClassificacao } from "../../components/projetos/ComposicaoPipeline";
-import { RankingRepresentantes, RepresentanteRow } from "../../components/projetos/RankingRepresentantes";
+import { RankingRepresentantes } from "../../components/projetos/RankingRepresentantes";
 import { TendenciaMensalPropostas, PontoTendenciaMensal } from "../../components/projetos/TendenciaMensalPropostas";
 import { AgingPipelineChart, AgingBucketPropostas } from "../../components/projetos/AgingPipelineChart";
 import { Skeleton } from "../../components/ui/Skeleton";
@@ -92,13 +92,6 @@ export function Propostas() {
   const [loadingComposicao, setLoadingComposicao] = useState(true);
   const [erroComposicao, setErroComposicao] = useState<string | null>(null);
 
-  const [repRows, setRepRows] = useState<RepresentanteRow[]>([]);
-  const [repTotal, setRepTotal] = useState(0);
-  const [repPage, setRepPage] = useState(1);
-  const [repSort, setRepSort] = useState("propostasAbertas");
-  const [repDir, setRepDir] = useState<"asc" | "desc">("desc");
-  const [loadingRep, setLoadingRep] = useState(true);
-  const [erroRep, setErroRep] = useState<string | null>(null);
 
   const [tendenciaMensal, setTendenciaMensal] = useState<PontoTendenciaMensal[]>([]);
   const [loadingTendencia, setLoadingTendencia] = useState(true);
@@ -260,22 +253,6 @@ export function Propostas() {
 
   useEffect(() => {
     if (!p.pronto) return;
-    setLoadingRep(true);
-    axios
-      .get(`${API_BASE}/representantes-ranking`, {
-        params: { ...paramsComunsResumo, representantes: representanteIds, sort: repSort, dir: repDir, page: repPage, pageSize: 20 },
-      })
-      .then(({ data }) => {
-        setRepRows(data.rows);
-        setRepTotal(data.total);
-        setErroRep(null);
-      })
-      .catch((err) => setErroRep(err.response?.data?.error ?? "Falha ao carregar o ranking de representantes"))
-      .finally(() => setLoadingRep(false));
-  }, [p.pronto, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, repSort, repDir, repPage]);
-
-  useEffect(() => {
-    if (!p.pronto) return;
     setLoadingTendencia(true);
     axios
       .get(`${API_BASE}/tendencia-mensal`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
@@ -312,12 +289,6 @@ export function Propostas() {
     if (novoAlerta !== null && filtros.situacao.length > 0) {
       setFiltros((atual) => ({ ...atual, situacao: [] }));
     }
-  }
-
-  function handleSortRepChange(sort: string, dir: "asc" | "desc") {
-    setRepSort(sort);
-    setRepDir(dir);
-    setRepPage(1);
   }
 
   const kpiCards = kpis
@@ -491,21 +462,7 @@ export function Propostas() {
 
       <section className="mb-6">
         <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">Ranking de Representantes</p>
-        {erroRep && (
-          <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroRep}</div>
-        )}
-        <RankingRepresentantes
-          rows={repRows}
-          page={repPage}
-          pageSize={20}
-          total={repTotal}
-          loading={loadingRep}
-          onPageChange={setRepPage}
-          sort={repSort}
-          dir={repDir}
-          onSortChange={handleSortRepChange}
-          empFiltroParams={paramsComunsResumo}
-        />
+        {p.pronto && <RankingRepresentantes params={{ ...paramsComunsResumo, representantes: representanteIds }} empFiltroParams={paramsComunsResumo} />}
       </section>
 
       <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
