@@ -7,7 +7,8 @@ import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { MolduraFiltro, DATA_EMBUTIDA } from "../../components/ui/ControlesFiltro";
 import { regras } from "../../components/ui/padroesFiltros/regras";
 import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
-import { Pagination } from "../../components/ui/Pagination";
+import { ListaServidor, type Resposta } from "../../components/colunas/ListaServidor";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { toneBadge } from "../../components/ui/badges";
 import { StatusViagemBadge } from "../../components/solicitacoes/StatusViagemBadge";
 import { classeBotaoPrimario, classeCampo } from "../../components/solicitacoes/campos";
@@ -84,6 +85,61 @@ const PADRAO_STATUS: Record<EscopoViagem, StatusViagem[]> = {
   aprovacao: ["aguardando_aprovacao"],
 };
 
+// Lista com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (ListaServidor + lista em memória no
+// servidor, 03/11/2026): o escopo de permissão e os filtros do topo continuam no servidor.
+const COLUNAS_VIAGEM: DefColuna<LinhaViagem, (id: number) => void>[] = [
+  { nome: "id", titulo: "Nº", fixa: true, largura: 70, classe: "font-mono text-[12.5px] text-foreground", resumos: ["contagem"], render: (v) => `#${v.id}` },
+  { nome: "situacao", titulo: "Status", largura: 170, render: (v) => <StatusViagemBadge status={v.status} tipo={v.tipo} /> },
+  { nome: "solicitanteNome", titulo: "Solicitante", largura: 180, classe: "text-foreground", texto: (v) => v.solicitanteNome, render: (v) => v.solicitanteNome },
+  { nome: "atendimentoNome", titulo: "Atendimento", largura: 160, classe: "text-muted", texto: (v) => v.atendimentoNome, render: (v) => v.atendimentoNome ?? "—" },
+  { nome: "finalidade", titulo: "Finalidade", largura: 160, classe: "text-muted", render: (v) => FINALIDADE_ROTULO[v.finalidade] ?? v.finalidade },
+  { nome: "clienteNome", titulo: "Cliente", largura: 180, classe: "text-foreground", texto: (v) => v.clienteNome, render: (v) => v.clienteNome ?? "—" },
+  { nome: "propostaRotulo", titulo: "Proposta", largura: 150, classe: "text-muted", texto: (v) => v.propostaRotulo, render: (v) => v.propostaRotulo ?? "—" },
+  {
+    nome: "dataInicio",
+    titulo: "Período",
+    largura: 170,
+    classe: "text-foreground",
+    render: (v) => (v.tipo === "outros" ? `Até ${formatarDia(v.dataFim)}` : formatarPeriodo(v.dataInicio, v.dataFim)),
+  },
+  { nome: "dataFim", titulo: "Término", largura: 100, classe: "text-muted", render: (v) => formatarDia(v.dataFim) },
+  {
+    nome: "cidadesDestino",
+    titulo: "Destino / itens",
+    largura: 220,
+    classe: "text-muted",
+    texto: (v) => (v.tipo === "outros" ? v.resumoItens.map((i) => `${i.descricao} ×${i.quantidade ?? 1}`).join(", ") : v.cidadesDestino),
+    render: (v) =>
+      v.tipo === "outros"
+        ? v.resumoItens.map((i) => `${i.descricao} ×${i.quantidade ?? 1}`).join(", ")
+        : `${v.cidadesDestino} · ${v.qtdPessoas} ${v.qtdPessoas === 1 ? "pessoa" : "pessoas"}`,
+  },
+  { nome: "qtdPessoas", titulo: "Pessoas", direita: true, largura: 80, classe: "tabular-nums text-muted", render: (v) => v.qtdPessoas },
+  {
+    nome: "servicos",
+    titulo: "Serviços",
+    semOrdenar: true,
+    largura: 150,
+    render: (v) => (
+      <div className="flex flex-wrap gap-1">
+        {v.tipo === "outros" && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Outros</span>}
+        {v.precisaHospedagem && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Hotel</span>}
+        {v.precisaAereo && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Aéreo</span>}
+        {v.precisaCarro && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Carro</span>}
+      </div>
+    ),
+  },
+  {
+    nome: "valorAprovado",
+    titulo: "Aprovado",
+    direita: true,
+    largura: 120,
+    classe: "font-mono text-[12.5px] text-foreground",
+    formatarResumo: (n) => formatarMoeda(n),
+    render: (v) => formatarMoeda(v.valorAprovado),
+  },
+];
+
 // A mesma página serve as três rotas: trocar de escopo monta a lista de novo (filtro do zero e o padrão salvo daquele escopo).
 export function SolicitacoesViagem({ escopo }: { escopo: EscopoViagem }) {
   return <ListaSolicitacoes key={escopo} escopo={escopo} />;
@@ -104,13 +160,8 @@ function ListaSolicitacoes({ escopo }: { escopo: EscopoViagem }) {
   const [terminoDe, setTerminoDe] = useState("");
   const [busca, setBusca] = useState("");
   const buscaDebounced = useDebouncedValue(busca, 300);
-  const [pagina, setPagina] = useState(1);
-  const [linhas, setLinhas] = useState<LinhaViagem[]>([]);
-  const [total, setTotal] = useState(0);
   const [kpis, setKpis] = useState<Record<string, number>>({});
-  const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
-  const tamanho = 25;
 
   // Padrão de cada filtro (estrela, 03/11/2026): um por escopo (minhas, atendimento, aprovação), aplicado antes da 1ª consulta.
   const p = usePadroesTela({
@@ -169,42 +220,6 @@ function ListaSolicitacoes({ escopo }: { escopo: EscopoViagem }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [escopo, usuarioId, usuarioRole, p.pronto]);
-
-  const carregar = useCallback(async () => {
-    if (!pronto || !p.pronto) return;
-    setCarregando(true);
-    setErro(null);
-    try {
-      const { data } = await axios.get("/api/solicitacoes-viagem", {
-        params: {
-          escopo,
-          status: status.join(",") || undefined,
-          finalidade: finalidades.join(",") || undefined,
-          codcli: cliente?.codcli,
-          de: terminoDe || undefined,
-          q: buscaDebounced || undefined,
-          pagina,
-          tamanho,
-        },
-      });
-      setLinhas(data.solicitacoes);
-      setTotal(data.total);
-      setKpis(data.kpis);
-    } catch (err) {
-      setErro(mensagemDeErro(err, "Não foi possível carregar as solicitações"));
-    } finally {
-      setCarregando(false);
-    }
-  }, [pronto, p.pronto, escopo, status, finalidades, cliente, terminoDe, buscaDebounced, pagina]);
-
-  useEffect(() => {
-    carregar();
-  }, [carregar]);
-
-  // Qualquer filtro novo volta pra primeira página.
-  useEffect(() => {
-    setPagina(1);
-  }, [status, finalidades, cliente, terminoDe, buscaDebounced]);
 
   const totalGeral = useMemo(() => Object.values(kpis).reduce((a, b) => a + b, 0), [kpis]);
 
@@ -277,75 +292,30 @@ function ListaSolicitacoes({ escopo }: { escopo: EscopoViagem }) {
         </div>
       </div>
 
-      {erro && <p className="mt-4 text-sm text-destructive">{erro}</p>}
-
-      <div className="mt-4 overflow-x-auto rounded-lg border border-border bg-surface">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-border text-[11.5px] uppercase tracking-wide text-muted">
-            <tr>
-              <th className="px-4 py-2.5 font-medium">Nº</th>
-              <th className="px-4 py-2.5 font-medium">Status</th>
-              <th className="px-4 py-2.5 font-medium">Solicitante</th>
-              <th className="px-4 py-2.5 font-medium">Finalidade</th>
-              <th className="px-4 py-2.5 font-medium">Cliente / Proposta</th>
-              <th className="px-4 py-2.5 font-medium">Período e destino</th>
-              <th className="px-4 py-2.5 font-medium">Serviços</th>
-              <th className="px-4 py-2.5 text-right font-medium">Aprovado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {linhas.map((v) => (
-              <tr key={v.id} onClick={() => navigate(`/solicitacoes/${v.id}`)} className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-2">
-                <td className="px-4 py-2.5 font-mono text-[12.5px] text-foreground">#{v.id}</td>
-                <td className="px-4 py-2.5">
-                  <StatusViagemBadge status={v.status} tipo={v.tipo} />
-                </td>
-                <td className="px-4 py-2.5 text-foreground">
-                  {v.solicitanteNome}
-                  {v.atendimentoNome && <span className="block text-[11.5px] text-muted">Atend.: {v.atendimentoNome}</span>}
-                </td>
-                <td className="px-4 py-2.5 text-muted">{FINALIDADE_ROTULO[v.finalidade] ?? v.finalidade}</td>
-                <td className="px-4 py-2.5 text-foreground">
-                  {v.clienteNome ?? <span className="text-muted">—</span>}
-                  {v.propostaRotulo && <span className="block text-[11.5px] text-muted">{v.propostaRotulo}</span>}
-                </td>
-                <td className="px-4 py-2.5 text-foreground">
-                  {v.tipo === "outros" ? `Até ${formatarDia(v.dataFim)}` : formatarPeriodo(v.dataInicio, v.dataFim)}
-                  <span className="block max-w-[16rem] truncate text-[11.5px] text-muted">
-                    {v.tipo === "outros"
-                      ? v.resumoItens.map((i) => `${i.descricao} ×${i.quantidade ?? 1}`).join(", ")
-                      : `${v.cidadesDestino} · ${v.qtdPessoas} ${v.qtdPessoas === 1 ? "pessoa" : "pessoas"}`}
-                  </span>
-                </td>
-                <td className="px-4 py-2.5">
-                  <div className="flex flex-wrap gap-1">
-                    {v.tipo === "outros" && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Outros</span>}
-                    {v.precisaHospedagem && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Hotel</span>}
-                    {v.precisaAereo && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Aéreo</span>}
-                    {v.precisaCarro && <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] ${toneBadge.neutral}`}>Carro</span>}
-                  </div>
-                </td>
-                <td className="px-4 py-2.5 text-right font-mono text-[12.5px] text-foreground">{formatarMoeda(v.valorAprovado)}</td>
-              </tr>
-            ))}
-            {!carregando && linhas.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">
-                  {terminoDe ? `Nenhuma viagem com término a partir de ${formatarDia(terminoDe)}. Use "Ver histórico" para ver as anteriores.` : texto.vazio}
-                </td>
-              </tr>
-            )}
-            {carregando && linhas.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">
-                  Carregando...
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-        <Pagination page={pagina} pageSize={tamanho} total={total} loading={carregando} onPageChange={setPagina} label="solicitações" />
-      </div>
+      {pronto && p.pronto && (
+        <div className="mt-4">
+          <ListaServidor<LinhaViagem, (id: number) => void>
+            chave={`solicitacoes.${escopo}`}
+            url="/api/solicitacoes-viagem"
+            params={{
+              escopo,
+              status: status.join(",") || undefined,
+              finalidade: finalidades.join(",") || undefined,
+              codcli: cliente?.codcli,
+              de: terminoDe || undefined,
+              q: buscaDebounced || undefined,
+            }}
+            defs={COLUNAS_VIAGEM}
+            chaveLinha={(v) => String(v.id)}
+            onLinha={(v) => navigate(`/solicitacoes/${v.id}`)}
+            rotulo="solicitações"
+            vazio={terminoDe ? `Nenhuma viagem com término a partir de ${formatarDia(terminoDe)}. Use "Ver histórico" para ver as anteriores.` : texto.vazio}
+            pageSize={25}
+            opcoesPorPagina={[25, 50, 100, 200]}
+            aoCarregar={(d) => setKpis((d as Resposta<LinhaViagem> & { kpis?: Record<string, number> }).kpis ?? {})}
+          />
+        </div>
+      )}
     </div>
   );
 }
