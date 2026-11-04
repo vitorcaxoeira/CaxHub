@@ -6,6 +6,9 @@ import fs from "fs";
 import path from "path";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { registrarListaEmMemoria } from "./listaEmMemoria";
+import type { ColunaMemoria } from "../consultas/listaEmMemoria";
+import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { CINCO_S_DIR } from "../config/uploads";
 import { criarEventoAuditoria, diffCampos } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA, EventoAuditoriaTipo } from "../audit/taxonomia";
@@ -745,10 +748,27 @@ async function perguntasAtivasDaArea(area: { id: number; tipo: string }) {
   return perguntas;
 }
 
-gestao5sRouter.get("/avaliacoes", async (req: Req5S, res) => {
-  try {
-    const acesso = exigirAcesso(req, res);
-    if (!acesso) return;
+// Lista de avaliações com filtro e ordem por coluna, resumo no rodapé e colunas calculadas (registrarListaEmMemoria, 03/11/2026): o recorte
+// de visibilidade (filtroAvaliacoesVisiveis) e os filtros do topo continuam aqui. A resposta mantém `itens` no formato de sempre (o
+// relatório impresso pagina por ela), com os percentuais também soltos (`percGeral`, `percSeiri`...) para o funil e o rodapé.
+const SENSOS_COLUNA = ["Seiri", "Seiton", "Seiso", "Seiketsu", "Shitsuke"] as const;
+const COLUNAS_AVALIACOES: ColunaMemoria[] = [
+  { nome: "data", tipo: "data", obrigatoria: true, utc: true },
+  { nome: "areaNome", tipo: "texto", obrigatoria: true },
+  { nome: "avaliadorNome", tipo: "texto" },
+  { nome: "quantidadeAmbientes", tipo: "inteiro", obrigatoria: true },
+  { nome: "percGeral", tipo: "decimal" },
+  ...SENSOS_COLUNA.map((s): ColunaMemoria => ({ nome: `perc${s}`, tipo: "decimal" })),
+  { nome: "situacao", tipo: "texto", obrigatoria: true },
+];
+
+registrarListaEmMemoria(
+  gestao5sRouter,
+  "/avaliacoes",
+  async (reqBruto) => {
+    const req = reqBruto as Req5S;
+    const acesso = req.acesso!;
+    if (!temAcesso(acesso)) throw new ErroEntradaConsulta("Sem acesso ao módulo Gestão 5S", 403);
     const filtros: Prisma.Avaliacao5SWhereInput[] = [filtroAvaliacoesVisiveis(acesso)];
     const areaId = num(req.query.areaId);
     if (areaId) filtros.push({ areaId });
@@ -760,24 +780,28 @@ gestao5sRouter.get("/avaliacoes", async (req: Req5S, res) => {
     if (req.query.status === "em_andamento" || req.query.status === "finalizada") filtros.push({ status: req.query.status });
     if (ehDataIso(req.query.de)) filtros.push({ data: { gte: paraData(req.query.de) } });
     if (ehDataIso(req.query.ate)) filtros.push({ data: { lte: paraData(req.query.ate) } });
-    const where: Prisma.Avaliacao5SWhereInput = { AND: filtros };
-    const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 20, 1), 100);
-    const page = Math.max(Number(req.query.page) || 1, 1);
-    const [total, itens] = await Promise.all([
-      prisma.avaliacao5S.count({ where }),
-      prisma.avaliacao5S.findMany({
-        where,
-        include: { area: { select: { nome: true, tipo: true } }, avaliador: { select: { nome: true } }, _count: { select: { filhas: true } } },
-        orderBy: [{ data: "desc" }, { id: "desc" }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-    ]);
-    res.json({ total, page, pageSize, itens: itens.map(serializarResumo) });
-  } catch (error) {
-    handleError(res, error, "avaliacoes-listar");
-  }
-});
+    const itens = await prisma.avaliacao5S.findMany({
+      where: { AND: filtros },
+      include: { area: { select: { nome: true, tipo: true } }, avaliador: { select: { nome: true } }, _count: { select: { filhas: true } } },
+      orderBy: [{ data: "desc" }, { id: "desc" }],
+    });
+    return {
+      colunas: COLUNAS_AVALIACOES,
+      pageSizePadrao: 20,
+      linhas: itens.map((a) => ({
+        ...serializarResumo(a),
+        percGeral: dec(a.percGeral),
+        percSeiri: dec(a.percSeiri),
+        percSeiton: dec(a.percSeiton),
+        percSeiso: dec(a.percSeiso),
+        percSeiketsu: dec(a.percSeiketsu),
+        percShitsuke: dec(a.percShitsuke),
+        situacao: a.status === "finalizada" ? "Finalizada" : "Em andamento",
+      })),
+    };
+  },
+  "5s-avaliacoes",
+);
 
 gestao5sRouter.post("/avaliacoes", async (req: Req5S, res) => {
   try {

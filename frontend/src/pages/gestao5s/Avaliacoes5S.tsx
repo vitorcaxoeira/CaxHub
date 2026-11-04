@@ -4,6 +4,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { TendenciaSeta } from "../../components/gestao5s/TendenciaSeta";
 import { classeBotaoPrimario, classeCampo, classeRotulo } from "../../components/gestao5s/campos";
 import { Pagination } from "../../components/ui/Pagination";
+import { ListaServidor } from "../../components/colunas/ListaServidor";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { campoParDatas } from "../../components/ui/padroesFiltros/campos";
 import { regras } from "../../components/ui/padroesFiltros/regras";
 import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
@@ -88,6 +90,47 @@ export function Avaliacoes5S() {
   );
 }
 
+// Histórico com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (ListaServidor + lista em memória no
+// servidor, 03/11/2026). O recorte de quem vê o quê continua no servidor.
+const COLUNAS_AVALIACOES: DefColuna<Linha>[] = [
+  { nome: "data", titulo: "Data", fixa: true, largura: 100, classe: "text-sm text-foreground", render: (a) => formatarDiaIso(a.data) },
+  {
+    nome: "areaNome",
+    titulo: "Setor / ambiente",
+    largura: 240,
+    classe: "text-sm font-medium text-foreground",
+    texto: (a) => a.areaNome,
+    render: (a) => (
+      <>
+        {a.areaNome}
+        {a.quantidadeAmbientes > 0 && <span className="ml-2 text-[11px] font-normal text-muted">{a.quantidadeAmbientes} ambientes</span>}
+      </>
+    ),
+  },
+  { nome: "avaliadorNome", titulo: "Avaliador", largura: 160, classe: "text-sm text-muted", render: (a) => a.avaliadorNome ?? "—" },
+  { nome: "quantidadeAmbientes", titulo: "Ambientes", direita: true, largura: 90, classe: "text-sm tabular-nums text-muted", render: (a) => a.quantidadeAmbientes },
+  { nome: "percGeral", titulo: "Geral", centro: true, largura: 90, formatarResumo: (v) => formatarPerc(v), render: (a) => <CelulaPerc valor={a.percentuais.geral} /> },
+  ...SENSOS.map(
+    (s): DefColuna<Linha> => ({
+      nome: `perc${s.nome}`,
+      titulo: s.curto,
+      dica: s.rotulo,
+      centro: true,
+      largura: 100,
+      formatarResumo: (v) => formatarPerc(v),
+      render: (a) => <CelulaPerc valor={a.percentuais.porSenso[s.chave]} />,
+    })
+  ),
+  {
+    nome: "situacao",
+    titulo: "Situação",
+    largura: 120,
+    render: (a) => (
+      <span className={`text-xs ${a.status === "finalizada" ? "text-success" : "text-warning"}`}>{a.status === "finalizada" ? "Finalizada" : "Em andamento"}</span>
+    ),
+  },
+];
+
 function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean }) {
   const navigate = useNavigate();
   const [filtros, setFiltros] = useState({ areaId: "", status: "", de: "", ate: "" });
@@ -107,30 +150,11 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
       periodo: campoParDatas("Período", filtros.de || null, filtros.ate || null, (de, ate) => setFiltros((f) => ({ ...f, de: de ?? "", ate: ate ?? "" }))),
     },
   });
-  const [page, setPage] = useState(1);
-  const [dados, setDados] = useState<{ total: number; itens: Linha[] } | null>(null);
-  const [erro, setErro] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const pageSize = 20;
 
-  useEffect(() => {
-    if (!p.pronto) return;
-    setLoading(true);
-    axios
-      .get<{ total: number; itens: Linha[] }>("/api/5s/avaliacoes", {
-        params: { ...Object.fromEntries(Object.entries(filtros).filter(([, v]) => v)), page, pageSize },
-      })
-      .then(({ data }) => {
-        setDados(data);
-        setErro(null);
-      })
-      .catch((err) => setErro(mensagemDeErro(err, "Falha ao carregar as avaliações")))
-      .finally(() => setLoading(false));
-  }, [p.pronto, filtros, page]);
+
 
   function mudar(campo: keyof typeof filtros, valor: string) {
     setFiltros((f) => ({ ...f, [campo]: valor }));
-    setPage(1);
   }
 
   return (
@@ -170,68 +194,20 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
         </div>
       </div>
 
-      {erro && <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">{erro}</p>}
-
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-surface-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                <th className="px-4 py-3">Data</th>
-                <th className="px-4 py-3">Setor / ambiente</th>
-                <th className="hidden px-4 py-3 md:table-cell">Avaliador</th>
-                <th className="px-4 py-3 text-center">Geral</th>
-                {SENSOS.map((s) => (
-                  <th key={s.chave} className="hidden px-3 py-3 text-center xl:table-cell" title={s.rotulo}>
-                    {s.curto}
-                  </th>
-                ))}
-                <th className="hidden px-4 py-3 sm:table-cell">Situação</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading &&
-                Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i} className="border-t border-border/60">
-                    <td colSpan={5} className="px-4 py-3">
-                      <Skeleton className="h-5 w-full" />
-                    </td>
-                  </tr>
-                ))}
-              {!loading && dados?.itens.length === 0 && (
-                <tr>
-                  <td colSpan={10} className="px-4 py-6 text-center text-sm text-muted">
-                    Nenhuma avaliação encontrada.
-                  </td>
-                </tr>
-              )}
-              {!loading &&
-                dados?.itens.map((a) => (
-                  <tr key={a.id} onClick={() => navigate(`/5s/avaliacoes/${a.id}`)} className="cursor-pointer border-t border-border/60 transition hover:bg-surface-2">
-                    <td className="whitespace-nowrap px-4 py-3 text-sm text-foreground">{formatarDiaIso(a.data)}</td>
-                    <td className="px-4 py-3 text-sm font-medium text-foreground">
-                      {a.areaNome}
-                      {a.quantidadeAmbientes > 0 && <span className="ml-2 text-[11px] font-normal text-muted">{a.quantidadeAmbientes} ambientes</span>}
-                    </td>
-                    <td className="hidden px-4 py-3 text-sm text-muted md:table-cell">{a.avaliadorNome ?? "—"}</td>
-                    <td className="px-4 py-3 text-center">
-                      <CelulaPerc valor={a.percentuais.geral} />
-                    </td>
-                    {SENSOS.map((s) => (
-                      <td key={s.chave} className="hidden px-3 py-3 text-center xl:table-cell">
-                        <CelulaPerc valor={a.percentuais.porSenso[s.chave]} />
-                      </td>
-                    ))}
-                    <td className="hidden px-4 py-3 text-xs sm:table-cell">
-                      <span className={a.status === "finalizada" ? "text-success" : "text-warning"}>{a.status === "finalizada" ? "Finalizada" : "Em andamento"}</span>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-        <Pagination page={page} pageSize={pageSize} total={dados?.total ?? 0} loading={loading} onPageChange={setPage} label="avaliações" />
-      </div>
+      {p.pronto && (
+        <ListaServidor<Linha>
+          chave="gestao5s.avaliacoes"
+          url="/api/5s/avaliacoes"
+          params={Object.fromEntries(Object.entries(filtros).filter(([, v]) => v))}
+          defs={COLUNAS_AVALIACOES}
+          chaveLinha={(a) => String(a.id)}
+          onLinha={(a) => navigate(`/5s/avaliacoes/${a.id}`)}
+          rotulo="avaliações"
+          vazio="Nenhuma avaliação encontrada."
+          pageSize={20}
+          opcoesPorPagina={[20, 50, 100, 200]}
+        />
+      )}
     </>
   );
 }
