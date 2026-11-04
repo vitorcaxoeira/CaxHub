@@ -5,7 +5,6 @@ import { formatHoras } from "../../utils/horas";
 import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Spinner } from "../../components/ui/Spinner";
-import { Pagination } from "../../components/ui/Pagination";
 import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
@@ -21,6 +20,8 @@ import { diaCurtoDaJanela, textoJanelaRetroativa, useJanelaRetroativa } from "..
 import { useToast } from "../../components/ui/Toast";
 import { regras } from "../../components/ui/padroesFiltros/regras";
 import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
+import { ListaServidor } from "../../components/colunas/ListaServidor";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 
 // Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
 // apontamento ao Senior fica retido no servidor.
@@ -272,7 +273,159 @@ function formatHoraDoDia(minutosDesdeMeiaNoite: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+// Tabela de RATs com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (04/11/2026): ListaServidor
+// sobre GET /rats/lista (backend/src/domain/ratsListaSql.ts, tudo resolvido no banco). Os filtros do topo continuam os mesmos e com a
+// estrela de padrão; a linha abre o acordeão de Atividades/RDVs (várias abertas ao mesmo tempo, como antes).
 const PAGE_SIZE_RATS = 30;
+
+interface AcoesRats {
+  navegar: (rota: string) => void;
+  sincronizar: (rat: RatRow) => void;
+  fechar: (rat: RatRow) => void;
+  sincronizando: number | null;
+  fechando: number | null;
+  avisoSinc: Record<number, string>;
+  expandidas: ReadonlySet<number>;
+}
+
+const COLUNAS_RATS: DefColuna<RatRow, AcoesRats>[] = [
+  {
+    nome: "id",
+    titulo: "ID",
+    fixa: true,
+    largura: 90,
+    resumos: ["contagem"],
+    render: (rat, a) => (
+      <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <span className="text-muted">{a.expandidas.has(rat.id) ? "▾" : "▸"}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            a.navegar(`/projetos/rat/${rat.id}`);
+          }}
+          title="Ver detalhes e auditoria desta RAT"
+          className="text-primary hover:underline"
+        >
+          {rat.id}
+        </button>
+      </p>
+    ),
+  },
+  {
+    nome: "numrat",
+    titulo: "RAT",
+    largura: 80,
+    resumos: ["contagem", "distintos", "vazios"],
+    classe: "whitespace-nowrap font-mono text-sm text-muted",
+    render: (rat) => rat.numrat ?? "—",
+  },
+  {
+    nome: "codpro",
+    titulo: "Proposta",
+    largura: 90,
+    resumos: ["contagem", "distintos"],
+    classe: "text-sm text-foreground",
+    render: (rat, a) =>
+      rat.codpro != null ? (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            a.navegar(`/projetos/proposta/${rat.codemp}/${rat.codpro}`);
+          }}
+          className="text-primary hover:underline"
+        >
+          {rat.codpro}
+        </button>
+      ) : (
+        "—"
+      ),
+  },
+  { nome: "cliente", titulo: "Cliente", largura: 220, classe: "text-sm text-muted", texto: (rat) => rat.cliente, render: (rat) => rat.cliente ?? "—" },
+  { nome: "consultorNome", titulo: "Consultor", largura: 150, classe: "text-sm text-muted", texto: (rat) => rat.consultorNome, render: (rat) => rat.consultorNome },
+  {
+    nome: "datemi",
+    titulo: "Emissão",
+    largura: 100,
+    classe: "whitespace-nowrap font-mono text-sm text-muted",
+    render: (rat) => (rat.datemi ? dateFormatter.format(new Date(rat.datemi)) : "—"),
+  },
+  {
+    nome: "sitratLabel",
+    titulo: "Situação",
+    largura: 120,
+    render: (rat, _a, cortar) => (
+      <span className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.sitratTone]} ${cortar ? "max-w-full truncate" : ""}`}>
+        {rat.sitratLabel}
+      </span>
+    ),
+  },
+  {
+    nome: "integracaoLabel",
+    titulo: "Sinc. ERP",
+    largura: 130,
+    // Resultado do último "Sinc. ERP" (itens desvinculados, reenviados etc.) vira tooltip aqui em vez de banner no topo da tela — um
+    // banner fixo continuava mostrando a última RAT sincronizada mesmo depois de sincronizar outra.
+    render: (rat, a, cortar) => (
+      <span
+        className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.integracaoTone]} ${
+          a.avisoSinc[rat.id] ? "cursor-help underline decoration-dotted" : ""
+        } ${cortar ? "max-w-full truncate" : ""}`}
+        title={a.avisoSinc[rat.id]}
+      >
+        {rat.integracaoLabel}
+      </span>
+    ),
+  },
+  { nome: "totalItens", titulo: "Itens", direita: true, largura: 70, classe: "font-mono text-sm tabular-nums text-muted", render: (rat) => rat.totalItens },
+  {
+    nome: "totalMinutos",
+    titulo: "Total",
+    direita: true,
+    largura: 90,
+    classe: "whitespace-nowrap font-mono text-sm tabular-nums text-foreground",
+    formatarResumo: formatMinutos,
+    render: (rat) => formatMinutos(rat.totalMinutos),
+  },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 60,
+    render: (rat, a) => (
+      <span onClick={(e) => e.stopPropagation()}>
+        <DropdownMenu placement="bottom-end">
+          <DropdownMenu.Trigger>
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Ações"
+            >
+              ⋯
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content>
+            <DropdownMenu.Item
+              onSelect={() => a.sincronizar(rat)}
+              disabled={a.sincronizando === rat.id}
+              title="Busca o que mudou no ERP (itens e despesas) e reenvia o que ainda está pendente/com erro daqui pra lá"
+            >
+              {a.sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
+            </DropdownMenu.Item>
+            {rat.podeFechar && (
+              <DropdownMenu.Item
+                onSelect={() => a.fechar(rat)}
+                disabled={a.fechando === rat.id}
+                title="Reenvia itens/despesas pendentes ou com erro (se houver) e, se tudo sincronizar, fecha a RAT no Senior"
+              >
+                {a.fechando === rat.id ? "Fechando..." : "Fechar RAT"}
+              </DropdownMenu.Item>
+            )}
+          </DropdownMenu.Content>
+        </DropdownMenu>
+      </span>
+    ),
+  },
+];
 
 // Estado da integração daquele apontamento com o Senior, na própria coluna de ação.
 // A ordem vai do mais definitivo pro mais transitório:
@@ -400,6 +553,10 @@ const selectClass =
 const ENVIO_INTERVALO_MS = 1500;
 const ENVIO_MAX_TENTATIVAS = 13;
 
+// Aviso ao excluir um apontamento com pedido de ajuste de horário aguardando o gestor: o pedido é excluído junto (04/11/2026).
+  "Este apontamento tem uma solicitação de ajuste de horário aguardando o gestor.\n\n" +
+  "Ao excluir o apontamento, a solicitação também será excluída. Continuar?";
+
 // Lista de RATs de destino como cartões de opção (radio), usada na confirmação individual e
 // no resumo do lote. Não é <select> de propósito: a lista nativa do navegador abre com a
 // largura do texto mais longo e vaza pra fora do modal, e a descrição dos itens (que é o que
@@ -523,10 +680,11 @@ export function MeusApontamentos() {
   const [descricoes, setDescricoes] = useState<Record<number, string>>({});
   const [editandoDescricaoId, setEditandoDescricaoId] = useState<number | null>(null);
 
-  const [rats, setRats] = useState<RatRow[]>([]);
-  const [totalRats, setTotalRats] = useState(0);
-  const [pageRats, setPageRats] = useState(1);
-  const [loadingRats, setLoadingRats] = useState(true);
+  // Lista de RATs (ListaServidor, 04/11/2026): a tela só guarda o que muda a consulta (recarga e os filtros de coluna, que o "Fechar Todos"
+  // também respeita) e os ajustes de linha feitos sem recarregar (número da RAT confirmado pelo Senior, situação depois de fechar).
+  const [recargaRats, setRecargaRats] = useState(0);
+  const [consultaColunasRats, setConsultaColunasRats] = useState<{ filtros?: string; calculadas?: string }>({});
+  const [ajustesRat, setAjustesRat] = useState<Record<number, Partial<RatRow>>>({});
   const [opcoesFiltro, setOpcoesFiltro] = useState<ConsultorFiltro[]>([]);
   const [codforsFiltro, setCodforsFiltro] = useState<number[]>([]);
   const [situacoesRat, setSituacoesRat] = useState<SituacaoRatOpcao[]>([]);
@@ -641,26 +799,8 @@ export function MeusApontamentos() {
   }
 
   function carregarRats() {
-    setLoadingRats(true);
-    axios
-      .get("/api/rats", { params: { ...filtrosRatsParaQuery(), page: pageRats, pageSize: PAGE_SIZE_RATS } })
-      .then(({ data }) => {
-        setRats(data.rats);
-        setTotalRats(data.total);
-        setErro(null);
-      })
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar RATs"))
-      .finally(() => setLoadingRats(false));
-    // Contador do botão "Fechar Todos" — piggyback em toda vez que a lista de RATs é
-    // recarregada (mesmos gatilhos: mount, filtro, e depois de qualquer ação que muda
-    // sitrat/integração), sem precisar de um efeito próprio. Silencioso em erro — é só um
-    // contador auxiliar, não impede o resto da tela de funcionar. Endpoint LEVE (só o número,
-    // 14/09/2026, achado real de lentidão) — o resumo completo com cliente/consultor/minutos
-    // só é buscado quando o modal é de fato aberto, em abrirResumoFechamentoLote.
-    axios
-      .get("/api/rats/elegiveis-fechamento/contagem", { params: filtrosRatsParaQuery() })
-      .then(({ data }) => setTotalElegiveisFechamento(data.total ?? 0))
-      .catch(() => {});
+  // Recarrega a lista de RATs (ListaServidor) e, junto, o contador do "Fechar Todos" (efeito mais abaixo).
+    setRecargaRats((n) => n + 1);
   }
 
   useEffect(() => {
@@ -702,34 +842,32 @@ export function MeusApontamentos() {
   });
 
   useEffect(() => {
+  // Contador do botão "Fechar Todos": endpoint LEVE (só o número, 14/09/2026, achado real de lentidão) com os MESMOS filtros da tabela,
+  // do topo e de coluna (04/11/2026). Recalcula a cada troca de filtro e depois de qualquer ação que recarrega a lista. Silencioso em erro:
+  // é só um contador auxiliar. O resumo completo (cliente/consultor/minutos) só é buscado quando o modal abre (abrirResumoFechamentoLote).
     if (!padroesRats.pronto) return;
-    carregarRats();
+    let cancelado = false;
+    axios
+      .get("/api/rats/elegiveis-fechamento/contagem", { params: { ...filtrosRatsParaQuery(), ...consultaColunasRats } })
+      .then(({ data }) => !cancelado && setTotalElegiveisFechamento(data.total ?? 0))
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [padroesRats.pronto, codforsFiltro, sitratFiltro, integracaoFiltro, buscaDebounced, buscaItemDebounced, pageRats]);
-
-  // Digitar reseta pra página 1 (senão a busca poderia "sumir" numa página que não
-  // existe mais no resultado filtrado) — só dispara depois do debounce, pra não
-  // recarregar a cada tecla.
-  useEffect(() => {
-    setPageRats(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buscaDebounced, buscaItemDebounced]);
+  }, [padroesRats.pronto, codforsFiltro, sitratFiltro, integracaoFiltro, buscaDebounced, buscaItemDebounced, consultaColunasRats, recargaRats]);
 
   function onMudarFiltroConsultor(codfors: number[]) {
     setCodforsFiltro(codfors);
-    // Volta pra página 1: o resultado filtrado pode ter menos páginas que o atual, e a
-    // lista "sumiria" numa página que não existe mais.
-    setPageRats(1);
+    // A ListaServidor volta sozinha para a página 1 quando um filtro do topo muda.
   }
 
   function onMudarFiltroSitrat(valores: number[]) {
     setSitratFiltro(valores);
-    setPageRats(1);
   }
 
   function onMudarFiltroIntegracao(valores: IntegracaoErpStatus[]) {
     setIntegracaoFiltro(valores);
-    setPageRats(1);
   }
 
   // Apontamentos com reenvio disparado agora — mantém o spinner na linha entre o clique e
@@ -798,7 +936,7 @@ export function MeusApontamentos() {
     // tivesse um antes e o novo venha diferente (ex.: a RAT foi desvinculada — ver
     // desvincularRatAusenteNoSenior no backend — e o reenvio criou uma RAT NOVA lá).
     if (dados.status === "registrado" && dados.numrat != null) {
-      setRats((atual) => atual.map((r) => (r.id !== ratId ? r : { ...r, numrat: dados.numrat })));
+      setAjustesRat((a) => ({ ...a, [ratId]: { ...a[ratId], numrat: dados.numrat } }));
     }
   }
 
@@ -1028,6 +1166,142 @@ export function MeusApontamentos() {
   }
 
   // Troca a aba (Atividades/RDVs) da linha expandida de uma RAT. `rdvJaAberto` só cresce — a
+  // Conteúdo da linha aberta de uma RAT (ListaServidor `detalhe`): abas Atividades (itens, carregados ao abrir) e RDVs.
+  function renderDetalheRat(rat: RatRow) {
+    const itens = itensPorRat[rat.id];
+    const abaRat = abaExpandidaPorRat[rat.id] ?? "atividades";
+    return (
+      <>
+          <Tabs
+            tabs={[
+              { key: "atividades", label: "Atividades" },
+              { key: "rdvs", label: "RDVs" },
+            ]}
+            activeKey={abaRat}
+            onChange={(key) => selecionarAbaRat(rat.id, key as "atividades" | "rdvs")}
+          />
+          <div className={abaRat === "atividades" ? "" : "hidden"}>
+          {itens === "carregando" && <p className="py-2 text-sm text-muted">Carregando itens...</p>}
+          {itens === "erro" && <p className="py-2 text-sm text-destructive">Falha ao carregar os itens desta RAT.</p>}
+          {Array.isArray(itens) && itens.length === 0 && (
+            <p className="py-2 text-sm text-muted">Nenhum item nesta RAT.</p>
+          )}
+          {Array.isArray(itens) && itens.length > 0 && (
+            <table className="w-full border-collapse">
+              <thead>
+                <tr>
+                  <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                    Id. Ativ.
+                  </th>
+                  <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                    Serviço
+                  </th>
+                  <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                    Item
+                  </th>
+                  <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                    Data
+                  </th>
+                  <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                    Horário
+                  </th>
+                  <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                    Duração
+                  </th>
+                  <th className="w-2/5 py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                    Observação
+                  </th>
+                  <th className="py-1.5" />
+                </tr>
+              </thead>
+              <tbody>
+                {itens.map((item) => (
+                  <tr key={item.id} className="border-t border-border/40">
+                    <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums">
+                      {item.atividadeId != null ? (
+                        <button
+                          onClick={() => abrirDetalheAtividade(item.atividadeId!)}
+                          className="text-primary hover:underline"
+                          title="Abrir a atividade (somente visualização)"
+                        >
+                          {item.atividadeId}
+                        </button>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-3 font-mono text-[12.5px] text-muted">{item.codser ?? "—"}</td>
+                    <td
+                      className="max-w-[260px] truncate py-1.5 pr-3 text-[12.5px] text-muted"
+                      title={rotuloItem(item)}
+                    >
+                      {rotuloItem(item)}
+                    </td>
+                    <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
+                      {item.datati ? dateFormatter.format(new Date(item.datati)) : "—"}
+                    </td>
+                    <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
+                      {item.horini != null && item.horfim != null
+                        ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}`
+                        : "—"}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">
+                      {item.duracaoMinutos != null ? formatMinutos(item.duracaoMinutos) : "—"}
+                    </td>
+                    {/* Observação é o que trava a aprovação da RAT (todo item precisa ter) e
+                        vai no desAti do Senior — por isso ela mesma é o clique, em vez de
+                        mais uma ação na coluna da direita. Editável abre pra editar; já
+                        registrado no ERP abre a MESMA janela em leitura, que é onde se lê o
+                        texto completo sem depender do tooltip. */}
+                    <td className="max-w-[320px] py-1.5 pr-3">
+                      <button
+                        onClick={() =>
+                          setEditandoObservacao({
+                            item,
+                            ratId: rat.id,
+                            somenteLeitura: !podeEditarObservacao(item),
+                          })
+                        }
+                        title={item.desati?.trim() || "Sem observação"}
+                        className={`block w-full truncate text-left text-[12.5px] hover:underline ${
+                          item.desati?.trim() ? "text-foreground" : "font-medium text-warning"
+                        }`}
+                      >
+                        {item.desati?.trim() ||
+                          (podeEditarObservacao(item) ? "Sem observação — clique para preencher" : "Sem observação")}
+                      </button>
+                    </td>
+                    <td className="py-1.5 text-right">
+                      <AcaoIntegracao
+                        item={item}
+                        reenviando={reenviando.has(item.id)}
+                        onReenviar={() => reenviarAoSenior(item.id, rat.id)}
+                        onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
+                        onVerErro={() => setErroEnvioItem(item)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          </div>
+          {rdvJaAberto.has(rat.id) && (
+            <div className={abaRat === "rdvs" ? "" : "hidden"}>
+              <DespesasRatPainel ratId={rat.id} />
+            </div>
+          )}
+      </>
+    );
+  }
+
+  const abertasRats = useMemo(() => new Set([...ratsExpandidas].map(String)), [ratsExpandidas]);
+
+  // Só guarda quando muda de fato (a ListaServidor avisa ao montar, com tudo vazio), para não refazer a contagem do "Fechar Todos" à toa.
+  function mudarConsultaColunasRats(consulta: { filtros?: string; calculadas?: string }) {
+    setConsultaColunasRats((atual) => (atual.filtros === consulta.filtros && atual.calculadas === consulta.calculadas ? atual : consulta));
+  }
+
   // 1ª vez que a aba RDVs é aberta pra uma RAT, `DespesasRatPainel` monta e faz seu próprio
   // fetch; nas trocas seguintes ele continua montado (só oculto), sem novo fetch.
   function selecionarAbaRat(ratId: number, aba: "atividades" | "rdvs") {
@@ -1169,7 +1443,7 @@ export function MeusApontamentos() {
     ratId: number,
     dados: { sitrat: number | null; sitratLabel: string; sitratTone: Tone; podeFechar: boolean }
   ) {
-    setRats((atual) => atual.map((r) => (r.id !== ratId ? r : { ...r, ...dados })));
+    setAjustesRat((a) => ({ ...a, [ratId]: { ...a[ratId], ...dados } }));
   }
 
   // Fechamento de RAT roda em segundo plano (outbox), igual o envio de apontamento — este é o
@@ -1228,7 +1502,7 @@ export function MeusApontamentos() {
     setCarregandoResumoFechamentoLote(true);
     setResultadoFechamentoLote(null);
     try {
-      const { data } = await axios.get("/api/rats/elegiveis-fechamento", { params: filtrosRatsParaQuery() });
+      const { data } = await axios.get("/api/rats/elegiveis-fechamento", { params: { ...filtrosRatsParaQuery(), ...consultaColunasRats } });
       setResumoFechamentoLote(data.rats ?? []);
     } catch (err: any) {
       toast.mostrar(err.response?.data?.error ?? "Falha ao carregar as RATs elegíveis para fechamento", "destructive");
@@ -2029,311 +2303,41 @@ export function MeusApontamentos() {
               </button>
             </div>
           </div>
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      ID
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      RAT
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Proposta
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Cliente
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Consultor
-                    </th>
-                    <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
-                      Emissão
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Situação
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Sinc. ERP
-                    </th>
-                    <th className="hidden bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                      Itens
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Total
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {loadingRats &&
-                    Array.from({ length: 3 }).map((_, i) => (
-                      <tr key={i} className="border-t border-border/60">
-                        <td className="px-2.5 py-3.5" colSpan={11}>
-                          <Skeleton className="h-6 w-full" />
-                        </td>
-                      </tr>
-                    ))}
-                  {!loadingRats &&
-                    rats.map((rat) => {
-                      const expandida = ratsExpandidas.has(rat.id);
-                      const itens = itensPorRat[rat.id];
-                      const abaRat = abaExpandidaPorRat[rat.id] ?? "atividades";
-                      return (
-                        <Fragment key={rat.id}>
-                          <tr
-                            onClick={() => toggleExpandirRat(rat)}
-                            className={`cursor-pointer transition ${
-                              expandida ? "border-t border-primary bg-primary/5" : "border-t border-border/60 hover:bg-surface-2"
-                            }`}
-                          >
-                            <td className={`px-2.5 py-3.5 ${expandida ? "border-l border-primary" : ""}`}>
-                              <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                                <span className="text-muted">{expandida ? "▾" : "▸"}</span>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigate(`/projetos/rat/${rat.id}`);
-                                  }}
-                                  title="Ver detalhes e auditoria desta RAT"
-                                  className="text-primary hover:underline"
-                                >
-                                  {rat.id}
-                                </button>
-                              </p>
-                            </td>
-                            <td className="whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted">{rat.numrat ?? "—"}</td>
-                            <td className="px-2.5 py-3.5 text-sm text-foreground">
-                              {rat.codpro != null ? (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigate(`/projetos/proposta/${rat.codemp}/${rat.codpro}`);
-                                  }}
-                                  className="text-primary hover:underline"
-                                >
-                                  {rat.codpro}
-                                </button>
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                            <td className="max-w-[220px] truncate px-2.5 py-3.5 text-sm text-muted" title={rat.cliente ?? undefined}>
-                              {rat.cliente ?? "—"}
-                            </td>
-                            <td className="px-2.5 py-3.5 text-sm text-muted">{rat.consultorNome}</td>
-                            <td className="hidden whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted md:table-cell">
-                              {rat.datemi ? dateFormatter.format(new Date(rat.datemi)) : "—"}
-                            </td>
-                            <td className="px-2.5 py-3.5">
-                              <span className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.sitratTone]}`}>
-                                {rat.sitratLabel}
-                              </span>
-                            </td>
-                            <td className="px-2.5 py-3.5">
-                              {/* Resultado do último "Sinc. ERP" (itens desvinculados, reenviados etc.) vira
-                                  tooltip aqui em vez de banner no topo da tela — um banner fixo continuava
-                                  mostrando a última RAT sincronizada mesmo depois de sincronizar outra. */}
-                              <span
-                                className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.integracaoTone]} ${
-                                  avisoSincPorRat[rat.id] ? "cursor-help underline decoration-dotted" : ""
-                                }`}
-                                title={avisoSincPorRat[rat.id]}
-                              >
-                                {rat.integracaoLabel}
-                              </span>
-                            </td>
-                            <td className="hidden px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted sm:table-cell">
-                              {rat.totalItens}
-                            </td>
-                            <td className="whitespace-nowrap px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">
-                              {formatMinutos(rat.totalMinutos)}
-                            </td>
-                            <td className={`px-2.5 py-3.5 text-right ${expandida ? "border-r border-primary" : ""}`}>
-                              <DropdownMenu placement="bottom-end">
-                                <DropdownMenu.Trigger>
-                                  <button
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                    aria-label="Ações"
-                                  >
-                                    ⋯
-                                  </button>
-                                </DropdownMenu.Trigger>
-                                <DropdownMenu.Content>
-                                  <DropdownMenu.Item
-                                    onSelect={() => sincronizarErp(rat)}
-                                    disabled={sincronizando === rat.id}
-                                    title="Busca o que mudou no ERP (itens e despesas) e reenvia o que ainda está pendente/com erro daqui pra lá"
-                                  >
-                                    {sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
-                                  </DropdownMenu.Item>
-                                  {rat.podeFechar && (
-                                    <DropdownMenu.Item
-                                      onSelect={() => fecharRat(rat)}
-                                      disabled={fechando === rat.id}
-                                      title="Reenvia itens/despesas pendentes ou com erro (se houver) e, se tudo sincronizar, fecha a RAT no Senior"
-                                    >
-                                      {fechando === rat.id ? "Fechando..." : "Fechar RAT"}
-                                    </DropdownMenu.Item>
-                                  )}
-                                </DropdownMenu.Content>
-                              </DropdownMenu>
-                            </td>
-                          </tr>
-                          {expandida && (
-                            <tr className="border-t border-border/60 bg-surface-2/40">
-                              {/* `pt-2` (8px), não `py-3` (12px) em cima — pra igualar o vão entre a borda
-                                  de cima do acordeon e as abas Atividades/RDVs com o vão que já existe
-                                  entre as abas e o conteúdo (8px, ver DespesasRatPainel.tsx). `pb-3` embaixo
-                                  fica como estava, não fazia parte do pedido. */}
-                              <td colSpan={11} className="border-b border-l border-r border-primary px-2.5 pt-2 pb-3">
-                                <Tabs
-                                  tabs={[
-                                    { key: "atividades", label: "Atividades" },
-                                    { key: "rdvs", label: "RDVs" },
-                                  ]}
-                                  activeKey={abaRat}
-                                  onChange={(key) => selecionarAbaRat(rat.id, key as "atividades" | "rdvs")}
-                                />
-                                <div className={abaRat === "atividades" ? "" : "hidden"}>
-                                {itens === "carregando" && <p className="py-2 text-sm text-muted">Carregando itens...</p>}
-                                {itens === "erro" && <p className="py-2 text-sm text-destructive">Falha ao carregar os itens desta RAT.</p>}
-                                {Array.isArray(itens) && itens.length === 0 && (
-                                  <p className="py-2 text-sm text-muted">Nenhum item nesta RAT.</p>
-                                )}
-                                {Array.isArray(itens) && itens.length > 0 && (
-                                  <table className="w-full border-collapse">
-                                    <thead>
-                                      <tr>
-                                        <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Id. Ativ.
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Serviço
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Item
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Data
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Horário
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Duração
-                                        </th>
-                                        <th className="w-2/5 py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Observação
-                                        </th>
-                                        <th className="py-1.5" />
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {itens.map((item) => (
-                                        <tr key={item.id} className="border-t border-border/40">
-                                          <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums">
-                                            {item.atividadeId != null ? (
-                                              <button
-                                                onClick={() => abrirDetalheAtividade(item.atividadeId!)}
-                                                className="text-primary hover:underline"
-                                                title="Abrir a atividade (somente visualização)"
-                                              >
-                                                {item.atividadeId}
-                                              </button>
-                                            ) : (
-                                              <span className="text-muted">—</span>
-                                            )}
-                                          </td>
-                                          <td className="py-1.5 pr-3 font-mono text-[12.5px] text-muted">{item.codser ?? "—"}</td>
-                                          <td
-                                            className="max-w-[260px] truncate py-1.5 pr-3 text-[12.5px] text-muted"
-                                            title={rotuloItem(item)}
-                                          >
-                                            {rotuloItem(item)}
-                                          </td>
-                                          <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
-                                            {item.datati ? dateFormatter.format(new Date(item.datati)) : "—"}
-                                          </td>
-                                          <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
-                                            {item.horini != null && item.horfim != null
-                                              ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}`
-                                              : "—"}
-                                          </td>
-                                          <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">
-                                            {item.duracaoMinutos != null ? formatMinutos(item.duracaoMinutos) : "—"}
-                                          </td>
-                                          {/* Observação é o que trava a aprovação da RAT (todo item precisa ter) e
-                                              vai no desAti do Senior — por isso ela mesma é o clique, em vez de
-                                              mais uma ação na coluna da direita. Editável abre pra editar; já
-                                              registrado no ERP abre a MESMA janela em leitura, que é onde se lê o
-                                              texto completo sem depender do tooltip. */}
-                                          <td className="max-w-[320px] py-1.5 pr-3">
-                                            <button
-                                              onClick={() =>
-                                                setEditandoObservacao({
-                                                  item,
-                                                  ratId: rat.id,
-                                                  somenteLeitura: !podeEditarObservacao(item),
-                                                })
-                                              }
-                                              title={item.desati?.trim() || "Sem observação"}
-                                              className={`block w-full truncate text-left text-[12.5px] hover:underline ${
-                                                item.desati?.trim() ? "text-foreground" : "font-medium text-warning"
-                                              }`}
-                                            >
-                                              {item.desati?.trim() ||
-                                                (podeEditarObservacao(item) ? "Sem observação — clique para preencher" : "Sem observação")}
-                                            </button>
-                                          </td>
-                                          <td className="py-1.5 text-right">
-                                            <AcaoIntegracao
-                                              item={item}
-                                              reenviando={reenviando.has(item.id)}
-                                              onReenviar={() => reenviarAoSenior(item.id, rat.id)}
-                                              onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
-                                              onVerErro={() => setErroEnvioItem(item)}
-                                            />
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                )}
-                                </div>
-                                {rdvJaAberto.has(rat.id) && (
-                                  <div className={abaRat === "rdvs" ? "" : "hidden"}>
-                                    <DespesasRatPainel ratId={rat.id} />
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                      );
-                    })}
-                  {!loadingRats && rats.length === 0 && (
-                    <tr>
-                      <td colSpan={11} className="px-2.5 py-8 text-center text-sm text-muted">
-                        Nenhuma RAT ainda — confirme uma sessão pendente pra começar.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <Pagination
-              page={pageRats}
+          {/* ListaServidor sobre GET /rats/lista: só monta depois que os padrões dos filtros (estrela) foram aplicados, senão a 1ª consulta
+              sairia sem eles. */}
+          {padroesRats.pronto ? (
+            <ListaServidor<RatRow, AcoesRats>
+              chave="projetos.apontamentos.rats"
+              url="/api/rats/lista"
+              params={filtrosRatsParaQuery()}
+              defs={COLUNAS_RATS}
+              ctx={{
+                navegar: navigate,
+                sincronizar: sincronizarErp,
+                fechar: fecharRat,
+                sincronizando,
+                fechando,
+                avisoSinc: avisoSincPorRat,
+                expandidas: ratsExpandidas,
+              }}
+              chaveLinha={(rat) => String(rat.id)}
+              rotulo="RATs"
+              vazio="Nenhuma RAT ainda — confirme uma sessão pendente pra começar."
               pageSize={PAGE_SIZE_RATS}
-              total={totalRats}
-              loading={loadingRats}
-              onPageChange={setPageRats}
-              label="RATs"
+              recarga={recargaRats}
+              detalhe={renderDetalheRat}
+              abertas={abertasRats}
+              onAlternarAberta={(rat) => toggleExpandirRat(rat)}
+              ajustarLinha={(rat) => (ajustesRat[rat.id] ? { ...rat, ...ajustesRat[rat.id] } : rat)}
+              aoCarregar={() => setAjustesRat({})}
+              aoMudarConsulta={mudarConsultaColunasRats}
+              aoErro={(_status, mensagem) => setErro(mensagem)}
             />
-          </div>
+          ) : (
+            <div className="rounded-lg border border-border bg-surface p-4">
+              <Skeleton className="h-6 w-full" />
+            </div>
+          )}
         </section>
       </div>
 

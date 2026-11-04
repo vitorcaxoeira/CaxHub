@@ -114,6 +114,16 @@ function jaTemGet(router: Router, caminho: string): boolean {
   return pilha.some((l) => l.route?.path === caminho && !!l.route.methods?.get);
 }
 
+/**
+ * Todas as linhas da lista (sem página nem ordem) que passam pelos filtros de coluna da query, com a `selecao` pedida sobre `x`. Para
+ * ações em lote que precisam respeitar exatamente o filtro que a pessoa vê na tela (ex.: "Fechar Todos" das RATs).
+ */
+export async function linhasFiltradasDaLista(lista: ListaConsultavel, q: Record<string, unknown>, selecao: Prisma.Sql) {
+  const montar = montarDe(lista);
+  const { colunas, filtros } = await prepararColunasConsulta(executar, lista.colunas, q, montar(lista.colunas));
+  return (await executar(montar(colunas)(filtros)(selecao))).map(limpar);
+}
+
 export function registrarListaConsultavel(
   router: Router,
   caminho: string,
