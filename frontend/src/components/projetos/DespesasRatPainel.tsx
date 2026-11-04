@@ -5,6 +5,9 @@ import { toneBadge, type Tone } from "../ui/badges";
 import { IconeIntegracaoErp } from "../ui/IconeIntegracaoErp";
 import { Modal } from "../ui/Modal";
 import { ModalLancarDespesa } from "./ModalLancarDespesa";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { Comprovante, ComprovantesRat, JanelaComprovantesRat, OpcaoDespesaComprovante } from "./ComprovantesRat";
 
 export interface Opcao {
@@ -119,6 +122,116 @@ function tituloIntegracaoDespesa(despesa: DespesaLancada): string {
 // de lançar/editar vive num modal próprio (ModalLancarDespesa.tsx, aberto por cima desta tela em
 // vez de embutido no acordeão; chegou a ser uma janela popup separada por um instante, revertido
 // a pedido do Vitor — só modal mesmo).
+// Lançamentos da RAT com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026).
+// Só na tela larga; no celular seguem os cartões. As ações da linha vêm por ctx.
+interface AcoesDespesa {
+  reenviandoId: number | null;
+  reenviar: (id: number) => void;
+  comprovantes: (id: number) => void;
+  editar: (d: DespesaLancada) => void;
+  excluir: (id: number) => void;
+}
+const LOCAIS_DESPESAS: ColunaLocal[] = [
+  { nome: "id", tipo: "inteiro", obrigatoria: true },
+  { nome: "seqrdv", tipo: "inteiro" },
+  { nome: "datemi", tipo: "data", utc: true },
+  { nome: "tipdesLabel", tipo: "texto", obrigatoria: true },
+  { nome: "moddesLabel", tipo: "texto" },
+  { nome: "desrdv", tipo: "texto" },
+  { nome: "qtdrdv", tipo: "decimal" },
+  { nome: "vlrunt", tipo: "decimal" },
+  { nome: "vlrtot", tipo: "decimal" },
+  { nome: "fatrdvLabel", tipo: "texto" },
+  { nome: "integracaoErpLabel", tipo: "texto" },
+  { nome: "qtdComprovantes", tipo: "inteiro", obrigatoria: true },
+];
+const COLUNAS_DESPESAS: DefColuna<DespesaLancada, AcoesDespesa>[] = [
+  { nome: "id", titulo: "ID", fixa: true, largura: 64, classe: "font-mono text-[12.5px] tabular-nums text-muted", resumos: ["contagem"], render: (d) => d.id },
+  { nome: "seqrdv", titulo: "Seqrdv", largura: 80, classe: "font-mono text-[12.5px] tabular-nums text-muted", render: (d) => d.seqrdv ?? "—" },
+  { nome: "datemi", titulo: "Data", largura: 95, classe: "font-mono text-[12.5px] tabular-nums text-muted", render: (d) => formatData(d.datemi) },
+  {
+    nome: "tipdesLabel",
+    titulo: "Tipo",
+    largura: 170,
+    classe: "text-[12.5px] text-muted",
+    texto: (d) => [d.tipdesLabel, d.moddesLabel].filter(Boolean).join(" · "),
+    render: (d) => (
+      <>
+        {d.tipdesLabel}
+        {d.moddesLabel && <span className="text-muted/70"> · {d.moddesLabel}</span>}
+      </>
+    ),
+  },
+  { nome: "moddesLabel", titulo: "Modalidade", largura: 120, classe: "text-[12.5px] text-muted", render: (d) => d.moddesLabel ?? "—" },
+  {
+    nome: "desrdv",
+    titulo: "Descrição",
+    largura: 240,
+    classe: "text-[12.5px] text-foreground",
+    texto: (d) => d.desrdv,
+    render: (d) => (
+      <>
+        <p className="truncate">{d.desrdv ?? "—"}</p>
+        {d.pendenteDeEnvio && <span className="mt-1 inline-block rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">Pendente de envio</span>}
+        {d.exclusaoPendente && <span className="mt-1 inline-block rounded-full bg-destructive/15 px-1.5 py-0.5 text-[9.5px] font-medium text-destructive">Exclusão pendente</span>}
+        {faltaComprovante(d) && <span className="mt-1 inline-block rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">Sem comprovante</span>}
+      </>
+    ),
+  },
+  { nome: "qtdrdv", titulo: "Quantidade", direita: true, largura: 95, classe: "font-mono text-[12.5px] tabular-nums text-foreground", render: (d) => d.qtdrdv ?? "—" },
+  { nome: "vlrunt", titulo: "Valor Unit.", direita: true, largura: 110, classe: "font-mono text-[12.5px] tabular-nums text-foreground", formatarResumo: formatMoney, render: (d) => formatMoney(d.vlrunt) },
+  { nome: "vlrtot", titulo: "Total", direita: true, largura: 110, classe: "font-mono text-[12.5px] tabular-nums text-foreground", formatarResumo: formatMoney, render: (d) => formatMoney(d.vlrtot) },
+  { nome: "fatrdvLabel", titulo: "Fatura cliente", largura: 100, classe: "text-[12.5px] text-muted", render: (d) => d.fatrdvLabel },
+  {
+    nome: "integracaoErpLabel",
+    titulo: "Sinc. ERP",
+    centro: true,
+    largura: 90,
+    render: (d, a) =>
+      podeReenviarDespesa(d) ? (
+        <button
+          type="button"
+          onClick={() => a.reenviar(d.id)}
+          disabled={a.reenviandoId === d.id}
+          title={tituloIntegracaoDespesa(d)}
+          className={`inline-flex h-4 w-4 items-center justify-center rounded-full transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${toneBadge[d.integracaoErpTone]}`}
+        >
+          <IconeIntegracaoErp tone={a.reenviandoId === d.id ? "warning" : d.integracaoErpTone} />
+        </button>
+      ) : (
+        <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full ${toneBadge[d.integracaoErpTone]}`} title={tituloIntegracaoDespesa(d)}>
+          <IconeIntegracaoErp tone={d.integracaoErpTone} />
+        </span>
+      ),
+  },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 230,
+    render: (d, a) => (
+      <div className="flex justify-end gap-3">
+        {(d.qtdComprovantes > 0 || d.podeAnexar) && (
+          <button type="button" onClick={() => a.comprovantes(d.id)} className="whitespace-nowrap text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Comprovantes ({d.qtdComprovantes})
+          </button>
+        )}
+        {d.podeEditar && (
+          <button type="button" onClick={() => a.editar(d)} className="text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Editar
+          </button>
+        )}
+        {d.podeExcluir && (
+          <button type="button" onClick={() => a.excluir(d.id)} className="text-xs text-destructive hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Excluir
+          </button>
+        )}
+      </div>
+    ),
+  },
+];
+
 export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
   const [dados, setDados] = useState<RespostaDespesas | null>(null);
   const [loading, setLoading] = useState(true);
@@ -358,88 +471,23 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
                   <p className="px-3 py-4 text-sm text-muted sm:px-4">Os lançamentos realizados aqui aparecerão neste histórico.</p>
                 ) : (
                   <>
-                    <div className="hidden overflow-x-auto sm:block">
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr>
-                            {/* Id local (RegistroDespesaViagem.id), não o seqrdv do Senior — mesmo espírito de
-                                "Est. {id}" no Cronograma (DrawerAtividade.tsx): a alça pra falar desta linha
-                                aqui dentro, antes/independente dela existir do lado de lá. Espaçamento (py-1.5
-                                pr-3, sem fundo) igual ao da tabela de Atividades logo acima, na mesma aba. */}
-                            <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">ID</th>
-                            <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Seqrdv</th>
-                            <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Data</th>
-                            <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Tipo</th>
-                            <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Descrição</th>
-                            <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Quantidade</th>
-                            <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Valor Unit.</th>
-                            <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Total</th>
-                            <th className="py-1.5 pr-3 text-center font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Sinc. ERP</th>
-                            <th className="py-1.5" />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {dados.despesas.map((despesa) => (
-                            <tr key={despesa.id} className="border-t border-border/40">
-                              <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">{despesa.id}</td>
-                              <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">{despesa.seqrdv ?? "—"}</td>
-                              <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">{formatData(despesa.datemi)}</td>
-                              <td className="py-1.5 pr-3 text-[12.5px] text-muted">
-                                {despesa.tipdesLabel}
-                                {despesa.moddesLabel && <span className="text-muted/70"> · {despesa.moddesLabel}</span>}
-                              </td>
-                              <td className="max-w-[260px] py-1.5 pr-3 text-[12.5px] text-foreground">
-                                <p className="truncate" title={despesa.desrdv ?? undefined}>{despesa.desrdv ?? "—"}</p>
-                                {despesa.pendenteDeEnvio && <span className="mt-1 inline-block rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">Pendente de envio</span>}
-                                {despesa.exclusaoPendente && <span className="mt-1 inline-block rounded-full bg-destructive/15 px-1.5 py-0.5 text-[9.5px] font-medium text-destructive">Exclusão pendente</span>}
-                                {faltaComprovante(despesa) && <span className="mt-1 inline-block rounded-full bg-warning/15 px-1.5 py-0.5 text-[9.5px] font-medium text-warning">Sem comprovante</span>}
-                              </td>
-                              <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">{despesa.qtdrdv ?? "—"}</td>
-                              <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">{formatMoney(despesa.vlrunt)}</td>
-                              <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">{formatMoney(despesa.vlrtot)}</td>
-                              <td className="py-1.5 pr-3 text-center">
-                                {podeReenviarDespesa(despesa) ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => void reenviar(despesa.id)}
-                                    disabled={reenviandoId === despesa.id}
-                                    title={tituloIntegracaoDespesa(despesa)}
-                                    className={`inline-flex h-4 w-4 items-center justify-center rounded-full transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${toneBadge[despesa.integracaoErpTone]}`}
-                                  >
-                                    <IconeIntegracaoErp tone={reenviandoId === despesa.id ? "warning" : despesa.integracaoErpTone} />
-                                  </button>
-                                ) : (
-                                  <span
-                                    className={`inline-flex h-4 w-4 items-center justify-center rounded-full ${toneBadge[despesa.integracaoErpTone]}`}
-                                    title={tituloIntegracaoDespesa(despesa)}
-                                  >
-                                    <IconeIntegracaoErp tone={despesa.integracaoErpTone} />
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-1.5 text-right">
-                                <div className="flex justify-end gap-3">
-                                  {(despesa.qtdComprovantes > 0 || despesa.podeAnexar) && (
-                                    <button type="button" onClick={() => setComprovantesDaDespesaId(despesa.id)} className="whitespace-nowrap text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                                      Comprovantes ({despesa.qtdComprovantes})
-                                    </button>
-                                  )}
-                                  {despesa.podeEditar && (
-                                    <button type="button" onClick={() => setModalDespesa({ despesa })} className="text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                                      Editar
-                                    </button>
-                                  )}
-                                  {despesa.podeExcluir && (
-                                    <button type="button" onClick={() => void excluir(despesa.id)} className="text-xs text-destructive hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                                      Excluir
-                                    </button>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="hidden sm:block">
+                      <TabelaLocal<DespesaLancada, AcoesDespesa>
+                        chave="projetos.rat.despesas"
+                        defs={COLUNAS_DESPESAS}
+                        colunas={LOCAIS_DESPESAS}
+                        linhas={dados.despesas}
+                        ctx={{
+                          reenviandoId,
+                          reenviar: (id) => void reenviar(id),
+                          comprovantes: setComprovantesDaDespesaId,
+                          editar: (despesa) => setModalDespesa({ despesa }),
+                          excluir: (id) => void excluir(id),
+                        }}
+                        chaveLinha={(d) => String(d.id)}
+                        vazio="Os lançamentos realizados aqui aparecerão neste histórico."
+                        alturaMax="max-h-[50vh]"
+                      />
                     </div>
 
                     <div className="divide-y divide-border sm:hidden">
