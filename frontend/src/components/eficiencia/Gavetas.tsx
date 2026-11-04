@@ -2,6 +2,9 @@ import axios from "axios";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Skeleton } from "../ui/Skeleton";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { Tabs } from "../ui/Tabs";
 import {
   ConsultorDetalhe,
@@ -100,6 +103,52 @@ const Un = () => <small className="ml-0.5 text-[13px] font-medium text-muted">h<
 
 // ---------------------------------------------------------------- proposta
 
+
+// Consultores que apontaram na proposta, com filtro e ordem por coluna, colunas configuráveis e resumo no rodapé (TabelaLocal, 03/11/2026).
+type ConsultorDaProposta = PropostaDetalhe["consultores"][number];
+const LOCAIS_CONSULTORES_PROPOSTA: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "executado", tipo: "decimal", obrigatoria: true },
+  { nome: "partePct", tipo: "decimal" },
+  { nome: "alocado", tipo: "decimal", obrigatoria: true },
+  { nome: "itens", tipo: "inteiro", obrigatoria: true },
+];
+const horasH = (v: number) => `${hn(v)} h`;
+const COLUNAS_CONSULTORES_PROPOSTA: DefColuna<ConsultorDaProposta, (codfor: number) => void>[] = [
+  {
+    nome: "ignorar",
+    titulo: "Ignorar",
+    semOrdenar: true,
+    largura: 64,
+    render: (c, alternar) => (
+      <input
+        type="checkbox"
+        checked={c.ignorado}
+        onChange={() => alternar(c.codfor)}
+        aria-label={`Ignorar ${c.nome} no cálculo da proposta`}
+        title={c.ignorado ? "Ignorado: desmarque para as horas dele voltarem ao cálculo" : "Marque para tirar as horas deste consultor do cálculo desta proposta"}
+        className="h-4 w-4 cursor-pointer accent-primary"
+      />
+    ),
+  },
+  {
+    nome: "nome",
+    titulo: "Consultor",
+    fixa: true,
+    largura: 200,
+    texto: (c) => c.nome,
+    render: (c) => (
+      <>
+        <span className={`font-medium text-foreground ${c.ignorado ? "line-through" : ""}`}>{c.nome}</span>
+        {c.ignorado && <span className="block text-[11.5px] font-normal text-muted">ignorado nesta proposta</span>}
+      </>
+    ),
+  },
+  { nome: "executado", titulo: "Executado", direita: true, largura: 100, classe: "font-mono tabular-nums", formatarResumo: horasH, render: (c) => horasH(c.executado) },
+  { nome: "partePct", titulo: "% da proposta", direita: true, largura: 110, classe: "font-mono tabular-nums text-muted", formatarResumo: (v) => pct(v / 100), render: (c) => pct(c.parte) },
+  { nome: "alocado", titulo: "Alocado", direita: true, largura: 100, classe: "font-mono tabular-nums text-muted", formatarResumo: horasH, render: (c) => (c.alocado > 0 ? horasH(c.alocado) : "—") },
+  { nome: "itens", titulo: "Itens", direita: true, largura: 70, classe: "font-mono tabular-nums text-muted", render: (c) => c.itens },
+];
 export function GavetaProposta({
   codemp,
   codpro,
@@ -248,56 +297,26 @@ export function GavetaProposta({
               {p.consultores.length === 0 && p.outrosConsultores.quantidade === 0 ? (
                 <Vazio>Ninguém apontou horas nesta proposta.</Vazio>
               ) : (
-                <div className="overflow-x-auto rounded-md border border-border">
-                  <table className="w-full border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-surface-2/60 text-left font-mono text-[10.5px] uppercase tracking-wider text-muted">
-                        <th className="w-14 px-2.5 py-2 font-medium">Ignorar</th>
-                        <th className="px-2.5 py-2 font-medium">Consultor</th>
-                        <th className="px-2.5 py-2 text-right font-medium">Executado</th>
-                        <th className="px-2.5 py-2 text-right font-medium">% da proposta</th>
-                        <th className="px-2.5 py-2 text-right font-medium">Alocado</th>
-                        <th className="px-2.5 py-2 text-right font-medium">Itens</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {p.consultores.map((c) => (
-                        <tr key={c.codfor} className={`border-t border-border/60 ${c.ignorado ? "opacity-45" : ""}`}>
-                          <td className="px-2.5 py-2">
-                            <input
-                              type="checkbox"
-                              checked={c.ignorado}
-                              onChange={() => onAlternarConsultor(p.codemp, p.codpro, c.codfor)}
-                              aria-label={`Ignorar ${c.nome} no cálculo da proposta ${p.codpro}`}
-                              title={c.ignorado ? "Ignorado: desmarque para as horas dele voltarem ao cálculo" : "Marque para tirar as horas deste consultor do cálculo desta proposta"}
-                              className="h-4 w-4 cursor-pointer accent-primary"
-                            />
-                          </td>
-                          <td className="px-2.5 py-2 font-medium text-foreground">
-                            <span className={c.ignorado ? "line-through" : ""}>{c.nome}</span>
-                            {c.ignorado && <span className="block text-[11.5px] font-normal text-muted">ignorado nesta proposta</span>}
-                          </td>
-                          <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(c.executado)} h</td>
-                          <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums text-muted">{pct(c.parte)}</td>
-                          <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums text-muted">{c.alocado > 0 ? `${hn(c.alocado)} h` : "—"}</td>
-                          <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums text-muted">{c.itens}</td>
-                        </tr>
-                      ))}
-                      {p.outrosConsultores.quantidade > 0 && (
-                        <tr className="border-t border-border/60 text-muted">
-                          <td className="px-2.5 py-2" />
-                          <td className="px-2.5 py-2">
-                            {p.outrosConsultores.quantidade} outro{p.outrosConsultores.quantidade > 1 ? "s" : ""} consultor{p.outrosConsultores.quantidade > 1 ? "es" : ""} (fora do seu time)
-                          </td>
-                          <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(p.outrosConsultores.executado)} h</td>
-                          <td className="px-2.5 py-2" />
-                          <td className="px-2.5 py-2" />
-                          <td className="px-2.5 py-2" />
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                <>
+                  <TabelaLocal<ConsultorDaProposta, (codfor: number) => void>
+                    chave="projetos.eficiencia.gaveta-consultores"
+                    defs={COLUNAS_CONSULTORES_PROPOSTA}
+                    colunas={LOCAIS_CONSULTORES_PROPOSTA}
+                    linhas={p.consultores}
+                    ler={(c, nome) => (nome === "partePct" ? (c.parte == null ? null : c.parte * 100) : (c as unknown as Record<string, unknown>)[nome])}
+                    ctx={(codfor) => onAlternarConsultor(p.codemp, p.codpro, codfor)}
+                    chaveLinha={(c) => String(c.codfor)}
+                    classeLinha={(c) => (c.ignorado ? "opacity-45" : undefined)}
+                    vazio="Só consultores fora do seu time apontaram nesta proposta."
+                    alturaMax="max-h-[50vh]"
+                  />
+                  {p.outrosConsultores.quantidade > 0 && (
+                    <p className="mt-2 text-[12.5px] text-muted">
+                      {p.outrosConsultores.quantidade} outro{p.outrosConsultores.quantidade > 1 ? "s" : ""} consultor{p.outrosConsultores.quantidade > 1 ? "es" : ""} (fora do seu time):{" "}
+                      <span className="font-mono tabular-nums">{hn(p.outrosConsultores.executado)} h</span> executadas.
+                    </p>
+                  )}
+                </>
               )}
             </section>
           )}

@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { PainelEficiencia, PropostaLinha, ROTULO_PROPOSTA, Tom, brlCompacto, clienteCurto, hh, hn, paraTsv, pct, tomEficiencia, tomTexto } from "../../lib/eficiencia";
 import { Tabs, TabDef } from "../ui/Tabs";
-import { BarraConsumo, BotaoCopiar, Cartao, Chip, Ordem, TabelaRolavel, Th, Vazio, ordenar, proximaOrdem } from "./comum";
+import { BarraConsumo, BotaoCopiar, Cartao, Chip, Vazio } from "./comum";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 
 export type FiltroCarteira = "all" | "estouro" | "atencao" | "ok" | "naoini" | "b1" | "b2" | "b3" | "b4" | "b5";
 
@@ -26,7 +29,148 @@ const VISOES: TabDef[] = [
   { key: "grafico", label: "Vendido x executado" },
 ];
 
-type Chave = "cliente" | "vendido" | "executado" | "consumo" | "acima" | "impacto" | "saldo" | "eficiencia" | "semAlocacao";
+interface CtxPropostas {
+  l: PainelEficiencia["meta"]["limiares"];
+  ehIgnorada: (p: PropostaLinha) => boolean;
+  alternar: (codemp: number, codpro: number) => void;
+}
+
+// Filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026). Abre na ordem de
+// sempre (maior estouro primeiro); clicar num título reordena. Horas em minutos (hn formata).
+const COLUNAS_LOCAIS: ColunaLocal[] = [
+  { nome: "codpro", tipo: "inteiro", obrigatoria: true },
+  { nome: "cliente", tipo: "texto", obrigatoria: true },
+  { nome: "modproRotulo", tipo: "texto" },
+  { nome: "sitproRotulo", tipo: "texto" },
+  { nome: "situacaoRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "vendido", tipo: "decimal", obrigatoria: true },
+  { nome: "executado", tipo: "decimal", obrigatoria: true },
+  { nome: "consumoPct", tipo: "decimal" },
+  { nome: "acima", tipo: "decimal", obrigatoria: true },
+  { nome: "impacto", tipo: "decimal", obrigatoria: true },
+  { nome: "saldo", tipo: "decimal", obrigatoria: true },
+  { nome: "semAlocacao", tipo: "decimal", obrigatoria: true },
+  { nome: "eficienciaPct", tipo: "decimal" },
+];
+const lerProposta = (p: PropostaLinha, nome: string): unknown =>
+  nome === "situacaoRotulo"
+    ? ROTULO_PROPOSTA[p.situacao]
+    : nome === "consumoPct"
+      ? p.consumo == null ? null : p.consumo * 100
+      : nome === "eficienciaPct"
+        ? p.eficiencia == null ? null : p.eficiencia * 100
+        : (p as unknown as Record<string, unknown>)[nome];
+const pctNum = (v: number) => pct(v / 100);
+
+const COLUNAS_PROPOSTAS: DefColuna<PropostaLinha, CtxPropostas>[] = [
+  {
+    nome: "ignorar",
+    titulo: "Ignorar",
+    semOrdenar: true,
+    largura: 64,
+    // Check de ignorar: tira a proposta de TODOS os cálculos (qualquer proposta, atípica ou não). Não abre a gaveta.
+    render: (p, c) => (
+      <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          checked={c.ehIgnorada(p)}
+          onChange={() => c.alternar(p.codemp, p.codpro)}
+          aria-label={`Ignorar a proposta ${p.codpro} nos cálculos`}
+          title={c.ehIgnorada(p) ? "Ignorada: desmarque para voltar a contar nos cálculos" : "Marque para tirar esta proposta de todos os cálculos"}
+          className="h-4 w-4 cursor-pointer accent-primary"
+        />
+      </span>
+    ),
+  },
+  {
+    nome: "cliente",
+    titulo: "Proposta",
+    fixa: true,
+    largura: 260,
+    texto: (p) => p.cliente,
+    render: (p, c) => (
+      <>
+        <span className={`block truncate font-medium text-foreground ${c.ehIgnorada(p) ? "line-through" : ""}`}>{p.cliente}</span>
+        <span className="block truncate text-[11.5px] text-muted">
+          PS {p.codpro} · {p.modproRotulo} · {p.sitproRotulo}
+          {p.interna ? " · interna" : ""}
+          {p.atipica && (
+            <span className="text-warning" title="Fora da curva: consumo e estouro muito altos">
+              {" "}
+              · atípica
+            </span>
+          )}
+          {c.ehIgnorada(p) && " · ignorada nos cálculos"}
+        </span>
+      </>
+    ),
+  },
+  { nome: "codpro", titulo: "Nº", largura: 80, classe: "font-mono text-muted", render: (p) => p.codpro },
+  { nome: "modproRotulo", titulo: "Modalidade", largura: 120, classe: "text-muted", render: (p) => p.modproRotulo },
+  { nome: "sitproRotulo", titulo: "Sit. proposta", largura: 130, classe: "text-muted", render: (p) => p.sitproRotulo },
+  {
+    nome: "situacaoRotulo",
+    titulo: "Situação",
+    largura: 140,
+    render: (p) => (
+      <Chip tom={p.situacao}>
+        {ROTULO_PROPOSTA[p.situacao]}
+        {p.critico ? " crítico" : ""}
+      </Chip>
+    ),
+  },
+  { nome: "vendido", titulo: "Vendido", direita: true, largura: 95, classe: "font-mono tabular-nums", formatarResumo: hn, render: (p) => hn(p.vendido) },
+  { nome: "executado", titulo: "Executado", direita: true, largura: 95, classe: "font-mono tabular-nums", formatarResumo: hn, render: (p) => hn(p.executado) },
+  {
+    nome: "consumoPct",
+    titulo: "Consumo",
+    largura: 120,
+    formatarResumo: pctNum,
+    render: (p) => (
+      <>
+        <BarraConsumo consumo={p.consumo} />
+        <span className="mt-1 block font-mono text-[11.5px] text-muted">{pct(p.consumo)}</span>
+      </>
+    ),
+  },
+  {
+    nome: "acima",
+    titulo: "Estouro",
+    direita: true,
+    largura: 95,
+    classe: (p) => `font-mono tabular-nums ${p.acima ? "text-destructive" : "text-muted"}`,
+    formatarResumo: hn,
+    render: (p) => (p.acima ? `+${hn(p.acima)}` : "—"),
+  },
+  {
+    nome: "impacto",
+    titulo: "Impacto",
+    direita: true,
+    largura: 100,
+    classe: "font-mono tabular-nums text-muted",
+    formatarResumo: brlCompacto,
+    render: (p) => (p.impacto > 0 ? brlCompacto(p.impacto) : "—"),
+  },
+  { nome: "saldo", titulo: "Saldo", direita: true, largura: 95, classe: "font-mono tabular-nums", formatarResumo: hn, render: (p) => (p.saldo ? hn(p.saldo) : "—") },
+  {
+    nome: "semAlocacao",
+    titulo: "Sem alocação",
+    direita: true,
+    largura: 110,
+    classe: (p) => `font-mono tabular-nums ${p.semAlocacao >= 60 ? "text-warning" : "text-muted"}`,
+    formatarResumo: hn,
+    render: (p) => (p.semAlocacao >= 60 ? hn(p.semAlocacao) : "—"),
+  },
+  {
+    nome: "eficienciaPct",
+    titulo: "Eficiência",
+    direita: true,
+    largura: 100,
+    classe: (p, c) => `font-mono font-semibold tabular-nums ${tomTexto[tomEficiencia(p.eficiencia, c.l)]}`,
+    formatarResumo: pctNum,
+    render: (p) => pct(p.eficiencia),
+  },
+];
 type ModoGrafico = "acima" | "consumo" | "vendido" | "saldo";
 
 const MODOS: Record<ModoGrafico, { rotulo: string; valor: (p: PropostaLinha) => number }> = {
@@ -56,7 +200,6 @@ export function AbaPropostas({
   onAlternarIgnorada: (codemp: number, codpro: number) => void;
   abrirProposta: (codemp: number, codpro: number) => void;
 }) {
-  const [ordem, setOrdem] = useState<Ordem<Chave>>({ chave: "acima", dir: -1 });
   const [modo, setModo] = useState<ModoGrafico>("acima");
   // A aba abre sempre na lista de propostas (é o destino de "Ver todas", das faixas de consumo e do clique num cliente).
   const [visao, setVisao] = useState<Visao>("tabela");
@@ -66,13 +209,9 @@ export function AbaPropostas({
   const linhas = useMemo(() => {
     const q = busca.trim().toLowerCase();
     const filtradas = todas.filter((p) => passaFiltro(filtro, p) && (!q || p.cliente.toLowerCase().includes(q) || String(p.codpro).includes(q)));
-    return ordenar(filtradas, ordem, (p, k) => {
-      if (k === "cliente") return p.cliente;
-      if (k === "consumo") return p.consumo ?? 99;
-      if (k === "eficiencia") return p.eficiencia ?? 2;
-      return p[k];
-    });
-  }, [todas, filtro, busca, ordem]);
+    // Abre do maior estouro para o menor (a ordem de sempre); a tabela reordena pelo título.
+    return [...filtradas].sort((a, b) => b.acima - a.acima);
+  }, [todas, filtro, busca]);
 
   const contagem = (f: FiltroCarteira) => todas.filter((p) => passaFiltro(f, p)).length;
   const ehIgnorada = (p: PropostaLinha) => ignoradas.has(`${p.codemp}:${p.codpro}`);
@@ -90,7 +229,6 @@ export function AbaPropostas({
   }, [todas, modo, ignoradas]);
   const escala = Math.max(1, ...grafico.map((p) => Math.max(p.vendido, p.executado)));
 
-  const ordenarPor = (k: Chave) => setOrdem((o) => proximaOrdem(o, k, ["cliente"]));
 
   return (
     <div className="space-y-5">
@@ -204,71 +342,18 @@ export function AbaPropostas({
             </div>
           </div>
 
-          <TabelaRolavel>
-            {/* px-2 nas células (em vez do px-2.5 padrão): com a coluna "Ignorar" a tabela passava da largura do cartão e ganhava barra de rolagem horizontal. */}
-            <table className="w-full border-collapse text-sm [&_td]:px-2 [&_th]:px-2">
-              <thead>
-                <tr>
-                  <Th rotulo="Ignorar" className="w-14" />
-                  <Th rotulo="Proposta" chave="cliente" ordem={ordem} onOrdenar={ordenarPor} />
-                  <Th rotulo="Situação" />
-                  <Th rotulo="Vendido" chave="vendido" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Executado" chave="executado" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Consumo" chave="consumo" ordem={ordem} onOrdenar={ordenarPor} />
-                  <Th rotulo="Estouro" chave="acima" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Impacto" chave="impacto" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Saldo" chave="saldo" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Sem alocação" chave="semAlocacao" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Eficiência" chave="eficiencia" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                </tr>
-              </thead>
-              <tbody>
-                {linhas.length === 0 ? (
-                  <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-muted">Nenhuma proposta neste filtro.</td>
-                  </tr>
-                ) : (
-                  linhas.map((p) => (
-                    <tr
-                      key={`${p.codemp}-${p.codpro}`}
-                      tabIndex={0}
-                      onClick={() => abrirProposta(p.codemp, p.codpro)}
-                      onKeyDown={(e) => e.key === "Enter" && abrirProposta(p.codemp, p.codpro)}
-                      className={`cursor-pointer border-t border-border/60 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${ehIgnorada(p) ? "opacity-45" : ""}`}
-                    >
-                      {/* Check de ignorar: tira a proposta de TODOS os cálculos (qualquer proposta, atípica ou não). Não abre a gaveta. */}
-                      <td className="px-2.5 py-2" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={ehIgnorada(p)}
-                          onChange={() => onAlternarIgnorada(p.codemp, p.codpro)}
-                          aria-label={`Ignorar a proposta ${p.codpro} nos cálculos`}
-                          title={ehIgnorada(p) ? "Ignorada: desmarque para voltar a contar nos cálculos" : "Marque para tirar esta proposta de todos os cálculos"}
-                          className="h-4 w-4 cursor-pointer accent-primary"
-                        />
-                      </td>
-                      <td className="px-2.5 py-2">
-                       {/* Coluna com largura máxima: o nome corta com "…" e a linha de baixo (PS · modalidade · situação...) quebra, em vez de alargar a tabela. */}
-                       <div className="max-w-[240px]">
-                        <span className={`block truncate font-medium text-foreground ${ehIgnorada(p) ? "line-through" : ""}`} title={p.cliente}>{p.cliente}</span>
-                        <span className="block text-[11.5px] text-muted">PS {p.codpro} · {p.modproRotulo} · {p.sitproRotulo}{p.interna ? " · interna" : ""}{p.atipica && <span className="text-warning" title="Fora da curva: consumo e estouro muito altos"> · atípica</span>}{ehIgnorada(p) && " · ignorada nos cálculos"}</span>
-                       </div>
-                      </td>
-                      <td className="px-2.5 py-2"><Chip tom={p.situacao}>{ROTULO_PROPOSTA[p.situacao]}{p.critico ? " crítico" : ""}</Chip></td>
-                      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(p.vendido)}</td>
-                      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(p.executado)}</td>
-                      <td className="px-2.5 py-2"><BarraConsumo consumo={p.consumo} /><span className="mt-1 block font-mono text-[11.5px] text-muted">{pct(p.consumo)}</span></td>
-                      <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums ${p.acima ? "text-destructive" : "text-muted"}`}>{p.acima ? `+${hn(p.acima)}` : "—"}</td>
-                      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums text-muted">{p.impacto > 0 ? brlCompacto(p.impacto) : "—"}</td>
-                      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{p.saldo ? hn(p.saldo) : "—"}</td>
-                      <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums ${p.semAlocacao >= 60 ? "text-warning" : "text-muted"}`}>{p.semAlocacao >= 60 ? hn(p.semAlocacao) : "—"}</td>
-                      <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono font-semibold tabular-nums ${tomTexto[tomEficiencia(p.eficiencia, l)]}`}>{pct(p.eficiencia)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </TabelaRolavel>
+          <TabelaLocal<PropostaLinha, CtxPropostas>
+            chave="projetos.eficiencia.propostas"
+            defs={COLUNAS_PROPOSTAS}
+            colunas={COLUNAS_LOCAIS}
+            linhas={linhas}
+            ler={lerProposta}
+            ctx={{ l, ehIgnorada, alternar: onAlternarIgnorada }}
+            chaveLinha={(p) => `${p.codemp}-${p.codpro}`}
+            onLinha={(p) => abrirProposta(p.codemp, p.codpro)}
+            classeLinha={(p) => (ehIgnorada(p) ? "opacity-45" : undefined)}
+            vazio="Nenhuma proposta neste filtro."
+          />
           <p className="text-[12.5px] text-muted">
             {contam.length} propostas · vendido {hh(totais.vendido)} · executado {hh(totais.executado)} · estouro {hh(totais.acima)}
             {totais.impacto > 0 ? ` (${brlCompacto(totais.impacto)})` : ""} · saldo {hh(totais.saldo)}.

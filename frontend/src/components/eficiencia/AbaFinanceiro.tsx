@@ -1,22 +1,124 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { ClienteFinanceiro, LinhaFinanceira, PainelEficiencia, PropostaFinanceira, brl, brlCompacto, paraTsv, pct, rs, tomEficiencia, tomTexto } from "../../lib/eficiencia";
-import { BarraConsumo, BotaoCopiar, Cartao, Indicador, Ordem, TabelaRolavel, Th, Vazio, ordenar, proximaOrdem } from "./comum";
+import { BarraConsumo, BotaoCopiar, Cartao, Indicador, Vazio } from "./comum";
 
-type Chave = "nome" | "propostas" | "valorVendido" | "valorExecutado" | "consumo" | "valorAcima" | "valorSaldo" | "eficiencia" | "receitaPorHora";
+type Limiares = PainelEficiencia["meta"]["limiares"];
 
-const ordenarLinhas = <T extends LinhaFinanceira>(
-  linhas: T[],
-  ordem: Ordem<Chave>,
-  nome: (l: T) => string
-) =>
-  ordenar<T, Chave>(linhas, ordem, (l, k) => {
-    if (k === "nome") return nome(l);
-    if (k === "consumo") return l.consumo ?? 99;
-    if (k === "eficiencia") return l.eficiencia ?? 2;
-    if (k === "receitaPorHora") return l.receitaPorHora ?? -1;
-    if (k === "propostas") return (l as unknown as { propostas?: number }).propostas ?? 0;
-    return l[k];
-  });
+// Tabelas com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026). Abrem na
+// ordem de sempre (maior estouro em R$ primeiro); clicar num título reordena.
+const COLUNAS_VALORES_LOCAIS: ColunaLocal[] = [
+  { nome: "valorVendido", tipo: "decimal", obrigatoria: true },
+  { nome: "valorExecutado", tipo: "decimal", obrigatoria: true },
+  { nome: "consumoPct", tipo: "decimal" },
+  { nome: "valorAcima", tipo: "decimal", obrigatoria: true },
+  { nome: "valorSaldo", tipo: "decimal", obrigatoria: true },
+  { nome: "eficienciaPct", tipo: "decimal" },
+  { nome: "receitaPorHora", tipo: "decimal" },
+];
+const LOCAIS_CLIENTES: ColunaLocal[] = [{ nome: "cliente", tipo: "texto", obrigatoria: true }, { nome: "propostas", tipo: "inteiro", obrigatoria: true }, ...COLUNAS_VALORES_LOCAIS];
+const LOCAIS_PROPOSTAS: ColunaLocal[] = [
+  { nome: "cliente", tipo: "texto", obrigatoria: true },
+  { nome: "codpro", tipo: "inteiro", obrigatoria: true },
+  { nome: "sitproRotulo", tipo: "texto" },
+  ...COLUNAS_VALORES_LOCAIS,
+];
+const lerFinanceiro = (x: LinhaFinanceira, nome: string): unknown =>
+  nome === "consumoPct"
+    ? x.consumo == null ? null : x.consumo * 100
+    : nome === "eficienciaPct"
+      ? x.eficiencia == null ? null : x.eficiencia * 100
+      : (x as unknown as Record<string, unknown>)[nome];
+const pctNum = (v: number) => pct(v / 100);
+
+function colunasValores<T extends LinhaFinanceira>(): DefColuna<T, Limiares>[] {
+  return [
+    { nome: "valorVendido", titulo: "Vendido", direita: true, largura: 110, classe: "font-mono tabular-nums", formatarResumo: rs, render: (x) => rs(x.valorVendido) },
+    { nome: "valorExecutado", titulo: "Executado", direita: true, largura: 110, classe: "font-mono tabular-nums", formatarResumo: rs, render: (x) => rs(x.valorExecutado) },
+    {
+      nome: "consumoPct",
+      titulo: "Consumo",
+      largura: 120,
+      formatarResumo: pctNum,
+      render: (x) => (
+        <>
+          <BarraConsumo consumo={x.consumo} />
+          <span className="mt-1 block font-mono text-[11.5px] text-muted">{pct(x.consumo)}</span>
+        </>
+      ),
+    },
+    {
+      nome: "valorAcima",
+      titulo: "Estouro",
+      direita: true,
+      largura: 110,
+      classe: (x) => `font-mono tabular-nums ${x.valorAcima > 0 ? "text-destructive" : "text-muted"}`,
+      formatarResumo: rs,
+      render: (x) => (x.valorAcima > 0 ? rs(x.valorAcima) : "—"),
+    },
+    { nome: "valorSaldo", titulo: "Saldo", direita: true, largura: 110, classe: "font-mono tabular-nums", formatarResumo: rs, render: (x) => (x.valorSaldo > 0 ? rs(x.valorSaldo) : "—") },
+    {
+      nome: "eficienciaPct",
+      titulo: "Eficiência",
+      direita: true,
+      largura: 100,
+      classe: (x, l) => `font-mono font-semibold tabular-nums ${tomTexto[tomEficiencia(x.eficiencia, l)]}`,
+      formatarResumo: pctNum,
+      render: (x) => pct(x.eficiencia),
+    },
+    {
+      nome: "receitaPorHora",
+      titulo: "R$/h exec.",
+      direita: true,
+      largura: 100,
+      classe: "font-mono tabular-nums text-muted",
+      formatarResumo: rs,
+      render: (x) => (x.receitaPorHora == null ? "—" : rs(x.receitaPorHora)),
+    },
+  ];
+}
+
+const COLUNAS_CLIENTES: DefColuna<ClienteFinanceiro, Limiares>[] = [
+  {
+    nome: "cliente",
+    titulo: "Cliente",
+    fixa: true,
+    largura: 220,
+    texto: (c) => c.cliente,
+    render: (c) => (
+      <>
+        <span className="block truncate font-medium text-foreground">{c.cliente}</span>
+        {c.interna && <span className="block text-[11.5px] text-muted">interna (a própria empresa)</span>}
+      </>
+    ),
+  },
+  { nome: "propostas", titulo: "Propostas", direita: true, largura: 90, classe: "font-mono tabular-nums", render: (c) => c.propostas },
+  ...colunasValores<ClienteFinanceiro>(),
+];
+
+const COLUNAS_PROPOSTAS: DefColuna<PropostaFinanceira, Limiares>[] = [
+  {
+    nome: "cliente",
+    titulo: "Proposta",
+    fixa: true,
+    largura: 220,
+    texto: (p) => p.cliente,
+    render: (p) => (
+      <>
+        <span className="block truncate font-medium text-foreground">{p.cliente}</span>
+        <span className="block truncate text-[11.5px] text-muted">
+          PS {p.codpro} · {p.sitproRotulo}
+          {p.interna ? " · interna" : ""}
+        </span>
+      </>
+    ),
+  },
+  { nome: "codpro", titulo: "Nº", largura: 80, classe: "font-mono text-muted", render: (p) => p.codpro },
+  { nome: "sitproRotulo", titulo: "Sit. proposta", largura: 130, classe: "text-muted", render: (p) => p.sitproRotulo },
+  ...colunasValores<PropostaFinanceira>(),
+];
 
 // Eficiência financeira: global, por cliente e por proposta. Base = valor-hora de VENDA do item (R$). Não é faturamento (a NF só se liga ao
 // projeto, não à proposta) nem custo (poucos consultores têm valor-hora cadastrado). Respeita todos os filtros, os ignorados e o modo de estouro.
@@ -33,10 +135,9 @@ export function AbaFinanceiro({
   const { resumo: r, clientes, propostas } = painel.financeiro;
   const l = painel.meta.limiares;
   const modoProposta = painel.meta.modoEstouro === "proposta";
-  const [ordemCli, setOrdemCli] = useState<Ordem<Chave>>({ chave: "valorAcima", dir: -1 });
-  const [ordemProp, setOrdemProp] = useState<Ordem<Chave>>({ chave: "valorAcima", dir: -1 });
-  const linhasCli = useMemo(() => ordenarLinhas<ClienteFinanceiro>(clientes, ordemCli, (c) => c.cliente), [clientes, ordemCli]);
-  const linhasProp = useMemo(() => ordenarLinhas<PropostaFinanceira>(propostas, ordemProp, (p) => p.cliente), [propostas, ordemProp]);
+  // Abrem do maior estouro em R$ para o menor (a ordem de sempre); as tabelas reordenam pelo título.
+  const linhasCli = useMemo(() => [...clientes].sort((a, b) => b.valorAcima - a.valorAcima), [clientes]);
+  const linhasProp = useMemo(() => [...propostas].sort((a, b) => b.valorAcima - a.valorAcima), [propostas]);
   const fracSemFat = r.valorVendido > 0 ? r.valorSemFaturamento / r.valorVendido : 0;
   const tomEf = tomEficiencia(r.eficiencia, l);
 
@@ -50,32 +151,6 @@ export function AbaFinanceiro({
     x.eficiencia == null ? "" : Math.round(x.eficiencia * 100),
     x.receitaPorHora == null ? "" : Math.round(x.receitaPorHora),
   ];
-
-  const colunasValores = (
-    ordem: Ordem<Chave>,
-    ordenarPor: (k: Chave) => void
-  ) => (
-    <>
-      <Th rotulo="Vendido" chave="valorVendido" ordem={ordem} onOrdenar={ordenarPor} numerico />
-      <Th rotulo="Executado" chave="valorExecutado" ordem={ordem} onOrdenar={ordenarPor} numerico />
-      <Th rotulo="Consumo" chave="consumo" ordem={ordem} onOrdenar={ordenarPor} />
-      <Th rotulo="Estouro" chave="valorAcima" ordem={ordem} onOrdenar={ordenarPor} numerico />
-      <Th rotulo="Saldo" chave="valorSaldo" ordem={ordem} onOrdenar={ordenarPor} numerico />
-      <Th rotulo="Eficiência" chave="eficiencia" ordem={ordem} onOrdenar={ordenarPor} numerico />
-      <Th rotulo="R$/h exec." chave="receitaPorHora" ordem={ordem} onOrdenar={ordenarPor} numerico />
-    </>
-  );
-  const valores = (x: PropostaFinanceira | ClienteFinanceiro) => (
-    <>
-      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{rs(x.valorVendido)}</td>
-      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{rs(x.valorExecutado)}</td>
-      <td className="px-2.5 py-2"><BarraConsumo consumo={x.consumo} /><span className="mt-1 block font-mono text-[11.5px] text-muted">{pct(x.consumo)}</span></td>
-      <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums ${x.valorAcima > 0 ? "text-destructive" : "text-muted"}`}>{x.valorAcima > 0 ? rs(x.valorAcima) : "—"}</td>
-      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{x.valorSaldo > 0 ? rs(x.valorSaldo) : "—"}</td>
-      <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono font-semibold tabular-nums ${tomTexto[tomEficiencia(x.eficiencia, l)]}`}>{pct(x.eficiencia)}</td>
-      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums text-muted">{x.receitaPorHora == null ? "—" : rs(x.receitaPorHora)}</td>
-    </>
-  );
 
   return (
     <div className="space-y-5">
@@ -141,35 +216,17 @@ export function AbaFinanceiro({
         {linhasCli.length === 0 ? (
           <Vazio>Nenhum cliente neste recorte.</Vazio>
         ) : (
-          <TabelaRolavel>
-            <table className="w-full border-collapse text-sm [&_td]:px-2 [&_th]:px-2">
-              <thead>
-                <tr>
-                  <Th rotulo="Cliente" chave="nome" ordem={ordemCli} onOrdenar={(k) => setOrdemCli((o) => proximaOrdem(o, k, ["nome"]))} />
-                  <Th rotulo="Propostas" chave="propostas" ordem={ordemCli} onOrdenar={(k) => setOrdemCli((o) => proximaOrdem(o, k, ["nome"]))} numerico />
-                  {colunasValores(ordemCli, (k) => setOrdemCli((o) => proximaOrdem(o, k, ["nome"])))}
-                </tr>
-              </thead>
-              <tbody>
-                {linhasCli.map((c) => (
-                  <tr
-                    key={c.codcli}
-                    tabIndex={0}
-                    onClick={() => filtrarCliente(c.codcli)}
-                    onKeyDown={(e) => e.key === "Enter" && filtrarCliente(c.codcli)}
-                    className="cursor-pointer border-t border-border/60 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  >
-                    <td className="px-2.5 py-2">
-                      <span className="block max-w-[200px] truncate font-medium text-foreground" title={c.cliente}>{c.cliente}</span>
-                      {c.interna && <span className="block text-[11.5px] text-muted">interna (a própria empresa)</span>}
-                    </td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{c.propostas}</td>
-                    {valores(c)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TabelaRolavel>
+          <TabelaLocal<ClienteFinanceiro, Limiares>
+            chave="projetos.eficiencia.financeiro-clientes"
+            defs={COLUNAS_CLIENTES}
+            colunas={LOCAIS_CLIENTES}
+            linhas={linhasCli}
+            ler={lerFinanceiro}
+            ctx={l}
+            chaveLinha={(c) => String(c.codcli)}
+            onLinha={(c) => filtrarCliente(c.codcli)}
+            vazio="Nenhum cliente neste recorte."
+          />
         )}
       </Cartao>
 
@@ -190,33 +247,17 @@ export function AbaFinanceiro({
         {linhasProp.length === 0 ? (
           <Vazio>Nenhuma proposta neste recorte.</Vazio>
         ) : (
-          <TabelaRolavel>
-            <table className="w-full border-collapse text-sm [&_td]:px-2 [&_th]:px-2">
-              <thead>
-                <tr>
-                  <Th rotulo="Proposta" chave="nome" ordem={ordemProp} onOrdenar={(k) => setOrdemProp((o) => proximaOrdem(o, k, ["nome"]))} />
-                  {colunasValores(ordemProp, (k) => setOrdemProp((o) => proximaOrdem(o, k, ["nome"])))}
-                </tr>
-              </thead>
-              <tbody>
-                {linhasProp.map((p) => (
-                  <tr
-                    key={`${p.codemp}-${p.codpro}`}
-                    tabIndex={0}
-                    onClick={() => abrirProposta(p.codemp, p.codpro)}
-                    onKeyDown={(e) => e.key === "Enter" && abrirProposta(p.codemp, p.codpro)}
-                    className="cursor-pointer border-t border-border/60 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  >
-                    <td className="px-2.5 py-2">
-                      <span className="block max-w-[200px] truncate font-medium text-foreground" title={p.cliente}>{p.cliente}</span>
-                      <span className="block text-[11.5px] text-muted">PS {p.codpro} · {p.sitproRotulo}{p.interna ? " · interna" : ""}</span>
-                    </td>
-                    {valores(p)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TabelaRolavel>
+          <TabelaLocal<PropostaFinanceira, Limiares>
+            chave="projetos.eficiencia.financeiro-propostas"
+            defs={COLUNAS_PROPOSTAS}
+            colunas={LOCAIS_PROPOSTAS}
+            linhas={linhasProp}
+            ler={lerFinanceiro}
+            ctx={l}
+            chaveLinha={(p) => `${p.codemp}-${p.codpro}`}
+            onLinha={(p) => abrirProposta(p.codemp, p.codpro)}
+            vazio="Nenhuma proposta neste recorte."
+          />
         )}
       </Cartao>
     </div>

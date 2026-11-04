@@ -1,8 +1,115 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { ConsultorLinha, PainelEficiencia, clienteCurto, hh, hn, meses1, nomeCurto, paraTsv, pct, tomEficiencia, tomMeses, tomTexto } from "../../lib/eficiencia";
-import { BotaoCopiar, Cartao, Indicador, Ordem, TabelaRolavel, Th, Vazio, ordenar, proximaOrdem } from "./comum";
+import { BotaoCopiar, Cartao, Indicador, Vazio } from "./comum";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 
-type Chave = "nome" | "pendente" | "meses" | "revisar" | "executado" | "eficiencia" | "propostasComSaldo";
+interface CtxEquipe {
+  l: PainelEficiencia["meta"]["limiares"];
+  capMin: number;
+  limite: number;
+  alternar: (codfor: number) => void;
+}
+
+// Filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026). Abre na ordem de
+// sempre (maior carga pendente primeiro). Horas em minutos (hn formata).
+const COLUNAS_LOCAIS: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "departamento", tipo: "texto" },
+  { nome: "pendente", tipo: "decimal", obrigatoria: true },
+  { nome: "meses", tipo: "decimal", obrigatoria: true },
+  { nome: "revisar", tipo: "decimal", obrigatoria: true },
+  { nome: "executado", tipo: "decimal", obrigatoria: true },
+  { nome: "alocado", tipo: "decimal", obrigatoria: true },
+  { nome: "eficienciaPct", tipo: "decimal" },
+  { nome: "propostasComSaldo", tipo: "inteiro", obrigatoria: true },
+];
+const lerConsultor = (c: ConsultorLinha, nome: string): unknown =>
+  nome === "eficienciaPct" ? (c.eficiencia == null ? null : c.eficiencia * 100) : (c as unknown as Record<string, unknown>)[nome];
+
+const COLUNAS_CONSULTORES: DefColuna<ConsultorLinha, CtxEquipe>[] = [
+  {
+    nome: "ignorar",
+    titulo: "Ignorar",
+    semOrdenar: true,
+    largura: 64,
+    // Check de ignorar: tira o consultor dos indicadores da equipe (carga, eficiência, sobrecarga, a revisar, mapa e alertas). Não abre a gaveta.
+    render: (c, x) => (
+      <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          checked={c.ignorado}
+          onChange={() => x.alternar(c.codfor)}
+          aria-label={`Ignorar ${c.nome} nos indicadores da equipe`}
+          title={c.ignorado ? "Ignorado: desmarque para voltar a contar nos indicadores da equipe" : "Marque para tirar este consultor dos indicadores da equipe"}
+          className="h-4 w-4 cursor-pointer accent-primary"
+        />
+      </span>
+    ),
+  },
+  {
+    nome: "nome",
+    titulo: "Consultor",
+    fixa: true,
+    largura: 200,
+    texto: (c) => c.nome,
+    render: (c) => (
+      <>
+        <span className={`block truncate font-medium text-foreground ${c.ignorado ? "line-through" : ""}`}>{nomeCurto(c.nome)}</span>
+        <span className="block truncate text-[11.5px] text-muted">
+          {c.departamento ?? "—"}
+          {c.ignorado && " · ignorado nos indicadores"}
+        </span>
+      </>
+    ),
+  },
+  { nome: "departamento", titulo: "Departamento", largura: 150, classe: "text-muted", render: (c) => c.departamento ?? "—" },
+  {
+    nome: "carteira",
+    titulo: "Carteira",
+    semOrdenar: true,
+    largura: 200,
+    render: (c, x) => (
+      <span className="relative flex h-3 gap-0.5 rounded bg-surface-2">
+        <span className="block rounded bg-primary" style={{ width: `${(c.pendente / x.capMin / x.limite) * 100}%` }} />
+        <span className="block rounded bg-muted/50" style={{ width: `${(c.revisar / x.capMin / x.limite) * 100}%` }} />
+        <span className="absolute -inset-y-1 border-l-[1.5px] border-dashed border-muted" style={{ left: `${(x.l.mesesSobrecarga / x.limite) * 100}%` }} />
+      </span>
+    ),
+  },
+  { nome: "pendente", titulo: "Pendente", direita: true, largura: 95, classe: "font-mono tabular-nums", formatarResumo: hn, render: (c) => hn(c.pendente) },
+  {
+    nome: "meses",
+    titulo: "Meses",
+    direita: true,
+    largura: 80,
+    classe: (c, x) => `font-mono font-semibold tabular-nums ${tomTexto[tomMeses(c.meses, x.l)]}`,
+    formatarResumo: meses1,
+    render: (c) => meses1(c.meses),
+  },
+  {
+    nome: "revisar",
+    titulo: "A revisar",
+    direita: true,
+    largura: 95,
+    classe: "font-mono tabular-nums text-muted",
+    formatarResumo: hn,
+    render: (c) => (c.revisar >= 30 ? hn(c.revisar) : "—"),
+  },
+  { nome: "executado", titulo: "Executado", direita: true, largura: 95, classe: "font-mono tabular-nums", formatarResumo: hn, render: (c) => hn(c.executado) },
+  { nome: "alocado", titulo: "Alocado", direita: true, largura: 95, classe: "font-mono tabular-nums text-muted", formatarResumo: hn, render: (c) => hn(c.alocado) },
+  {
+    nome: "eficienciaPct",
+    titulo: "Eficiência",
+    direita: true,
+    largura: 100,
+    classe: (c, x) => `font-mono font-semibold tabular-nums ${tomTexto[tomEficiencia(c.eficiencia, x.l)]}`,
+    formatarResumo: (v) => pct(v / 100),
+    render: (c) => pct(c.eficiencia),
+  },
+  { nome: "propostasComSaldo", titulo: "Propostas c/ saldo", direita: true, largura: 120, classe: "font-mono tabular-nums", render: (c) => c.propostasComSaldo },
+];
 
 export function AbaEquipe({
   painel,
@@ -19,7 +126,6 @@ export function AbaEquipe({
   /** Liga/desliga o consultor nos indicadores da equipe (escolha pessoal, guardada no navegador). */
   onAlternarIgnorado: (codfor: number) => void;
 }) {
-  const [ordem, setOrdem] = useState<Ordem<Chave>>({ chave: "pendente", dir: -1 });
   const { meta, equipe, carga } = painel;
   const l = meta.limiares;
   const capMin = meta.capacidadeHorasMes * 60;
@@ -31,12 +137,9 @@ export function AbaEquipe({
   // Eficiência da equipe: média das eficiências ponderada pelo executado de cada um.
   const eficienciaEquipe = executadoTotal > 0 ? contam.reduce((t, c) => t + (c.eficiencia ?? 0) * c.executado, 0) / executadoTotal : null;
 
-  const linhas = useMemo(
-    () => ordenar<ConsultorLinha, Chave>(consultores, ordem, (c, k) => (k === "nome" ? c.nome : k === "eficiencia" ? c.eficiencia ?? 2 : c[k])),
-    [consultores, ordem]
-  );
+  // Abre da maior carga pendente para a menor (a ordem de sempre); a tabela reordena pelo título.
+  const linhas = useMemo(() => [...consultores].sort((a, b) => b.pendente - a.pendente), [consultores]);
   const limite = Math.max(3.5, ...contam.map((c) => (c.pendente + c.revisar) / capMin));
-  const ordenarPor = (k: Chave) => setOrdem((o) => proximaOrdem(o, k, ["nome"]));
 
   const { mapa } = equipe;
   const maxCelula = Math.max(1, ...mapa.celulas.map((c) => c.executado));
@@ -80,63 +183,18 @@ export function AbaEquipe({
         {linhas.length === 0 ? (
           <Vazio>Nenhum consultor com alocação nas propostas deste recorte.</Vazio>
         ) : (
-          <TabelaRolavel altura="max-h-[60vh]">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr>
-                  <Th rotulo="Ignorar" className="w-14" />
-                  <Th rotulo="Consultor" chave="nome" ordem={ordem} onOrdenar={ordenarPor} />
-                  <Th rotulo="Carteira" className="min-w-[200px]" />
-                  <Th rotulo="Pendente" chave="pendente" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Meses" chave="meses" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="A revisar" chave="revisar" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Executado" chave="executado" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Eficiência" chave="eficiencia" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Propostas c/ saldo" chave="propostasComSaldo" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                </tr>
-              </thead>
-              <tbody>
-                {linhas.map((c) => (
-                  <tr
-                    key={c.codfor}
-                    tabIndex={0}
-                    onClick={() => abrirConsultor(c.codfor)}
-                    onKeyDown={(e) => e.key === "Enter" && abrirConsultor(c.codfor)}
-                    className={`cursor-pointer border-t border-border/60 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${c.ignorado ? "opacity-45" : ""}`}
-                  >
-                    {/* Check de ignorar: tira o consultor dos indicadores da equipe (carga, eficiência, sobrecarga, a revisar, mapa e alertas). Não abre a gaveta. */}
-                    <td className="px-2.5 py-2" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={c.ignorado}
-                        onChange={() => onAlternarIgnorado(c.codfor)}
-                        aria-label={`Ignorar ${c.nome} nos indicadores da equipe`}
-                        title={c.ignorado ? "Ignorado: desmarque para voltar a contar nos indicadores da equipe" : "Marque para tirar este consultor dos indicadores da equipe"}
-                        className="h-4 w-4 cursor-pointer accent-primary"
-                      />
-                    </td>
-                    <td className="px-2.5 py-2">
-                      <span className={`block font-medium text-foreground ${c.ignorado ? "line-through" : ""}`}>{nomeCurto(c.nome)}</span>
-                      <span className="block text-[11.5px] text-muted">{c.departamento ?? "—"}{c.ignorado && " · ignorado nos indicadores"}</span>
-                    </td>
-                    <td className="px-2.5 py-2">
-                      <span className="relative flex h-3 gap-0.5 rounded bg-surface-2">
-                        <span className="block rounded bg-primary" style={{ width: `${(c.pendente / capMin / limite) * 100}%` }} />
-                        <span className="block rounded bg-muted/50" style={{ width: `${(c.revisar / capMin / limite) * 100}%` }} />
-                        <span className="absolute -inset-y-1 border-l-[1.5px] border-dashed border-muted" style={{ left: `${(l.mesesSobrecarga / limite) * 100}%` }} />
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(c.pendente)}</td>
-                    <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono font-semibold tabular-nums ${tomTexto[tomMeses(c.meses, l)]}`}>{meses1(c.meses)}</td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums text-muted">{c.revisar >= 30 ? hn(c.revisar) : "—"}</td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(c.executado)}</td>
-                    <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono font-semibold tabular-nums ${tomTexto[tomEficiencia(c.eficiencia, l)]}`}>{pct(c.eficiencia)}</td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{c.propostasComSaldo}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TabelaRolavel>
+          <TabelaLocal<ConsultorLinha, CtxEquipe>
+            chave="projetos.eficiencia.equipe"
+            defs={COLUNAS_CONSULTORES}
+            colunas={COLUNAS_LOCAIS}
+            linhas={linhas}
+            ler={lerConsultor}
+            ctx={{ l, capMin, limite, alternar: onAlternarIgnorado }}
+            chaveLinha={(c) => String(c.codfor)}
+            onLinha={(c) => abrirConsultor(c.codfor)}
+            classeLinha={(c) => (c.ignorado ? "opacity-45" : undefined)}
+            vazio="Nenhum consultor com alocação nas propostas deste recorte."
+          />
         )}
       </Cartao>
 
