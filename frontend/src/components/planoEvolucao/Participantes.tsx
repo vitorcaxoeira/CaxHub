@@ -2,6 +2,9 @@ import axios from "axios";
 import { FormEvent, Fragment, useEffect, useMemo, useState } from "react";
 import { Avatar } from "../ui/Avatar";
 import { Modal } from "../ui/Modal";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { useToast } from "../ui/Toast";
 import { CiclosResposta, OpcoesAdesao, ParticipanteDto, ParticipantesResposta, brl2, dataBr } from "../../lib/planoEvolucao";
 import { Cartao, Chip, Vazio } from "../eficiencia/comum";
@@ -17,6 +20,90 @@ const normalizar = (t: string) => t.normalize("NFD").replace(/\p{Diacritic}/gu, 
 
 type Dialogo = { tipo: "aderir" } | { tipo: "valor"; p: ParticipanteDto } | { tipo: "encerrar"; p: ParticipanteDto } | null;
 
+// Participantes com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026). O
+// histórico do Valor Hora Base abre logo abaixo da tabela.
+interface AcoesParticipante {
+  aberto: number | null;
+  alternarHistorico: (id: number) => void;
+  dialogo: (d: Dialogo) => void;
+}
+const LOCAIS_PARTICIPANTES: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "departamento", tipo: "texto" },
+  { nome: "dataAdesao", tipo: "data", obrigatoria: true, utc: true },
+  { nome: "primeiroCicloInicio", tipo: "data", obrigatoria: true, utc: true },
+  { nome: "ciclosConsecutivosAntes", tipo: "inteiro", obrigatoria: true },
+  { nome: "valorHoraBase", tipo: "decimal" },
+  { nome: "situacao", tipo: "texto", obrigatoria: true },
+];
+const COLUNAS_PARTICIPANTES: DefColuna<ParticipanteDto, AcoesParticipante>[] = [
+  {
+    nome: "nome",
+    titulo: "Consultor",
+    fixa: true,
+    largura: 220,
+    texto: (p) => p.nome,
+    render: (p) => (
+      <>
+        <span className="block truncate font-medium text-foreground">{p.nome}</span>
+        <span className="block truncate text-[11.5px] text-muted">{p.departamento ?? "—"}</span>
+      </>
+    ),
+  },
+  { nome: "departamento", titulo: "Departamento", largura: 160, classe: "text-muted", render: (p) => p.departamento ?? "—" },
+  { nome: "dataAdesao", titulo: "Adesão", largura: 100, classe: "font-mono text-[12.5px]", render: (p) => dataBr(p.dataAdesao) },
+  { nome: "primeiroCicloInicio", titulo: "1º ciclo", largura: 100, classe: "font-mono text-[12.5px]", render: (p) => dataBr(p.primeiroCicloInicio) },
+  { nome: "ciclosConsecutivosAntes", titulo: "Ciclos já cumpridos", direita: true, largura: 130, classe: "font-mono tabular-nums", render: (p) => p.ciclosConsecutivosAntes },
+  {
+    nome: "valorHoraBase",
+    titulo: "Valor Hora Base",
+    direita: true,
+    largura: 130,
+    classe: "font-mono tabular-nums",
+    formatarResumo: (v) => brl2(v),
+    render: (p) => brl2(p.valorHoraBase ?? null),
+  },
+  {
+    nome: "situacao",
+    titulo: "Situação",
+    largura: 170,
+    render: (p) => (
+      <>
+        <Chip tom={p.status === "ativo" ? "ok" : "off"}>{p.status === "ativo" ? "ativo" : "encerrado"}</Chip>
+        {p.motivoEncerramento && (
+          <span className="block truncate text-[11px] text-muted" title={p.motivoEncerramento}>
+            {p.motivoEncerramento}
+          </span>
+        )}
+      </>
+    ),
+  },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 260,
+    render: (p, x) => (
+      <span className="whitespace-nowrap">
+        <button type="button" onClick={() => x.alternarHistorico(p.id)} aria-expanded={x.aberto === p.id} className="mr-3 text-[12.5px] font-medium text-primary hover:underline">
+          Histórico
+        </button>
+        {p.status === "ativo" && (
+          <>
+            <button type="button" onClick={() => x.dialogo({ tipo: "valor", p })} className="mr-3 text-[12.5px] font-medium text-primary hover:underline">
+              Novo valor base
+            </button>
+            <button type="button" onClick={() => x.dialogo({ tipo: "encerrar", p })} className="text-[12.5px] font-medium text-destructive hover:underline">
+              Encerrar
+            </button>
+          </>
+        )}
+      </span>
+    ),
+  },
+];
+
 // Quem está no plano, com adesão, 1º ciclo, Valor Hora Base e histórico. Admin e gestores da Consultoria ERP e HCM veem e mantêm tudo.
 export function Participantes({ dados, podeEditar, motivosValorBase, onMudou }: { dados: ParticipantesResposta; podeEditar: boolean; motivosValorBase: CiclosResposta["motivosValorBase"]; onMudou: () => void }) {
   const [dialogo, setDialogo] = useState<Dialogo>(null);
@@ -24,6 +111,11 @@ export function Participantes({ dados, podeEditar, motivosValorBase, onMudou }: 
   const fechar = () => setDialogo(null);
   const mostraValores = dados.mostraValores;
   const ativos = dados.participantes.filter((p) => p.status === "ativo").length;
+  // Valor hora só para quem pode ver; ações só para quem pode editar.
+  const defs = useMemo(
+    () => COLUNAS_PARTICIPANTES.filter((c) => (c.nome !== "valorHoraBase" || mostraValores) && (c.nome !== "acoes" || podeEditar)),
+    [mostraValores, podeEditar]
+  );
 
   return (
     <div className="space-y-5">
@@ -41,75 +133,41 @@ export function Participantes({ dados, podeEditar, motivosValorBase, onMudou }: 
         {dados.participantes.length === 0 ? (
           <Vazio>{podeEditar ? "Ninguém aderiu ainda. Registre a assinatura do Termo de Ciência de cada consultor PJ." : "Nenhum consultor do seu time está no plano."}</Vazio>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-sm [&_td]:px-2 [&_th]:px-2">
-              <thead>
-                <tr className="text-left font-mono text-[10.5px] uppercase tracking-wider text-muted">
-                  <th className="py-2 font-medium">Consultor</th>
-                  <th className="py-2 font-medium">Adesão</th>
-                  <th className="py-2 font-medium">1º ciclo</th>
-                  <th className="py-2 text-right font-medium">Ciclos já cumpridos</th>
-                  {mostraValores && <th className="py-2 text-right font-medium">Valor Hora Base</th>}
-                  <th className="py-2 font-medium">Situação</th>
-                  {podeEditar && <th className="py-2" />}
-                </tr>
-              </thead>
-              <tbody>
-                {dados.participantes.map((p) => (
-                  <Fragment key={p.id}>
-                    <tr className={`border-t border-border/60 ${p.status === "encerrado" ? "opacity-60" : ""}`}>
-                      <td className="px-2.5 py-2">
-                        <span className="block font-medium text-foreground">{p.nome}</span>
-                        <span className="block text-[11.5px] text-muted">{p.departamento ?? "—"}</span>
-                      </td>
-                      <td className="whitespace-nowrap px-2.5 py-2 font-mono text-[12.5px]">{dataBr(p.dataAdesao)}</td>
-                      <td className="whitespace-nowrap px-2.5 py-2 font-mono text-[12.5px]">{dataBr(p.primeiroCicloInicio)}</td>
-                      <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{p.ciclosConsecutivosAntes}</td>
-                      {mostraValores && <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{brl2(p.valorHoraBase)}</td>}
-                      <td className="px-2.5 py-2">
-                        <Chip tom={p.status === "ativo" ? "ok" : "off"}>{p.status === "ativo" ? "ativo" : "encerrado"}</Chip>
-                        {p.motivoEncerramento && <span className="block max-w-[200px] truncate text-[11px] text-muted" title={p.motivoEncerramento}>{p.motivoEncerramento}</span>}
-                      </td>
-                      {podeEditar && (
-                        <td className="whitespace-nowrap px-2.5 py-2 text-right">
-                          <button type="button" onClick={() => setAberto(aberto === p.id ? null : p.id)} aria-expanded={aberto === p.id} className="mr-3 text-[12.5px] font-medium text-primary hover:underline">
-                            Histórico
-                          </button>
-                          {p.status === "ativo" && (
-                            <>
-                              <button type="button" onClick={() => setDialogo({ tipo: "valor", p })} className="mr-3 text-[12.5px] font-medium text-primary hover:underline">
-                                Novo valor base
-                              </button>
-                              <button type="button" onClick={() => setDialogo({ tipo: "encerrar", p })} className="text-[12.5px] font-medium text-destructive hover:underline">
-                                Encerrar
-                              </button>
-                            </>
-                          )}
-                        </td>
-                      )}
-                    </tr>
-                    {aberto === p.id && p.historicoBase && (
-                      <tr className="bg-surface-2/50">
-                        <td colSpan={7} className="px-4 py-3">
-                          <p className="mb-1.5 text-[12px] font-medium text-foreground">Histórico do Valor Hora Base (nunca reescrito: cada mudança é uma linha nova)</p>
-                          <ul className="space-y-1 text-[12.5px]">
-                            {p.historicoBase.map((h) => (
-                              <li key={h.id} className="flex flex-wrap gap-x-4 text-muted">
-                                <span className="font-mono text-foreground">{brl2(h.valorHoraBase)}</span>
-                                <span>desde {dataBr(h.desde)}</span>
-                                <span>{h.motivoRotulo}</span>
-                                {h.observacao && <span>— {h.observacao}</span>}
-                              </li>
-                            ))}
-                          </ul>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <TabelaLocal<ParticipanteDto, AcoesParticipante>
+              chave="projetos.plano-evolucao.participantes"
+              defs={defs}
+              colunas={LOCAIS_PARTICIPANTES}
+              linhas={dados.participantes}
+              ler={(p, nome) => (nome === "situacao" ? p.status : (p as unknown as Record<string, unknown>)[nome])}
+              ctx={{ aberto, alternarHistorico: (id) => setAberto(aberto === id ? null : id), dialogo: setDialogo }}
+              chaveLinha={(p) => String(p.id)}
+              classeLinha={(p) => (p.status === "encerrado" ? "opacity-60" : undefined)}
+              vazio="Ninguém no plano ainda."
+            />
+            {(() => {
+              const p = dados.participantes.find((x) => x.id === aberto);
+              return (
+                p?.historicoBase && (
+                  <div className="mt-3 rounded-md bg-surface-2/50 px-4 py-3">
+                    <p className="mb-1.5 text-[12px] font-medium text-foreground">
+                      {p.nome}: histórico do Valor Hora Base (nunca reescrito: cada mudança é uma linha nova)
+                    </p>
+                    <ul className="space-y-1 text-[12.5px]">
+                      {p.historicoBase.map((h) => (
+                        <li key={h.id} className="flex flex-wrap gap-x-4 text-muted">
+                          <span className="font-mono text-foreground">{brl2(h.valorHoraBase)}</span>
+                          <span>desde {dataBr(h.desde)}</span>
+                          <span>{h.motivoRotulo}</span>
+                          {h.observacao && <span>— {h.observacao}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              );
+            })()}
+          </>
         )}
         {!mostraValores && <p className="mt-3 text-[12px] text-muted">Valor hora é dado sensível: só o administrador e os gestores da Consultoria ERP e HCM veem.</p>}
       </Cartao>

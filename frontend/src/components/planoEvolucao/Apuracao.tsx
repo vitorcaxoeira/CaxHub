@@ -1,6 +1,9 @@
 import axios from "axios";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "../ui/Modal";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { Skeleton } from "../ui/Skeleton";
 import { useToast } from "../ui/Toast";
 import { baixarPdfDoServidor } from "../relatorio/relatorioComum";
@@ -8,6 +11,7 @@ import { Cartao, Chip, Indicador, Vazio } from "../eficiencia/comum";
 import { hn } from "../../lib/eficiencia";
 import {
   ApuracaoDetalheResposta,
+  type ApuracaoListaItem,
   ApuracaoListaResposta,
   ChaveObservacao,
   CicloDto,
@@ -36,6 +40,89 @@ const mensagemDe = (e: unknown, padrao: string) => (axios.isAxiosError(e) ? e.re
 // ---------------------------------------------------------------- lista do ciclo
 
 // Aba "Apuração": por ciclo, o índice global fechado e o andamento de cada consultor (lançamento → apuração → devolutiva → encerramento).
+
+// Consultores da apuração com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal,
+// 03/11/2026). Clicar na linha abre a apuração do consultor.
+const LOCAIS_APURACAO: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "departamento", tipo: "texto" },
+  { nome: "statusRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "resultado", tipo: "texto" },
+  { nome: "efetivou", tipo: "booleano", obrigatoria: true },
+  { nome: "percentual", tipo: "decimal" },
+  { nome: "valorHora", tipo: "decimal" },
+];
+const COLUNAS_APURACAO: DefColuna<ApuracaoListaItem, (id: number) => void>[] = [
+  {
+    nome: "nome",
+    titulo: "Consultor",
+    fixa: true,
+    largura: 220,
+    texto: (p) => p.nome,
+    render: (p) => (
+      <>
+        <span className="block truncate font-medium text-foreground">{p.nome}</span>
+        <span className="block truncate text-[11.5px] text-muted">{p.departamento ?? "—"}</span>
+      </>
+    ),
+  },
+  { nome: "departamento", titulo: "Departamento", largura: 150, classe: "text-muted", render: (p) => p.departamento ?? "—" },
+  {
+    nome: "statusRotulo",
+    titulo: "Andamento",
+    largura: 200,
+    render: (p) => (
+      <>
+        <Chip tom={tomDoStatusApuracao(p.status)}>{p.statusRotulo}</Chip>
+        {p.contestacaoPendente && <span className="mt-0.5 block text-[11.5px] font-medium text-warning">contestação aguardando desfecho</span>}
+        {p.status === "rascunho" || p.status === "nao_iniciada" ? (
+          <span className="mt-0.5 block text-[11.5px] text-muted">{p.pendentes.length === 0 ? "pronto para apurar" : `falta lançar: ${p.pendentes.length}`}</span>
+        ) : null}
+      </>
+    ),
+  },
+  {
+    nome: "resultado",
+    titulo: "Resultado",
+    largura: 160,
+    render: (p) => (
+      <>
+        {p.statusCiclo ? <Chip tom={tomDaSituacaoCiclo(p.statusCiclo)}>{rotuloSituacaoCiclo(p.statusCiclo)}</Chip> : <span className="text-muted">—</span>}
+        {p.efetivou && <span className="ml-2 text-[11.5px] font-medium text-success">efetiva</span>}
+      </>
+    ),
+  },
+  { nome: "efetivou", titulo: "Efetiva", largura: 80, classe: "text-muted", render: (p) => (p.efetivou ? "sim" : "não") },
+  {
+    nome: "percentual",
+    titulo: "Percentual",
+    direita: true,
+    largura: 100,
+    classe: "font-mono tabular-nums",
+    formatarResumo: (v) => pctBp(Math.round(v * 100)),
+    render: (p) => (p.percentualBp != null ? pctBp(p.percentualBp) : "—"),
+  },
+  { nome: "valorHora", titulo: "Valor hora", direita: true, largura: 110, classe: "font-mono tabular-nums", formatarResumo: (v) => brl2(v), render: (p) => (p.valorHora != null ? brl2(p.valorHora) : "—") },
+  {
+    nome: "acao",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 80,
+    render: (p, abrir) => (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          abrir(p.participanteId);
+        }}
+        className="text-[12.5px] font-medium text-primary hover:underline"
+      >
+        {p.status === "nao_iniciada" || p.status === "rascunho" ? "Lançar" : "Abrir"}
+      </button>
+    ),
+  },
+];
 export function Apuracao({ ciclos, cicloId, onSelecionar, admin }: { ciclos: CicloDto[]; cicloId: number | null; onSelecionar: (id: number) => void; admin: boolean }) {
   const { mostrar } = useToast();
   const [dados, setDados] = useState<ApuracaoListaResposta | null>(null);
@@ -171,47 +258,23 @@ export function Apuracao({ ciclos, cicloId, onSelecionar, admin }: { ciclos: Cic
             {dados.participantes.length === 0 ? (
               <Vazio>Nenhum consultor do seu time está no plano.</Vazio>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-sm [&_td]:px-2 [&_th]:px-2">
-                  <thead>
-                    <tr className="text-left font-mono text-[10.5px] uppercase tracking-wider text-muted">
-                      <th className="py-2 font-medium">Consultor</th>
-                      <th className="py-2 font-medium">Andamento</th>
-                      <th className="py-2 font-medium">Resultado</th>
-                      <th className="py-2 text-right font-medium">Percentual</th>
-                      {dados.mostraValores && <th className="py-2 text-right font-medium">Valor hora</th>}
-                      <th className="py-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dados.participantes.map((p) => (
-                      <tr key={p.participanteId} className="border-t border-border/60">
-                        <td className="px-2.5 py-2">
-                          <button type="button" onClick={() => setAberto(p.participanteId)} className="block text-left font-medium text-foreground hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                            {p.nome}
-                          </button>
-                          <span className="block text-[11.5px] text-muted">{p.departamento ?? "—"}</span>
-                        </td>
-                        <td className="px-2.5 py-2">
-                          <Chip tom={tomDoStatusApuracao(p.status)}>{p.statusRotulo}</Chip>
-                          {p.contestacaoPendente && <span className="mt-0.5 block text-[11.5px] font-medium text-warning">contestação aguardando desfecho</span>}
-                          {p.status === "rascunho" || p.status === "nao_iniciada" ? (
-                            <span className="mt-0.5 block text-[11.5px] text-muted">{p.pendentes.length === 0 ? "pronto para apurar" : `falta lançar: ${p.pendentes.length}`}</span>
-                          ) : null}
-                        </td>
-                        <td className="px-2.5 py-2">{p.statusCiclo ? <Chip tom={tomDaSituacaoCiclo(p.statusCiclo)}>{rotuloSituacaoCiclo(p.statusCiclo)}</Chip> : <span className="text-muted">—</span>}{p.efetivou && <span className="ml-2 text-[11.5px] font-medium text-success">efetiva</span>}</td>
-                        <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{p.percentualBp != null ? pctBp(p.percentualBp) : "—"}</td>
-                        {dados.mostraValores && <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{p.valorHora != null ? brl2(p.valorHora) : "—"}</td>}
-                        <td className="whitespace-nowrap px-2.5 py-2 text-right">
-                          <button type="button" onClick={() => setAberto(p.participanteId)} className="text-[12.5px] font-medium text-primary hover:underline">
-                            {p.status === "nao_iniciada" || p.status === "rascunho" ? "Lançar" : "Abrir"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <TabelaLocal<ApuracaoListaItem, (id: number) => void>
+                chave="projetos.plano-evolucao.apuracao"
+                defs={dados.mostraValores ? COLUNAS_APURACAO : COLUNAS_APURACAO.filter((c) => c.nome !== "valorHora")}
+                colunas={LOCAIS_APURACAO}
+                linhas={dados.participantes}
+                ler={(p, nome) =>
+                  nome === "percentual"
+                    ? p.percentualBp == null ? null : p.percentualBp / 100
+                    : nome === "resultado"
+                      ? p.statusCiclo ? rotuloSituacaoCiclo(p.statusCiclo) : null
+                      : (p as unknown as Record<string, unknown>)[nome]
+                }
+                ctx={setAberto}
+                chaveLinha={(p) => String(p.participanteId)}
+                onLinha={(p) => setAberto(p.participanteId)}
+                vazio="Nenhum consultor do seu time está no plano."
+              />
             )}
             {!dados.mostraValores && <p className="mt-3 text-[12px] text-muted">Valor hora é dado sensível: só o administrador e os gestores da Consultoria ERP e HCM veem.</p>}
           </Cartao>
