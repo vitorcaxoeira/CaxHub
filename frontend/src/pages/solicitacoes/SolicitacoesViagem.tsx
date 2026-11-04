@@ -91,7 +91,7 @@ const COLUNAS_VIAGEM: DefColuna<LinhaViagem, (id: number) => void>[] = [
   { nome: "id", titulo: "Nº", fixa: true, largura: 70, classe: "font-mono text-[12.5px] text-foreground", resumos: ["contagem"], render: (v) => `#${v.id}` },
   { nome: "situacao", titulo: "Status", largura: 170, render: (v) => <StatusViagemBadge status={v.status} tipo={v.tipo} /> },
   { nome: "solicitanteNome", titulo: "Solicitante", largura: 180, classe: "text-foreground", texto: (v) => v.solicitanteNome, render: (v) => v.solicitanteNome },
-  { nome: "atendimentoNome", titulo: "Atendimento", largura: 160, classe: "text-muted", texto: (v) => v.atendimentoNome, render: (v) => v.atendimentoNome ?? "—" },
+  { nome: "atendimentoNome", ocultaPorPadrao: true, titulo: "Atendimento", largura: 160, classe: "text-muted", texto: (v) => v.atendimentoNome, render: (v) => v.atendimentoNome ?? "—" },
   { nome: "finalidade", titulo: "Finalidade", largura: 160, classe: "text-muted", render: (v) => FINALIDADE_ROTULO[v.finalidade] ?? v.finalidade },
   { nome: "clienteNome", titulo: "Cliente", largura: 180, classe: "text-foreground", texto: (v) => v.clienteNome, render: (v) => v.clienteNome ?? "—" },
   { nome: "propostaRotulo", titulo: "Proposta", largura: 150, classe: "text-muted", texto: (v) => v.propostaRotulo, render: (v) => v.propostaRotulo ?? "—" },
@@ -102,7 +102,7 @@ const COLUNAS_VIAGEM: DefColuna<LinhaViagem, (id: number) => void>[] = [
     classe: "text-foreground",
     render: (v) => (v.tipo === "outros" ? `Até ${formatarDia(v.dataFim)}` : formatarPeriodo(v.dataInicio, v.dataFim)),
   },
-  { nome: "dataFim", titulo: "Término", largura: 100, classe: "text-muted", render: (v) => formatarDia(v.dataFim) },
+  { nome: "dataFim", ocultaPorPadrao: true, titulo: "Término", largura: 100, classe: "text-muted", render: (v) => formatarDia(v.dataFim) },
   {
     nome: "cidadesDestino",
     titulo: "Destino / itens",
@@ -114,7 +114,7 @@ const COLUNAS_VIAGEM: DefColuna<LinhaViagem, (id: number) => void>[] = [
         ? v.resumoItens.map((i) => `${i.descricao} ×${i.quantidade ?? 1}`).join(", ")
         : `${v.cidadesDestino} · ${v.qtdPessoas} ${v.qtdPessoas === 1 ? "pessoa" : "pessoas"}`,
   },
-  { nome: "qtdPessoas", titulo: "Pessoas", direita: true, largura: 80, classe: "tabular-nums text-muted", render: (v) => v.qtdPessoas },
+  { nome: "qtdPessoas", ocultaPorPadrao: true, titulo: "Pessoas", direita: true, largura: 80, classe: "tabular-nums text-muted", render: (v) => v.qtdPessoas },
   {
     nome: "servicos",
     titulo: "Serviços",

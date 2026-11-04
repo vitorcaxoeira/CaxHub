@@ -64,13 +64,13 @@ const COLUNAS: DefColuna<PropostaRow>[] = [
       </>
     ),
   },
-  { nome: "numprj", titulo: "Projeto", largura: 90, classe: "font-mono text-muted", resumos: ["contagem", "distintos", "vazios"], render: (r) => r.numprj ?? "—" },
+  { nome: "numprj", ocultaPorPadrao: true, titulo: "Projeto", largura: 90, classe: "font-mono text-muted", resumos: ["contagem", "distintos", "vazios"], render: (r) => r.numprj ?? "—" },
   { nome: "cliente", titulo: "Cliente", largura: 260, classe: "text-foreground", texto: (r) => r.cliente, render: (r) => r.cliente },
   { nome: "datpro", titulo: "Data", largura: 100, classe: "font-mono text-muted", render: (r) => fmtData(r.datpro) },
   { nome: "datret", titulo: "Aprovação", largura: 100, classe: "font-mono text-muted", render: (r) => fmtData(r.datret) },
   { nome: "despro", titulo: "Descrição", largura: 200, classe: "text-muted", texto: (r) => r.despro, render: (r) => r.despro ?? "—" },
   { nome: "depexe", titulo: "Depto. Executor", largura: 160, classe: "text-muted", texto: (r) => r.depexe, render: (r) => r.depexe },
-  { nome: "modalidade", titulo: "Modalidade", largura: 140, classe: "text-muted", texto: (r) => r.modalidade, render: (r) => r.modalidade },
+  { nome: "modalidade", ocultaPorPadrao: true, titulo: "Modalidade", largura: 140, classe: "text-muted", texto: (r) => r.modalidade, render: (r) => r.modalidade },
   { nome: "forfat", titulo: "Forma Fat.", largura: 130, classe: "text-muted", texto: (r) => r.forfat, render: (r) => r.forfat },
   {
     nome: "horas",

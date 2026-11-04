@@ -27,9 +27,11 @@ export const limitarLargura = (px: number) => Math.min(LARGURA_MAX, Math.max(LAR
 
 /**
  * Junta o que foi salvo com as colunas que a tela tem hoje: nome que não existe mais é ignorado, coluna nova (criada depois que o usuário
- * arrumou) entra logo depois da coluna que vem antes dela no padrão, e coluna obrigatória nunca fica oculta.
+ * arrumou) entra logo depois da coluna que vem antes dela no padrão, e coluna obrigatória nunca fica oculta. `ocultasPadrao` (04/11/2026):
+ * colunas que nascem ocultas quando o usuário ainda não arrumou nada (as que não existiam na tabela antes do kit de colunas); ele as liga
+ * no painel "Colunas".
  */
-export function resolverLayout(padrao: string[], salvo: LayoutSalvo | null, obrigatorias: string[] = []): LayoutResolvido {
+export function resolverLayout(padrao: string[], salvo: LayoutSalvo | null, obrigatorias: string[] = [], ocultasPadrao: string[] = []): LayoutResolvido {
   const existe = new Set(padrao);
   const ordem = (salvo?.ordem ?? []).filter((n) => existe.has(n));
   padrao.forEach((nome, i) => {
@@ -40,7 +42,9 @@ export function resolverLayout(padrao: string[], salvo: LayoutSalvo | null, obri
       .find((n) => ordem.includes(n));
     ordem.splice(anterior ? ordem.indexOf(anterior) + 1 : 0, 0, nome);
   });
-  const ocultas = (salvo?.ocultas ?? []).filter((n) => existe.has(n) && !obrigatorias.includes(n));
+  // Sem nada salvo, GET /api/perfil/colunas devolve { ordem: [], ocultas: [] }; arrumação salva de verdade sempre traz a ordem inteira.
+  const temSalvo = salvo != null && salvo.ordem.length > 0;
+  const ocultas = (temSalvo ? salvo.ocultas : ocultasPadrao).filter((n) => existe.has(n) && !obrigatorias.includes(n));
   const larguras = Object.fromEntries(
     Object.entries(salvo?.larguras ?? {})
       .filter(([n, px]) => existe.has(n) && Number.isFinite(px))
@@ -82,10 +86,12 @@ export function definirLargura(larguras: Record<string, number>, nome: string, p
   return { ...base, [nome]: limitarLargura(px) };
 }
 
-/** Igual ao padrão da tela (mesma ordem, nada oculto, sem largura ajustada e sem resumo): não há o que guardar. */
-export function ehPadrao(padrao: string[], layout: LayoutSalvo): boolean {
+/** Igual ao padrão da tela (mesma ordem, só as ocultas por padrão ocultas, sem largura ajustada e sem resumo): não há o que guardar. */
+export function ehPadrao(padrao: string[], layout: LayoutSalvo, ocultasPadrao: string[] = []): boolean {
+  const esperadas = ocultasPadrao.filter((n) => padrao.includes(n));
   return (
-    layout.ocultas.length === 0 &&
+    layout.ocultas.length === esperadas.length &&
+    esperadas.every((n) => layout.ocultas.includes(n)) &&
     Object.keys(layout.larguras ?? {}).length === 0 &&
     Object.keys(layout.resumos ?? {}).length === 0 &&
     layout.ordem.length === padrao.length &&

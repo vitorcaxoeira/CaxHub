@@ -43,6 +43,8 @@ export interface DefColuna<T, C = undefined> {
   largura?: number;
   /** Não pode ser ocultada (ex.: a coluna que abre o detalhe da linha). */
   fixa?: boolean;
+  /** Nasce oculta enquanto o usuário não arrumou as colunas (04/11/2026): coluna que não existia na tabela antes do kit; liga no painel. */
+  ocultaPorPadrao?: boolean;
   classe?: string | ((linha: T, ctx: C, pos: PosicaoColuna) => string | undefined);
   /** title da célula. */
   title?: (linha: T) => string | undefined;
@@ -93,7 +95,8 @@ export function useColunasConfiguraveis<T, C = undefined>(
   const titulos = useMemo(() => Object.fromEntries(defs.map((d) => [d.nome, d.titulo])), [defs]);
   const larguraPadrao = useMemo(() => Object.fromEntries(defs.map((d) => [d.nome, d.largura ?? LARGURA_SEM_PADRAO])), [defs]);
   const porNome = useMemo(() => new Map(defs.map((d) => [d.nome, d])), [defs]);
-  const layout = useLayoutColunas(chave, padrao, fixas);
+  const ocultasPadrao = useMemo(() => defs.filter((d) => d.ocultaPorPadrao && !d.fixa).map((d) => d.nome), [defs]);
+  const layout = useLayoutColunas(chave, padrao, fixas, ocultasPadrao);
   const larg = useRedimensionarColunas(layout, larguraPadrao);
   const visiveis = layout.visiveis.map((n) => porNome.get(n)).filter((d): d is DefColuna<T, C> => !!d);
   const cortar = larg.larguras !== null;
@@ -170,24 +173,33 @@ export function useColunasConfiguraveis<T, C = undefined>(
     </tr>
   );
 
+  // Coluna de texto (a que declara `texto`) no layout automático, sem largura ajustada pelo usuário (04/11/2026): a `largura` da
+  // definição vira o teto e o resto corta com "…" (texto inteiro no title), como os `max-w-[…] truncate` das tabelas antes do kit.
+  // Sem isto, o `whitespace-nowrap` das células deixava a coluna do tamanho do maior texto e a tabela estourava na horizontal.
+  const tetoTexto = (d: DefColuna<T, C>) => (!cortar && d.texto ? (d.largura ?? LARGURA_SEM_PADRAO) : undefined);
+
   const celulas = (linha: T, ctx: C) => [
     <td key="__colunas" aria-hidden className={cn("w-7 min-w-7 max-w-7 p-0", opcoes.classeEspaco?.(linha, ctx))} />,
-    ...visiveis.map((d, i) => (
-      <td
-        key={d.nome}
-        data-coluna={d.nome}
-        className={cn(
-          d.direita ? TD_DIR : TD,
-          opcoes.td,
-          d.centro && "text-center",
-          typeof d.classe === "function" ? d.classe(linha, ctx, { primeira: i === 0, ultima: i === visiveis.length - 1 }) : d.classe,
-          cortar && "overflow-hidden text-ellipsis",
-        )}
-        title={d.title?.(linha) ?? (cortar ? d.texto?.(linha) || undefined : undefined)}
-      >
-        {d.render(linha, ctx, cortar)}
-      </td>
-    )),
+    ...visiveis.map((d, i) => {
+      const teto = tetoTexto(d);
+      return (
+        <td
+          key={d.nome}
+          data-coluna={d.nome}
+          className={cn(
+            d.direita ? TD_DIR : TD,
+            opcoes.td,
+            d.centro && "text-center",
+            typeof d.classe === "function" ? d.classe(linha, ctx, { primeira: i === 0, ultima: i === visiveis.length - 1 }) : d.classe,
+            (cortar || teto != null) && "overflow-hidden text-ellipsis",
+          )}
+          style={teto != null ? { maxWidth: teto } : undefined}
+          title={d.title?.(linha) ?? (cortar || teto != null ? d.texto?.(linha) || undefined : undefined)}
+        >
+          {d.render(linha, ctx, cortar || teto != null)}
+        </td>
+      );
+    }),
   ];
 
   return {

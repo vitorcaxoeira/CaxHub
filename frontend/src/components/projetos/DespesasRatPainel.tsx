@@ -486,7 +486,6 @@ export function DespesasRatPainel({ ratId }: DespesasRatPainelProps) {
                         }}
                         chaveLinha={(d) => String(d.id)}
                         vazio="Os lançamentos realizados aqui aparecerão neste histórico."
-                        alturaMax="max-h-[50vh]"
                       />
                     </div>
 

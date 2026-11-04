@@ -76,3 +76,26 @@ describe("larguras", () => {
     expect(ehPadrao(PADRAO, { ordem: PADRAO, ocultas: [], larguras: {} })).toBe(true);
   });
 });
+
+describe("colunas ocultas por padrão (04/11/2026)", () => {
+  it("sem nada salvo, as ocultas por padrão nascem ocultas (obrigatória nunca)", () => {
+    const r = resolverLayout(PADRAO, null, ["codigo"], ["origem", "codigo", "sumiu"]);
+    expect(r.ocultas).toEqual(["origem"]);
+    expect(r.visiveis).toEqual(["codigo", "descricao", "unidade", "faixa"]);
+  });
+
+  it("a resposta 'nada salvo' da API ({ ordem: [], ocultas: [] }) também usa as ocultas por padrão", () => {
+    expect(resolverLayout(PADRAO, { ordem: [], ocultas: [], larguras: {}, resumos: {} }, [], ["origem"]).ocultas).toEqual(["origem"]);
+  });
+
+  it("com arrumação salva, vale o que o usuário escolheu (inclusive mostrar a que nasce oculta)", () => {
+    expect(resolverLayout(PADRAO, { ordem: PADRAO, ocultas: [] }, [], ["origem"]).ocultas).toEqual([]);
+    expect(resolverLayout(PADRAO, { ordem: PADRAO, ocultas: ["unidade"] }, [], ["origem"]).ocultas).toEqual(["unidade"]);
+  });
+
+  it("padrão = exatamente as ocultas por padrão ocultas; mostrar uma delas deixa de ser o padrão", () => {
+    expect(ehPadrao(PADRAO, { ordem: PADRAO, ocultas: ["origem"] }, ["origem"])).toBe(true);
+    expect(ehPadrao(PADRAO, { ordem: PADRAO, ocultas: [] }, ["origem"])).toBe(false);
+    expect(ehPadrao(PADRAO, { ordem: PADRAO, ocultas: ["origem", "faixa"] }, ["origem"])).toBe(false);
+  });
+});

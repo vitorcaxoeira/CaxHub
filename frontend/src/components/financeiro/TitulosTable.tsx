@@ -62,7 +62,7 @@ const COLUNAS: DefColuna<TituloRow>[] = [
     avisoResumo: "Soma valores de moedas diferentes quando há mais de uma",
     render: (r) => `${r.moeda_sigla ?? "R$"} ${currencyFormatter.format(r.vlrabe)}`,
   },
-  { nome: "dias_atraso", titulo: "Dias de atraso", direita: true, classe: "font-mono tabular-nums text-muted", largura: 110, render: (r) => r.dias_atraso },
+  { nome: "dias_atraso", ocultaPorPadrao: true, titulo: "Dias de atraso", direita: true, classe: "font-mono tabular-nums text-muted", largura: 110, render: (r) => r.dias_atraso },
   {
     nome: "situacao",
     titulo: "Situação",

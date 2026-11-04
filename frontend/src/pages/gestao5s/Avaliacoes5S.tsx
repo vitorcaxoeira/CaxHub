@@ -108,7 +108,7 @@ const COLUNAS_AVALIACOES: DefColuna<Linha>[] = [
     ),
   },
   { nome: "avaliadorNome", titulo: "Avaliador", largura: 160, classe: "text-sm text-muted", render: (a) => a.avaliadorNome ?? "—" },
-  { nome: "quantidadeAmbientes", titulo: "Ambientes", direita: true, largura: 90, classe: "text-sm tabular-nums text-muted", render: (a) => a.quantidadeAmbientes },
+  { nome: "quantidadeAmbientes", ocultaPorPadrao: true, titulo: "Ambientes", direita: true, largura: 90, classe: "text-sm tabular-nums text-muted", render: (a) => a.quantidadeAmbientes },
   { nome: "percGeral", titulo: "Geral", centro: true, largura: 90, formatarResumo: (v) => formatarPerc(v), render: (a) => <CelulaPerc valor={a.percentuais.geral} /> },
   ...SENSOS.map(
     (s): DefColuna<Linha> => ({

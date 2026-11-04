@@ -54,8 +54,9 @@ const COLUNAS_INDICADORES: DefColuna<Indicador, AcoesIndicador>[] = [
   { nome: "unidadeRotulo", titulo: "Unidade", largura: 120, classe: "text-muted", render: (i) => ROTULO_UNIDADE[i.unidade] },
   { nome: "acumulacaoRotulo", titulo: "Como soma os meses", largura: 170, classe: "text-muted", render: (i) => ROTULO_ACUMULACAO[i.acumulacao] },
   { nome: "origemRotulo", titulo: "Origem do realizado", largura: 180, classe: "text-muted", render: (i) => rotuloOrigem(i.origem) },
-  { nome: "ativo", titulo: "Ativo", largura: 70, classe: "text-muted", render: (i) => (i.ativo ? "sim" : "não") },
-  { nome: "ordem", titulo: "Ordem", direita: true, largura: 70, classe: "tabular-nums text-muted", render: (i) => i.ordem },
+  // "Ativo" e "Ordem" não existiam na tabela antes do kit de colunas (o inativo já aparece como etiqueta ao lado do nome): nascem ocultas.
+  { nome: "ativo", titulo: "Ativo", ocultaPorPadrao: true, largura: 70, classe: "text-muted", render: (i) => (i.ativo ? "sim" : "não") },
+  { nome: "ordem", titulo: "Ordem", ocultaPorPadrao: true, direita: true, largura: 70, classe: "tabular-nums text-muted", render: (i) => i.ordem },
   {
     nome: "acoes",
     titulo: "Ações",

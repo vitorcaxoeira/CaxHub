@@ -67,7 +67,7 @@ interface Props<T, C> {
   aoCarregar?: (dados: Resposta<T>) => void;
   /** Avisa a tela quando a lista falha (ex.: 403 vira a mensagem de "sem acesso" da própria tela). */
   aoErro?: (status: number | undefined, mensagem: string) => void;
-  /** Altura máxima da área rolável. */
+  /** Altura máxima da área rolável (com rolagem vertical própria). Sem ela, a tabela cresce com a página, como antes do kit de colunas. */
   alturaMax?: string;
 }
 
@@ -94,7 +94,7 @@ export function ListaServidor<T extends object, C = undefined>({
   rodape,
   aoCarregar,
   aoErro,
-  alturaMax = "max-h-[70vh]",
+  alturaMax,
 }: Props<T, C>) {
   const titulosBase = useMemo(() => titulosDe(base), [base]);
   const estado = useFiltroOrdemLocal();
@@ -171,7 +171,7 @@ export function ListaServidor<T extends object, C = undefined>({
         </div>
       )}
       {erro && <p className="px-3 py-2 text-sm text-destructive">{erro}</p>}
-      <div className={cn("overflow-auto", alturaMax)}>
+      <div className={cn(alturaMax ? "overflow-auto" : "overflow-x-auto", alturaMax)}>
         <table className={tc.classeTabela} style={tc.estiloTabela} aria-busy={loading}>
           {tc.colgroup}
           <thead className="sticky top-0 z-10">{tc.cabecalho({ colunas: dados?.colunas, estado, valores })}</thead>
