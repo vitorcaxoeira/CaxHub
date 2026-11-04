@@ -32,7 +32,7 @@ export interface AuthUser {
   fotoUrl: string | null;
   role: string;
   /** Preferências de tela (backend/src/domain/preferenciasTela.ts), gravadas em PUT /api/perfil/preferencias. */
-  preferencias: { atividadesVisao: VisaoAtividades };
+  preferencias: { atividadesVisao: VisaoAtividades; menuLateral?: "aberto" | "recolhido" };
 }
 
 interface AuthContextValue {
