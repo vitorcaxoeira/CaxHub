@@ -106,10 +106,11 @@ export function ConformidadeJornada() {
             {d.ranking ? (
               <Painel titulo="Quem mais acumulou ocorrências" descricao="Lista nominal, só para o papel RH.">
                 <Tabela
+                  chave="rh.jornada.ranking"
                   colunas={[
-                    { titulo: "Colaborador", render: (l) => l.nome },
-                    ...(["jornadaAcimaDoLimite", "intrajornada", "interjornada", "dsrTrabalhado"] as ChaveEvento[]).map((c) => ({ titulo: ABREV[c], render: (l: NonNullable<Jornada["ranking"]>[number]) => fmtInt(l[c]), alinhar: "dir" as const })),
-                    { titulo: "Total", render: (l: NonNullable<Jornada["ranking"]>[number]) => <strong>{fmtInt(l.total)}</strong>, alinhar: "dir" as const },
+                    { nome: "nome", tipo: "texto" as const, titulo: "Colaborador", render: (l: NonNullable<Jornada["ranking"]>[number]) => l.nome },
+                    ...(["jornadaAcimaDoLimite", "intrajornada", "interjornada", "dsrTrabalhado"] as ChaveEvento[]).map((c) => ({ nome: c, tipo: "inteiro" as const, titulo: ABREV[c], render: (l: NonNullable<Jornada["ranking"]>[number]) => fmtInt(l[c]), alinhar: "dir" as const, formatarResumo: (v: number) => fmtInt(v) })),
+                    { nome: "total", tipo: "inteiro" as const, titulo: "Total", render: (l: NonNullable<Jornada["ranking"]>[number]) => <strong>{fmtInt(l.total)}</strong>, alinhar: "dir" as const, formatarResumo: (v: number) => fmtInt(v) },
                   ]}
                   linhas={d.ranking}
                   vazio="Nenhuma ocorrência no período."

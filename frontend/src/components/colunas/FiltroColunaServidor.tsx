@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { raizDoPortal } from "../ui/raizDoPortal";
 import { autoUpdate, FloatingPortal, offset, shift, size, useClick, useDismiss, useFloating, useInteractions } from "@floating-ui/react";
 import { cn } from "../../lib/cn";
 
@@ -16,11 +17,15 @@ export interface FiltroColuna {
 }
 
 export interface ColunaComFiltro {
+  /** Nome da coluna na tela (o `nome` é o técnico); padrão: o próprio nome. */
+  rotulo?: string;
   nome: string;
   tipo: "texto" | "inteiro" | "decimal" | "data" | "booleano" | "json";
   operadores: OperadorColuna[];
   // Lista fechada documentada no schema (/// Domínio "X": 1=...): o funil oferece a lista completa e um select na Condição.
   dominio?: { valor: string; rotulo: string }[];
+  // Sem a aba "Valores" (coluna calculada, como soma ou contagem: não há lista de valores a oferecer). Só a Condição.
+  semAbaValores?: boolean;
 }
 
 export interface RespostaValores {
@@ -186,8 +191,8 @@ export function FiltroColunaServidor({ coluna, filtro, onAplicar, carregarValore
         type="button"
         ref={refs.setReference}
         {...getReferenceProps({ onClick: (e) => e.stopPropagation() })}
-        aria-label={`Filtrar por ${coluna.nome}`}
-        title={ativo ? `${coluna.nome}: filtro ativo` : `Filtrar por ${coluna.nome}`}
+        aria-label={`Filtrar por ${coluna.rotulo ?? coluna.nome}`}
+        title={ativo ? `${coluna.rotulo ?? coluna.nome}: filtro ativo` : `Filtrar por ${coluna.rotulo ?? coluna.nome}`}
         className={cn(
           "ml-1 inline-flex items-center rounded p-0.5 align-middle transition hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           ativo ? "text-primary" : "text-muted hover:text-foreground"
@@ -199,7 +204,7 @@ export function FiltroColunaServidor({ coluna, filtro, onAplicar, carregarValore
       </button>
 
       {open && (
-        <FloatingPortal>
+        <FloatingPortal root={raizDoPortal(refs.domReference.current)}>
           <div
             ref={refs.setFloating}
             style={floatingStyles}
@@ -207,9 +212,9 @@ export function FiltroColunaServidor({ coluna, filtro, onAplicar, carregarValore
             {...getFloatingProps({ onClick: (e) => e.stopPropagation() })}
           >
             <div className="shrink-0 border-b border-border px-2 pt-2">
-              <p className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-muted">{coluna.nome}</p>
+              <p className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-muted">{coluna.rotulo ?? coluna.nome}</p>
               <div className="flex gap-3 text-[12px]" role="tablist">
-                {(["condicao", "valores"] as const).map((a) => (
+                {(coluna.semAbaValores ? (["condicao"] as const) : (["condicao", "valores"] as const)).map((a) => (
                   <button
                     key={a}
                     type="button"

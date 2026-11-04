@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+import { ParDatasFiltro } from "../ui/ControlesFiltro";
 import { ClienteFilter, ClienteOption } from "./ClienteFilter";
 import { PortadorFilter, PortadorOption } from "./PortadorFilter";
 import { EmpresaFilialFilter, EmpresaOption, FilialOption } from "./EmpresaFilialFilter";
@@ -23,66 +25,49 @@ interface FiltrosBarProps {
   opcoes: FiltroOpcoes | null;
   filtros: Filtros;
   onChange: (filtros: Filtros) => void;
+  /** Estrela de padrão de cada filtro (campo: clientes/fornecedores, empFil, portadores, vencimento, emissao). */
+  estrela?: (campo: string) => ReactNode;
 }
 
-function dateInputClass() {
-  return "rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-}
-
-export function FiltrosBar({ opcoes, filtros, onChange }: FiltrosBarProps) {
+export function FiltrosBar({ opcoes, filtros, onChange, estrela }: FiltrosBarProps) {
   return (
     <div className="mb-6 flex flex-col gap-3">
     <div className="flex flex-wrap items-center gap-3">
-      <ClienteFilter selecionados={filtros.clientes} onChange={(clientes) => onChange({ ...filtros, clientes })} />
+      <ClienteFilter selecionados={filtros.clientes} onChange={(clientes) => onChange({ ...filtros, clientes })} acessorio={estrela?.("clientes")} />
 
       <EmpresaFilialFilter
         empresas={opcoes?.empresas ?? []}
         filiais={opcoes?.filiais ?? []}
         selecionados={filtros.empresasFiliais}
         onChange={(empresasFiliais) => onChange({ ...filtros, empresasFiliais })}
+        acessorio={estrela?.("empFil")}
       />
 
       <PortadorFilter
         opcoes={opcoes?.portadores ?? []}
         selecionados={filtros.portadores}
         onChange={(portadores) => onChange({ ...filtros, portadores })}
+        acessorio={estrela?.("portadores")}
       />
     </div>
 
     <div className="flex flex-wrap items-center gap-3">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted">Vencimento:</span>
-        <input
-          type="date"
-          className={dateInputClass()}
-          value={filtros.vctproInicio ?? ""}
-          onChange={(e) => onChange({ ...filtros, vctproInicio: e.target.value || null })}
-        />
-        <span className="text-sm text-muted">até</span>
-        <input
-          type="date"
-          className={dateInputClass()}
-          value={filtros.vctproFim ?? ""}
-          onChange={(e) => onChange({ ...filtros, vctproFim: e.target.value || null })}
-        />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted">Emissão:</span>
-        <input
-          type="date"
-          className={dateInputClass()}
-          value={filtros.datemiInicio ?? ""}
-          onChange={(e) => onChange({ ...filtros, datemiInicio: e.target.value || null })}
-        />
-        <span className="text-sm text-muted">até</span>
-        <input
-          type="date"
-          className={dateInputClass()}
-          value={filtros.datemiFim ?? ""}
-          onChange={(e) => onChange({ ...filtros, datemiFim: e.target.value || null })}
-        />
-      </div>
+      <ParDatasFiltro
+        rotulo="Vencimento"
+        de={filtros.vctproInicio ?? ""}
+        ate={filtros.vctproFim ?? ""}
+        onDe={(v) => onChange({ ...filtros, vctproInicio: v || null })}
+        onAte={(v) => onChange({ ...filtros, vctproFim: v || null })}
+        acessorio={estrela?.("vencimento")}
+      />
+      <ParDatasFiltro
+        rotulo="Emissão"
+        de={filtros.datemiInicio ?? ""}
+        ate={filtros.datemiFim ?? ""}
+        onDe={(v) => onChange({ ...filtros, datemiInicio: v || null })}
+        onAte={(v) => onChange({ ...filtros, datemiFim: v || null })}
+        acessorio={estrela?.("emissao")}
+      />
     </div>
     </div>
   );

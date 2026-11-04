@@ -115,14 +115,15 @@ export function Rescisoes() {
           {d.lista && (
             <Painel titulo="Rescisões do período" descricao="Lista nominal, só para o papel RH.">
               <Tabela
+                chave="rh.rescisoes.lista"
                 colunas={[
-                  { titulo: "Colaborador", render: (l) => l.nome },
-                  { titulo: "Admissão", render: (l) => fmtData(l.admissao), alinhar: "dir" },
-                  { titulo: "Demissão", render: (l) => fmtData(l.demissao), alinhar: "dir" },
-                  { titulo: "Causa", render: (l) => l.causa ?? "—" },
-                  { titulo: "Proventos", render: (l) => fmtMoeda(l.proventos), alinhar: "dir" },
-                  { titulo: "Descontos", render: (l) => fmtMoeda(l.descontos), alinhar: "dir" },
-                  { titulo: "FGTS", render: (l) => fmtMoeda(l.saldoFgts), alinhar: "dir" },
+                  { nome: "nome", tipo: "texto", titulo: "Colaborador", render: (l) => l.nome },
+                  { nome: "admissao", tipo: "data", titulo: "Admissão", render: (l) => fmtData(l.admissao), alinhar: "dir" },
+                  { nome: "demissao", tipo: "data", titulo: "Demissão", render: (l) => fmtData(l.demissao), alinhar: "dir" },
+                  { nome: "causa", tipo: "texto", titulo: "Causa", render: (l) => l.causa ?? "—" },
+                  { nome: "proventos", tipo: "decimal", titulo: "Proventos", render: (l) => fmtMoeda(l.proventos), alinhar: "dir", formatarResumo: (v) => fmtMoeda(v) },
+                  { nome: "descontos", tipo: "decimal", titulo: "Descontos", render: (l) => fmtMoeda(l.descontos), alinhar: "dir", formatarResumo: (v) => fmtMoeda(v) },
+                  { nome: "saldoFgts", tipo: "decimal", titulo: "FGTS", render: (l) => fmtMoeda(l.saldoFgts), alinhar: "dir", formatarResumo: (v) => fmtMoeda(v) },
                 ]}
                 linhas={d.lista}
               />

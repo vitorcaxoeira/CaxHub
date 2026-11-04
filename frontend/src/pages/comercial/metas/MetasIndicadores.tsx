@@ -2,6 +2,9 @@ import axios from "axios";
 import { FormEvent, useEffect, useState } from "react";
 import { Aviso, botaoPrimario, botaoSecundario, Cabecalho, Cartao, campo, mensagemDe } from "../../../components/metasComercial/comum";
 import { Modal } from "../../../components/ui/Modal";
+import { TabelaLocal } from "../../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../../components/colunas/useColunasConfiguraveis";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { useToast } from "../../../components/ui/Toast";
 import { Acumulacao, Indicador, Unidade, rotuloOrigem } from "../../../lib/metasComercial";
@@ -11,6 +14,66 @@ const ROTULO_ACUMULACAO: Record<Acumulacao, string> = { SOMA: "Soma dos meses", 
 
 // Comercial › Gestão de Metas › Indicadores: o cadastro do que se mede (Mensalidade, Licenças, Horas, Faturamento…). Indicador novo
 // aparece nas outras telas sem deploy. Com uso, só renomeia ou desativa; unidade e acumulação travam para não mudar o sentido do histórico.
+
+// Indicadores com filtro e ordem por coluna e colunas configuráveis (TabelaLocal, 03/11/2026). As ações da linha vêm por ctx.
+interface AcoesIndicador {
+  editar: (i: Indicador) => void;
+  alternarAtivo: (i: Indicador) => void;
+}
+const LOCAIS_INDICADORES: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "unidadeRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "acumulacaoRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "origemRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "ativo", tipo: "booleano", obrigatoria: true },
+  { nome: "ordem", tipo: "inteiro", obrigatoria: true },
+];
+const lerIndicador = (i: Indicador, nome: string): unknown =>
+  nome === "unidadeRotulo"
+    ? ROTULO_UNIDADE[i.unidade]
+    : nome === "acumulacaoRotulo"
+      ? ROTULO_ACUMULACAO[i.acumulacao]
+      : nome === "origemRotulo"
+        ? rotuloOrigem(i.origem)
+        : (i as unknown as Record<string, unknown>)[nome];
+const COLUNAS_INDICADORES: DefColuna<Indicador, AcoesIndicador>[] = [
+  {
+    nome: "nome",
+    titulo: "Indicador",
+    fixa: true,
+    largura: 240,
+    classe: "text-foreground",
+    texto: (i) => i.nome,
+    render: (i) => (
+      <>
+        {i.nome}
+        {!i.ativo && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] text-muted">inativo</span>}
+      </>
+    ),
+  },
+  { nome: "unidadeRotulo", titulo: "Unidade", largura: 120, classe: "text-muted", render: (i) => ROTULO_UNIDADE[i.unidade] },
+  { nome: "acumulacaoRotulo", titulo: "Como soma os meses", largura: 170, classe: "text-muted", render: (i) => ROTULO_ACUMULACAO[i.acumulacao] },
+  { nome: "origemRotulo", titulo: "Origem do realizado", largura: 180, classe: "text-muted", render: (i) => rotuloOrigem(i.origem) },
+  { nome: "ativo", titulo: "Ativo", largura: 70, classe: "text-muted", render: (i) => (i.ativo ? "sim" : "não") },
+  { nome: "ordem", titulo: "Ordem", direita: true, largura: 70, classe: "tabular-nums text-muted", render: (i) => i.ordem },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 190,
+    render: (i, a) => (
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => a.editar(i)} className={botaoSecundario}>
+          Editar
+        </button>
+        <button type="button" onClick={() => a.alternarAtivo(i)} className={botaoSecundario}>
+          {i.ativo ? "Desativar" : "Ativar"}
+        </button>
+      </div>
+    ),
+  },
+];
 export function MetasIndicadores() {
   const { mostrar } = useToast();
   const [lista, setLista] = useState<Indicador[] | null>(null);
@@ -50,42 +113,17 @@ export function MetasIndicadores() {
       {!lista && !erro && <Skeleton className="h-64 w-full" />}
       {lista && (
         <Cartao>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[620px] text-sm">
-              <thead>
-                <tr className="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted">
-                  <th className="py-1.5 pr-3 font-medium">Indicador</th>
-                  <th className="px-3 py-1.5 font-medium">Unidade</th>
-                  <th className="px-3 py-1.5 font-medium">Como soma os meses</th>
-                  <th className="px-3 py-1.5 font-medium">Origem do realizado</th>
-                  <th className="py-1.5 pl-3 text-right font-medium">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lista.map((i) => (
-                  <tr key={i.id} className={`border-b border-border/60 ${i.ativo ? "" : "opacity-60"}`}>
-                    <td className="py-2 pr-3 text-foreground">
-                      {i.nome}
-                      {!i.ativo && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] text-muted">inativo</span>}
-                    </td>
-                    <td className="px-3 py-2 text-muted">{ROTULO_UNIDADE[i.unidade]}</td>
-                    <td className="px-3 py-2 text-muted">{ROTULO_ACUMULACAO[i.acumulacao]}</td>
-                    <td className="px-3 py-2 text-muted">{rotuloOrigem(i.origem)}</td>
-                    <td className="py-2 pl-3 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button type="button" onClick={() => setModal({ indicador: i })} className={botaoSecundario}>
-                          Editar
-                        </button>
-                        <button type="button" onClick={() => alternarAtivo(i)} className={botaoSecundario}>
-                          {i.ativo ? "Desativar" : "Ativar"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TabelaLocal<Indicador, AcoesIndicador>
+            chave="comercial.metas.indicadores"
+            defs={COLUNAS_INDICADORES}
+            colunas={LOCAIS_INDICADORES}
+            linhas={lista}
+            ler={lerIndicador}
+            ctx={{ editar: (i) => setModal({ indicador: i }), alternarAtivo }}
+            chaveLinha={(i) => String(i.id)}
+            classeLinha={(i) => (i.ativo ? undefined : "opacity-60")}
+            vazio="Nenhum indicador cadastrado."
+          />
         </Cartao>
       )}
       {modal && <FormIndicador indicador={modal.indicador} onClose={() => setModal(null)} onSalvo={() => setRecarga((n) => n + 1)} />}

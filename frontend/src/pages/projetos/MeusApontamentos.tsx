@@ -19,6 +19,8 @@ import { IconeIntegracaoErp } from "../../components/ui/IconeIntegracaoErp";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { diaCurtoDaJanela, textoJanelaRetroativa, useJanelaRetroativa } from "../../hooks/useJanelaRetroativa";
 import { useToast } from "../../components/ui/Toast";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 
 // Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
 // apontamento ao Senior fica retido no servidor.
@@ -530,6 +532,8 @@ export function MeusApontamentos() {
   const [situacoesRat, setSituacoesRat] = useState<SituacaoRatOpcao[]>([]);
   const [sitratFiltro, setSitratFiltro] = useState<number[]>([]);
   const [integracaoFiltro, setIntegracaoFiltro] = useState<IntegracaoErpStatus[]>([]);
+  const [opcoesRatsProntas, setOpcoesRatsProntas] = useState(false);
+  const [opcoesRatsFalharam, setOpcoesRatsFalharam] = useState(false);
   const [buscaInput, setBuscaInput] = useState("");
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
   const [buscaItemInput, setBuscaItemInput] = useState("");
@@ -666,8 +670,9 @@ export function MeusApontamentos() {
       .then(({ data }) => {
         setOpcoesFiltro(data.consultores);
         setSituacoesRat(data.situacoesRat ?? []);
+        setOpcoesRatsProntas(true);
       })
-      .catch(() => {});
+      .catch(() => setOpcoesRatsFalharam(true));
     axios
       .get("/api/apontamentos/consultores")
       .then(({ data }) => {
@@ -678,10 +683,29 @@ export function MeusApontamentos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Padrão de cada filtro da aba de RATs (estrela, 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta das RATs.
+  const padroesRats = usePadroesTela({
+    tela: "projetos.apontamentos.rats",
+    opcoesProntas: opcoesRatsProntas,
+    opcoesFalharam: opcoesRatsFalharam,
+    campos: {
+      sitrat: { rotulo: "Situação", atual: sitratFiltro, aplicar: setSitratFiltro, validar: regras.lista("number", situacoesRat.map((o) => o.sitrat)) },
+      integracao: {
+        rotulo: "Sincronização",
+        atual: integracaoFiltro,
+        aplicar: setIntegracaoFiltro,
+        validar: regras.lista("string", OPCOES_INTEGRACAO.map((o) => o.value)),
+        semOpcoes: true,
+      },
+      codfor: { rotulo: "Consultor", atual: codforsFiltro, aplicar: setCodforsFiltro, validar: regras.lista("number", opcoesFiltro.map((o) => o.codfor)) },
+    },
+  });
+
   useEffect(() => {
+    if (!padroesRats.pronto) return;
     carregarRats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [codforsFiltro, sitratFiltro, integracaoFiltro, buscaDebounced, buscaItemDebounced, pageRats]);
+  }, [padroesRats.pronto, codforsFiltro, sitratFiltro, integracaoFiltro, buscaDebounced, buscaItemDebounced, pageRats]);
 
   // Digitar reseta pra página 1 (senão a busca poderia "sumir" numa página que não
   // existe mais no resultado filtrado) — só dispara depois do debounce, pra não
@@ -1969,6 +1993,7 @@ export function MeusApontamentos() {
                   onChange={onMudarFiltroSitrat}
                   labelTodos="Todas as situações"
                   labelSufixo="situações"
+                  acessorio={padroesRats.estrela("sitrat")}
                 />
               )}
               <MultiSelectDropdown
@@ -1977,6 +2002,7 @@ export function MeusApontamentos() {
                 onChange={onMudarFiltroIntegracao}
                 labelTodos="Todas as sincronizações"
                 labelSufixo="sincronizações"
+                acessorio={padroesRats.estrela("integracao")}
               />
               {opcoesFiltro.length > 1 && (
                 <MultiSelectDropdown
@@ -1985,6 +2011,7 @@ export function MeusApontamentos() {
                   onChange={onMudarFiltroConsultor}
                   labelTodos="Todos os consultores"
                   labelSufixo="consultores"
+                  acessorio={padroesRats.estrela("codfor")}
                 />
               )}
               {/* Contador vem de GET /rats/elegiveis-fechamento (carregarRats) — não da página

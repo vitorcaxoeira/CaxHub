@@ -3,6 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Avatar } from "../../components/ui/Avatar";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
+import { DATA_EMBUTIDA, MolduraFiltro } from "../../components/ui/ControlesFiltro";
+import { campoListaFixa, campoParDatas } from "../../components/ui/padroesFiltros/campos";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import {
   CONFIG_EVENTO_AUDITORIA,
   GrupoAuditoria,
@@ -77,6 +80,32 @@ export function Auditoria() {
   const [ate, setAte] = useState(dataDaUrl(searchParams.get("ate")));
   const [grupos, setGrupos] = useState<string[]>(searchParams.get("grupos")?.split(",").filter(Boolean) ?? []);
   const [origens, setOrigens] = useState<string[]>(searchParams.get("origens")?.split(",").filter(Boolean) ?? []);
+
+  // Padrão de cada filtro (estrela, 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta. O que veio na URL (link) vale mais.
+  const [daUrl] = useState(() =>
+    (
+      [
+        ["periodo", "de"],
+        ["periodo", "ate"],
+        ["grupos", "grupos"],
+        ["origens", "origens"],
+      ] as const
+    )
+      .filter(([, chave]) => searchParams.has(chave))
+      .map(([campo]) => campo)
+  );
+  const p = usePadroesTela({
+    tela: "auditoria",
+    daUrl,
+    campos: {
+      periodo: campoParDatas("Período", de || null, ate || null, (d, a) => {
+        setDe(d ?? "");
+        setAte(a ?? "");
+      }),
+      grupos: campoListaFixa("Grupos", "string", grupos, setGrupos, GRUPOS_OPCOES.map((o) => o.value)),
+      origens: campoListaFixa("Origens", "string", origens, setOrigens, ORIGENS_OPCOES.map((o) => o.value)),
+    },
+  });
 
   const deValida = dataValida(de);
   const ateValida = dataValida(ate);
@@ -175,12 +204,13 @@ export function Auditoria() {
   }
 
   useEffect(() => {
+    if (!p.pronto) return;
     persistirFiltrosNaUrl();
     carregar(null);
     // Só as datas VÁLIDAS entram nas dependências: digitar o ano ("0002", "0020"...) não deve
     // disparar consulta nem regravar a URL a cada tecla.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [propostaSelecionada, deValida ? de : "", ateValida ? ate : "", grupos, origens]);
+  }, [p.pronto, propostaSelecionada, deValida ? de : "", ateValida ? ate : "", grupos, origens]);
 
   // Busca de proposta (typeahead) — rota própria da Auditoria, com o mesmo RBAC da tela. Não usa
   // /alocacao/propostas: aquele só lista Aprovada/Em Execução, e a auditoria existe pra qualquer
@@ -311,22 +341,27 @@ export function Auditoria() {
 
       {/* Demais filtros */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <input
-          type="date"
-          value={de}
-          onChange={(e) => setDe(e.target.value)}
-          className={selectClass}
-          aria-label="Data inicial"
+        <MolduraFiltro rotulo="Período:" acessorio={p.estrela("periodo")}>
+          <input type="date" value={de} onChange={(e) => setDe(e.target.value)} className={DATA_EMBUTIDA} aria-label="Data inicial" />
+          <span className="text-muted">até</span>
+          <input type="date" value={ate} onChange={(e) => setAte(e.target.value)} className={DATA_EMBUTIDA} aria-label="Data final" />
+        </MolduraFiltro>
+        <MultiSelectDropdown
+          opcoes={GRUPOS_OPCOES}
+          selecionados={grupos}
+          onChange={setGrupos}
+          labelTodos="Todos os grupos"
+          labelSufixo="grupos"
+          acessorio={p.estrela("grupos")}
         />
-        <input
-          type="date"
-          value={ate}
-          onChange={(e) => setAte(e.target.value)}
-          className={selectClass}
-          aria-label="Data final"
+        <MultiSelectDropdown
+          opcoes={ORIGENS_OPCOES}
+          selecionados={origens}
+          onChange={setOrigens}
+          labelTodos="Todas as origens"
+          labelSufixo="origens"
+          acessorio={p.estrela("origens")}
         />
-        <MultiSelectDropdown opcoes={GRUPOS_OPCOES} selecionados={grupos} onChange={setGrupos} labelTodos="Todos os grupos" labelSufixo="grupos" />
-        <MultiSelectDropdown opcoes={ORIGENS_OPCOES} selecionados={origens} onChange={setOrigens} labelTodos="Todas as origens" labelSufixo="origens" />
         <button
           onClick={exportarCsv}
           disabled={exportando}

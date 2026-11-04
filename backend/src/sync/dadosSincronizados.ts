@@ -12,6 +12,8 @@ import { prisma } from "../db/prisma";
 import type { SyncJobDescriptor } from "./registry";
 import { ColunaFiltravel, FiltroColuna, OperadorColuna, TipoColuna, operadoresDaColuna, whereDosFiltros } from "./filtroColunaLocal";
 import { OpcaoDominio, catalogoDeDominios, dominioDoCampo } from "./dominioDoSchema";
+import { type OrdemColuna } from "./ordemColuna";
+import { type PedidoResumo, valorDoResumo } from "./resumoColuna";
 
 // Teto de linhas por chamada — protege contra tabelas enormes (itens, movimentos) mesmo que o
 // cliente peça mais.
@@ -172,7 +174,7 @@ function filtroDeSituacao(
 }
 
 // Recorte comum à listagem e aos valores de uma coluna: busca + situação (removidos) + filtros de coluna, tudo em E.
-interface OpcoesRecorte {
+export interface OpcoesRecorte {
   busca: string;
   /** Só na tela de removidos: recorte por situação (ver SituacaoRemovidos). */
   situacao?: SituacaoRemovidos;
@@ -200,10 +202,68 @@ function delegateDoModelo(model: ModeloDmmf, tabelaLocal: string) {
   const delegate = (prisma as unknown as Record<string, unknown>)[nomeDelegate] as {
     count: (args: { where?: unknown }) => Promise<number>;
     findMany: (args: { where?: unknown; orderBy?: unknown; skip?: number; take?: number }) => Promise<Record<string, unknown>[]>;
+    aggregate: (args: { where?: unknown } & Record<string, unknown>) => Promise<Record<string, Record<string, unknown>>>;
     groupBy: (args: { by: string[]; where?: unknown; _count: Record<string, boolean>; orderBy?: unknown; take?: number }) => Promise<Record<string, unknown>[]>;
   };
   if (!delegate) throw new Error(`prisma.${nomeDelegate} não existe (esperado pra tabela "${tabelaLocal}").`);
   return delegate;
+}
+
+/**
+ * `orderBy` do Prisma: os critérios da tela e, por último, a chave primária (desempate estável, e a ordem de sempre quando não há
+ * critério). Nulos vão por último; `nulls` só existe para campo opcional (o Prisma recusa em campo obrigatório). Mesmo do CaxHub_Dash.
+ */
+export function orderByDoRecorte(model: Pick<ModeloDmmf, "fields">, ordem: OrdemColuna[], chaves: string[]): Record<string, unknown>[] {
+  const porNome = new Map(model.fields.map((f) => [f.name, f]));
+  const criterios = ordem.map((o) => {
+    const campo = porNome.get(o.coluna);
+    return { [o.coluna]: campo && !campo.isRequired ? { sort: o.direcao, nulls: "last" } : o.direcao };
+  });
+  const usadas = new Set(ordem.map((o) => o.coluna));
+  return [...criterios, ...chaves.filter((c) => !usadas.has(c)).map((c) => ({ [c]: "asc" }))];
+}
+
+/**
+ * Funções de resumo do rodapé que a tela "Ver dados" oferece (03/11/2026). A tabela é lida pelo Prisma (não por SQL), então ficam as que
+ * o Prisma agrega sem varrer grupos: sem mediana e sem distintos (numa coluna quase única seriam centenas de milhares de grupos).
+ */
+export const FUNCOES_RESUMO_DADOS = new Set(["soma", "media", "minimo", "maximo", "contagem", "vazios", "sim", "nao", "pctSim"]);
+
+/** Resumo do rodapé sobre TODAS as linhas do recorte (busca, situação e filtros de coluna). Chave da resposta: `coluna:funcao`. */
+export async function resumoDosDados(job: SyncJobDescriptor, pedidos: PedidoResumo[], opcoes: OpcoesRecorte): Promise<{ linhas: number; valores: Record<string, number | string | null> }> {
+  const model = modeloDaTabela(job.tabelaLocal);
+  const delegate = delegateDoModelo(model, job.tabelaLocal);
+  const where = whereDoRecorte(job, model, opcoes);
+  const e = (extra: Record<string, unknown>) => (where ? { AND: [where, extra] } : extra);
+  const tipos = new Map(colunasFiltraveis(job).map((c) => [c.nome, c.tipo]));
+  // Campo obrigatório não aceita `not: null` no Prisma (e nunca é nulo): só o texto vazio conta como vazio nele.
+  const obrigatorio = new Set(model.fields.filter((f) => f.isRequired).map((f) => f.name));
+  const preenchido = (c: string): Record<string, unknown> => {
+    const naoNulo = obrigatorio.has(c) ? [] : [{ [c]: { not: null } }];
+    const naoVazio = tipos.get(c) === "texto" ? [{ [c]: { not: "" } }] : [];
+    return { AND: [...naoNulo, ...naoVazio] };
+  };
+
+  const linhas = await delegate.count({ where });
+  const valores: Record<string, number | string | null> = {};
+  await Promise.all(
+    pedidos.map(async ({ coluna: c, funcao }) => {
+      const chave = `${c}:${funcao}`;
+      if (!FUNCOES_RESUMO_DADOS.has(funcao)) throw new Error(`Resumo ${funcao} não está disponível nesta tela.`);
+      const agregado = { soma: "_sum", media: "_avg", minimo: "_min", maximo: "_max" }[funcao as "soma"];
+      if (agregado) {
+        const r = await delegate.aggregate({ where, [agregado]: { [c]: true } });
+        valores[chave] = valorDoResumo(r[agregado]?.[c]);
+      } else if (funcao === "contagem" || funcao === "vazios") {
+        const n = await delegate.count({ where: e(preenchido(c)) });
+        valores[chave] = funcao === "contagem" ? n : linhas - n;
+      } else {
+        const [sim, nao] = await Promise.all([delegate.count({ where: e({ [c]: true }) }), delegate.count({ where: e({ [c]: false }) })]);
+        valores[chave] = funcao === "sim" ? sim : funcao === "nao" ? nao : sim + nao ? (100 * sim) / (sim + nao) : null;
+      }
+    })
+  );
+  return { linhas, valores };
 }
 
 export async function listarDadosDoJob(
@@ -219,6 +279,8 @@ export async function listarDadosDoJob(
     candidatosDesde?: Date | null;
     /** Recorte local do filtro da sincronização (filtroDoJob().escopoLocal); `null` = filtro não recortável. */
     escopo?: Record<string, unknown> | null;
+    /** Ordem por coluna da tela (validarOrdem); a chave primária entra por último, como desempate. */
+    ordem?: OrdemColuna[];
   }
 ): Promise<ResultadoDados> {
   const model = modeloDaTabela(job.tabelaLocal);
@@ -231,7 +293,7 @@ export async function listarDadosDoJob(
 
   const [total, linhas] = await Promise.all([
     delegate.count({ where }),
-    delegate.findMany({ where, orderBy: chaves.map((c) => ({ [c]: "asc" })), skip: (page - 1) * pageSize, take: pageSize }),
+    delegate.findMany({ where, orderBy: orderByDoRecorte(model, opcoes.ordem ?? [], chaves), skip: (page - 1) * pageSize, take: pageSize }),
   ]);
 
   const colunas = colunasDoJob(job);

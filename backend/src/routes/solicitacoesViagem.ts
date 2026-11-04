@@ -6,6 +6,9 @@ import fs from "fs";
 import path from "path";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { registrarListaEmMemoria } from "./listaEmMemoria";
+import type { ColunaMemoria } from "../consultas/listaEmMemoria";
+import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { VIAGEM_DIR } from "../config/uploads";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
 import { criarEventoAuditoria, diffCampos, paraDiff } from "../audit/registrarEvento";
@@ -15,6 +18,8 @@ import { criarNotificacao, notificarAprovadoresViagem, notificarAtendimentoViage
 import {
   ContextoViagem,
   FINALIDADES,
+  FINALIDADE_ROTULO,
+  rotuloStatusViagem,
   PAPEIS_MODULO_VIAGEM,
   Finalidade,
   ItemEntrada,
@@ -570,22 +575,49 @@ solicitacoesViagemRouter.get("/apoio/usuarios", async (req: AuthenticatedRequest
 
 const lista = (v: unknown): string[] => (typeof v === "string" && v ? v.split(",").map((s) => s.trim()).filter(Boolean) : []);
 
-solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
-  try {
+// Lista com filtro e ordem por coluna, resumo no rodapé e colunas calculadas (registrarListaEmMemoria, 03/11/2026): o escopo (recorte de
+// permissão) e os filtros do topo continuam aqui; o funil, a ordem e os totais são aplicados sobre as linhas do escopo.
+const COLUNAS_LISTA: ColunaMemoria[] = [
+  { nome: "id", tipo: "inteiro", obrigatoria: true },
+  { nome: "situacao", tipo: "texto", obrigatoria: true },
+  { nome: "solicitanteNome", tipo: "texto", obrigatoria: true },
+  { nome: "atendimentoNome", tipo: "texto" },
+  {
+    nome: "finalidade",
+    tipo: "texto",
+    obrigatoria: true,
+    dominio: FINALIDADES.map((f) => ({ valor: f, rotulo: FINALIDADE_ROTULO[f] })),
+  },
+  { nome: "clienteNome", tipo: "texto" },
+  { nome: "propostaRotulo", tipo: "texto" },
+  { nome: "dataInicio", tipo: "data", utc: true },
+  { nome: "dataFim", tipo: "data", utc: true },
+  { nome: "cidadesDestino", tipo: "texto" },
+  { nome: "qtdPessoas", tipo: "inteiro" },
+  { nome: "valorAprovado", tipo: "decimal" },
+  { nome: "motivo", tipo: "texto", semValores: true },
+  { nome: "criadoEm", tipo: "data", obrigatoria: true },
+];
+
+registrarListaEmMemoria(
+  solicitacoesViagemRouter,
+  "/",
+  async (reqBruto) => {
+    const req = reqBruto as AuthenticatedRequest;
     const ctx = await contextoDoUsuario(req);
-    if (!ctx) return void res.status(404).json({ error: "Usuário não encontrado" });
+    if (!ctx) throw new ErroEntradaConsulta("Usuário não encontrado", 404);
 
     const escopo = String(req.query.escopo ?? "minhas");
     // O escopo já é o recorte de permissão: nada de filtrar em memória depois.
     let base: Prisma.SolicitacaoViagemWhereInput;
     if (escopo === "atendimento") {
-      if (!ehAtendimento(ctx.role)) return void res.status(403).json({ error: "Sem permissão para o atendimento" });
+      if (!ehAtendimento(ctx.role)) throw new ErroEntradaConsulta("Sem permissão para o atendimento", 403);
       base = {};
     } else if (escopo === "aprovacao") {
       if (ctx.role === "admin") base = {};
       else if (ctx.contexto.departamentosGerenciados.length > 0)
         base = { aprovacaoDepexe: { in: ctx.contexto.departamentosGerenciados }, NOT: { solicitanteId: ctx.userId } };
-      else return void res.status(403).json({ error: "Sem permissão para aprovações" });
+      else throw new ErroEntradaConsulta("Sem permissão para aprovações", 403);
     } else {
       // O que a pessoa pediu + as viagens em que ela viaja e que já estão reservadas/finalizadas.
       base = { OR: [{ solicitanteId: ctx.userId }, whereViajanteVisivel(ctx.userId)] };
@@ -618,16 +650,10 @@ solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
     const where: Prisma.SolicitacaoViagemWhereInput = { AND: [base, ...filtros] };
     const whereComStatus: Prisma.SolicitacaoViagemWhereInput = status.length ? { AND: [where, { status: { in: status } }] } : where;
 
-    const pagina = Math.max(1, Number(req.query.pagina) || 1);
-    const tamanho = Math.min(100, Math.max(1, Number(req.query.tamanho) || 25));
-
-    const [total, linhas, porStatus] = await Promise.all([
-      prisma.solicitacaoViagem.count({ where: whereComStatus }),
+    const [linhas, porStatus] = await Promise.all([
       prisma.solicitacaoViagem.findMany({
         where: whereComStatus,
         orderBy: { id: "desc" },
-        skip: (pagina - 1) * tamanho,
-        take: tamanho,
         include: {
           solicitante: { select: { nome: true } },
           atendimento: { select: { nome: true } },
@@ -639,16 +665,17 @@ solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
       prisma.solicitacaoViagem.groupBy({ by: ["status"], where, _count: { _all: true } }),
     ]);
 
-    res.json({
-      total,
-      pagina,
-      tamanho,
-      kpis: Object.fromEntries(porStatus.map((s) => [s.status, s._count._all])),
-      solicitacoes: linhas.map((v) => ({
+    return {
+      colunas: COLUNAS_LISTA,
+      totais: ["valorAprovado"],
+      pageSizePadrao: 25,
+      extras: { kpis: Object.fromEntries(porStatus.map((s) => [s.status, s._count._all])) },
+      linhas: linhas.map((v) => ({
         id: v.id,
         tipo: v.tipo,
         resumoItens: v.tipo === "outros" ? v.itens.map((i) => ({ descricao: i.descricao, quantidade: i.quantidade })) : [],
         status: v.status,
+        situacao: rotuloStatusViagem(v.status, v.tipo),
         finalidade: v.finalidade,
         motivo: v.motivo,
         solicitanteNome: v.solicitante?.nome ?? "Usuário removido",
@@ -665,11 +692,10 @@ solicitacoesViagemRouter.get("/", async (req: AuthenticatedRequest, res) => {
         valorAprovado: dec(v.valorAprovado),
         criadoEm: v.criadoEm,
       })),
-    });
-  } catch (error) {
-    handleError(res, error, "listar");
-  }
-});
+    };
+  },
+  "solicitacoes-viagem",
+);
 
 // ---------- detalhe ----------
 

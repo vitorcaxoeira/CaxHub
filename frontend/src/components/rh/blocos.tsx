@@ -1,6 +1,9 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useMemo, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
 import { Skeleton } from "../ui/Skeleton";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal, LeitorDeValor } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { BarraFiltrosRh } from "./BarraFiltrosRh";
 import { fmtVariacao } from "./formato";
 import type { RespostaBase } from "./useRh";
@@ -118,7 +121,9 @@ export function Painel({
   children: ReactNode;
 }) {
   return (
-    <section className={cn("rounded-lg border border-border bg-surface p-4", className)}>
+    // min-w-0: o Painel costuma ser item de grid (GradeDePaineis); sem ele, a tabela de colunas configuráveis (largura fixa por coluna)
+    // alarga o painel inteiro e estoura a página no celular, em vez de rolar dentro da própria tabela.
+    <section className={cn("min-w-0 rounded-lg border border-border bg-surface p-4", className)}>
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h2 className="font-display text-[15px] font-semibold text-foreground">{titulo}</h2>
@@ -214,17 +219,38 @@ export function VazioRh({ children }: { children: ReactNode }) {
   return <p className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted">{children}</p>;
 }
 
-/** Tabela simples e legível (sem paginação: as listas de RH têm no máximo dezenas de linhas). */
+export interface ColunaTabelaRh<T> {
+  titulo: string;
+  render: (l: T) => ReactNode;
+  alinhar?: "esq" | "dir";
+  largura?: string;
+  /** Com `chave` na tabela: nome técnico da coluna (o mesmo que fica salvo na arrumação do usuário). */
+  nome?: string;
+  /** Com `chave`: tipo do valor, para o funil (filtro) e o resumo do rodapé. */
+  tipo?: "texto" | "inteiro" | "decimal" | "data";
+  /** Com `chave`: o valor da coluna na linha (o que filtra, ordena e soma); sem ele, o campo de mesmo nome. */
+  valor?: (l: T) => unknown;
+  /** Formato do resumo do rodapé (soma, média...) na unidade da coluna. */
+  formatarResumo?: (v: number) => string;
+}
+
+/**
+ * Tabela simples e legível (sem paginação: as listas de RH têm no máximo dezenas de linhas). Com `chave`, ganha filtro e ordem por coluna,
+ * resumo no rodapé (soma, média...) e colunas calculadas por fórmula (29/10/2026): aí cada coluna precisa de `nome` e `tipo` (e `valor`).
+ */
 export function Tabela<T>({
   colunas,
   linhas,
   vazio = "Sem dados no período.",
+  chave,
 }: {
-  colunas: { titulo: string; render: (l: T) => ReactNode; alinhar?: "esq" | "dir"; largura?: string }[];
+  colunas: ColunaTabelaRh<T>[];
   linhas: T[];
   vazio?: string;
+  chave?: string;
 }) {
   if (!linhas.length) return <VazioRh>{vazio}</VazioRh>;
+  if (chave) return <TabelaRhConfiguravel chave={chave} colunas={colunas} linhas={linhas} />;
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-[13px]">
@@ -255,4 +281,37 @@ export function Tabela<T>({
       </table>
     </div>
   );
+}
+
+/** A Tabela com o kit de colunas: as definições vêm das colunas da tela (a assinatura estável evita refazer os hooks a cada render do pai). */
+function TabelaRhConfiguravel<T>({ chave, colunas, linhas }: { chave: string; colunas: ColunaTabelaRh<T>[]; linhas: T[] }) {
+  const ultimas = useRef(colunas);
+  ultimas.current = colunas;
+  const assinatura = colunas.map((c) => `${c.nome ?? c.titulo}|${c.titulo}|${c.alinhar ?? ""}|${c.tipo ?? ""}`).join(";");
+  const defs = useMemo<DefColuna<T>[]>(
+    () =>
+      colunas.map((c) => {
+        const nome = c.nome ?? c.titulo;
+        return {
+          nome,
+          titulo: c.titulo || nome,
+          direita: c.alinhar === "dir",
+          fixa: colunas[0] === c,
+          largura: 140,
+          formatarResumo: c.formatarResumo,
+          render: (l: T) => ultimas.current.find((x) => (x.nome ?? x.titulo) === nome)?.render(l),
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [assinatura],
+  );
+  const locais = useMemo<ColunaLocal[]>(() => colunas.map((c) => ({ nome: c.nome ?? c.titulo, tipo: c.tipo ?? "texto" })), [assinatura]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ler = useMemo<LeitorDeValor<T>>(
+    () => (l, nome) => {
+      const c = ultimas.current.find((x) => (x.nome ?? x.titulo) === nome);
+      return c?.valor ? c.valor(l) : (l as unknown as Record<string, unknown>)[nome];
+    },
+    [],
+  );
+  return <TabelaLocal<T> chave={chave} defs={defs} colunas={locais} linhas={linhas} ler={ler} chaveLinha={(_, i) => String(i)} vazio="" alturaMax="max-h-[420px]" />;
 }

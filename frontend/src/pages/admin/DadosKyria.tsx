@@ -5,6 +5,9 @@ import { Modal } from "../../components/ui/Modal";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useToast } from "../../components/ui/Toast";
 import { MultiSelectColumnFilter, VALOR_VAZIO, normalizar } from "../../components/ui/MultiSelectColumnFilter";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 
 // Consulta/edição dos dados JÁ SINCRONIZADOS de um job Kyria (Administração > Integração Kyria
 // > Sincronização > "Ver dados", 18/09/2026, pedido do Vitor). Diferente de tudo mais na
@@ -261,18 +264,21 @@ function ModalEscolherRegistroRelacionado({
   );
 }
 
+/** O que as células dos campos internos podem fazer (vincular/trocar e remover o vínculo). */
+interface AcoesKyria {
+  descricoes: Record<string, Record<string, string>>;
+  removendo: string | null;
+  editar: (e: { linhaId: string; campo: string; modelo: string; campoAlvo: string }) => void;
+  remover: (linhaId: string, campo: string, rotulo: string) => void;
+}
+
 export function DadosKyria() {
   const { jobName } = useParams<{ jobName: string }>();
   const toast = useToast();
   const [dados, setDados] = useState<ListaCompleta | null>(null);
-  const [pagina, setPagina] = useState(1);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [edicaoAberta, setEdicaoAberta] = useState<{ linhaId: string; campo: string; modelo: string; campoAlvo: string } | null>(null);
-  // Filtro de coluna (mesmo padrão de ListarPedidos "Por Cliente") — chave dinâmica
-  // (nomeInterno) em vez de um union type fixo, já que as colunas aqui vêm do mapeamento
-  // registrado, não são conhecidas em tempo de compilação. Coluna ausente = sem filtro.
-  const [filtrosColuna, setFiltrosColuna] = useState<Record<string, string[]>>({});
 
   function carregar() {
     if (!jobName) return;
@@ -292,8 +298,6 @@ export function DadosKyria() {
 
   useEffect(() => {
     carregar();
-    setFiltrosColuna({});
-    setPagina(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobName]);
 
@@ -329,39 +333,76 @@ export function DadosKyria() {
     }
   }
 
-  const opcoesPorColuna = useMemo(() => {
-    const mapa = new Map<string, string[]>();
-    if (!dados) return mapa;
-    for (const coluna of dados.colunas) {
-      const valores = new Set<string>();
-      for (const linha of dados.itens) valores.add(valorFiltravel(linha, coluna.nomeInterno));
-      mapa.set(coluna.nomeInterno, [...valores].sort((a, b) => a.localeCompare(b, "pt-BR")));
-    }
-    return mapa;
-  }, [dados]);
-
-  const temFiltro = Object.values(filtrosColuna).some((selecionados) => selecionados.length > 0);
-
-  const itensFiltrados = useMemo(() => {
-    if (!dados) return [];
-    if (!temFiltro) return dados.itens;
-    return dados.itens.filter((linha) =>
-      Object.entries(filtrosColuna).every(([coluna, selecionados]) => selecionados.length === 0 || selecionados.includes(valorFiltravel(linha, coluna)))
-    );
-  }, [dados, filtrosColuna, temFiltro]);
-
-  function alterarFiltroColuna(coluna: string, selecionados: string[]) {
-    setFiltrosColuna((atual) => ({ ...atual, [coluna]: selecionados }));
-    setPagina(1);
-  }
-
-  function limparFiltros() {
-    setFiltrosColuna({});
-    setPagina(1);
-  }
-
-  const totalPaginas = Math.max(1, Math.ceil(itensFiltrados.length / PAGE_SIZE));
-  const itensPagina = itensFiltrados.slice((pagina - 1) * PAGE_SIZE, pagina * PAGE_SIZE);
+  // Tabela com filtro e ordem por coluna, colunas configuráveis e resumo no rodapé (TabelaLocal, 03/11/2026): a lista já vem inteira
+  // (índice). O tipo de cada coluna sai dos próprios valores (as colunas vêm do mapeamento registrado, não do código).
+  const colunasLocais = useMemo<ColunaLocal[]>(
+    () =>
+      (dados?.colunas ?? []).map((c) => {
+        const valores = (dados?.itens ?? []).map((l) => l[c.nomeInterno]).filter((v) => v !== null && v !== undefined && v !== "");
+        const tipo =
+          valores.length > 0 && valores.every((v) => typeof v === "boolean")
+            ? "booleano"
+            : valores.length > 0 && valores.every((v) => typeof v === "number")
+              ? valores.every((v) => Number.isInteger(v))
+                ? "inteiro"
+                : "decimal"
+              : "texto";
+        return { nome: c.nomeInterno, tipo };
+      }),
+    [dados]
+  );
+  const defs = useMemo<DefColuna<Record<string, unknown>, AcoesKyria>[]>(
+    () =>
+      (dados?.colunas ?? []).map((c, i) => ({
+        nome: c.nomeInterno,
+        titulo: c.nomeInterno,
+        cabecalho: (
+          <>
+            {c.nomeInterno}
+            {c.ehInterno && (
+              <span className="ml-1 text-primary" title="Campo interno, editável">
+                ●
+              </span>
+            )}
+          </>
+        ),
+        fixa: i === 0,
+        largura: 160,
+        classe: "text-[12.5px] text-foreground",
+        texto: (l) => formatarValor(l[c.nomeInterno]),
+        formatarValor: (v) => formatarValor(v),
+        render: (linha, a) => {
+          if (!(c.ehInterno && c.relacionamentoModelo && c.relacionamentoCampo)) return formatarValor(linha[c.nomeInterno]);
+          const valorAtual = linha[c.nomeInterno];
+          const vinculado = valorAtual !== null && valorAtual !== undefined && valorAtual !== "";
+          const descricao = a.descricoes[c.nomeInterno]?.[String(valorAtual)];
+          const rotulo = `${formatarValor(valorAtual)}${descricao ? ` — ${descricao}` : ""}`;
+          const chaveRemocao = `${String(linha.id)}:${c.nomeInterno}`;
+          return (
+            <span className="inline-flex items-center gap-2">
+              <button
+                onClick={() => a.editar({ linhaId: String(linha.id), campo: c.nomeInterno, modelo: c.relacionamentoModelo!, campoAlvo: c.relacionamentoCampo! })}
+                className="text-primary hover:underline"
+              >
+                {rotulo}
+                {vinculado ? " · trocar" : " · vincular"}
+              </button>
+              {vinculado && (
+                <button
+                  onClick={() => a.remover(String(linha.id), c.nomeInterno, rotulo)}
+                  disabled={a.removendo === chaveRemocao}
+                  title="Remover o vínculo deste registro"
+                  className="text-destructive hover:underline disabled:opacity-50"
+                >
+                  {a.removendo === chaveRemocao ? "removendo…" : "remover"}
+                </button>
+              )}
+            </span>
+          );
+        },
+      })),
+    [dados]
+  );
 
   return (
     <div>
@@ -392,129 +433,17 @@ export function DadosKyria() {
         </p>
       )}
 
-      {temFiltro && (
-        <div className="mb-3">
-          <button
-            onClick={limparFiltros}
-            className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/20"
-          >
-            Limpar filtros
-          </button>
-        </div>
-      )}
-
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                {(dados?.colunas ?? []).map((c) => (
-                  <th key={c.nomeInterno} className="bg-surface-2 px-2.5 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    <span className="inline-flex items-center gap-1 normal-case tracking-normal">
-                      <span className="font-mono text-[10px] uppercase tracking-wider">{c.nomeInterno}</span>
-                      {c.ehInterno && <span className="text-primary" title="Campo interno, editável">●</span>}
-                      <MultiSelectColumnFilter
-                        titulo={c.nomeInterno}
-                        opcoes={opcoesPorColuna.get(c.nomeInterno) ?? []}
-                        selecionados={filtrosColuna[c.nomeInterno] ?? []}
-                        onChange={(selecionados) => alterarFiltroColuna(c.nomeInterno, selecionados)}
-                      />
-                    </span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {carregando &&
-                Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i} className="border-t border-border/60">
-                    <td colSpan={dados?.colunas.length ?? 1} className="px-2.5 py-3">
-                      <Skeleton className="h-4 w-full" />
-                    </td>
-                  </tr>
-                ))}
-              {!carregando && dados && dados.itens.length === 0 && (
-                <tr>
-                  <td colSpan={dados.colunas.length} className="px-2.5 py-4 text-center text-sm text-muted">
-                    Nenhum registro sincronizado ainda.
-                  </td>
-                </tr>
-              )}
-              {!carregando && dados && dados.itens.length > 0 && itensFiltrados.length === 0 && (
-                <tr>
-                  <td colSpan={dados.colunas.length} className="px-2.5 py-4 text-center text-sm text-muted">
-                    Nenhum registro bate com o filtro selecionado.
-                  </td>
-                </tr>
-              )}
-              {!carregando &&
-                dados &&
-                itensPagina.map((linha) => (
-                  <tr key={String(linha.id)} className="border-t border-border/60">
-                    {dados.colunas.map((c) => (
-                      <td key={c.nomeInterno} className="px-2.5 py-2 text-[12.5px] text-foreground">
-                        {c.ehInterno && c.relacionamentoModelo && c.relacionamentoCampo ? (
-                          (() => {
-                            const valorAtual = linha[c.nomeInterno];
-                            const vinculado = valorAtual !== null && valorAtual !== undefined && valorAtual !== "";
-                            const descricao = dados.descricoes[c.nomeInterno]?.[String(valorAtual)];
-                            const rotulo = `${formatarValor(valorAtual)}${descricao ? ` — ${descricao}` : ""}`;
-                            const chaveRemocao = `${String(linha.id)}:${c.nomeInterno}`;
-                            return (
-                              <span className="inline-flex items-center gap-2">
-                                <button
-                                  onClick={() =>
-                                    setEdicaoAberta({
-                                      linhaId: String(linha.id),
-                                      campo: c.nomeInterno,
-                                      modelo: c.relacionamentoModelo!,
-                                      campoAlvo: c.relacionamentoCampo!,
-                                    })
-                                  }
-                                  className="text-primary hover:underline"
-                                >
-                                  {rotulo}
-                                  {vinculado ? " · trocar" : " · vincular"}
-                                </button>
-                                {vinculado && (
-                                  <button
-                                    onClick={() => removerVinculo(String(linha.id), c.nomeInterno, rotulo)}
-                                    disabled={removendo === chaveRemocao}
-                                    title="Remover o vínculo deste registro"
-                                    className="text-destructive hover:underline disabled:opacity-50"
-                                  >
-                                    {removendo === chaveRemocao ? "removendo…" : "remover"}
-                                  </button>
-                                )}
-                              </span>
-                            );
-                          })()
-                        ) : (
-                          formatarValor(linha[c.nomeInterno])
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {itensFiltrados.length > PAGE_SIZE && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted">
-          <button onClick={() => setPagina((p) => Math.max(1, p - 1))} disabled={pagina <= 1} className="hover:text-foreground disabled:opacity-40">
-            ← Anterior
-          </button>
-          <span>
-            página {pagina} de {totalPaginas} ({itensFiltrados.length}
-            {temFiltro ? ` de ${dados?.itens.length ?? 0}` : ""} registros)
-          </span>
-          <button onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))} disabled={pagina >= totalPaginas} className="hover:text-foreground disabled:opacity-40">
-            Próxima →
-          </button>
-        </div>
-      )}
+      <TabelaLocal<Record<string, unknown>, AcoesKyria>
+        chave={`admin.kyria.${(jobName ?? "").toLowerCase().replace(/[^a-z0-9._-]+/g, ".")}`.slice(0, 80)}
+        defs={defs}
+        colunas={colunasLocais}
+        linhas={dados?.itens ?? []}
+        chaveLinha={(l, i) => String(l.id ?? i)}
+        loading={carregando}
+        vazio="Nenhum registro sincronizado ainda."
+        alturaMax="max-h-[70vh]"
+        ctx={{ descricoes: dados?.descricoes ?? {}, removendo, editar: setEdicaoAberta, remover: removerVinculo }}
+      />
 
       {edicaoAberta && (
         <ModalEscolherRegistroRelacionado

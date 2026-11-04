@@ -1,4 +1,8 @@
+import { useMemo } from "react";
 import { Modal } from "../ui/Modal";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import type { GrupoRdv, ItemRdvEmRat, ItemTituloRdv } from "../../hooks/useRdvConsultor";
 
 const moeda = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -8,8 +12,6 @@ function formatarData(iso: string | null): string {
   return iso ? dataFormatter.format(new Date(`${iso}T00:00:00Z`)) : "—";
 }
 
-const th = "px-3 py-2 font-mono text-[10px] font-medium uppercase tracking-wider text-muted";
-const thDireita = `${th} text-right`;
 
 // O que o modal mostra: as despesas de RAT ainda não aprovada, ou uma faixa de títulos a
 // pagar em aberto (vencidos / este mês / próximos meses).
@@ -22,6 +24,55 @@ export type SelecaoRdv =
 
 export type FaixaTitulo = "Vencido" | "No mês" | "Próximos meses";
 export type ItemTituloComFaixa = ItemTituloRdv & { faixa: FaixaTitulo };
+
+// Tabelas do modal com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026).
+const LOCAIS_RDV: ColunaLocal[] = [
+  { nome: "numrat", tipo: "inteiro" },
+  { nome: "sitratLabel", tipo: "texto" },
+  { nome: "data", tipo: "data", utc: true },
+  { nome: "desrdv", tipo: "texto" },
+  { nome: "tipdesLabel", tipo: "texto" },
+  { nome: "qtdrdv", tipo: "decimal" },
+  { nome: "vlrunt", tipo: "decimal" },
+  { nome: "vlrtot", tipo: "decimal" },
+];
+const brl = (v: number) => moeda.format(v);
+const COLUNAS_RDV: DefColuna<ItemRdvEmRat>[] = [
+  { nome: "numrat", titulo: "RAT", fixa: true, largura: 80, classe: "font-mono text-xs text-foreground", render: (d) => d.numrat },
+  { nome: "sitratLabel", titulo: "Situação", largura: 110, classe: "text-xs text-muted", render: (d) => d.sitratLabel },
+  { nome: "data", titulo: "Data", largura: 100, classe: "font-mono text-xs text-muted", render: (d) => formatarData(d.datemi ?? d.datemiRat) },
+  { nome: "desrdv", titulo: "Descrição", largura: 260, classe: "text-xs text-foreground", texto: (d) => d.desrdv, render: (d) => d.desrdv ?? "—" },
+  { nome: "tipdesLabel", titulo: "Tipo", largura: 130, classe: "text-xs text-muted", render: (d) => d.tipdesLabel },
+  { nome: "qtdrdv", titulo: "Qtd", direita: true, largura: 70, classe: "font-mono text-xs tabular-nums text-muted", render: (d) => d.qtdrdv ?? "—" },
+  { nome: "vlrunt", titulo: "Vlr unit.", direita: true, largura: 110, classe: "font-mono text-xs tabular-nums text-muted", formatarResumo: brl, render: (d) => brl(d.vlrunt) },
+  { nome: "vlrtot", titulo: "Total", direita: true, largura: 110, classe: "font-mono text-xs tabular-nums text-foreground", formatarResumo: brl, render: (d) => brl(d.vlrtot) },
+];
+const LOCAIS_TITULOS: ColunaLocal[] = [
+  { nome: "numtit", tipo: "texto", obrigatoria: true },
+  { nome: "codfil", tipo: "inteiro" },
+  { nome: "datemi", tipo: "data", utc: true },
+  { nome: "vctpro", tipo: "data", utc: true },
+  { nome: "faixa", tipo: "texto" },
+  { nome: "obstcp", tipo: "texto" },
+  { nome: "vlrori", tipo: "decimal" },
+  { nome: "vlrabe", tipo: "decimal" },
+];
+const COLUNAS_TITULOS: DefColuna<ItemTituloRdv | ItemTituloComFaixa>[] = [
+  { nome: "numtit", titulo: "Título", fixa: true, largura: 110, classe: "font-mono text-xs text-foreground", resumos: ["contagem"], render: (t) => t.numtit },
+  { nome: "codfil", titulo: "Filial", largura: 70, classe: "font-mono text-xs text-muted", render: (t) => t.codfil },
+  { nome: "datemi", titulo: "Emissão", largura: 100, classe: "font-mono text-xs text-muted", render: (t) => formatarData(t.datemi) },
+  { nome: "vctpro", titulo: "Vencimento", largura: 100, classe: "font-mono text-xs text-foreground", render: (t) => formatarData(t.vctpro) },
+  {
+    nome: "faixa",
+    titulo: "Faixa",
+    largura: 120,
+    classe: (t) => `text-xs ${"faixa" in t && t.faixa === "Vencido" ? "text-destructive" : "text-muted"}`,
+    render: (t) => ("faixa" in t ? t.faixa : "—"),
+  },
+  { nome: "obstcp", titulo: "Observação", largura: 240, classe: "text-xs text-muted", texto: (t) => t.obstcp, render: (t) => t.obstcp ?? "—" },
+  { nome: "vlrori", titulo: "Valor original", direita: true, largura: 120, classe: "font-mono text-xs tabular-nums text-muted", formatarResumo: brl, render: (t) => brl(t.vlrori) },
+  { nome: "vlrabe", titulo: "Em aberto", direita: true, largura: 120, classe: "font-mono text-xs tabular-nums text-foreground", formatarResumo: brl, render: (t) => brl(t.vlrabe) },
+];
 
 function Cabecalho({ quantidade, rotulo, total }: { quantidade: number; rotulo: string; total: number }) {
   return (
@@ -39,38 +90,16 @@ function TabelaRdv({ grupo, semCabecalho = false }: { grupo: GrupoRdv<ItemRdvEmR
   return (
     <>
       {!semCabecalho && <Cabecalho quantidade={grupo.itens.length} rotulo="despesa" total={grupo.total} />}
-      <div className="overflow-x-auto rounded-md border border-border/60">
-        <table className="w-full border-collapse text-left">
-          <thead>
-            <tr className="bg-surface-2">
-              <th className={th}>RAT</th>
-              <th className={th}>Situação</th>
-              <th className={th}>Data</th>
-              <th className={th}>Descrição</th>
-              <th className={th}>Tipo</th>
-              <th className={thDireita}>Qtd</th>
-              <th className={thDireita}>Vlr unit.</th>
-              <th className={thDireita}>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {grupo.itens.map((d) => (
-              <tr key={d.id} className="border-t border-border/60">
-                <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{d.numrat}</td>
-                <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">{d.sitratLabel}</td>
-                <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{formatarData(d.datemi ?? d.datemiRat)}</td>
-                <td className="max-w-[320px] truncate px-3 py-2 text-xs text-foreground" title={d.desrdv ?? undefined}>
-                  {d.desrdv ?? "—"}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">{d.tipdesLabel}</td>
-                <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-muted">{d.qtdrdv ?? "—"}</td>
-                <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-muted">{moeda.format(d.vlrunt)}</td>
-                <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">{moeda.format(d.vlrtot)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TabelaLocal<ItemRdvEmRat>
+        chave="dashboard.rdv.despesas"
+        defs={COLUNAS_RDV}
+        colunas={LOCAIS_RDV}
+        linhas={grupo.itens}
+        ler={(d, nome) => (nome === "data" ? d.datemi ?? d.datemiRat : (d as unknown as Record<string, unknown>)[nome])}
+        chaveLinha={(d) => String(d.id)}
+        vazio="Nenhuma despesa."
+        alturaMax="max-h-[55vh]"
+      />
     </>
   );
 }
@@ -84,45 +113,19 @@ function TabelaTitulos({
   comFaixa?: boolean;
   semCabecalho?: boolean;
 }) {
+  const defs = useMemo(() => (comFaixa ? COLUNAS_TITULOS : COLUNAS_TITULOS.filter((c) => c.nome !== "faixa")), [comFaixa]);
   return (
     <>
       {!semCabecalho && <Cabecalho quantidade={grupo.itens.length} rotulo="título" total={grupo.total} />}
-      <div className="overflow-x-auto rounded-md border border-border/60">
-        <table className="w-full border-collapse text-left">
-          <thead>
-            <tr className="bg-surface-2">
-              <th className={th}>Título</th>
-              <th className={th}>Filial</th>
-              <th className={th}>Emissão</th>
-              <th className={th}>Vencimento</th>
-              {comFaixa && <th className={th}>Faixa</th>}
-              <th className={th}>Observação</th>
-              <th className={thDireita}>Valor original</th>
-              <th className={thDireita}>Em aberto</th>
-            </tr>
-          </thead>
-          <tbody>
-            {grupo.itens.map((t) => (
-              <tr key={`${t.codemp}-${t.codfil}-${t.numtit}`} className="border-t border-border/60">
-                <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{t.numtit}</td>
-                <td className="px-3 py-2 font-mono text-xs text-muted">{t.codfil}</td>
-                <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{formatarData(t.datemi)}</td>
-                <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{formatarData(t.vctpro)}</td>
-                {comFaixa && (
-                  <td className={`whitespace-nowrap px-3 py-2 text-xs ${"faixa" in t && t.faixa === "Vencido" ? "text-destructive" : "text-muted"}`}>
-                    {"faixa" in t ? t.faixa : "—"}
-                  </td>
-                )}
-                <td className="max-w-[280px] truncate px-3 py-2 text-xs text-muted" title={t.obstcp ?? undefined}>
-                  {t.obstcp ?? "—"}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-muted">{moeda.format(t.vlrori)}</td>
-                <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">{moeda.format(t.vlrabe)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TabelaLocal<ItemTituloRdv | ItemTituloComFaixa>
+        chave={comFaixa ? "dashboard.rdv.titulos-faixa" : "dashboard.rdv.titulos"}
+        defs={defs}
+        colunas={LOCAIS_TITULOS}
+        linhas={grupo.itens}
+        chaveLinha={(t) => `${t.codemp}-${t.codfil}-${t.numtit}`}
+        vazio="Nenhum título."
+        alturaMax="max-h-[55vh]"
+      />
     </>
   );
 }

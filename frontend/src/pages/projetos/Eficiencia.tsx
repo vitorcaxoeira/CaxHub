@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
+import { SelectFiltro } from "../../components/ui/ControlesFiltro";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useToast } from "../../components/ui/Toast";
 import { TabDef, Tabs } from "../../components/ui/Tabs";
@@ -218,14 +221,46 @@ export function Eficiencia() {
   const [recarga, setRecarga] = useState(0);
   const parametrosRef = useRef<HTMLDivElement>(null);
 
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
   useEffect(() => {
     axios
       .get<FiltrosOpcoes>("/api/eficiencia/filtros")
       .then(({ data }) => setOpcoes(data))
-      .catch((e) => axios.isAxiosError(e) && e.response?.status === 403 && setSemAcesso(true));
+      .catch((e) => {
+        setOpcoesFalharam(true);
+        if (axios.isAxiosError(e) && e.response?.status === 403) setSemAcesso(true);
+      });
   }, []);
 
+  // Padrão de cada filtro (estrela, 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta do painel.
+  const campoLista = (rotulo: string, campo: Exclude<keyof FiltrosEficiencia, "tipo">, existentes: { valor: number }[] | undefined) => ({
+    rotulo,
+    atual: filtros[campo],
+    aplicar: (v: number[]) => setFiltros((f) => ({ ...f, [campo]: v })),
+    validar: regras.lista("number", existentes?.map((o) => o.valor)),
+  });
+  const padroes = usePadroesTela({
+    tela: "projetos.eficiencia",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    campos: {
+      tipo: {
+        rotulo: "Propostas",
+        atual: filtros.tipo,
+        aplicar: (v: FiltrosEficiencia["tipo"]) => setFiltros((f) => ({ ...f, tipo: v })),
+        validar: regras.valorUnico("string", ["cli", "int", "all"]),
+        semOpcoes: true,
+      },
+      sitpro: campoLista("Situação", "sitpro", opcoes?.situacoes),
+      modpro: campoLista("Modalidade", "modpro", opcoes?.modalidades),
+      codcli: campoLista("Cliente", "codcli", opcoes?.clientes),
+      codpro: campoLista("Proposta", "codpro", opcoes?.propostas),
+      depexe: campoLista("Departamento", "depexe", opcoes?.departamentos),
+    },
+  });
+
   useEffect(() => {
+    if (!padroes.pronto) return;
     let cancelado = false;
     setCarregando(true);
     setErro(null);
@@ -256,7 +291,8 @@ export function Eficiencia() {
     return () => {
       cancelado = true;
     };
-  }, [filtros, modoEstouro, capacidade, ignoradasParam, consultoresIgnoradosParam, itensIgnoradosParam, consultoresNaPropostaParam, recarga]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [padroes.pronto, filtros, modoEstouro, capacidade, ignoradasParam, consultoresIgnoradosParam, itensIgnoradosParam, consultoresNaPropostaParam, recarga]);
 
   useEffect(() => {
     if (!parametrosAbertos) return;
@@ -476,15 +512,17 @@ export function Eficiencia() {
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-[12.5px] text-muted">
           Propostas
-          <select
+          <SelectFiltro
+            aria-label="Propostas"
+            className="w-40"
             value={filtros.tipo}
             onChange={(e) => setFiltros((f) => ({ ...f, tipo: e.target.value as FiltrosEficiencia["tipo"] }))}
-            className={selectClass}
+            acessorio={padroes.estrela("tipo")}
           >
             <option value="cli">De clientes</option>
             <option value="int">Internas</option>
             <option value="all">Todas</option>
-          </select>
+          </SelectFiltro>
         </label>
         {opcoes && (
           <>
@@ -494,6 +532,7 @@ export function Eficiencia() {
               onChange={(sitpro) => setFiltros((f) => ({ ...f, sitpro }))}
               labelTodos="Todas as situações"
               labelSufixo="situações"
+              acessorio={padroes.estrela("sitpro")}
             />
             <MultiSelectDropdown
               opcoes={opcoes.modalidades.map((s) => ({ value: s.valor, label: s.rotulo }))}
@@ -501,6 +540,7 @@ export function Eficiencia() {
               onChange={(modpro) => setFiltros((f) => ({ ...f, modpro }))}
               labelTodos="Todas as modalidades"
               labelSufixo="modalidades"
+              acessorio={padroes.estrela("modpro")}
             />
             {opcoes.clientes.length > 1 && (
               <MultiSelectDropdown
@@ -509,6 +549,7 @@ export function Eficiencia() {
                 onChange={(codcli) => setFiltros((f) => ({ ...f, codcli }))}
                 labelTodos="Todos os clientes"
                 labelSufixo="clientes"
+                acessorio={padroes.estrela("codcli")}
               />
             )}
             {opcoesProposta.length > 1 && (
@@ -518,6 +559,7 @@ export function Eficiencia() {
                 onChange={(codpro) => setFiltros((f) => ({ ...f, codpro }))}
                 labelTodos="Todas as propostas"
                 labelSufixo="propostas"
+                acessorio={padroes.estrela("codpro")}
               />
             )}
             {opcoes.departamentos.length > 1 && (
@@ -527,6 +569,7 @@ export function Eficiencia() {
                 onChange={(depexe) => setFiltros((f) => ({ ...f, depexe }))}
                 labelTodos="Todos os departamentos"
                 labelSufixo="departamentos"
+                acessorio={padroes.estrela("depexe")}
               />
             )}
           </>

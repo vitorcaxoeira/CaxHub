@@ -1,160 +1,89 @@
-import axios from "axios";
-import { useEffect, useState } from "react";
 import { Modal } from "../ui/Modal";
-import { Spinner } from "../ui/Spinner";
-import { Pagination } from "../ui/Pagination";
-import { formatarMes, ValorClicado } from "./MatrizContabil";
+import { ListaServidor } from "../colunas/ListaServidor";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
+import { formatarMes } from "./MatrizContabil";
 
-// Espelha o retorno de GET /contabil/resultado/lancamentos (backend/src/routes/contabil.ts).
-interface LancamentoDetalhe {
+// GET /contabil/resultado/lancamentos (backend/src/routes/contabil.ts): os lançamentos por trás de uma célula da matriz, com filtro e ordem por
+// coluna, resumo no rodapé e colunas calculadas por fórmula (ListaServidor, 29/10/2026). O total do cabeçalho soma TODOS os lançamentos do
+// filtro e, sem filtro por coluna, bate com a célula clicada.
+interface LancamentoContabilDetalhe {
   numlct: string;
   ctared: number;
-  // "1234 - Descrição da conta" — só exibida quando `ctareds.length > 1` (mais de uma conta
-  // real compõe o valor clicado, ver ValorClicado/LinhaMatrizContabil.ctareds).
-  contaRotulo: string;
+  conta: string;
   datlct: string;
-  codccu: string;
-  // "1111 - Nome do centro de custo" — cai pro código sozinho quando o centro de custo não
-  // está (mais) cadastrado localmente (join fora, ver routes/contabil.ts).
-  codccuRotulo: string;
-  debcreLabel: string;
+  centro_custo: string | null;
+  debcre: string | null;
+  debcre_label: string;
+  vlrrat: number;
   valor: number;
   cpllct: string | null;
-  // Texto legível do Histórico, já montado no backend a partir do template de HistoricoPadrao
-  // (E046HPD) + os parâmetros de `cpllct` — ver domain/historicoPadrao.ts. Cai pro `cpllct`
-  // cru sozinho quando não há template (lançamento sem `codhpd`, ou contagem de parâmetros não
-  // bate com o template — nunca mostra texto errado).
+  /** Texto final (com o template do histórico padrão); a coluna filtra e ordena pelo complemento (`cpllct`). */
   historico: string | null;
-  orilctLabel: string;
+  origem: string;
   sitlctLabel: string;
-}
-
-interface RespostaLancamentos {
-  lancamentos: LancamentoDetalhe[];
-  total: number;
-  // Soma de `valor` em TODOS os lançamentos que batem o filtro (não só a página atual) — tem
-  // que bater exatamente com o valor da célula clicada; é a própria conferência do drilldown.
-  valorTotal: number;
-  page: number;
-  pageSize: number;
 }
 
 const dataFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
 const moeda = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-interface ModalDetalheLancamentosProps extends ValorClicado {
-  // Mesmo filtro de centro de custo ativo na tela — sem propagar, a lista traria mais
-  // lançamento do que a célula soma (ver regra 4 do pedido: filtros precisam chegar aqui).
+const COLUNAS: DefColuna<LancamentoContabilDetalhe>[] = [
+  { nome: "datlct", titulo: "Data", fixa: true, classe: "font-mono text-xs text-muted", largura: 90, render: (l) => dataFormatter.format(new Date(l.datlct)) },
+  { nome: "numlct", titulo: "Lançamento", classe: "font-mono text-xs text-muted", largura: 110, render: (l) => l.numlct },
+  { nome: "conta", titulo: "Conta", classe: "text-xs text-foreground", largura: 240, texto: (l) => l.conta, render: (l) => l.conta },
+  { nome: "origem", titulo: "Origem", classe: "text-xs text-muted", largura: 140, render: (l) => l.origem },
+  {
+    nome: "cpllct",
+    titulo: "Histórico",
+    dica: "Filtra e ordena pelo complemento do lançamento; o texto mostrado aplica o histórico padrão",
+    classe: "text-xs text-foreground",
+    largura: 300,
+    texto: (l) => l.historico,
+    render: (l) => l.historico ?? "—",
+  },
+  { nome: "centro_custo", titulo: "C. Custo", classe: "text-xs text-muted", largura: 200, texto: (l) => l.centro_custo, render: (l) => l.centro_custo ?? "—" },
+  { nome: "debcre_label", titulo: "D/C", classe: "text-xs text-muted", largura: 90, render: (l) => l.debcre_label },
+  {
+    nome: "valor",
+    titulo: "Valor",
+    direita: true,
+    largura: 130,
+    formatarResumo: (v) => moeda.format(v),
+    classe: (l) => `font-mono text-xs tabular-nums ${l.valor < 0 ? "text-destructive" : "text-foreground"}`,
+    render: (l) => moeda.format(l.valor),
+  },
+];
+
+interface Props {
+  ctareds: number[];
+  mesReferencia: string;
+  rotulo: string;
   codccu: string[];
   onClose: () => void;
 }
 
-export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu, onClose }: ModalDetalheLancamentosProps) {
-  const [dados, setDados] = useState<RespostaLancamentos | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
-
-  useEffect(() => {
-    setLoading(true);
-    axios
-      .get("/api/contabil/resultado/lancamentos", {
-        params: {
-          ctareds: ctareds.join(","),
-          mesReferencia,
-          codccu: codccu.length > 0 ? codccu.join(",") : undefined,
-          page,
-          pageSize: 50,
-        },
-      })
-      .then(({ data }) => {
-        setDados(data);
-        setErro(null);
-      })
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os lançamentos"))
-      .finally(() => setLoading(false));
-    // `ctareds` é um array novo a cada render do pai — comparar pelo conteúdo (join) evita
-    // refetch em loop por identidade de referência.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctareds.join(","), mesReferencia, codccu.join(","), page]);
-
-  const mostrarColunaConta = ctareds.length > 1;
-
+export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu, onClose }: Props) {
   return (
-    <Modal open onClose={onClose} title={rotulo} subtitulo={formatarMes(mesReferencia)} className="w-[calc(100%-2rem)] max-w-7xl">
-      {loading && !dados ? (
-        <div className="flex justify-center py-10">
-          <Spinner className="h-6 w-6" />
-        </div>
-      ) : erro ? (
-        <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{erro}</p>
-      ) : dados && dados.lancamentos.length === 0 ? (
-        <p className="py-8 text-center text-sm text-muted">Nenhum lançamento encontrado pra este valor.</p>
-      ) : dados ? (
-        <>
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <p className="text-[12.5px] text-muted">
-              {dados.total} lançamento{dados.total === 1 ? "" : "s"}
-            </p>
-            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">Total: {moeda.format(dados.valorTotal)}</p>
-          </div>
-          <div className="overflow-x-auto rounded-md border border-border/60">
-            <table className="w-full border-collapse text-left">
-              <thead>
-                <tr className="bg-surface-2">
-                  {/* Número do lançamento no Senior (E640LCT.NumLct): primeira coluna, para achar o lançamento lá. */}
-                  <th className="px-3 py-2 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Nº lanç.</th>
-                  <th className="px-3 py-2 font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Data</th>
-                  {mostrarColunaConta && (
-                    <th className="px-3 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Conta</th>
-                  )}
-                  <th className="px-3 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Histórico</th>
-                  <th className="px-3 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Origem</th>
-                  <th className="px-3 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">C. Custo</th>
-                  <th className="px-3 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">D/C</th>
-                  <th className="px-3 py-2 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Valor</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dados.lancamentos.map((l) => (
-                  <tr key={`${l.numlct}-${l.ctared}`} className="border-t border-border/60">
-                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">{l.numlct}</td>
-                    <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{dataFormatter.format(new Date(l.datlct))}</td>
-                    {/* Uma linha por lançamento: texto que não cabe termina em "…" e aparece inteiro ao passar o mouse (title). */}
-                    {mostrarColunaConta && (
-                      <td className="max-w-[220px] truncate whitespace-nowrap px-3 py-2 text-xs text-muted" title={l.contaRotulo}>
-                        {l.contaRotulo}
-                      </td>
-                    )}
-                    <td className="max-w-[520px] truncate whitespace-nowrap px-3 py-2 text-xs text-foreground" title={l.historico ?? l.cpllct ?? undefined}>
-                      {l.historico ?? "—"}
-                    </td>
-                    <td className="max-w-[180px] truncate whitespace-nowrap px-3 py-2 text-xs text-muted" title={l.orilctLabel}>
-                      {l.orilctLabel}
-                    </td>
-                    <td className="max-w-[200px] truncate whitespace-nowrap px-3 py-2 text-xs text-muted" title={l.codccuRotulo}>
-                      {l.codccuRotulo}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">{l.debcreLabel}</td>
-                    <td
-                      className={`whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums ${
-                        l.valor < 0 ? "text-destructive" : "text-foreground"
-                      }`}
-                    >
-                      {moeda.format(l.valor)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {dados.total > dados.pageSize && (
-            <div className="-mx-4 -mb-4 mt-1">
-              <Pagination page={dados.page} pageSize={dados.pageSize} total={dados.total} loading={loading} onPageChange={setPage} label="lançamentos" />
-            </div>
-          )}
-        </>
-      ) : null}
+    <Modal open onClose={onClose} title={rotulo} subtitulo={formatarMes(mesReferencia)} className="max-w-5xl">
+      <ListaServidor<LancamentoContabilDetalhe>
+        chave="contabil.resultado.lancamentos"
+        url="/api/contabil/resultado/lancamentos"
+        params={{ ctareds: ctareds.join(","), mesReferencia, codccu: codccu.length > 0 ? codccu.join(",") : undefined }}
+        defs={COLUNAS}
+        chaveLinha={(l, i) => `${l.numlct}-${l.ctared}-${i}`}
+        rotulo="lançamentos"
+        vazio="Nenhum lançamento encontrado pra este valor."
+        alturaMax="max-h-[60vh]"
+        topo={(d) =>
+          d && (
+            <>
+              <span className="text-[12.5px] text-muted">
+                {d.total} lançamento{d.total === 1 ? "" : "s"}
+              </span>
+              <span className="ml-auto font-mono text-sm font-semibold tabular-nums text-foreground">Total: {moeda.format(d.totais?.valor ?? 0)}</span>
+            </>
+          )
+        }
+      />
     </Modal>
   );
 }

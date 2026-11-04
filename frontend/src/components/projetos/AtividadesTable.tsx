@@ -123,6 +123,8 @@ interface AtividadesTableProps {
   onFiltros: (patch: Partial<FiltrosAtividades>) => void;
   onPageChange: (page: number) => void;
   onLimparKpi: () => void;
+  /** Estrela de padrão de cada filtro (repassada à barra de filtros). */
+  estrela?: (campo: string) => import("react").ReactNode;
   onMover: (atividadeId: number, novaColunaId: number) => void;
   onAbrirDetalhe: (atividadeId: number, info: DetalheInfo) => void;
   onIniciar: (atividadeId: number) => void;
@@ -192,6 +194,7 @@ export function AtividadesTable({
   onFiltros,
   onPageChange,
   onLimparKpi,
+  estrela,
   onMover,
   onAbrirDetalhe,
   onIniciar,
@@ -235,6 +238,7 @@ export function AtividadesTable({
         situacaoKpi={situacaoKpi}
         onFiltros={onFiltros}
         onLimparKpi={onLimparKpi}
+        estrela={estrela}
       />
 
       <div className="overflow-hidden rounded-lg border border-border bg-surface">

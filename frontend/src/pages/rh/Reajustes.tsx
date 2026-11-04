@@ -96,12 +96,13 @@ export function Reajustes() {
             {d.maioresAumentos && (
               <Painel titulo="Maiores aumentos do período" descricao="Lista nominal, só para o papel RH.">
                 <Tabela
+                  chave="rh.reajustes.maiores-aumentos"
                   colunas={[
-                    { titulo: "Colaborador", render: (l) => l.nome },
-                    { titulo: "Data", render: (l) => fmtData(l.data), alinhar: "dir" },
-                    { titulo: "Motivo", render: (l) => l.motivo ?? "—" },
-                    { titulo: "Aumento", render: (l) => fmtPct(l.percentual), alinhar: "dir" },
-                    { titulo: "Salário", render: (l) => fmtMoeda(l.salario), alinhar: "dir" },
+                    { nome: "nome", tipo: "texto", titulo: "Colaborador", render: (l) => l.nome },
+                    { nome: "data", tipo: "data", titulo: "Data", render: (l) => fmtData(l.data), alinhar: "dir" },
+                    { nome: "motivo", tipo: "texto", titulo: "Motivo", render: (l) => l.motivo ?? "—" },
+                    { nome: "percentual", tipo: "decimal", titulo: "Aumento", render: (l) => fmtPct(l.percentual), alinhar: "dir", formatarResumo: (v) => fmtPct(v) },
+                    { nome: "salario", tipo: "decimal", titulo: "Salário", render: (l) => fmtMoeda(l.salario), alinhar: "dir", formatarResumo: (v) => fmtMoeda(v) },
                   ]}
                   linhas={d.maioresAumentos}
                 />

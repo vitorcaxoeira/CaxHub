@@ -6,6 +6,10 @@ import multer from "multer";
 import rateLimit from "express-rate-limit";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { Prisma } from "@prisma/client";
+import { type LayoutColunas, tabelaValida, validarLayoutColunas } from "./layoutColunas";
+import { MAX_CALCULADAS_POR_LISTA, validarColunaCalculada } from "./colunasCalculadas";
+import { campoFiltroValido, validarValorFiltro } from "./preferenciasFiltros";
 import { AVATARS_DIR } from "../config/uploads";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
@@ -230,4 +234,245 @@ perfilRouter.post("/senha", senhaLimiter, async (req: AuthenticatedRequest, res)
   });
 
   res.json({ ok: true });
+});
+
+// Preferências de lista (colunas, resumo do rodapé, padrão de filtro, colunas calculadas): trazidas do CaxHub_Dash em 03/11/2026.
+
+// ---- Arrumação das colunas das tabelas (26/10/2026) ----------------------------------------------------------------------------
+// Ordem, colunas ocultas e larguras de cada tabela da tela, por usuário (`preferencias_colunas`, só por SQL). Sem linha = arrumação padrão da tela.
+
+perfilRouter.get("/colunas/:tabela", async (req: AuthenticatedRequest, res) => {
+  const { tabela } = req.params;
+  if (!tabelaValida(tabela)) {
+    res.status(400).json({ error: "Tabela inválida" });
+    return;
+  }
+  try {
+    const [linha] = await prisma.$queryRaw<LayoutColunas[]>(
+      Prisma.sql`SELECT ordem, ocultas, larguras, resumos FROM preferencias_colunas WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`,
+    );
+    res.json(linha ?? { ordem: [], ocultas: [], larguras: {}, resumos: {} });
+  } catch (err) {
+    console.error("[perfil] colunas-get:", err);
+    res.status(500).json({ error: "Falha ao ler a arrumação das colunas" });
+  }
+});
+
+perfilRouter.put("/colunas/:tabela", async (req: AuthenticatedRequest, res) => {
+  const { tabela } = req.params;
+  const layout = validarLayoutColunas(req.body);
+  if (!tabelaValida(tabela) || !layout) {
+    res.status(400).json({ error: "Arrumação de colunas inválida" });
+    return;
+  }
+  try {
+    await prisma.$executeRaw(Prisma.sql`
+      INSERT INTO preferencias_colunas (user_id, tabela, ordem, ocultas, larguras, resumos, atualizado_em)
+      VALUES (${req.user!.userId}, ${tabela}, ${layout.ordem}::text[], ${layout.ocultas}::text[], ${JSON.stringify(layout.larguras)}::jsonb,
+              ${JSON.stringify(layout.resumos)}::jsonb, now())
+      ON CONFLICT (user_id, tabela) DO UPDATE SET ordem = EXCLUDED.ordem, ocultas = EXCLUDED.ocultas, larguras = EXCLUDED.larguras,
+                                                 resumos = EXCLUDED.resumos, atualizado_em = now()`);
+    res.json(layout);
+  } catch (err) {
+    console.error("[perfil] colunas-put:", err);
+    res.status(500).json({ error: "Falha ao gravar a arrumação das colunas" });
+  }
+});
+
+perfilRouter.delete("/colunas/:tabela", async (req: AuthenticatedRequest, res) => {
+  const { tabela } = req.params;
+  if (!tabelaValida(tabela)) {
+    res.status(400).json({ error: "Tabela inválida" });
+    return;
+  }
+  try {
+    await prisma.$executeRaw(Prisma.sql`DELETE FROM preferencias_colunas WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`);
+    res.json({ ordem: [], ocultas: [], larguras: {}, resumos: {} });
+  } catch (err) {
+    console.error("[perfil] colunas-delete:", err);
+    res.status(500).json({ error: "Falha ao restaurar as colunas" });
+  }
+});
+
+// ---- Padrão de cada filtro de uma tela (03/11/2026, Acompanhamento de Compra) --------------------------------------------------------
+// A estrela no canto de um filtro grava SÓ aquele campo, do usuário logado (`preferencias_filtros`). Sem linha = sem padrão; `valor` lista vazia = "Todos" salvo de propósito.
+
+// Todos os padrões do usuário de uma vez ({ [tela]: { [campo]: valor } }): o frontend lê uma vez por sessão e as telas abrem sem esperar.
+perfilRouter.get("/filtros", async (req: AuthenticatedRequest, res) => {
+  try {
+    const linhas = await prisma.$queryRaw<{ tela: string; campo: string; valor: unknown }[]>(
+      Prisma.sql`SELECT tela, campo, valor FROM preferencias_filtros WHERE user_id = ${req.user!.userId}`,
+    );
+    const padroes: Record<string, Record<string, unknown>> = {};
+    for (const l of linhas) (padroes[l.tela] ??= {})[l.campo] = l.valor;
+    res.json({ padroes });
+  } catch (err) {
+    console.error("[perfil] filtros-todos:", err);
+    res.status(500).json({ error: "Falha ao ler os padrões dos filtros" });
+  }
+});
+
+perfilRouter.get("/filtros/:tela", async (req: AuthenticatedRequest, res) => {
+  const { tela } = req.params;
+  if (!tabelaValida(tela)) {
+    res.status(400).json({ error: "Tela inválida" });
+    return;
+  }
+  try {
+    const linhas = await prisma.$queryRaw<{ campo: string; valor: unknown }[]>(
+      Prisma.sql`SELECT campo, valor FROM preferencias_filtros WHERE user_id = ${req.user!.userId} AND tela = ${tela}`,
+    );
+    res.json({ padroes: Object.fromEntries(linhas.map((l) => [l.campo, l.valor])) });
+  } catch (err) {
+    console.error("[perfil] filtros-get:", err);
+    res.status(500).json({ error: "Falha ao ler os padrões dos filtros" });
+  }
+});
+
+perfilRouter.put("/filtros/:tela/:campo", async (req: AuthenticatedRequest, res) => {
+  const { tela, campo } = req.params;
+  const valor = validarValorFiltro((req.body ?? {}).valor);
+  if (!tabelaValida(tela) || !campoFiltroValido(campo) || valor === undefined) {
+    res.status(400).json({ error: "Padrão de filtro inválido" });
+    return;
+  }
+  try {
+    await prisma.$executeRaw(Prisma.sql`
+      INSERT INTO preferencias_filtros (user_id, tela, campo, valor, atualizado_em)
+      VALUES (${req.user!.userId}, ${tela}, ${campo}, ${JSON.stringify(valor)}::jsonb, now())
+      ON CONFLICT (user_id, tela, campo) DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = now()`);
+    res.json({ campo, valor });
+  } catch (err) {
+    console.error("[perfil] filtros-put:", err);
+    res.status(500).json({ error: "Falha ao gravar o padrão do filtro" });
+  }
+});
+
+perfilRouter.delete("/filtros/:tela/:campo", async (req: AuthenticatedRequest, res) => {
+  const { tela, campo } = req.params;
+  if (!tabelaValida(tela) || !campoFiltroValido(campo)) {
+    res.status(400).json({ error: "Padrão de filtro inválido" });
+    return;
+  }
+  try {
+    await prisma.$executeRaw(
+      Prisma.sql`DELETE FROM preferencias_filtros WHERE user_id = ${req.user!.userId} AND tela = ${tela} AND campo = ${campo}`,
+    );
+    res.json({ campo });
+  } catch (err) {
+    console.error("[perfil] filtros-delete:", err);
+    res.status(500).json({ error: "Falha ao remover o padrão do filtro" });
+  }
+});
+
+// ---- Colunas calculadas por fórmula (28/10/2026) --------------------------------------------------------------------------------
+// As minhas e as publicadas de uma lista. Publicar (e mexer numa publicada de outra pessoa) é de admin; cada um mexe nas suas.
+
+const podePublicar = (req: AuthenticatedRequest) => req.user?.role === "admin";
+
+const SELECT_CALCULADA = Prisma.sql`SELECT c.id, c.titulo, c.formula, c.arvore, c.formato, c.casas, c.publicada, c.user_id AS "userId",
+  u.nome AS autor, c.atualizado_em AS "atualizadoEm" FROM colunas_calculadas c LEFT JOIN "User" u ON u.id = c.user_id`;
+
+perfilRouter.get("/calculadas/:tabela", async (req: AuthenticatedRequest, res) => {
+  const { tabela } = req.params;
+  if (!tabelaValida(tabela)) {
+    res.status(400).json({ error: "Tabela inválida" });
+    return;
+  }
+  try {
+    const linhas = await prisma.$queryRaw<{ userId: number }[]>(Prisma.sql`
+      ${SELECT_CALCULADA} WHERE c.tabela = ${tabela} AND (c.user_id = ${req.user!.userId} OR c.publicada) ORDER BY c.id`);
+    const me = req.user!.userId;
+    res.json(linhas.map((l) => ({ ...l, minha: l.userId === me, podeEditar: l.userId === me || podePublicar(req) })));
+  } catch (err) {
+    console.error("[perfil] calculadas-get:", err);
+    res.status(500).json({ error: "Falha ao ler as colunas calculadas" });
+  }
+});
+
+perfilRouter.post("/calculadas/:tabela", async (req: AuthenticatedRequest, res) => {
+  const { tabela } = req.params;
+  const r = validarColunaCalculada(req.body);
+  if (!tabelaValida(tabela) || !r.ok) {
+    res.status(400).json({ error: r.ok ? "Tabela inválida" : r.erro });
+    return;
+  }
+  if (r.valor.publicada && !podePublicar(req)) {
+    res.status(403).json({ error: "Só administrador publica coluna calculada para todos" });
+    return;
+  }
+  try {
+    const [{ n }] = await prisma.$queryRaw<{ n: bigint }[]>(
+      Prisma.sql`SELECT count(*) AS n FROM colunas_calculadas WHERE tabela = ${tabela} AND user_id = ${req.user!.userId}`,
+    );
+    if (Number(n) >= MAX_CALCULADAS_POR_LISTA) {
+      res.status(400).json({ error: `No máximo ${MAX_CALCULADAS_POR_LISTA} colunas calculadas por lista` });
+      return;
+    }
+    const v = r.valor;
+    const [criada] = await prisma.$queryRaw<{ id: number }[]>(Prisma.sql`
+      INSERT INTO colunas_calculadas (tabela, user_id, publicada, titulo, formula, arvore, formato, casas)
+      VALUES (${tabela}, ${req.user!.userId}, ${v.publicada}, ${v.titulo}, ${v.formula}, ${JSON.stringify(v.arvore)}::jsonb, ${v.formato}, ${v.casas})
+      RETURNING id`);
+    res.status(201).json({ id: criada.id });
+  } catch (err) {
+    console.error("[perfil] calculadas-post:", err);
+    res.status(500).json({ error: "Falha ao gravar a coluna calculada" });
+  }
+});
+
+/** A coluna da lista e se quem pede pode mexer nela (a sua; ou publicada, sendo admin/master). */
+async function calculadaEditavel(req: AuthenticatedRequest): Promise<{ status: number; erro?: string; id?: number }> {
+  const { tabela } = req.params;
+  const id = Number(req.params.id);
+  if (!tabelaValida(tabela) || !Number.isInteger(id) || id <= 0) return { status: 400, erro: "Coluna calculada inválida" };
+  const [linha] = await prisma.$queryRaw<{ userId: number; publicada: boolean }[]>(
+    Prisma.sql`SELECT user_id AS "userId", publicada FROM colunas_calculadas WHERE id = ${id} AND tabela = ${tabela}`,
+  );
+  if (!linha) return { status: 404, erro: "Coluna calculada não encontrada" };
+  if (linha.userId !== req.user!.userId && !(linha.publicada && podePublicar(req))) return { status: 403, erro: "Esta coluna calculada é de outra pessoa" };
+  return { status: 200, id };
+}
+
+perfilRouter.put("/calculadas/:tabela/:id", async (req: AuthenticatedRequest, res) => {
+  const r = validarColunaCalculada(req.body);
+  if (!r.ok) {
+    res.status(400).json({ error: r.erro });
+    return;
+  }
+  if (r.valor.publicada && !podePublicar(req)) {
+    res.status(403).json({ error: "Só administrador publica coluna calculada para todos" });
+    return;
+  }
+  try {
+    const alvo = await calculadaEditavel(req);
+    if (!alvo.id) {
+      res.status(alvo.status).json({ error: alvo.erro });
+      return;
+    }
+    const v = r.valor;
+    await prisma.$executeRaw(Prisma.sql`
+      UPDATE colunas_calculadas SET titulo = ${v.titulo}, formula = ${v.formula}, arvore = ${JSON.stringify(v.arvore)}::jsonb, formato = ${v.formato},
+             casas = ${v.casas}, publicada = ${v.publicada}, atualizado_em = now()
+       WHERE id = ${alvo.id}`);
+    res.json({ id: alvo.id });
+  } catch (err) {
+    console.error("[perfil] calculadas-put:", err);
+    res.status(500).json({ error: "Falha ao gravar a coluna calculada" });
+  }
+});
+
+perfilRouter.delete("/calculadas/:tabela/:id", async (req: AuthenticatedRequest, res) => {
+  try {
+    const alvo = await calculadaEditavel(req);
+    if (!alvo.id) {
+      res.status(alvo.status).json({ error: alvo.erro });
+      return;
+    }
+    await prisma.$executeRaw(Prisma.sql`DELETE FROM colunas_calculadas WHERE id = ${alvo.id}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[perfil] calculadas-delete:", err);
+    res.status(500).json({ error: "Falha ao excluir a coluna calculada" });
+  }
 });

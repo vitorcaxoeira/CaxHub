@@ -1,25 +1,111 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { ClienteLinha, PainelEficiencia, ROTULO_PROPOSTA, brlCompacto, hn, paraTsv, pct, tomEficiencia, tomTexto } from "../../lib/eficiencia";
-import { BarraConsumo, BotaoCopiar, Cartao, Chip, Indicador, Ordem, TabelaRolavel, Th, Vazio, ordenar, proximaOrdem } from "./comum";
+import { BarraConsumo, BotaoCopiar, Cartao, Chip, Indicador, Vazio } from "./comum";
 
-type Chave = "cliente" | "propostas" | "propostasComEstouro" | "vendido" | "executado" | "consumo" | "acima" | "impacto" | "saldo" | "eficiencia";
+type Limiares = PainelEficiencia["meta"]["limiares"];
+
+// Filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026). A ordem de abertura é
+// a de sempre (maior estouro primeiro); clicar num título reordena. Horas em minutos (hn formata).
+const COLUNAS_LOCAIS: ColunaLocal[] = [
+  { nome: "cliente", tipo: "texto", obrigatoria: true },
+  { nome: "situacaoRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "propostas", tipo: "inteiro", obrigatoria: true },
+  { nome: "propostasComEstouro", tipo: "inteiro", obrigatoria: true },
+  { nome: "vendido", tipo: "decimal", obrigatoria: true },
+  { nome: "executado", tipo: "decimal", obrigatoria: true },
+  { nome: "consumoPct", tipo: "decimal" },
+  { nome: "acima", tipo: "decimal", obrigatoria: true },
+  { nome: "impacto", tipo: "decimal", obrigatoria: true },
+  { nome: "saldo", tipo: "decimal", obrigatoria: true },
+  { nome: "eficienciaPct", tipo: "decimal" },
+];
+const lerCliente = (c: ClienteLinha, nome: string): unknown =>
+  nome === "situacaoRotulo"
+    ? ROTULO_PROPOSTA[c.situacao]
+    : nome === "consumoPct"
+      ? c.consumo == null ? null : c.consumo * 100
+      : nome === "eficienciaPct"
+        ? c.eficiencia == null ? null : c.eficiencia * 100
+        : (c as unknown as Record<string, unknown>)[nome];
+const pctNum = (v: number) => pct(v / 100);
+
+const COLUNAS_CLIENTES: DefColuna<ClienteLinha, Limiares>[] = [
+  {
+    nome: "cliente",
+    titulo: "Cliente",
+    fixa: true,
+    largura: 280,
+    texto: (c) => c.cliente,
+    render: (c) => (
+      <>
+        <span className="block truncate font-medium text-foreground">{c.cliente}</span>
+        {c.interna && <span className="block text-[11.5px] text-muted">interna (a própria empresa)</span>}
+      </>
+    ),
+  },
+  { nome: "situacaoRotulo", titulo: "Situação", largura: 140, render: (c) => <Chip tom={c.situacao}>{ROTULO_PROPOSTA[c.situacao]}</Chip> },
+  { nome: "propostas", titulo: "Propostas", direita: true, largura: 90, classe: "font-mono tabular-nums", render: (c) => c.propostas },
+  {
+    nome: "propostasComEstouro",
+    titulo: "Com estouro",
+    direita: true,
+    largura: 100,
+    classe: (c) => `font-mono tabular-nums ${c.propostasComEstouro ? "text-destructive" : "text-muted"}`,
+    render: (c) => c.propostasComEstouro || "—",
+  },
+  { nome: "vendido", titulo: "Vendido", direita: true, largura: 100, classe: "font-mono tabular-nums", formatarResumo: hn, render: (c) => hn(c.vendido) },
+  { nome: "executado", titulo: "Executado", direita: true, largura: 100, classe: "font-mono tabular-nums", formatarResumo: hn, render: (c) => hn(c.executado) },
+  {
+    nome: "consumoPct",
+    titulo: "Consumo",
+    largura: 130,
+    formatarResumo: pctNum,
+    render: (c) => (
+      <>
+        <BarraConsumo consumo={c.consumo} />
+        <span className="mt-1 block font-mono text-[11.5px] text-muted">{pct(c.consumo)}</span>
+      </>
+    ),
+  },
+  {
+    nome: "acima",
+    titulo: "Estouro",
+    direita: true,
+    largura: 100,
+    classe: (c) => `font-mono tabular-nums ${c.acima ? "text-destructive" : "text-muted"}`,
+    formatarResumo: hn,
+    render: (c) => (c.acima ? `+${hn(c.acima)}` : "—"),
+  },
+  {
+    nome: "impacto",
+    titulo: "Impacto",
+    direita: true,
+    largura: 110,
+    classe: "font-mono tabular-nums text-muted",
+    formatarResumo: brlCompacto,
+    render: (c) => (c.impacto > 0 ? brlCompacto(c.impacto) : "—"),
+  },
+  { nome: "saldo", titulo: "Saldo", direita: true, largura: 100, classe: "font-mono tabular-nums", formatarResumo: hn, render: (c) => (c.saldo ? hn(c.saldo) : "—") },
+  {
+    nome: "eficienciaPct",
+    titulo: "Eficiência",
+    direita: true,
+    largura: 100,
+    classe: (c, l) => `font-mono font-semibold tabular-nums ${tomTexto[tomEficiencia(c.eficiencia, l)]}`,
+    formatarResumo: pctNum,
+    render: (c) => pct(c.eficiencia),
+  },
+];
 
 export function AbaClientes({ painel, verPropostasDoCliente }: { painel: PainelEficiencia; verPropostasDoCliente: (cliente: string) => void }) {
-  const [ordem, setOrdem] = useState<Ordem<Chave>>({ chave: "acima", dir: -1 });
   const l = painel.meta.limiares;
   const clientes = painel.clientes;
 
-  const linhas = useMemo(
-    () =>
-      ordenar<ClienteLinha, Chave>(clientes, ordem, (c, k) => {
-        if (k === "cliente") return c.cliente;
-        if (k === "consumo") return c.consumo ?? 99;
-        if (k === "eficiencia") return c.eficiencia ?? 2;
-        return c[k];
-      }),
-    [clientes, ordem]
-  );
-  const ordenarPor = (k: Chave) => setOrdem((o) => proximaOrdem(o, k, ["cliente"]));
+  // Abre do maior estouro para o menor (a ordem de sempre); a tabela reordena pelo título.
+  const linhas = useMemo(() => [...clientes].sort((a, b) => b.acima - a.acima), [clientes]);
 
   const comEstouro = clientes.filter((c) => c.situacao === "bad").length;
   const maior = [...clientes].sort((a, b) => b.acima - a.acima)[0];
@@ -68,51 +154,17 @@ export function AbaClientes({ painel, verPropostasDoCliente }: { painel: PainelE
         {linhas.length === 0 ? (
           <Vazio>Nenhum cliente neste recorte.</Vazio>
         ) : (
-          <TabelaRolavel>
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr>
-                  <Th rotulo="Cliente" chave="cliente" ordem={ordem} onOrdenar={ordenarPor} />
-                  <Th rotulo="Situação" />
-                  <Th rotulo="Propostas" chave="propostas" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Com estouro" chave="propostasComEstouro" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Vendido" chave="vendido" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Executado" chave="executado" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Consumo" chave="consumo" ordem={ordem} onOrdenar={ordenarPor} />
-                  <Th rotulo="Estouro" chave="acima" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Impacto" chave="impacto" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Saldo" chave="saldo" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                  <Th rotulo="Eficiência" chave="eficiencia" ordem={ordem} onOrdenar={ordenarPor} numerico />
-                </tr>
-              </thead>
-              <tbody>
-                {linhas.map((c) => (
-                  <tr
-                    key={c.codcli}
-                    tabIndex={0}
-                    onClick={() => verPropostasDoCliente(c.cliente)}
-                    onKeyDown={(e) => e.key === "Enter" && verPropostasDoCliente(c.cliente)}
-                    className="cursor-pointer border-t border-border/60 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  >
-                    <td className="px-2.5 py-2">
-                      <span className="block max-w-[320px] truncate font-medium text-foreground" title={c.cliente}>{c.cliente}</span>
-                      {c.interna && <span className="block text-[11.5px] text-muted">interna (a própria empresa)</span>}
-                    </td>
-                    <td className="px-2.5 py-2"><Chip tom={c.situacao}>{ROTULO_PROPOSTA[c.situacao]}</Chip></td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{c.propostas}</td>
-                    <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums ${c.propostasComEstouro ? "text-destructive" : "text-muted"}`}>{c.propostasComEstouro || "—"}</td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(c.vendido)}</td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{hn(c.executado)}</td>
-                    <td className="px-2.5 py-2"><BarraConsumo consumo={c.consumo} /><span className="mt-1 block font-mono text-[11.5px] text-muted">{pct(c.consumo)}</span></td>
-                    <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums ${c.acima ? "text-destructive" : "text-muted"}`}>{c.acima ? `+${hn(c.acima)}` : "—"}</td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums text-muted">{c.impacto > 0 ? brlCompacto(c.impacto) : "—"}</td>
-                    <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono tabular-nums">{c.saldo ? hn(c.saldo) : "—"}</td>
-                    <td className={`whitespace-nowrap px-2.5 py-2 text-right font-mono font-semibold tabular-nums ${tomTexto[tomEficiencia(c.eficiencia, l)]}`}>{pct(c.eficiencia)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TabelaRolavel>
+          <TabelaLocal<ClienteLinha, Limiares>
+            chave="projetos.eficiencia.clientes"
+            defs={COLUNAS_CLIENTES}
+            colunas={COLUNAS_LOCAIS}
+            linhas={linhas}
+            ler={lerCliente}
+            ctx={l}
+            chaveLinha={(c) => String(c.codcli)}
+            onLinha={(c) => verPropostasDoCliente(c.cliente)}
+            vazio="Nenhum cliente neste recorte."
+          />
         )}
       </Cartao>
     </div>

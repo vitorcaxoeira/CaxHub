@@ -9,6 +9,10 @@ import { MultiSelectColumnFilter, VALOR_VAZIO } from "../../components/ui/MultiS
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useToast } from "../../components/ui/Toast";
 import { PedidosDashboard, PedidosIndicadoresData } from "../../components/mercado/PedidosDashboard";
+import { TabelaPedidos } from "../../components/mercado/TabelaPedidos";
+import { DATA_EMBUTIDA, MolduraFiltro } from "../../components/ui/ControlesFiltro";
+import { campoListaFixa, campoParDatas } from "../../components/ui/padroesFiltros/campos";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 
 type Visao = "lista" | "cliente" | "dash";
 
@@ -366,10 +370,21 @@ export function ListarPedidos() {
   const [datemiDe, setDatemiDe] = useState("");
   const [datemiAte, setDatemiAte] = useState("");
 
-  const [page, setPage] = useState(1);
-  const [pedidos, setPedidos] = useState<PedidoRow[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
+  // Aba Lista: ListaServidor (TabelaPedidos) cuida de página, ordem, funil e totais; `recargaLista` força buscar de novo.
+  const [recargaLista, setRecargaLista] = useState(0);
+
+  // Padrão de cada filtro de lista (estrela): situação, modalidade e emissão. Aplicado uma vez ao abrir, antes da 1ª consulta.
+  const p = usePadroesTela({
+    tela: "mercado.pedidos",
+    campos: {
+      sitped: campoListaFixa("Situação", "number", sitpedFiltro, setSitpedFiltro, SITPED_OPCOES.map((o) => o.value)),
+      modpro: campoListaFixa("Modalidade", "number", modproFiltro, setModproFiltro, MODPRO_OPCOES.map((o) => o.value)),
+      emissao: campoParDatas("Emissão", datemiDe || null, datemiAte || null, (de, ate) => {
+        setDatemiDe(de ?? "");
+        setDatemiAte(ate ?? "");
+      }),
+    },
+  });
 
   const [pageCliente, setPageCliente] = useState(1);
   // Índice de TODOS os pedidos do filtro atual (ver GET /pedidos/por-cliente/indice).
@@ -409,21 +424,6 @@ export function ListarPedidos() {
     };
   }
 
-  function carregar() {
-    setLoading(true);
-    axios
-      .get("/api/pedidos", {
-        params: { ...paramsFiltros(), page, pageSize: PAGE_SIZE },
-      })
-      .then(({ data }) => {
-        setPedidos(data.pedidos);
-        setTotal(data.total);
-        setErro(null);
-      })
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar pedidos"))
-      .finally(() => setLoading(false));
-  }
-
   function carregarPorCliente() {
     setLoadingClientes(true);
     axios
@@ -454,21 +454,14 @@ export function ListarPedidos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Cada aba só busca o próprio dado quando está ativa — evita bater nos dois
-  // endpoints (Lista e Por Cliente) toda vez que um filtro muda, independente de qual
-  // aba a pessoa está olhando.
-  useEffect(() => {
-    if (visao === "lista") carregar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, datemiDe, datemiAte, page]);
-
+  // Cada aba só busca o próprio dado quando está ativa (a Lista, pelo TabelaPedidos).
   // Sem `pageCliente` nas dependências: a aba Por Cliente carrega o índice inteiro do
   // filtro de uma vez e pagina no cliente, porque o filtro de coluna tem que ser aplicado
   // antes de fatiar as páginas.
   useEffect(() => {
-    if (visao === "cliente") carregarPorCliente();
+    if (visao === "cliente" && p.pronto) carregarPorCliente();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, datemiDe, datemiAte]);
+  }, [visao, p.pronto, clienteDebounced, numpedDebounced, numratDebounced, codproDebounced, sitpedFiltro, modproFiltro, datemiDe, datemiAte]);
 
   // Digitar ou trocar filtro reseta as duas paginações pra página 1 (senão a busca pode
   // "sumir" numa página que não existe mais) e colapsa qualquer cliente expandido — o
@@ -476,7 +469,6 @@ export function ListarPedidos() {
   // nova do grupo. Os filtros de coluna também zeram: os valores que a pessoa marcou
   // podem nem existir no recorte novo, e aí a tela ficaria vazia sem explicação.
   useEffect(() => {
-    setPage(1);
     setPageCliente(1);
     setClientesExpandidos(new Set());
     setItensPorCliente({});
@@ -656,6 +648,7 @@ export function ListarPedidos() {
           // Colapsa os grupos abertos junto — mesmo comportamento de quando um filtro
           // muda, e evita reabrir tudo com dado velho.
           carregarPorCliente();
+          setRecargaLista((n) => n + 1);
           setClientesExpandidos(new Set());
           setItensPorCliente({});
         })
@@ -765,6 +758,7 @@ export function ListarPedidos() {
             onChange={setSitpedFiltro}
             labelTodos="Todas as situações"
             labelSufixo="situações"
+            acessorio={p.estrela("sitped")}
           />
           <MultiSelectDropdown
             opcoes={MODPRO_OPCOES}
@@ -772,19 +766,19 @@ export function ListarPedidos() {
             onChange={setModproFiltro}
             labelTodos="Todas as modalidades"
             labelSufixo="modalidades"
+            acessorio={p.estrela("modpro")}
           />
           {/* Emissão: os dois limites são independentes — preencher só um já filtra
               (a partir de / até). O `max`/`min` cruzado impede escolher um intervalo
               invertido, que só retornaria lista vazia. */}
-          <div className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-muted">Emissão</span>
+          <MolduraFiltro rotulo="Emissão:" acessorio={p.estrela("emissao")}>
             <input
               type="date"
               value={datemiDe}
               max={datemiAte || undefined}
               onChange={(e) => setDatemiDe(e.target.value)}
               title="Emitidos a partir desta data"
-              className="bg-transparent text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className={DATA_EMBUTIDA}
             />
             <span className="text-sm text-muted">–</span>
             <input
@@ -793,7 +787,7 @@ export function ListarPedidos() {
               min={datemiDe || undefined}
               onChange={(e) => setDatemiAte(e.target.value)}
               title="Emitidos até esta data"
-              className="bg-transparent text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className={DATA_EMBUTIDA}
             />
             {(datemiDe || datemiAte) && (
               <button
@@ -807,7 +801,7 @@ export function ListarPedidos() {
                 ×
               </button>
             )}
-          </div>
+          </MolduraFiltro>
           {/* Ação global da aba Por Cliente: alcança TODOS os clientes do filtro da barra
               (as outras páginas também), por isso o contador vem de totalClientesFiltro e
               não do tamanho da página nem do recorte dos funis. */}
@@ -828,89 +822,7 @@ export function ListarPedidos() {
 
       {visao === "dash" && <PedidosDashboard dados={indicadores} loading={loadingIndicadores} />}
 
-      {visao === "lista" && (
-        <div className="overflow-hidden rounded-lg border border-border bg-surface">
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr>
-                  <th className={TH_CLASS}>Pedido</th>
-                  <th className={TH_CLASS}>Cliente</th>
-                  <th className={TH_CLASS}>Situação</th>
-                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Rat</th>
-                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Consultor</th>
-                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Proposta</th>
-                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Mod. Prop.</th>
-                  <th className={`hidden ${TH_CLASS} lg:table-cell`}>Sit. Prop.</th>
-                  <th className={`hidden ${TH_CLASS} xl:table-cell`}>Faturamento</th>
-                  <th className={TH_CLASS_RIGHT}>Valor Líquido</th>
-                  <th className={`hidden ${TH_CLASS} xl:table-cell`}>Obs. Mot.</th>
-                  <th className={TH_CLASS}>Emissão</th>
-                  <th className={`hidden ${TH_CLASS} xl:table-cell`}>Forma Pgto</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading &&
-                  Array.from({ length: 6 }).map((_, i) => (
-                    <tr key={i} className="border-t border-border/60">
-                      <td className="px-[7px] py-[10px]">
-                        <Skeleton className="h-4 w-16" />
-                      </td>
-                      <td className="px-[7px] py-[10px]">
-                        <Skeleton className="h-4 w-40" />
-                      </td>
-                      <td className="px-[7px] py-[10px]">
-                        <Skeleton className="h-5 w-24 rounded-full" />
-                      </td>
-                      <td className="hidden px-[7px] py-[10px] lg:table-cell">
-                        <Skeleton className="h-4 w-16" />
-                      </td>
-                      <td className="hidden px-[7px] py-[10px] lg:table-cell">
-                        <Skeleton className="h-4 w-24" />
-                      </td>
-                      <td className="hidden px-[7px] py-[10px] lg:table-cell">
-                        <Skeleton className="h-4 w-16" />
-                      </td>
-                      <td className="hidden px-[7px] py-[10px] lg:table-cell">
-                        <Skeleton className="h-4 w-20" />
-                      </td>
-                      <td className="hidden px-[7px] py-[10px] lg:table-cell">
-                        <Skeleton className="h-5 w-20 rounded-full" />
-                      </td>
-                      <td className="hidden px-[7px] py-[10px] xl:table-cell">
-                        <Skeleton className="h-4 w-32" />
-                      </td>
-                      <td className="px-[7px] py-[10px] text-right">
-                        <Skeleton className="ml-auto h-4 w-20" />
-                      </td>
-                      <td className="hidden px-[7px] py-[10px] xl:table-cell">
-                        <Skeleton className="h-4 w-32" />
-                      </td>
-                      <td className="px-[7px] py-[10px]">
-                        <Skeleton className="h-4 w-20" />
-                      </td>
-                      <td className="hidden px-[7px] py-[10px] xl:table-cell">
-                        <Skeleton className="h-4 w-24" />
-                      </td>
-                    </tr>
-                  ))}
-                {!loading &&
-                  pedidos.map((p) => (
-                    <LinhaPedido key={`${p.codemp}-${p.codfil}-${p.numped}`} p={p} mostrarCondPgto={false} />
-                  ))}
-                {!loading && pedidos.length === 0 && (
-                  <tr>
-                    <td colSpan={13} className="px-[7px] py-8 text-center text-sm text-muted">
-                      Nenhum pedido encontrado com esses filtros.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPageChange={setPage} label="pedidos" />
-        </div>
-      )}
+      {visao === "lista" && p.pronto && <TabelaPedidos params={paramsFiltros()} recarga={recargaLista} />}
 
       {visao === "cliente" && (
         <div className="overflow-hidden rounded-lg border border-border bg-surface">

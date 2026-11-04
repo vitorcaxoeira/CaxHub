@@ -1,5 +1,5 @@
 import axios from "axios";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 
 interface AutocompleteRemotoProps<T> {
@@ -17,6 +17,8 @@ interface AutocompleteRemotoProps<T> {
   chave: (item: T) => string | number;
   placeholder: string;
   desabilitado?: boolean;
+  /** Botão no canto superior direito do campo (a estrela de padrão do filtro). */
+  acessorio?: ReactNode;
 }
 
 // Escolha única com busca no servidor — SelectBuscavel filtra uma lista já carregada, e
@@ -33,6 +35,7 @@ export function AutocompleteRemoto<T>({
   chave,
   placeholder,
   desabilitado = false,
+  acessorio,
 }: AutocompleteRemotoProps<T>) {
   const [aberto, setAberto] = useState(false);
   const [busca, setBusca] = useState("");
@@ -71,7 +74,7 @@ export function AutocompleteRemoto<T>({
         type="button"
         disabled={desabilitado}
         onClick={() => setAberto((a) => !a)}
-        className="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-surface px-2 py-1.5 text-left text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+        className={`flex w-full items-center justify-between gap-2 rounded-md border border-border bg-surface py-1.5 pl-2 ${acessorio ? "pr-8" : "pr-2"} text-left text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50`}
       >
         <span className={`truncate ${valor ? "" : "text-muted"}`}>{valor ? rotulo(valor) : placeholder}</span>
         {valor && !desabilitado ? (
@@ -90,6 +93,7 @@ export function AutocompleteRemoto<T>({
           <span className="flex-none text-muted">▾</span>
         )}
       </button>
+      {acessorio}
       {aberto && (
         <div className="absolute z-30 mt-1 w-full min-w-[16rem] rounded-md border border-border bg-surface shadow-lg">
           <input

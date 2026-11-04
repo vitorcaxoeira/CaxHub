@@ -34,6 +34,10 @@ model User {
 
   preferenciaTela         PreferenciaTela?
 
+  preferenciasColunas     PreferenciaColunas[]
+  preferenciasFiltros     PreferenciaFiltro[]
+  colunasCalculadas       ColunaCalculada[]
+
   dispositivosDesktop    DispositivoDesktop[]
   movimentacoesAtividade AtividadeHistoricoMovimentacao[]
   comentariosAtividade   AtividadeComentario[]
@@ -105,6 +109,69 @@ model PreferenciaTela {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("preferencias_tela")
+}
+
+// Preferências de LISTA por usuário, trazidas do CaxHub_Dash (03/11/2026): arrumação de colunas + resumo do rodapé, padrão de cada
+// filtro e colunas calculadas. Exceção à regra do PreferenciaTela acima: aqui a chave é genérica (tela/lista + campo), não uma coluna por
+// preferência.
+/// Arrumação das colunas de uma tabela da tela (26/10/2026): ordem, colunas ocultas e larguras, por usuário e por chave da tabela
+/// (ex.: "plannix.obra.materiais"). O backend só valida o formato (routes/layoutColunas.ts); a tela descarta coluna que não tem mais.
+/// Lida e gravada só por SQL (routes/perfil.ts).
+model PreferenciaColunas {
+  userId       Int      @map("user_id")
+  tabela       String   @db.VarChar(80)
+  ordem        String[]
+  ocultas      String[]
+  /// Largura de cada coluna em px ({"descricao": 280}); vazio = layout automático da tela.
+  larguras     Json     @default("{}")
+  /// Resumo do rodapé por coluna ({"quantidade": "soma"}); vazio = nenhum (28/10/2026).
+  resumos      Json     @default("{}")
+  atualizadoEm DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, tabela])
+  @@map("preferencias_colunas")
+}
+
+/// Padrão de um filtro de uma tela, por usuário (03/11/2026, Acompanhamento de Compra): o disquete ao lado do filtro grava SÓ aquele campo.
+/// `campo` é o nome estável do filtro (não o rótulo); `valor` é o valor em JSON (lista vazia = "Todos"). Sem linha = sem padrão.
+/// Lida e gravada só por SQL (routes/perfil.ts).
+model PreferenciaFiltro {
+  userId       Int      @map("user_id")
+  tela         String   @db.VarChar(80)
+  campo        String   @db.VarChar(40)
+  valor        Json
+  atualizadoEm DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, tela, campo])
+  @@map("preferencias_filtros")
+}
+
+/// Coluna calculada por fórmula numa lista da tela (28/10/2026): `([Consumo ERP] - [Quantidade Plannix]) / [Consumo ERP] * 100`. Cada
+/// usuário cria as suas (chave da lista = a mesma da arrumação, `tabela`); admin/master pode publicar para todos daquela lista. `arvore`
+/// = a fórmula já lida pela tela (o servidor só confere a estrutura ao gravar; os tipos são conferidos ao usar). Lida e gravada por SQL
+/// (routes/perfil.ts). Na arrumação da lista, a coluna se chama `calc_<id>`.
+model ColunaCalculada {
+  id           Int      @id @default(autoincrement())
+  tabela       String   @db.VarChar(80)
+  userId       Int      @map("user_id")
+  publicada    Boolean  @default(false)
+  titulo       String   @db.VarChar(60)
+  formula      String   @db.VarChar(500)
+  arvore       Json
+  /// numero | moeda | percentual
+  formato      String   @default("numero") @db.VarChar(12)
+  casas        Int      @default(2) @db.SmallInt
+  criadoEm     DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tabela])
+  @@map("colunas_calculadas")
 }
 
 // Computador em que o CaxHub Desktop está conectado. O JWT dura 8h; este token de dispositivo

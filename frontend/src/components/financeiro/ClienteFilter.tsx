@@ -1,5 +1,5 @@
 import axios from "axios";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export interface ClienteOption {
   codcli: number;
@@ -9,9 +9,11 @@ export interface ClienteOption {
 interface ClienteFilterProps {
   selecionados: ClienteOption[];
   onChange: (selecionados: ClienteOption[]) => void;
+  /** Botão no canto da caixa (a estrela de padrão do filtro). */
+  acessorio?: ReactNode;
 }
 
-export function ClienteFilter({ selecionados, onChange }: ClienteFilterProps) {
+export function ClienteFilter({ selecionados, onChange, acessorio }: ClienteFilterProps) {
   const [query, setQuery] = useState("");
   const [opcoes, setOpcoes] = useState<ClienteOption[]>([]);
   const [open, setOpen] = useState(false);
@@ -57,7 +59,7 @@ export function ClienteFilter({ selecionados, onChange }: ClienteFilterProps) {
 
   return (
     <div className="relative" ref={containerRef}>
-      <div className="flex min-w-[260px] flex-wrap items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1.5">
+      <div className={`relative flex min-w-[260px] flex-wrap items-center gap-1.5 rounded-md border border-border bg-surface py-1.5 pl-2 ${acessorio ? "pr-8" : "pr-2"}`}>
         {selecionados.map((cliente) => (
           <span
             key={cliente.codcli}
@@ -83,6 +85,7 @@ export function ClienteFilter({ selecionados, onChange }: ClienteFilterProps) {
           placeholder={selecionados.length === 0 ? "Buscar cliente por nome ou código..." : "Adicionar..."}
           className="min-w-[120px] flex-1 bg-transparent text-sm text-foreground placeholder:text-muted focus:outline-none"
         />
+        {acessorio}
       </div>
 
       {open && opcoesFiltradas.length > 0 && (

@@ -2,6 +2,9 @@ import axios from "axios";
 import { useCallback, useEffect, useState } from "react";
 import { classeBotaoPrimario, classeBotaoSecundario, classeCampo, classeRotulo } from "../../../components/gestao5s/campos";
 import { Modal } from "../../../components/ui/Modal";
+import { TabelaLocal } from "../../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../../components/colunas/useColunasConfiguraveis";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { useToast } from "../../../components/ui/Toast";
 import { mensagemDeErro } from "../../../utils/gestao5s";
@@ -22,6 +25,58 @@ interface Area {
 // Cadastro de setores/áreas e ambientes comuns que entram nas auditorias. Um ambiente comum pode
 // ficar vinculado a um setor (o líder desse setor passa a ver o ambiente); sem vínculo, é
 // compartilhado e todos os líderes o enxergam.
+
+// Cadastro de áreas com filtro e ordem por coluna e colunas configuráveis (TabelaLocal, 03/11/2026). As ações da linha vêm por ctx.
+interface AcoesArea {
+  editar: (a: Area) => void;
+  alternarAtivo: (a: Area) => void;
+  excluir: (a: Area) => void;
+}
+const LOCAIS_AREAS: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "tipoRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "setorVinculadoNome", tipo: "texto" },
+  { nome: "situacao", tipo: "texto", obrigatoria: true },
+  { nome: "ordem", tipo: "inteiro", obrigatoria: true },
+];
+const COLUNAS_AREAS: DefColuna<Area, AcoesArea>[] = [
+  { nome: "nome", titulo: "Nome", fixa: true, largura: 240, classe: "text-sm font-medium text-foreground", texto: (a) => a.nome, render: (a) => a.nome },
+  {
+    nome: "tipoRotulo",
+    titulo: "Tipo",
+    largura: 220,
+    classe: "text-sm text-muted",
+    render: (a) => (
+      <>
+        {TIPO_AREA_ROTULO[a.tipo]}
+        {a.ehAgrupadora && <span className="ml-2 text-[11px] text-primary">agrupa {a.vinculados.length} ambiente(s)</span>}
+      </>
+    ),
+  },
+  { nome: "setorVinculadoNome", titulo: "Vinculado a", largura: 180, classe: "text-sm text-muted", render: (a) => a.setorVinculadoNome ?? "—" },
+  { nome: "situacao", titulo: "Situação", largura: 100, classe: "text-xs", render: (a) => <span className={a.ativo ? "text-success" : "text-muted"}>{a.ativo ? "Ativa" : "Inativa"}</span> },
+  { nome: "ordem", titulo: "Ordem", direita: true, largura: 70, classe: "text-sm tabular-nums text-muted", render: (a) => a.ordem },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 200,
+    render: (a, x) => (
+      <span className="whitespace-nowrap text-xs">
+        <button type="button" onClick={() => x.editar(a)} className="mr-3 text-primary hover:underline">
+          Editar
+        </button>
+        <button type="button" onClick={() => x.alternarAtivo(a)} className="mr-3 text-muted hover:underline">
+          {a.ativo ? "Desativar" : "Ativar"}
+        </button>
+        <button type="button" onClick={() => x.excluir(a)} className="text-destructive hover:underline">
+          Excluir
+        </button>
+      </span>
+    ),
+  },
+];
 export function Areas5S() {
   const { mostrar } = useToast();
   const [areas, setAreas] = useState<Area[] | null>(null);
@@ -72,61 +127,18 @@ export function Areas5S() {
 
       {erro && <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">{erro}</p>}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-surface-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                <th className="px-4 py-3">Nome</th>
-                <th className="px-4 py-3">Tipo</th>
-                <th className="hidden px-4 py-3 sm:table-cell">Vinculado a</th>
-                <th className="px-4 py-3">Situação</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {!areas && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-3">
-                    <Skeleton className="h-5 w-full" />
-                  </td>
-                </tr>
-              )}
-              {areas?.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted">
-                    Nenhuma área cadastrada.
-                  </td>
-                </tr>
-              )}
-              {areas?.map((a) => (
-                <tr key={a.id} className="border-t border-border/60">
-                  <td className="px-4 py-3 text-sm font-medium text-foreground">{a.nome}</td>
-                  <td className="px-4 py-3 text-sm text-muted">
-                    {TIPO_AREA_ROTULO[a.tipo]}
-                    {a.ehAgrupadora && <span className="ml-2 text-[11px] text-primary">agrupa {a.vinculados.length} ambiente(s)</span>}
-                  </td>
-                  <td className="hidden px-4 py-3 text-sm text-muted sm:table-cell">{a.setorVinculadoNome ?? "—"}</td>
-                  <td className="px-4 py-3 text-xs">
-                    <span className={a.ativo ? "text-success" : "text-muted"}>{a.ativo ? "Ativa" : "Inativa"}</span>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right text-xs">
-                    <button type="button" onClick={() => setEditando(a)} className="mr-3 text-primary hover:underline">
-                      Editar
-                    </button>
-                    <button type="button" onClick={() => alternarAtivo(a)} className="mr-3 text-muted hover:underline">
-                      {a.ativo ? "Desativar" : "Ativar"}
-                    </button>
-                    <button type="button" onClick={() => excluir(a)} className="text-destructive hover:underline">
-                      Excluir
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <TabelaLocal<Area, AcoesArea>
+        chave="gestao5s.areas"
+        defs={COLUNAS_AREAS}
+        colunas={LOCAIS_AREAS}
+        linhas={areas ?? []}
+        ler={(a, nome) => (nome === "tipoRotulo" ? TIPO_AREA_ROTULO[a.tipo] : nome === "situacao" ? (a.ativo ? "Ativa" : "Inativa") : (a as unknown as Record<string, unknown>)[nome])}
+        ctx={{ editar: setEditando, alternarAtivo, excluir }}
+        chaveLinha={(a) => String(a.id)}
+        loading={!areas}
+        vazio="Nenhuma área cadastrada."
+        alturaMax="max-h-[70vh]"
+      />
 
       {editando && (
         <FormArea

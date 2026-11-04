@@ -4,6 +4,8 @@ import { useSearchParams } from "react-router-dom";
 import { AtividadeKanban, ColunaKanban, DetalheInfo, KanbanBoard } from "../../components/projetos/KanbanBoard";
 import { AtividadesTable, FiltrosAtividades } from "../../components/projetos/AtividadesTable";
 import { AtividadesFiltros } from "../../components/projetos/AtividadesFiltros";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { IndicadoresProjetos, IndicadoresProjetosData, KpisAtividades, SituacaoKpi } from "../../components/projetos/IndicadoresProjetos";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { ModalObservacaoAtividade } from "../../components/projetos/ModalObservacaoAtividade";
@@ -114,6 +116,9 @@ export function Atividades() {
   // compartilhado, F5, voltar de um detalhe), e um KPI na URL também (o KPI é o critério de situação, ver clicarKpi).
   const urlTinhaSituacao = useRef(searchParams.has("colunaId") || searchParams.has("situacao"));
   const colunaIdPadrao = useRef("");
+  // As opções (e o padrão "esperto" de consultor e situações) chegaram: os padrões salvos pela estrela podem ser validados e aplicados.
+  const [opcoesProntas, setOpcoesProntas] = useState(false);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
   const [atividades, setAtividades] = useState<AtividadeKanban[]>([]);
   const [total, setTotal] = useState(0);
   const [kpis, setKpis] = useState<KpisAtividades | null>(null);
@@ -335,6 +340,58 @@ export function Atividades() {
     axios.get("/api/atividades/indicadores").then(({ data }) => setIndicadores(data));
   }
 
+  // Padrão de cada filtro (estrela, 03/11/2026), salvo por usuário. Vale mais que o padrão "esperto" da tela (eu como consultor, raias
+  // A Fazer + Em Andamento) e menos que a URL (link compartilhado, F5, voltar de um detalhe). Aplicado uma vez, antes da 1ª consulta.
+  // Os setters vão direto no estado (não em atualizarFiltros, que lê o render atual: várias chamadas seguidas desfariam umas às outras).
+  const lista = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean).map(Number);
+  const [daUrlPadroes] = useState(() =>
+    (
+      [
+        ["depexe", "depexe"],
+        ["colunaId", "colunaId"],
+        ["colunaId", "situacao"],
+        ["pripro", "pripro"],
+        ["codfor", "codfor"],
+        ["atrasada", "atrasada"],
+      ] as const
+    )
+      .filter(([, chave]) => searchParams.has(chave))
+      .map(([campo]) => campo)
+  );
+  const padroes = usePadroesTela({
+    tela: "projetos.atividades",
+    opcoesProntas,
+    opcoesFalharam,
+    daUrl: daUrlPadroes,
+    campos: {
+      depexe: {
+        rotulo: "Departamento",
+        atual: lista(depexe),
+        aplicar: (v: number[]) => setDepexeState(v.join(",")),
+        validar: regras.lista("number", departamentos.map((o) => o.value)),
+      },
+      colunaId: {
+        rotulo: "Situação",
+        atual: lista(colunaId),
+        aplicar: (v: number[]) => setColunaIdState(v.join(",")),
+        validar: regras.lista("number", colunas.map((c) => c.id)),
+      },
+      pripro: {
+        rotulo: "Prioridade",
+        atual: lista(pripro),
+        aplicar: (v: number[]) => setPriproState(v.join(",")),
+        validar: regras.lista("number", prioridades.map((o) => o.value)),
+      },
+      codfor: {
+        rotulo: "Consultor",
+        atual: lista(codfor),
+        aplicar: (v: number[]) => setCodforState(v.join(",")),
+        validar: regras.lista("number", consultores.map((o) => o.value)),
+      },
+      atrasada: { rotulo: "Só atrasadas", atual: atrasada, aplicar: setAtrasadaState, validar: regras.booleano(), semOpcoes: true },
+    },
+  });
+
   useEffect(() => {
     Promise.all([axios.get("/api/atividades/quadro-colunas"), axios.get("/api/atividades/opcoes-filtro")])
       .then(([colunasRes, opcoesRes]) => {
@@ -353,7 +410,9 @@ export function Atividades() {
         if (!urlTinhaCodfor.current && padrao.length > 0) patch.codfor = padrao.join(",");
         if (!urlTinhaSituacao.current && colunaIdPadrao.current) patch.colunaId = colunaIdPadrao.current;
         if (Object.keys(patch).length > 0) atualizarFiltros(patch);
+        setOpcoesProntas(true);
       })
+      .catch(() => setOpcoesFalharam(true))
       // `finally`, não `then`: se as opções falharem o padrão não vem, mas a lista ainda
       // tem que carregar — segurar pra sempre deixaria a tela vazia por causa de um filtro.
       .finally(() => setPadraoResolvido(true));
@@ -362,10 +421,10 @@ export function Atividades() {
   }, []);
 
   useEffect(() => {
-    if (!padraoResolvido) return;
+    if (!padraoResolvido || !padroes.pronto) return;
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [padraoResolvido, visao, buscaDebounced, depexe, colunaId, pripro, codfor, atrasada, situacao, page]);
+  }, [padraoResolvido, padroes.pronto, visao, buscaDebounced, depexe, colunaId, pripro, codfor, atrasada, situacao, page]);
 
   // O VigiaFimDeJornada vive no AppShell e não compartilha estado com esta tela. Quando
   // ele prorroga ou encerra uma sessão, o card aqui ainda está com o `sessaoLimite`
@@ -715,6 +774,7 @@ export function Atividades() {
           onFiltros={(patch) => atualizarFiltros(patch)}
           onPageChange={(novaPagina) => atualizarFiltros({ page: novaPagina })}
           onLimparKpi={desligarKpi}
+          estrela={padroes.estrela}
           onMover={moverAtividade}
           onAbrirDetalhe={abrirDetalhe}
           onIniciar={iniciarAtividade}
@@ -735,6 +795,7 @@ export function Atividades() {
             situacaoKpi={situacao}
             onFiltros={(patch) => atualizarFiltros(patch)}
             onLimparKpi={desligarKpi}
+            estrela={padroes.estrela}
           />
           <KanbanBoard
             colunas={colunas}

@@ -1,8 +1,11 @@
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../ui/Modal";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
 import { Skeleton } from "../ui/Skeleton";
-import { MESES_LONGOS, NotasFaturadasResposta, fmtValor } from "../../lib/metasComercial";
+import { MESES_LONGOS, type NotaFaturada, NotasFaturadasResposta, fmtValor } from "../../lib/metasComercial";
 import { Aviso, campo, mensagemDe } from "./comum";
 
 type Ordem = "valor" | "emissao";
@@ -11,6 +14,28 @@ const dataBr = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.sl
 
 // Notas que formam o Faturamento de um mês no painel da Gestão de Metas: mesma regra do total (NF fechada, valor bruto dos itens),
 // então o rodapé confere com o valor clicado.
+
+// Lista com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal, 03/11/2026). A busca e a
+// ordem de cima continuam valendo: escolhem o que entra e em que ordem a tabela abre.
+const LOCAIS: ColunaLocal[] = [
+  { nome: "numero", tipo: "inteiro", obrigatoria: true },
+  { nome: "serie", tipo: "texto", obrigatoria: true },
+  { nome: "emissao", tipo: "data", obrigatoria: true, utc: true },
+  { nome: "cliente", tipo: "texto" },
+  { nome: "representante", tipo: "texto" },
+  { nome: "itens", tipo: "inteiro", obrigatoria: true },
+  { nome: "valor", tipo: "decimal", obrigatoria: true },
+];
+const brl = (v: number) => fmtValor("BRL", v);
+const COLUNAS: DefColuna<NotaFaturada>[] = [
+  { nome: "numero", titulo: "Série / Nº", fixa: true, largura: 110, classe: "tabular-nums", resumos: ["contagem", "distintos"], render: (n) => `${n.serie} / ${n.numero}` },
+  { nome: "serie", titulo: "Série", largura: 70, classe: "text-muted", render: (n) => n.serie },
+  { nome: "emissao", titulo: "Emissão", largura: 100, classe: "tabular-nums", render: (n) => dataBr(n.emissao) },
+  { nome: "cliente", titulo: "Cliente", largura: 260, texto: (n) => n.cliente ?? `Cliente ${n.codcli}`, render: (n) => n.cliente ?? `Cliente ${n.codcli}` },
+  { nome: "representante", titulo: "Representante", largura: 180, classe: "text-muted", texto: (n) => n.representante, render: (n) => n.representante ?? n.codrep },
+  { nome: "itens", titulo: "Itens", direita: true, largura: 70, classe: "tabular-nums text-muted", render: (n) => n.itens },
+  { nome: "valor", titulo: "Valor", direita: true, largura: 130, classe: "tabular-nums", formatarResumo: brl, render: (n) => brl(n.valor) },
+];
 export function NotasFaturadasModal({ ano, mes, onClose }: { ano: number; mes: number; onClose: () => void }) {
   const [dados, setDados] = useState<NotasFaturadasResposta | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -66,37 +91,14 @@ export function NotasFaturadasModal({ ano, mes, onClose }: { ano: number; mes: n
                 {visiveis.length === dados.quantidade ? `${dados.quantidade} notas` : `${visiveis.length} de ${dados.quantidade} notas`}
               </span>
             </div>
-            <div className="max-h-[60vh] overflow-auto rounded-md border border-border">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead className="sticky top-0 bg-surface">
-                  <tr className="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted">
-                    <th className="px-3 py-2 font-medium">Série / Nº</th>
-                    <th className="px-3 py-2 font-medium">Emissão</th>
-                    <th className="px-3 py-2 font-medium">Cliente</th>
-                    <th className="px-3 py-2 font-medium">Representante</th>
-                    <th className="px-3 py-2 text-right font-medium">Itens</th>
-                    <th className="px-3 py-2 text-right font-medium">Valor</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visiveis.map((n) => (
-                    <tr key={`${n.codemp}-${n.codfil}-${n.serie}-${n.numero}`} className="border-b border-border/60">
-                      <td className="whitespace-nowrap px-3 py-1.5 tabular-nums">{n.serie} / {n.numero}</td>
-                      <td className="whitespace-nowrap px-3 py-1.5 tabular-nums">{dataBr(n.emissao)}</td>
-                      <td className="max-w-[18rem] truncate px-3 py-1.5" title={n.cliente ?? undefined}>{n.cliente ?? `Cliente ${n.codcli}`}</td>
-                      <td className="max-w-[12rem] truncate px-3 py-1.5 text-muted" title={n.representante ?? undefined}>{n.representante ?? n.codrep}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums text-muted">{n.itens}</td>
-                      <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums">{fmtValor("BRL", n.valor)}</td>
-                    </tr>
-                  ))}
-                  {visiveis.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="px-3 py-6 text-center text-muted">Nenhuma nota com esse filtro.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <TabelaLocal<NotaFaturada>
+              chave="comercial.metas.notas-faturadas"
+              defs={COLUNAS}
+              colunas={LOCAIS}
+              linhas={visiveis}
+              chaveLinha={(n) => `${n.codemp}-${n.codfil}-${n.serie}-${n.numero}`}
+              vazio="Nenhuma nota com esse filtro."
+            />
             <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 text-sm tabular-nums">
               {visiveis.length !== dados.quantidade && <span className="text-muted">Filtrado: {fmtValor("BRL", totalVisivel)}</span>}
               <span className="font-semibold text-foreground">Total do mês: {fmtValor("BRL", dados.total)}</span>

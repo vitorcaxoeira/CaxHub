@@ -1,6 +1,9 @@
-import axios from "axios";
 import { useEffect, useState } from "react";
 import { cn } from "../../lib/cn";
+import { MolduraFiltro, SelectFiltro } from "../ui/ControlesFiltro";
+import { usePadroesTela } from "../ui/padroesFiltros/usePadroesTela";
+import { buscarOpcoes, type OpcoesRh } from "./opcoesRh";
+import { camposRh, TELA_RH } from "./usePadroesRh";
 import { fmtData, fmtDataHora, fmtMesAno } from "./formato";
 import {
   aplicarPreset,
@@ -11,39 +14,6 @@ import {
   recortesAtivos,
   useFiltroRh,
 } from "./filtroStore";
-
-interface Opcao<V> {
-  valor: V;
-  rotulo: string;
-  empresa?: number;
-}
-
-interface OpcoesRh {
-  empresas: Opcao<number>[];
-  filiais: Opcao<number>[];
-  centrosDeCusto: Opcao<string>[];
-  locais: Opcao<number>[];
-  cargos: Opcao<string>[];
-  tiposDeColaborador: Opcao<number>[];
-  dados: {
-    primeiraAdmissao: string | null;
-    ultimaApuracaoDePonto: string | null;
-    ultimaCompetenciaDeFolha: string | null;
-    ultimaSincronizacao: string | null;
-  };
-}
-
-// As opções mudam só quando a base muda (sincronização): uma busca por sessão da página basta.
-let promessaOpcoes: Promise<OpcoesRh> | null = null;
-function buscarOpcoes(): Promise<OpcoesRh> {
-  if (!promessaOpcoes) {
-    promessaOpcoes = axios.get<OpcoesRh>("/api/rh/filtros").then((r) => r.data);
-    promessaOpcoes.catch(() => {
-      promessaOpcoes = null;
-    });
-  }
-  return promessaOpcoes;
-}
 
 const seletor =
   "h-9 min-w-0 rounded-md border border-border bg-surface px-2 text-[13px] text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring";
@@ -62,6 +32,8 @@ export function BarraFiltrosRh({ escopoPadrao }: { escopoPadrao?: string }) {
   const [opcoes, setOpcoes] = useState<OpcoesRh | null>(null);
   const [maisFiltros, setMaisFiltros] = useState(false);
   const ativos = recortesAtivos(f);
+  // Estrela de padrão de cada filtro (salvo por usuário, valendo para as 10 telas de RH); quem aplica ao abrir é o useRh.
+  const p = usePadroesTela({ tela: TELA_RH, campos: camposRh(f, opcoes, f.empresa), soEstrela: true });
 
   useEffect(() => {
     let vivo = true;
@@ -85,13 +57,13 @@ export function BarraFiltrosRh({ escopoPadrao }: { escopoPadrao?: string }) {
     <div className="rounded-lg border border-border bg-surface p-3">
       <div className="flex flex-wrap items-end gap-3">
         <Campo rotulo="Período" className="w-44">
-          <select className={seletor} value={f.preset} onChange={(e) => aplicarPreset(e.target.value as PresetPeriodo)}>
+          <SelectFiltro acessorio={p.estrela("periodo")} value={f.preset} onChange={(e) => aplicarPreset(e.target.value as PresetPeriodo)}>
             {PRESETS.map((p) => (
               <option key={p.valor} value={p.valor}>
                 {p.rotulo}
               </option>
             ))}
-          </select>
+          </SelectFiltro>
         </Campo>
         <Campo rotulo="De">
           <input
@@ -114,9 +86,7 @@ export function BarraFiltrosRh({ escopoPadrao }: { escopoPadrao?: string }) {
 
         {opcoes && opcoes.empresas.length > 1 && (
           <Campo rotulo="Empresa" className="w-44">
-            <select
-              className={seletor}
-              value={f.empresa ?? ""}
+            <SelectFiltro acessorio={p.estrela("empresa")} value={f.empresa ?? ""}
               onChange={(e) => atualizarFiltro({ empresa: e.target.value === "" ? null : Number(e.target.value), filial: null, ccu: null })}
             >
               <option value="">Todas</option>
@@ -125,12 +95,12 @@ export function BarraFiltrosRh({ escopoPadrao }: { escopoPadrao?: string }) {
                   {o.rotulo}
                 </option>
               ))}
-            </select>
+            </SelectFiltro>
           </Campo>
         )}
 
         <Campo rotulo="Tipo de colaborador">
-          <div className="flex h-9 items-center gap-1">
+          <MolduraFiltro acessorio={p.estrela("tipcol")} className="gap-1">
             {(opcoes?.tiposDeColaborador ?? []).map((t) => {
               const on = f.tipcol.includes(t.valor);
               return (
@@ -148,7 +118,7 @@ export function BarraFiltrosRh({ escopoPadrao }: { escopoPadrao?: string }) {
                 </button>
               );
             })}
-          </div>
+          </MolduraFiltro>
         </Campo>
 
         <div className="ml-auto flex items-center gap-2 pb-0.5">
@@ -171,44 +141,44 @@ export function BarraFiltrosRh({ escopoPadrao }: { escopoPadrao?: string }) {
       {maisFiltros && (
         <div className="mt-3 grid gap-3 border-t border-border pt-3 sm:grid-cols-2 lg:grid-cols-4">
           <Campo rotulo="Filial">
-            <select className={seletor} value={f.filial ?? ""} onChange={(e) => atualizarFiltro({ filial: e.target.value === "" ? null : Number(e.target.value) })}>
+            <SelectFiltro acessorio={p.estrela("filial")} value={f.filial ?? ""} onChange={(e) => atualizarFiltro({ filial: e.target.value === "" ? null : Number(e.target.value) })}>
               <option value="">Todas</option>
               {filiais.map((o) => (
                 <option key={o.valor} value={o.valor}>
                   {o.rotulo}
                 </option>
               ))}
-            </select>
+            </SelectFiltro>
           </Campo>
           <Campo rotulo="Centro de custo">
-            <select className={seletor} value={f.ccu ?? ""} onChange={(e) => atualizarFiltro({ ccu: e.target.value === "" ? null : e.target.value })}>
+            <SelectFiltro acessorio={p.estrela("ccu")} value={f.ccu ?? ""} onChange={(e) => atualizarFiltro({ ccu: e.target.value === "" ? null : e.target.value })}>
               <option value="">Todos</option>
               {centros.map((o) => (
                 <option key={`${o.empresa}:${o.valor}`} value={o.valor}>
                   {o.rotulo}
                 </option>
               ))}
-            </select>
+            </SelectFiltro>
           </Campo>
           <Campo rotulo="Local de trabalho">
-            <select className={seletor} value={f.local ?? ""} onChange={(e) => atualizarFiltro({ local: e.target.value === "" ? null : Number(e.target.value) })}>
+            <SelectFiltro acessorio={p.estrela("local")} value={f.local ?? ""} onChange={(e) => atualizarFiltro({ local: e.target.value === "" ? null : Number(e.target.value) })}>
               <option value="">Todos</option>
               {(opcoes?.locais ?? []).map((o) => (
                 <option key={o.valor} value={o.valor}>
                   {o.rotulo}
                 </option>
               ))}
-            </select>
+            </SelectFiltro>
           </Campo>
           <Campo rotulo="Cargo">
-            <select className={seletor} value={f.cargo ?? ""} onChange={(e) => atualizarFiltro({ cargo: e.target.value === "" ? null : e.target.value })}>
+            <SelectFiltro acessorio={p.estrela("cargo")} value={f.cargo ?? ""} onChange={(e) => atualizarFiltro({ cargo: e.target.value === "" ? null : e.target.value })}>
               <option value="">Todos</option>
               {(opcoes?.cargos ?? []).map((o) => (
                 <option key={o.valor} value={o.valor}>
                   {o.rotulo}
                 </option>
               ))}
-            </select>
+            </SelectFiltro>
           </Campo>
         </div>
       )}

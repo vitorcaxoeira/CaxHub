@@ -35,6 +35,31 @@ export const STATUS_VIAGEM = [
 ] as const;
 export type StatusViagem = (typeof STATUS_VIAGEM)[number];
 
+// Rótulos da tela (mesmos de frontend/src/utils/solicitacoesViagem.ts): o funil da lista filtra pela situação como ela aparece.
+export const STATUS_ROTULO: Record<StatusViagem, string> = {
+  solicitada: "Solicitada",
+  em_cotacao: "Em cotação",
+  aguardando_aceite: "Aguardando solicitante",
+  aguardando_aprovacao: "Aguardando aprovação",
+  aprovada: "Aprovada",
+  reprovada: "Reprovada",
+  reservada: "Reservada",
+  finalizada: "Finalizada",
+  cancelada: "Cancelada",
+};
+const ROTULO_STATUS_OUTROS: Partial<Record<StatusViagem, string>> = { em_cotacao: "Em atendimento", finalizada: "Concluída" };
+export function rotuloStatusViagem(status: string, tipo?: string): string {
+  if (tipo === "outros") return ROTULO_STATUS_OUTROS[status as StatusViagem] ?? STATUS_ROTULO[status as StatusViagem] ?? status;
+  return STATUS_ROTULO[status as StatusViagem] ?? status;
+}
+export const FINALIDADE_ROTULO: Record<Finalidade, string> = {
+  projeto: "Projeto / consultoria",
+  comercial: "Visita comercial",
+  interna: "Interna",
+  treinamento: "Treinamento",
+  outro: "Outro",
+};
+
 export const STATUS_TERMINAIS: readonly StatusViagem[] = ["reprovada", "finalizada", "cancelada"];
 
 // Papéis fixos que enxergam o módulo INTEIRO (só admin). Líder de departamento entra além disto,

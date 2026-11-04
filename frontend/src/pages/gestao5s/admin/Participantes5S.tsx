@@ -2,6 +2,9 @@ import axios from "axios";
 import { useCallback, useEffect, useState } from "react";
 import { classeBotaoPrimario, classeBotaoSecundario, classeCampo, classeRotulo } from "../../../components/gestao5s/campos";
 import { Modal } from "../../../components/ui/Modal";
+import { TabelaLocal } from "../../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../../components/colunas/useColunasConfiguraveis";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { useToast } from "../../../components/ui/Toast";
 import { mensagemDeErro } from "../../../utils/gestao5s";
@@ -32,6 +35,62 @@ const DESCRICAO_PAPEL: Record<Papel5S, string> = {
 // Quem acessa o portal 5S. O acesso é do módulo e independe do papel do usuário no CaxHub: o
 // usuário precisa existir (Administração › Usuários) e ser cadastrado aqui. Admin do CaxHub é
 // coordenador implícito.
+
+// Participantes com filtro e ordem por coluna e colunas configuráveis (TabelaLocal, 03/11/2026). As ações da linha vêm por ctx.
+interface AcoesParticipante {
+  editar: (p: Participante) => void;
+  remover: (p: Participante) => void;
+}
+const LOCAIS_PARTICIPANTES: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "email", tipo: "texto", obrigatoria: true },
+  { nome: "papelRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "setores", tipo: "texto" },
+  { nome: "situacao", tipo: "texto", obrigatoria: true },
+];
+const COLUNAS_PARTICIPANTES: DefColuna<Participante, AcoesParticipante>[] = [
+  {
+    nome: "nome",
+    titulo: "Usuário",
+    fixa: true,
+    largura: 240,
+    texto: (p) => p.nome,
+    render: (p) => (
+      <>
+        <p className="truncate text-sm font-medium text-foreground">{p.nome}</p>
+        <p className="truncate text-[11px] text-muted">{p.email}</p>
+      </>
+    ),
+  },
+  { nome: "email", titulo: "E-mail", largura: 220, classe: "text-sm text-muted", texto: (p) => p.email, render: (p) => p.email },
+  { nome: "papelRotulo", titulo: "Papel", largura: 130, classe: "text-sm text-foreground", render: (p) => PAPEL_ROTULO[p.papel] },
+  {
+    nome: "setores",
+    titulo: "Setores (líder)",
+    largura: 220,
+    classe: "text-sm text-muted",
+    texto: (p) => p.areas.map((a) => a.nome).join(", "),
+    render: (p) => (p.areas.length ? p.areas.map((a) => a.nome).join(", ") : "—"),
+  },
+  { nome: "situacao", titulo: "Situação", largura: 100, classe: "text-xs", render: (p) => <span className={p.ativo ? "text-success" : "text-muted"}>{p.ativo ? "Ativo" : "Inativo"}</span> },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 150,
+    render: (p, x) => (
+      <span className="whitespace-nowrap text-xs">
+        <button type="button" onClick={() => x.editar(p)} className="mr-3 text-primary hover:underline">
+          Editar
+        </button>
+        <button type="button" onClick={() => x.remover(p)} className="text-destructive hover:underline">
+          Remover
+        </button>
+      </span>
+    ),
+  },
+];
 export function Participantes5S() {
   const [lista, setLista] = useState<Participante[] | null>(null);
   const [setores, setSetores] = useState<Setor[]>([]);
@@ -76,58 +135,26 @@ export function Participantes5S() {
 
       {erro && <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">{erro}</p>}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-surface-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                <th className="px-4 py-3">Usuário</th>
-                <th className="px-4 py-3">Papel</th>
-                <th className="hidden px-4 py-3 md:table-cell">Setores (líder)</th>
-                <th className="px-4 py-3">Situação</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {!lista && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-3">
-                    <Skeleton className="h-5 w-full" />
-                  </td>
-                </tr>
-              )}
-              {lista?.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted">
-                    Nenhum participante. Adicione avaliadores e líderes para liberar o acesso ao portal.
-                  </td>
-                </tr>
-              )}
-              {lista?.map((p) => (
-                <tr key={p.id} className="border-t border-border/60">
-                  <td className="px-4 py-3">
-                    <p className="text-sm font-medium text-foreground">{p.nome}</p>
-                    <p className="text-[11px] text-muted">{p.email}</p>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-foreground">{PAPEL_ROTULO[p.papel]}</td>
-                  <td className="hidden px-4 py-3 text-sm text-muted md:table-cell">{p.areas.length ? p.areas.map((a) => a.nome).join(", ") : "—"}</td>
-                  <td className="px-4 py-3 text-xs">
-                    <span className={p.ativo ? "text-success" : "text-muted"}>{p.ativo ? "Ativo" : "Inativo"}</span>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right text-xs">
-                    <button type="button" onClick={() => setEditando(p)} className="mr-3 text-primary hover:underline">
-                      Editar
-                    </button>
-                    <button type="button" onClick={() => remover(p)} className="text-destructive hover:underline">
-                      Remover
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <TabelaLocal<Participante, AcoesParticipante>
+        chave="gestao5s.participantes"
+        defs={COLUNAS_PARTICIPANTES}
+        colunas={LOCAIS_PARTICIPANTES}
+        linhas={lista ?? []}
+        ler={(p, nome) =>
+          nome === "papelRotulo"
+            ? PAPEL_ROTULO[p.papel]
+            : nome === "setores"
+              ? p.areas.map((a) => a.nome).join(", ") || null
+              : nome === "situacao"
+                ? p.ativo ? "Ativo" : "Inativo"
+                : (p as unknown as Record<string, unknown>)[nome]
+        }
+        ctx={{ editar: setEditando, remover }}
+        chaveLinha={(p) => String(p.id)}
+        loading={!lista}
+        vazio="Nenhum participante. Adicione avaliadores e líderes para liberar o acesso ao portal."
+        alturaMax="max-h-[70vh]"
+      />
 
       {editando && (
         <FormParticipante

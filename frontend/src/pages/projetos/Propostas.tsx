@@ -4,12 +4,16 @@ import { ClienteFilter, ClienteOption } from "../../components/financeiro/Client
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { FunilSituacao, FunilItem } from "../../components/projetos/FunilSituacao";
 import { RankingBarra, RankingItem } from "../../components/ui/RankingBarra";
-import { PropostasTable, PropostaRow } from "../../components/projetos/PropostasTable";
+import { PropostasTable } from "../../components/projetos/PropostasTable";
+import { ParDatasFiltro } from "../../components/ui/ControlesFiltro";
+import { campoParDatas } from "../../components/ui/padroesFiltros/campos";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { formatHoras } from "../../utils/horas";
 import { EficienciaComercialCards, EficienciaComercial } from "../../components/projetos/EficienciaComercialCards";
 import { AlertasComerciais, AlertasComerciaisDados } from "../../components/projetos/AlertasComerciais";
 import { ComposicaoPipeline, ComposicaoTipoVenda, ComposicaoProduto, ComposicaoClassificacao } from "../../components/projetos/ComposicaoPipeline";
-import { RankingRepresentantes, RepresentanteRow } from "../../components/projetos/RankingRepresentantes";
+import { RankingRepresentantes } from "../../components/projetos/RankingRepresentantes";
 import { TendenciaMensalPropostas, PontoTendenciaMensal } from "../../components/projetos/TendenciaMensalPropostas";
 import { AgingPipelineChart, AgingBucketPropostas } from "../../components/projetos/AgingPipelineChart";
 import { Skeleton } from "../../components/ui/Skeleton";
@@ -44,22 +48,9 @@ interface Filtros {
   datproFim: string | null;
 }
 
-interface PropostasResponse {
-  rows: PropostaRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-}
-
-const PROPOSTAS_VAZIO: PropostasResponse = { rows: [], page: 1, pageSize: 50, total: 0 };
-
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtMoney = (v: number) => `R$ ${currency.format(v)}`;
 const fmtPct = (v: number) => `${v.toFixed(1)}%`;
-
-function dateInputClass() {
-  return "rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-}
 
 export function Propostas() {
   const [opcoes, setOpcoes] = useState<OpcoesFiltro | null>(null);
@@ -72,16 +63,13 @@ export function Propostas() {
     datproInicio: null,
     datproFim: null,
   });
-  const [page, setPage] = useState(1);
 
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [funil, setFunil] = useState<FunilItem[]>([]);
   const [topClientes, setTopClientes] = useState<RankingItem[]>([]);
   const [topClientesHoras, setTopClientesHoras] = useState<RankingItem[]>([]);
-  const [propostas, setPropostas] = useState<PropostasResponse>(PROPOSTAS_VAZIO);
 
   const [loadingResumo, setLoadingResumo] = useState(true);
-  const [loadingTabela, setLoadingTabela] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
   // ---------- Indicadores Comerciais (Seções 1-4) ----------
@@ -104,13 +92,6 @@ export function Propostas() {
   const [loadingComposicao, setLoadingComposicao] = useState(true);
   const [erroComposicao, setErroComposicao] = useState<string | null>(null);
 
-  const [repRows, setRepRows] = useState<RepresentanteRow[]>([]);
-  const [repTotal, setRepTotal] = useState(0);
-  const [repPage, setRepPage] = useState(1);
-  const [repSort, setRepSort] = useState("propostasAbertas");
-  const [repDir, setRepDir] = useState<"asc" | "desc">("desc");
-  const [loadingRep, setLoadingRep] = useState(true);
-  const [erroRep, setErroRep] = useState<string | null>(null);
 
   const [tendenciaMensal, setTendenciaMensal] = useState<PontoTendenciaMensal[]>([]);
   const [loadingTendencia, setLoadingTendencia] = useState(true);
@@ -126,14 +107,62 @@ export function Propostas() {
   const tipvenIds = filtros.tipven.join(",") || undefined;
   const modproIds = filtros.modpro.join(",") || undefined;
 
+  // Padrão de cada filtro (estrela): aplicado uma vez ao abrir, antes da 1ª consulta.
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+  const p = usePadroesTela({
+    tela: "projetos.propostas",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    campos: {
+      clientes: {
+        rotulo: "Cliente",
+        atual: filtros.clientes,
+        aplicar: (v: ClienteOption[]) => setFiltros((f) => ({ ...f, clientes: v })),
+        validar: regras.listaObjetos("codcli"),
+        semOpcoes: true,
+      },
+      situacao: {
+        rotulo: "Situação",
+        atual: filtros.situacao,
+        aplicar: (v: number[]) => setFiltros((f) => ({ ...f, situacao: v })),
+        validar: regras.lista("number", opcoes?.situacoes.map((o) => o.sitpro)),
+      },
+      representantes: {
+        rotulo: "Representante",
+        atual: filtros.representantes,
+        aplicar: (v: number[]) => setFiltros((f) => ({ ...f, representantes: v })),
+        validar: regras.lista("number", opcoes?.representantes.map((o) => o.codrep)),
+      },
+      tipven: {
+        rotulo: "Tipo de venda",
+        atual: filtros.tipven,
+        aplicar: (v: number[]) => setFiltros((f) => ({ ...f, tipven: v })),
+        validar: regras.lista("number", opcoes?.tiposVenda.map((o) => o.tipven)),
+      },
+      modpro: {
+        rotulo: "Modalidade",
+        atual: filtros.modpro,
+        aplicar: (v: number[]) => setFiltros((f) => ({ ...f, modpro: v })),
+        validar: regras.lista("number", opcoes?.modalidades.map((o) => o.modpro)),
+      },
+      datpro: campoParDatas("Data da proposta", filtros.datproInicio, filtros.datproFim, (de, ate) =>
+        setFiltros((f) => ({ ...f, datproInicio: de, datproFim: ate }))
+      ),
+    },
+  });
+
   useEffect(() => {
     axios
       .get(`${API_BASE}/opcoes-filtro`)
       .then(({ data }) => setOpcoes(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro"));
+      .catch((err) => {
+        setOpcoesFalharam(true);
+        setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro");
+      });
   }, []);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoadingResumo(true);
     const params = {
       clientes: clienteIds,
@@ -172,30 +201,7 @@ export function Propostas() {
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os indicadores"))
       .finally(() => setLoadingResumo(false));
-  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
-
-  useEffect(() => {
-    setLoadingTabela(true);
-    axios
-      .get(API_BASE, {
-        params: {
-          situacao: situacaoIds,
-          clientes: clienteIds,
-          representantes: representanteIds,
-          tipven: tipvenIds,
-          modpro: modproIds,
-          datproInicio: filtros.datproInicio ?? undefined,
-          datproFim: filtros.datproFim ?? undefined,
-          page,
-          pageSize: 50,
-          alerta: alerta ?? undefined,
-          estagnadaDias: alerta === "estagnadas" ? estagnadaDias : undefined,
-        },
-      })
-      .then(({ data }) => setPropostas(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a lista de propostas"))
-      .finally(() => setLoadingTabela(false));
-  }, [situacaoIds, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, page, alerta, estagnadaDias]);
+  }, [p.pronto, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
 
   // Params comuns (sem representantes) usados pelo drill-down do ranking de representantes.
   const paramsComunsResumo = {
@@ -207,6 +213,7 @@ export function Propostas() {
   };
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoadingEficiencia(true);
     axios
       .get(`${API_BASE}/eficiencia`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
@@ -216,9 +223,10 @@ export function Propostas() {
       })
       .catch((err) => setErroEficiencia(err.response?.data?.error ?? "Falha ao carregar a eficiência comercial"))
       .finally(() => setLoadingEficiencia(false));
-  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
+  }, [p.pronto, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoadingAlertas(true);
     axios
       .get(`${API_BASE}/alertas`, { params: { ...paramsComunsResumo, representantes: representanteIds, estagnadaDias } })
@@ -228,9 +236,10 @@ export function Propostas() {
       })
       .catch((err) => setErroAlertas(err.response?.data?.error ?? "Falha ao carregar os alertas"))
       .finally(() => setLoadingAlertas(false));
-  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, estagnadaDias]);
+  }, [p.pronto, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, estagnadaDias]);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoadingComposicao(true);
     axios
       .get(`${API_BASE}/composicao`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
@@ -240,24 +249,10 @@ export function Propostas() {
       })
       .catch((err) => setErroComposicao(err.response?.data?.error ?? "Falha ao carregar a composição do pipeline"))
       .finally(() => setLoadingComposicao(false));
-  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
+  }, [p.pronto, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
 
   useEffect(() => {
-    setLoadingRep(true);
-    axios
-      .get(`${API_BASE}/representantes-ranking`, {
-        params: { ...paramsComunsResumo, representantes: representanteIds, sort: repSort, dir: repDir, page: repPage, pageSize: 20 },
-      })
-      .then(({ data }) => {
-        setRepRows(data.rows);
-        setRepTotal(data.total);
-        setErroRep(null);
-      })
-      .catch((err) => setErroRep(err.response?.data?.error ?? "Falha ao carregar o ranking de representantes"))
-      .finally(() => setLoadingRep(false));
-  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim, repSort, repDir, repPage]);
-
-  useEffect(() => {
+    if (!p.pronto) return;
     setLoadingTendencia(true);
     axios
       .get(`${API_BASE}/tendencia-mensal`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
@@ -267,9 +262,10 @@ export function Propostas() {
       })
       .catch((err) => setErroTendencia(err.response?.data?.error ?? "Falha ao carregar a evolução mensal"))
       .finally(() => setLoadingTendencia(false));
-  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
+  }, [p.pronto, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoadingAging(true);
     axios
       .get(`${API_BASE}/aging`, { params: { ...paramsComunsResumo, representantes: representanteIds } })
@@ -279,11 +275,10 @@ export function Propostas() {
       })
       .catch((err) => setErroAging(err.response?.data?.error ?? "Falha ao carregar o aging do pipeline"))
       .finally(() => setLoadingAging(false));
-  }, [clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
+  }, [p.pronto, clienteIds, representanteIds, tipvenIds, modproIds, filtros.datproInicio, filtros.datproFim]);
 
   function atualizarFiltros(parcial: Partial<Filtros>) {
     setFiltros((atual) => ({ ...atual, ...parcial }));
-    setPage(1);
     if (parcial.situacao !== undefined) {
       setAlerta(null);
     }
@@ -291,16 +286,9 @@ export function Propostas() {
 
   function handleSelectAlerta(novoAlerta: string | null) {
     setAlerta(novoAlerta);
-    setPage(1);
     if (novoAlerta !== null && filtros.situacao.length > 0) {
       setFiltros((atual) => ({ ...atual, situacao: [] }));
     }
-  }
-
-  function handleSortRepChange(sort: string, dir: "asc" | "desc") {
-    setRepSort(sort);
-    setRepDir(dir);
-    setRepPage(1);
   }
 
   const kpiCards = kpis
@@ -337,7 +325,7 @@ export function Propostas() {
 
       <div className="mb-6 flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <ClienteFilter selecionados={filtros.clientes} onChange={(clientes) => atualizarFiltros({ clientes })} />
+          <ClienteFilter selecionados={filtros.clientes} onChange={(clientes) => atualizarFiltros({ clientes })} acessorio={p.estrela("clientes")} />
 
           <MultiSelectDropdown
             opcoes={opcoes?.situacoes.map((s) => ({ value: s.sitpro, label: s.label })) ?? []}
@@ -345,6 +333,7 @@ export function Propostas() {
             onChange={(situacao) => atualizarFiltros({ situacao })}
             labelTodos="Todas as situações"
             labelSufixo="situações"
+            acessorio={p.estrela("situacao")}
           />
 
           <MultiSelectDropdown
@@ -353,6 +342,7 @@ export function Propostas() {
             onChange={(representantes) => atualizarFiltros({ representantes })}
             labelTodos="Todos os representantes"
             labelSufixo="representantes"
+            acessorio={p.estrela("representantes")}
           />
 
           <MultiSelectDropdown
@@ -361,6 +351,7 @@ export function Propostas() {
             onChange={(tipven) => atualizarFiltros({ tipven })}
             labelTodos="Todos os tipos de venda"
             labelSufixo="tipos"
+            acessorio={p.estrela("tipven")}
           />
 
           <MultiSelectDropdown
@@ -369,26 +360,19 @@ export function Propostas() {
             onChange={(modpro) => atualizarFiltros({ modpro })}
             labelTodos="Todas as modalidades"
             labelSufixo="modalidades"
+            acessorio={p.estrela("modpro")}
           />
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted">Data da proposta:</span>
-            <input
-              type="date"
-              className={dateInputClass()}
-              value={filtros.datproInicio ?? ""}
-              onChange={(e) => atualizarFiltros({ datproInicio: e.target.value || null })}
-            />
-            <span className="text-sm text-muted">até</span>
-            <input
-              type="date"
-              className={dateInputClass()}
-              value={filtros.datproFim ?? ""}
-              onChange={(e) => atualizarFiltros({ datproFim: e.target.value || null })}
-            />
-          </div>
+          <ParDatasFiltro
+            rotulo="Data da proposta"
+            de={filtros.datproInicio ?? ""}
+            ate={filtros.datproFim ?? ""}
+            onDe={(v) => atualizarFiltros({ datproInicio: v || null })}
+            onAte={(v) => atualizarFiltros({ datproFim: v || null })}
+            acessorio={p.estrela("datpro")}
+          />
         </div>
       </div>
 
@@ -478,21 +462,7 @@ export function Propostas() {
 
       <section className="mb-6">
         <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">Ranking de Representantes</p>
-        {erroRep && (
-          <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroRep}</div>
-        )}
-        <RankingRepresentantes
-          rows={repRows}
-          page={repPage}
-          pageSize={20}
-          total={repTotal}
-          loading={loadingRep}
-          onPageChange={setRepPage}
-          sort={repSort}
-          dir={repDir}
-          onSortChange={handleSortRepChange}
-          empFiltroParams={paramsComunsResumo}
-        />
+        {p.pronto && <RankingRepresentantes params={{ ...paramsComunsResumo, representantes: representanteIds }} empFiltroParams={paramsComunsResumo} />}
       </section>
 
       <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -523,14 +493,22 @@ export function Propostas() {
       )}
 
       <div className="mt-6">
-        <PropostasTable
-          rows={propostas.rows}
-          page={propostas.page}
-          pageSize={propostas.pageSize}
-          total={propostas.total}
-          loading={loadingTabela}
-          onPageChange={setPage}
-        />
+        {p.pronto && (
+          <PropostasTable
+            url={API_BASE}
+            params={{
+              situacao: situacaoIds,
+              clientes: clienteIds,
+              representantes: representanteIds,
+              tipven: tipvenIds,
+              modpro: modproIds,
+              datproInicio: filtros.datproInicio ?? undefined,
+              datproFim: filtros.datproFim ?? undefined,
+              alerta: alerta ?? undefined,
+              estagnadaDias: alerta === "estagnadas" ? estagnadaDias : undefined,
+            }}
+          />
+        )}
       </div>
     </div>
   );

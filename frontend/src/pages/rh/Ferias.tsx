@@ -97,12 +97,13 @@ export function Ferias() {
             {d.lista && (
               <Painel titulo="Quem está com férias vencidas" descricao="Lista nominal, só para o papel RH.">
                 <Tabela
+                  chave="rh.ferias.vencidas"
                   colunas={[
-                    { titulo: "Colaborador", render: (l) => l.nome },
-                    { titulo: "Períodos", render: (l) => fmtInt(l.periodosVencidos), alinhar: "dir" },
-                    { titulo: "Dias", render: (l) => fmtDec(l.diasVencidos), alinhar: "dir" },
-                    { titulo: "Venceu em", render: (l) => fmtData(l.limiteMaisAntigo), alinhar: "dir" },
-                    { titulo: "Passivo estimado", render: (l) => fmtMoeda(l.passivoEstimado), alinhar: "dir" },
+                    { nome: "nome", tipo: "texto", titulo: "Colaborador", render: (l) => l.nome },
+                    { nome: "periodosVencidos", tipo: "inteiro", titulo: "Períodos", render: (l) => fmtInt(l.periodosVencidos), alinhar: "dir", formatarResumo: (v) => fmtInt(v) },
+                    { nome: "diasVencidos", tipo: "decimal", titulo: "Dias", render: (l) => fmtDec(l.diasVencidos), alinhar: "dir", formatarResumo: (v) => fmtDec(v) },
+                    { nome: "limiteMaisAntigo", tipo: "data", titulo: "Venceu em", render: (l) => fmtData(l.limiteMaisAntigo), alinhar: "dir" },
+                    { nome: "passivoEstimado", tipo: "decimal", titulo: "Passivo estimado", render: (l) => fmtMoeda(l.passivoEstimado), alinhar: "dir", formatarResumo: (v) => fmtMoeda(v) },
                   ]}
                   linhas={d.lista}
                   vazio="Nenhuma férias vencida."

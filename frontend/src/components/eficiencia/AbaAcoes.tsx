@@ -3,7 +3,121 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "../ui/Modal";
 import { useToast } from "../ui/Toast";
 import { AcaoDto, AcoesResposta, FiltroAcoes, STATUS_ACAO_ROTULO, StatusAcao, paraTsv, prazoBr } from "../../lib/eficiencia";
-import { BotaoCopiar, Cartao, Chip, Indicador, TabelaRolavel, Th, Vazio } from "./comum";
+import { BotaoCopiar, Cartao, Chip, Indicador, Vazio } from "./comum";
+import { TabelaLocal } from "../colunas/TabelaLocal";
+import type { ColunaLocal } from "../colunas/aplicarLocal";
+import type { DefColuna } from "../colunas/useColunasConfiguraveis";
+
+// Plano de ação com filtro e ordem por coluna, colunas configuráveis e resumo no rodapé (TabelaLocal, 03/11/2026). As ações da linha vêm por ctx.
+interface CtxAcoes {
+  abrirProposta: (codemp: number, codpro: number) => void;
+  abrirConsultor: (codfor: number) => void;
+  mudando: number | null;
+  mudarStatus: (a: AcaoDto, s: StatusAcao) => void;
+  editar: (a: AcaoDto) => void;
+  excluir: (a: AcaoDto) => void;
+}
+const LOCAIS_ACOES: ColunaLocal[] = [
+  { nome: "titulo", tipo: "texto", obrigatoria: true },
+  { nome: "cliente", tipo: "texto" },
+  { nome: "codpro", tipo: "inteiro" },
+  { nome: "alvoNome", tipo: "texto" },
+  { nome: "responsavelNome", tipo: "texto", obrigatoria: true },
+  { nome: "prazo", tipo: "data", obrigatoria: true, utc: true },
+  { nome: "statusRotulo", tipo: "texto", obrigatoria: true },
+  { nome: "atrasada", tipo: "booleano", obrigatoria: true },
+  { nome: "criadoPorNome", tipo: "texto" },
+  { nome: "criadoEm", tipo: "data", obrigatoria: true },
+];
+const COLUNAS_ACOES: DefColuna<AcaoDto, CtxAcoes>[] = [
+  {
+    nome: "titulo",
+    titulo: "Ação",
+    fixa: true,
+    largura: 380,
+    texto: (a) => a.titulo,
+    render: (a, x) => (
+      <>
+        <span className="block font-medium text-foreground">{a.titulo}</span>
+        {a.observacao && <span className="mt-0.5 block truncate text-[12px] text-muted">{a.observacao}</span>}
+        <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-muted">
+          {a.codemp != null && a.codpro != null && (
+            <button type="button" onClick={() => x.abrirProposta(a.codemp!, a.codpro!)} className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              PS {a.codpro}
+              {a.cliente ? ` · ${a.cliente}` : ""}
+            </button>
+          )}
+          {a.codforAlvo != null && (
+            <button type="button" onClick={() => x.abrirConsultor(a.codforAlvo!)} className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              {a.alvoNome ?? `Consultor ${a.codforAlvo}`}
+            </button>
+          )}
+          <span>por {a.criadoPorNome}</span>
+        </span>
+      </>
+    ),
+  },
+  { nome: "cliente", titulo: "Cliente", largura: 170, classe: "text-muted", texto: (a) => a.cliente, render: (a) => a.cliente ?? "—" },
+  { nome: "codpro", titulo: "Proposta", largura: 90, classe: "font-mono text-muted", render: (a) => a.codpro ?? "—" },
+  { nome: "alvoNome", titulo: "Consultor alvo", largura: 160, classe: "text-muted", render: (a) => a.alvoNome ?? "—" },
+  { nome: "responsavelNome", titulo: "Responsável", largura: 170, classe: "text-foreground", texto: (a) => a.responsavelNome, render: (a) => a.responsavelNome },
+  {
+    nome: "prazo",
+    titulo: "Prazo",
+    largura: 110,
+    classe: "font-mono tabular-nums",
+    render: (a) => (
+      <>
+        <span className={a.atrasada ? "font-semibold text-destructive" : "text-foreground"}>{prazoBr(a.prazo)}</span>
+        {a.atrasada && (
+          <span className="mt-1 block">
+            <Chip tom="bad">Atrasada</Chip>
+          </span>
+        )}
+      </>
+    ),
+  },
+  {
+    nome: "statusRotulo",
+    titulo: "Status",
+    largura: 150,
+    render: (a, x) =>
+      a.podeMudarStatus ? (
+        <SeletorStatus acao={a} ocupado={x.mudando === a.id} onMudar={(st) => x.mudarStatus(a, st)} />
+      ) : (
+        <Chip tom={a.status === "concluida" ? "ok" : "warn"}>{a.statusRotulo}</Chip>
+      ),
+  },
+  { nome: "atrasada", titulo: "Atrasada", largura: 90, classe: "text-muted", render: (a) => (a.atrasada ? "sim" : "não") },
+  { nome: "criadoPorNome", titulo: "Criada por", largura: 150, classe: "text-muted", render: (a) => a.criadoPorNome },
+  { nome: "criadoEm", titulo: "Criada em", largura: 110, classe: "font-mono text-muted", render: (a) => new Date(a.criadoEm).toLocaleDateString("pt-BR") },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 140,
+    render: (a, x) =>
+      a.podeEditar && (
+        <span className="inline-flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => x.editar(a)}
+            className="rounded-md border border-border bg-surface px-2 py-0.5 text-[12px] font-medium text-foreground transition hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Editar
+          </button>
+          <button
+            type="button"
+            onClick={() => x.excluir(a)}
+            className="rounded-md border border-border bg-surface px-2 py-0.5 text-[12px] font-medium text-foreground transition hover:border-destructive hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Excluir
+          </button>
+        </span>
+      ),
+  },
+];
 
 const FILTROS: { chave: FiltroAcoes; rotulo: string }[] = [
   { chave: "abertas", rotulo: "Em aberto" },
@@ -180,75 +294,16 @@ export function AbaAcoes({
           </Vazio>
         )}
         {dados && visiveis.length > 0 && (
-          <TabelaRolavel altura="max-h-[60vh]">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr>
-                  <Th rotulo="Ação" />
-                  <Th rotulo="Responsável" />
-                  <Th rotulo="Prazo" />
-                  <Th rotulo="Status" />
-                  <Th rotulo="" />
-                </tr>
-              </thead>
-              <tbody>
-                {visiveis.map((a) => (
-                  <tr key={a.id} className={`border-t border-border/60 align-top hover:bg-surface-2 ${a.status === "concluida" ? "opacity-60" : ""}`}>
-                    <td className="px-2.5 py-2.5">
-                      <span className="block max-w-[420px] font-medium text-foreground">{a.titulo}</span>
-                      {a.observacao && <span className="mt-0.5 block max-w-[420px] text-[12px] text-muted">{a.observacao}</span>}
-                      <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-muted">
-                        {a.codemp != null && a.codpro != null && (
-                          <button type="button" onClick={() => abrirProposta(a.codemp!, a.codpro!)} className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                            PS {a.codpro}
-                            {a.cliente ? ` · ${a.cliente}` : ""}
-                          </button>
-                        )}
-                        {a.codforAlvo != null && (
-                          <button type="button" onClick={() => abrirConsultor(a.codforAlvo!)} className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                            {a.alvoNome ?? `Consultor ${a.codforAlvo}`}
-                          </button>
-                        )}
-                        <span>por {a.criadoPorNome}</span>
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-2.5 py-2.5 text-foreground">{a.responsavelNome}</td>
-                    <td className="whitespace-nowrap px-2.5 py-2.5 font-mono tabular-nums">
-                      <span className={a.atrasada ? "font-semibold text-destructive" : "text-foreground"}>{prazoBr(a.prazo)}</span>
-                      {a.atrasada && <span className="mt-1 block"><Chip tom="bad">Atrasada</Chip></span>}
-                    </td>
-                    <td className="px-2.5 py-2.5">
-                      {a.podeMudarStatus ? (
-                        <SeletorStatus acao={a} ocupado={mudando === a.id} onMudar={(s) => mudarStatus(a, s)} />
-                      ) : (
-                        <Chip tom={a.status === "concluida" ? "ok" : "warn"}>{a.statusRotulo}</Chip>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-2.5 py-2.5 text-right">
-                      {a.podeEditar && (
-                        <span className="inline-flex gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => onEditar(a)}
-                            className="rounded-md border border-border bg-surface px-2 py-0.5 text-[12px] font-medium text-foreground transition hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setExcluindo(a)}
-                            className="rounded-md border border-border bg-surface px-2 py-0.5 text-[12px] font-medium text-foreground transition hover:border-destructive hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            Excluir
-                          </button>
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TabelaRolavel>
+          <TabelaLocal<AcaoDto, CtxAcoes>
+            chave="projetos.eficiencia.acoes"
+            defs={COLUNAS_ACOES}
+            colunas={LOCAIS_ACOES}
+            linhas={visiveis}
+            ctx={{ abrirProposta, abrirConsultor, mudando, mudarStatus, editar: onEditar, excluir: setExcluindo }}
+            chaveLinha={(a) => String(a.id)}
+            classeLinha={(a) => (a.status === "concluida" ? "opacity-60" : undefined)}
+            vazio="Nenhuma ação neste filtro."
+          />
         )}
       </Cartao>
 
