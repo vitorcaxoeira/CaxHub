@@ -63,6 +63,14 @@ export function diaBrasilComoData(data: Date): Date {
   return new Date(Date.UTC(ano, mes - 1, dia));
 }
 
+// Instante 00:00 (hora de parede de Brasília) do dia informado, que vem no formato de @db.Date (meia-noite UTC do dia do calendário). Serve para
+// recortar por faixa de instantes um campo timestamp sem fuso (ex.: AtividadeSessaoExecucao.inicio, gravado em UTC) pelo dia brasileiro: das 21:00
+// às 23:59 de Brasília o dia UTC já é o seguinte, e recortar/agrupar por UTC jogava essas horas no dia de amanhã. O meio-dia UTC garante que
+// paraHoraBrasil leia o mesmo dia do calendário; o offset é calculado (horário de verão).
+export function inicioDoDiaBrasil(dia: Date): Date {
+  return doDiaBrasil(new Date(dia.getTime() + 12 * 60 * 60_000), 0);
+}
+
 // Offset do fuso, em minutos, NAQUELE instante — calculado, e não constante, porque o
 // horário de verão brasileiro pode voltar e mudaria o valor conforme a data.
 function offsetMinutos(instante: Date): number {

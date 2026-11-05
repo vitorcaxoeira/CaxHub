@@ -56,16 +56,18 @@ interface ItemDetalhe {
   despro: string | null;
   entpro: string | null;
   depexeLabel: string;
+  depcusrecLabel: string;
   qtdhor: number | null;
-  valhor: number;
-  valorTotal: number;
+  /** Só vêm para admin, Comercial e gestor de área (podeVerValores); para os outros o servidor não manda. */
+  valhor?: number;
+  valorTotal?: number;
   fatserLabel: string;
   sitprzLabel: string;
 }
 
 interface Totais {
   horas: number;
-  valor: number;
+  valor?: number;
 }
 
 const toneBadge: Record<string, string> = {
@@ -112,6 +114,8 @@ export function PropostaVisualizacao() {
   const [proposta, setProposta] = useState<PropostaDetalhe | null>(null);
   const [itens, setItens] = useState<ItemDetalhe[]>([]);
   const [totais, setTotais] = useState<Totais | null>(null);
+  // Valores (valor/hora, total) só para admin, Comercial e gestor de área; até a resposta chegar, escondidos.
+  const [podeVerValores, setPodeVerValores] = useState(false);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [aba, setAba] = useState<"detalhes" | "auditoria">("detalhes");
@@ -124,6 +128,7 @@ export function PropostaVisualizacao() {
         setProposta(data.proposta);
         setItens(data.itens);
         setTotais(data.totais);
+        setPodeVerValores(Boolean(data.podeVerValores));
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a proposta"))
@@ -278,6 +283,9 @@ export function PropostaVisualizacao() {
                         Departamento
                       </th>
                       <th className="bg-surface-2 px-4 py-2.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                        Dep. Custo/Rec.
+                      </th>
+                      <th className="bg-surface-2 px-4 py-2.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                         Faturamento
                       </th>
                       <th className="bg-surface-2 px-4 py-2.5 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
@@ -286,12 +294,16 @@ export function PropostaVisualizacao() {
                       <th className="bg-surface-2 px-4 py-2.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                         Horas
                       </th>
-                      <th className="bg-surface-2 px-4 py-2.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                        Valor/Hora
-                      </th>
-                      <th className="bg-surface-2 px-4 py-2.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                        Total
-                      </th>
+                      {podeVerValores && (
+                        <>
+                          <th className="bg-surface-2 px-4 py-2.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                            Valor/Hora
+                          </th>
+                          <th className="bg-surface-2 px-4 py-2.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                            Total
+                          </th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -308,6 +320,9 @@ export function PropostaVisualizacao() {
                             <Skeleton className="h-5 w-20 rounded-full" />
                           </td>
                           <td className="px-4 py-2.5">
+                            <Skeleton className="h-5 w-20 rounded-full" />
+                          </td>
+                          <td className="px-4 py-2.5">
                             <Skeleton className="h-4 w-20" />
                           </td>
                           <td className="px-4 py-2.5">
@@ -316,12 +331,16 @@ export function PropostaVisualizacao() {
                           <td className="px-4 py-2.5 text-right">
                             <Skeleton className="ml-auto h-4 w-10" />
                           </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <Skeleton className="ml-auto h-4 w-16" />
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <Skeleton className="ml-auto h-4 w-16" />
-                          </td>
+                          {podeVerValores && (
+                            <>
+                              <td className="px-4 py-2.5 text-right">
+                                <Skeleton className="ml-auto h-4 w-16" />
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <Skeleton className="ml-auto h-4 w-16" />
+                              </td>
+                            </>
+                          )}
                         </tr>
                       ))}
                     {!loading &&
@@ -341,22 +360,31 @@ export function PropostaVisualizacao() {
                             {item.depexeLabel}
                           </span>
                         </td>
+                        <td className="px-4 py-2.5">
+                          <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+                            {item.depcusrecLabel}
+                          </span>
+                        </td>
                         <td className="px-4 py-2.5 text-sm text-muted">{item.fatserLabel}</td>
                         <td className="px-4 py-2.5 text-sm text-muted">{item.sitprzLabel}</td>
                         <td className="px-4 py-2.5 text-right font-mono text-sm tabular-nums text-muted">
                           {item.qtdhor != null ? formatHoras(item.qtdhor / 60) : "—"}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-sm tabular-nums text-muted">
-                          {fmtMoney(item.valhor)}
-                        </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-sm tabular-nums text-foreground">
-                          {fmtMoney(item.valorTotal)}
-                        </td>
+                        {podeVerValores && (
+                          <>
+                            <td className="px-4 py-2.5 text-right font-mono text-sm tabular-nums text-muted">
+                              {fmtMoney(item.valhor ?? 0)}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono text-sm tabular-nums text-foreground">
+                              {fmtMoney(item.valorTotal ?? 0)}
+                            </td>
+                          </>
+                        )}
                       </tr>
                     ))}
                     {!loading && itens.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">
+                        <td colSpan={podeVerValores ? 9 : 7} className="px-4 py-8 text-center text-sm text-muted">
                           Nenhum item cadastrado nesta proposta.
                         </td>
                       </tr>
@@ -365,16 +393,20 @@ export function PropostaVisualizacao() {
                   {totais && itens.length > 0 && (
                     <tfoot>
                       <tr className="border-t border-border bg-surface-2/40">
-                        <td colSpan={5} className="px-4 py-2.5 text-right font-mono text-sm font-semibold uppercase tracking-wider text-muted">
+                        <td colSpan={6} className="px-4 py-2.5 text-right font-mono text-sm font-semibold uppercase tracking-wider text-muted">
                           Total
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-sm font-semibold tabular-nums text-foreground">
                           {formatHoras(totais.horas / 60)}
                         </td>
-                        <td />
-                        <td className="px-4 py-2.5 text-right font-mono text-sm font-semibold tabular-nums text-foreground">
-                          {fmtMoney(totais.valor)}
-                        </td>
+                        {podeVerValores && (
+                          <>
+                            <td />
+                            <td className="px-4 py-2.5 text-right font-mono text-sm font-semibold tabular-nums text-foreground">
+                              {fmtMoney(totais.valor ?? 0)}
+                            </td>
+                          </>
+                        )}
                       </tr>
                     </tfoot>
                   )}

@@ -16,6 +16,7 @@ import {
 } from "../domain/resumoConsultor";
 import { produtividadeDoMes } from "../domain/relatorioProdutividade";
 import { parseIntListParam } from "../lib/queryParams";
+import { diaBrasilComoData } from "../domain/fusoBrasil";
 import { rdvConsultorEmAndamento, runSincronizacaoRdvConsultor, statusRdvConsultor } from "../sync/rdvConsultorSync";
 
 export const dashboardRouter = Router();
@@ -141,16 +142,19 @@ function periodoDaQuery(
   req: AuthenticatedRequest,
   hoje: Date
 ): { anos: number[]; meses: number[]; combos: { ano: number; mes: number }[] } | null {
-  const anos = [...new Set(parseIntListParam(req.query.anos) ?? [hoje.getUTCFullYear()])].sort((a, b) => a - b);
+  // O "hoje" é o dia de BRASÍLIA (produção roda em UTC: depois das 21h o dia UTC já é amanhã, e no último dia do mês a tela abria no mês seguinte).
+  const hojeBr = diaBrasilComoData(hoje);
+  const anos = [...new Set(parseIntListParam(req.query.anos) ?? [hojeBr.getUTCFullYear()])].sort((a, b) => a - b);
   const meses = [
-    ...new Set((parseIntListParam(req.query.meses) ?? [hoje.getUTCMonth() + 1]).filter((m) => m >= 1 && m <= 12)),
+    ...new Set((parseIntListParam(req.query.meses) ?? [hojeBr.getUTCMonth() + 1]).filter((m) => m >= 1 && m <= 12)),
   ].sort((a, b) => a - b);
   if (anos.length === 0 || meses.length === 0) return null;
   return { anos, meses, combos: anos.flatMap((ano) => meses.map((mes) => ({ ano, mes }))) };
 }
 
+// Dia de Brasília do instante, como meia-noite UTC (formato de @db.Date): o "hoje" da meta não pode virar amanhã às 21h (produção roda em UTC).
 function inicioDoDiaUtc(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  return diaBrasilComoData(d);
 }
 
 // Anos com pelo menos um dado real (sessão de execução encerrada ou apontamento já

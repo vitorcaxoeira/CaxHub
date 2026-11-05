@@ -1,4 +1,5 @@
 import { prisma } from "../db/prisma";
+import { diaBrasilComoData, inicioDoDiaBrasil } from "./fusoBrasil";
 import { SITRAT_CANCELADO, filtroRatItemRealizado, sitratLabel } from "./ratDominio";
 import { TIPDES_DESLOCAMENTO_ROTA, tipdesLabel } from "./rdvDominio";
 
@@ -40,7 +41,9 @@ export function diasDoPeriodo(de: Date, ate: Date): string[] {
 }
 
 // Horas realizadas de um consultor num período, já agrupadas por dia e por projeto (codpro).
-// `ate` é tratado como fim do dia (23:59:59.999) pra incluir o dia inteiro.
+// `ate` é tratado como fim do dia (23:59:59.999) pra incluir o dia inteiro. Sessão ainda não confirmada: o dia é o de BRASÍLIA do início
+// (mesma regra da confirmação, que grava RatItem.datati com diaBrasilComoData), e o recorte do período olha o início entre o começo do
+// dia `de` e o começo do dia seguinte a `ate`, também em Brasília (05/11/2026: antes era UTC e o trabalho das 21h às 24h caía no dia seguinte).
 export async function horasRealizadasNoPeriodo(
   codemp: number,
   codfor: number,
@@ -49,12 +52,15 @@ export async function horasRealizadasNoPeriodo(
 ): Promise<{ porDia: Map<string, number>; porProjeto: Map<number, number>; totalMinutos: number }> {
   const fimDoDia = new Date(ate);
   fimDoDia.setUTCHours(23, 59, 59, 999);
+  const inicioDoPeriodo = inicioDoDiaBrasil(de);
+  const fimDoPeriodo = inicioDoDiaBrasil(new Date(Date.UTC(ate.getUTCFullYear(), ate.getUTCMonth(), ate.getUTCDate() + 1)));
 
   const [sessoes, ratItens] = await Promise.all([
     prisma.atividadeSessaoExecucao.findMany({
       where: {
         confirmada: false,
-        fim: { not: null, gte: de, lte: fimDoDia },
+        fim: { not: null },
+        inicio: { gte: inicioDoPeriodo, lt: fimDoPeriodo },
         excluidaEm: null,
         // sitreg "A" filtra atividade soft-deletada — mesmo filtro de GET /sessoes-pendentes
         // em routes/apontamentos.ts (não é o mesmo `excluidaEm` da sessão, é da ATIVIDADE).
@@ -88,7 +94,7 @@ export async function horasRealizadasNoPeriodo(
   for (const s of sessoes) {
     if (!s.fim) continue;
     const minutos = Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000);
-    somar(chaveDia(s.inicio), s.atividade.codpro, minutos);
+    somar(chaveDia(diaBrasilComoData(s.inicio)), s.atividade.codpro, minutos);
   }
   for (const r of ratItens) {
     if (r.horini == null || r.horfim == null || !r.datati) continue;

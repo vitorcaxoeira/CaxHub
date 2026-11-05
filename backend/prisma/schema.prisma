@@ -673,6 +673,8 @@ model PropostaItem {
   atvpso           BigInt?
   /// Domínio "USU_LDepExe": 00=Diretoria, 01=Administrativo, 02=Comercial, 03=Suporte ERP, 04=Suporte HCM, 05=Suporte TI ERP, 06=Suporte TI HCM, 08=Consultoria ERP, 09=Consultoria HCM, 10=Desenvolvimento, 11=DHO, 12=Documentação, 13=Processo Interno
   depexe           Int?
+  /// Departamento de Custo/Receita do item (USU_DepCusRec, 05/11/2026). Domínio "USU_LDepExe": mesmo domínio de depexe
+  depcusrec        Int?
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)

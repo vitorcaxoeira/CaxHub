@@ -17,7 +17,7 @@ export const JOB_NAME = "propostas_itens-sync";
 export const CRON_EXPR = "0 4 * * *";
 // USU_TE077ITE não tem campo de data de geração/alteração no dicionário do Senior.
 export const CAMPO_DATA: string | null = null;
-export const QUERY =`SELECT USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_NumPrj AS numprj, USU_CodSer AS codser, USU_QtdHor AS qtdhor, USU_ValHor AS valhor, USU_DesPro AS despro, USU_EntPro AS entpro, USU_CodFpj AS codfpj, USU_FatSer AS fatser, USU_SitMot AS sitmot, USU_ForFat AS forfat, USU_TipPrj AS tipprj, USU_FrmPrj AS frmprj, USU_SitPrz AS sitprz, USU_ATVPSO AS atvpso, USU_DepExe AS depexe FROM USU_TE077ITE`;
+export const QUERY =`SELECT USU_CodEmp AS codemp, USU_CodPro AS codpro, USU_SeqIte AS seqite, USU_NumPrj AS numprj, USU_CodSer AS codser, USU_QtdHor AS qtdhor, USU_ValHor AS valhor, USU_DesPro AS despro, USU_EntPro AS entpro, USU_CodFpj AS codfpj, USU_FatSer AS fatser, USU_SitMot AS sitmot, USU_ForFat AS forfat, USU_TipPrj AS tipprj, USU_FrmPrj AS frmprj, USU_SitPrz AS sitprz, USU_ATVPSO AS atvpso, USU_DepExe AS depexe, USU_DepCusRec AS depcusrec FROM USU_TE077ITE`;
 
 export interface PropostaItemRow {
   codemp: number;
@@ -38,6 +38,8 @@ export interface PropostaItemRow {
   sitprz?: number;
   atvpso?: number;
   depexe?: number;
+  /** Departamento de Custo/Receita (USU_DepCusRec, domínio USU_LDepExe, 05/11/2026). Fora da auditoria de propósito (ver CAMPOS_AUDITADOS_PROPOSTA_ITEM). */
+  depcusrec?: number;
 }
 
 // Objeto tipado usado só pro diff de auditoria — ver mesmo raciocínio em propostaSync.ts.
@@ -46,7 +48,7 @@ function dataTipada(row: PropostaItemRow, inicio: Date) {
     codemp: row.codemp, codpro: row.codpro, seqite: row.seqite, numprj: row.numprj, codser: row.codser,
     qtdhor: row.qtdhor, valhor: row.valhor, despro: row.despro, entpro: row.entpro, codfpj: row.codfpj,
     fatser: row.fatser, sitmot: row.sitmot, forfat: row.forfat, tipprj: row.tipprj, frmprj: row.frmprj,
-    sitprz: row.sitprz, atvpso: row.atvpso != null ? BigInt(row.atvpso) : null, depexe: row.depexe,
+    sitprz: row.sitprz, atvpso: row.atvpso != null ? BigInt(row.atvpso) : null, depexe: row.depexe, depcusrec: row.depcusrec,
     vistoEmSync: inicio, removidoEmSenior: null as Date | null,
   };
 }
@@ -71,6 +73,7 @@ const COLUNAS: ColunaUpsert[] = [
   { nome: "sitprz", cast: "int" },
   { nome: "atvpso", cast: "bigint" },
   { nome: "depexe", cast: "int" },
+  { nome: "depcusrec", cast: "int" },
 ];
 
 function linhaDe(row: PropostaItemRow): LinhaUpsert {
@@ -95,6 +98,7 @@ function linhaDe(row: PropostaItemRow): LinhaUpsert {
       row.sitprz != null ? String(row.sitprz) : null,
       row.atvpso != null ? String(row.atvpso) : null,
       row.depexe != null ? String(row.depexe) : null,
+      row.depcusrec != null ? String(row.depcusrec) : null,
     ],
   };
 }
