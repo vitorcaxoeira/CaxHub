@@ -7,6 +7,7 @@ import { prisma } from "../db/prisma";
 import { sitpedTone, SITPED_LABELS } from "../domain/pedidoDominio";
 import { FORFAT_LABELS, MODPRO_LABELS, SITPRO_LABELS, forfatLabel } from "../domain/propostasDominio";
 import { runPedidoSyncPorClientes, ResultadoSyncPorCliente } from "../sync/pedidoSync";
+import { ResultadoSyncRatsFaltantes, sincronizarRatsFaltantesDosPedidos } from "../sync/ratsDosPedidos";
 
 // Tela "Mercado > Listar Pedidos" — espelho de E120PED (ver backend/src/sync/pedidoSync.ts).
 // Só admin acessa (menu "Mercado" restrito, ver frontend/src/layout/Sidebar.tsx).
@@ -419,6 +420,8 @@ interface StatusSincronizacaoLote {
   iniciadoEm: string | null;
   concluidoEm: string | null;
   resultado: ResultadoSyncPorCliente | null;
+  /** RATs citadas pelos pedidos que faltavam no CaxHub e foram buscadas no Senior (depois dos pedidos). */
+  rats: ResultadoSyncRatsFaltantes | null;
   erro: string | null;
 }
 
@@ -428,6 +431,7 @@ let statusLote: StatusSincronizacaoLote = {
   iniciadoEm: null,
   concluidoEm: null,
   resultado: null,
+  rats: null,
   erro: null,
 };
 
@@ -451,7 +455,9 @@ pedidosRouter.post("/por-cliente/:codcli/sincronizar", async (req, res) => {
   sincronizacoesEmAndamento.add(codcli);
   try {
     const resultado = await runPedidoSyncPorClientes([codcli]);
-    res.json(resultado);
+    // Depois dos pedidos: as RATs que eles citam e ainda não existem aqui (só leitura do Senior; falha de RAT não derruba a resposta).
+    const rats = await sincronizarRatsFaltantesDosPedidos([codcli]);
+    res.json({ ...resultado, rats });
   } catch (error) {
     handleError(res, error, "sincronizar-cliente");
   } finally {
@@ -491,17 +497,20 @@ pedidosRouter.post("/sincronizar", async (req, res) => {
       iniciadoEm: new Date().toISOString(),
       concluidoEm: null,
       resultado: null,
+      rats: null,
       erro: null,
     };
 
     runPedidoSyncPorClientes(codclis)
-      .then((resultado) => {
-        statusLote = { ...statusLote, resultado, erro: null };
+      .then(async (resultado) => {
+        // Só publica o resultado depois da etapa das RATs: a tela olha `emAndamento` e lê os dois juntos.
+        const rats = await sincronizarRatsFaltantesDosPedidos(codclis);
+        statusLote = { ...statusLote, resultado, rats, erro: null };
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[pedidos:sincronizar-filtro] falhou:", message);
-        statusLote = { ...statusLote, resultado: null, erro: message };
+        statusLote = { ...statusLote, resultado: null, rats: null, erro: message };
       })
       .finally(() => {
         statusLote = { ...statusLote, emAndamento: false, concluidoEm: new Date().toISOString() };

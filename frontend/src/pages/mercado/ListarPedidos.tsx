@@ -57,6 +57,23 @@ const formatMoney = (v: number) => `R$ ${currencyFormatter.format(v)}`;
 const TH_CLASS = "bg-surface-2 px-[7px] py-[8px] text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted";
 const TH_CLASS_RIGHT = "bg-surface-2 px-[7px] py-[8px] text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted";
 
+// RATs que os pedidos citavam e não existiam no CaxHub, buscadas no Senior junto do "Sinc. ERP" (ver sync/ratsDosPedidos.ts no backend).
+interface RatsFaltantes {
+  faltantes: number;
+  sincronizadas: number;
+  naoEncontradas: number;
+  falhas: number;
+}
+
+function textoRats(rats: RatsFaltantes | null | undefined): { texto: string; aviso: boolean } {
+  if (!rats || (rats.faltantes === 0 && rats.falhas === 0)) return { texto: "", aviso: false };
+  const partes: string[] = [];
+  if (rats.sincronizadas > 0) partes.push(`${rats.sincronizadas} RAT(s) que faltavam trazida(s) do Senior`);
+  if (rats.naoEncontradas > 0) partes.push(`${rats.naoEncontradas} RAT(s) não encontrada(s) no Senior`);
+  if (rats.falhas > 0) partes.push(`${rats.falhas} RAT(s) com falha ao sincronizar`);
+  return { texto: partes.length ? ` ${partes.join(" · ")}.` : "", aviso: rats.falhas > 0 };
+}
+
 export function ListarPedidos() {
   const toast = useToast();
   const [visao, setVisao] = useState<Visao>("lista");
@@ -231,9 +248,10 @@ export function ListarPedidos() {
     setSincronizandoClientes((s) => new Set(s).add(cliente.codcli));
     try {
       const { data } = await axios.post(`/api/pedidos/por-cliente/${cliente.codcli}/sincronizar`);
+      const rats = textoRats(data.rats);
       toast.mostrar(
-        `${cliente.nome}: ${data.total} pedido(s) no Senior — ${data.criados} novo(s), ${data.atualizados} atualizado(s).`,
-        "success"
+        `${cliente.nome}: ${data.total} pedido(s) no Senior — ${data.criados} novo(s), ${data.atualizados} atualizado(s).${rats.texto}`,
+        rats.aviso ? "warning" : "success"
       );
       carregarPorCliente();
       // Tabela do cliente (se estiver aberta) busca de novo; fechada, busca ao abrir.
@@ -273,10 +291,11 @@ export function ListarPedidos() {
           if (data.erro) {
             toast.mostrar(`Falha na sincronização do filtro: ${data.erro}`, "destructive");
           } else if (data.resultado) {
+            const rats = textoRats(data.rats);
             toast.mostrar(
               `${data.totalClientes} cliente(s) sincronizado(s): ${data.resultado.total} pedido(s) — ` +
-                `${data.resultado.criados} novo(s), ${data.resultado.atualizados} atualizado(s).`,
-              "success"
+                `${data.resultado.criados} novo(s), ${data.resultado.atualizados} atualizado(s).${rats.texto}`,
+              rats.aviso ? "warning" : "success"
             );
           }
 
@@ -445,7 +464,7 @@ export function ListarPedidos() {
             <button
               onClick={sincronizarFiltro}
               disabled={sincronizandoFiltro || loadingClientes || totalClientesFiltro === 0}
-              title="Puxa do Senior os pedidos de todos os clientes que batem com os filtros da barra, incluindo os das próximas páginas (os filtros de coluna não entram nesta ação)"
+              title="Puxa do Senior os pedidos de todos os clientes que batem com os filtros da barra, incluindo os das próximas páginas, e as RATs desses pedidos que ainda não existem aqui"
               className="ml-auto rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {sincronizandoFiltro
@@ -533,7 +552,7 @@ export function ListarPedidos() {
                             <button
                               onClick={() => sincronizarCliente(c)}
                               disabled={sincronizando || sincronizandoFiltro}
-                              title="Puxa do Senior todos os pedidos deste cliente, sem esperar a sincronização diária"
+                              title="Puxa do Senior todos os pedidos deste cliente (e as RATs desses pedidos que ainda não existem aqui), sem esperar a sincronização diária"
                               className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {sincronizando ? "Sincronizando..." : "Sinc. ERP"}
