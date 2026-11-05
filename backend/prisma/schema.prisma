@@ -1751,6 +1751,10 @@ model Pedido {
 
   /// Representante do pedido (E120PED.CodRep): leva as licenças vendidas para a pessoa na Gestão de Metas do Comercial.
   codrep           Int?
+  /// Soma dos valores dos itens de serviços do pedido (E120PED.VlrBse, 05/11/2026). Zero nos pedidos antigos.
+  vlrbse           Decimal?  @db.Decimal(15, 2)
+  /// Soma dos valores dos itens de produtos do pedido (E120PED.VlrBpr, 05/11/2026). Só espelhado (hoje zero em todos).
+  vlrbpr           Decimal?  @db.Decimal(15, 2)
   @@id([codemp, codfil, numped])
   @@map("pedidos")
 }

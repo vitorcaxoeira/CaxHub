@@ -15,7 +15,7 @@ export const JOB_NAME = "pedidos-sync";
 export const JOB_NAME_CLIENTE = "pedidos-sync-cliente";
 export const CRON_EXPR = "35 4 * * *"; // horário livre, sem dependência de outro job
 export const CAMPO_DATA: string | null = "DatEmi";
-export const BASE_QUERY =`SELECT CodEmp AS codemp, CodFil AS codfil, NumPed AS numped, TipPed AS tipped, PrcPed AS prcped, TnsPro AS tnspro, TnsSer AS tnsser, DatEmi AS datemi, HorEmi AS horemi, DatPrv AS datprv, ObsPed AS obsped, VlrLiq AS vlrliq, ObsMot AS obsmot, CodCli AS codcli, PedCli AS pedcli, CodCpg AS codcpg, CodFpg AS codfpg, SitPed AS sitped, usu_numrat AS numrat, CodRep AS codrep FROM E120PED`;
+export const BASE_QUERY =`SELECT CodEmp AS codemp, CodFil AS codfil, NumPed AS numped, TipPed AS tipped, PrcPed AS prcped, TnsPro AS tnspro, TnsSer AS tnsser, DatEmi AS datemi, HorEmi AS horemi, DatPrv AS datprv, ObsPed AS obsped, VlrLiq AS vlrliq, ObsMot AS obsmot, CodCli AS codcli, PedCli AS pedcli, CodCpg AS codcpg, CodFpg AS codfpg, SitPed AS sitped, usu_numrat AS numrat, CodRep AS codrep, VlrBse AS vlrbse, VlrBpr AS vlrbpr FROM E120PED`;
 
 // Fase 1 do plano de filtros na importação: acumulador de predicados
 // (sync/consultaSenior.ts), não concatenação — lista vazia devolve BASE_QUERY intacta.
@@ -55,6 +55,8 @@ export interface PedidoRow {
   sitped: number;
   numrat?: number;
   codrep?: number;
+  vlrbse?: number;
+  vlrbpr?: number;
 }
 
 // Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
@@ -80,6 +82,8 @@ const COLUNAS: ColunaUpsert[] = [
   { nome: "sitped", cast: "int" },
   { nome: "numrat", cast: "bigint" },
   { nome: "codrep", cast: "int" },
+  { nome: "vlrbse", cast: "numeric" },
+  { nome: "vlrbpr", cast: "numeric" },
 ];
 
 // `String(...).slice(0,10)` pra data, nunca `new Date(v)`. `!= null` (não `!== undefined`)
@@ -110,6 +114,8 @@ function linhaDe(row: PedidoRow): LinhaUpsert {
       String(row.sitped),
       row.numrat != null ? String(row.numrat) : null,
       row.codrep != null ? String(row.codrep) : null,
+      row.vlrbse != null ? row.vlrbse.toFixed(2) : null,
+      row.vlrbpr != null ? row.vlrbpr.toFixed(2) : null,
     ],
   };
 }
@@ -119,7 +125,7 @@ function linhaDe(row: PedidoRow): LinhaUpsert {
 // Só usada por runPedidoSyncPorClientes (pull sob demanda, linha a linha — volume pequeno
 // por natureza, não é o gargalo que motivou o upsert em lote).
 async function upsertPedido(row: PedidoRow, inicio: Date): Promise<void> {
-  const data = { codemp: row.codemp, codfil: row.codfil, numped: row.numped, tipped: row.tipped, prcped: row.prcped, tnspro: row.tnspro, tnsser: row.tnsser, datemi: new Date(row.datemi), horemi: row.horemi, datprv: row.datprv != null ? new Date(row.datprv) : null, obsped: row.obsped, vlrliq: row.vlrliq, obsmot: row.obsmot, codcli: row.codcli, pedcli: row.pedcli, codcpg: row.codcpg, codfpg: row.codfpg, sitped: row.sitped, numrat: row.numrat != null ? BigInt(row.numrat) : null, codrep: row.codrep ?? null, ...carimbo(inicio) };
+  const data = { codemp: row.codemp, codfil: row.codfil, numped: row.numped, tipped: row.tipped, prcped: row.prcped, tnspro: row.tnspro, tnsser: row.tnsser, datemi: new Date(row.datemi), horemi: row.horemi, datprv: row.datprv != null ? new Date(row.datprv) : null, obsped: row.obsped, vlrliq: row.vlrliq, obsmot: row.obsmot, codcli: row.codcli, pedcli: row.pedcli, codcpg: row.codcpg, codfpg: row.codfpg, sitped: row.sitped, numrat: row.numrat != null ? BigInt(row.numrat) : null, codrep: row.codrep ?? null, vlrbse: row.vlrbse ?? null, vlrbpr: row.vlrbpr ?? null, ...carimbo(inicio) };
   await prisma.pedido.upsert({
     where: { codemp_codfil_numped: { codemp: row.codemp, codfil: row.codfil, numped: row.numped } },
     update: data,

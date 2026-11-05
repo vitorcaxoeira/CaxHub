@@ -15,6 +15,7 @@ export interface PedidoLista {
   datemi: string;
   datprv: string | null;
   obsmot: string | null;
+  vlrbse: number | null;
   vlrliq: number | null;
   pedcli: string | null;
   situacao: string;
@@ -137,6 +138,16 @@ const COLUNAS: DefColuna<PedidoLista, Navegar>[] = [
   { nome: "modalidade", titulo: "Mod. Prop.", largura: 130, render: (p) => <Selo texto={p.modalidade} tone={p.modalidadeTone} /> },
   { nome: "situacaoProposta", titulo: "Sit. Prop.", largura: 150, render: (p) => <Selo texto={p.situacaoProposta} tone={p.situacaoPropostaTone} /> },
   { nome: "faturamento", titulo: "Faturamento", largura: 130, classe: "text-sm text-muted", texto: (p) => p.faturamento, render: (p) => texto(p.faturamento) },
+  {
+    nome: "vlrbse",
+    titulo: "Valor Serviços",
+    dica: "Soma dos valores dos itens de serviços do pedido (E120PED.VlrBse)",
+    direita: true,
+    largura: 130,
+    classe: "font-mono text-sm tabular-nums text-foreground",
+    formatarResumo: formatMoney,
+    render: (p) => (p.vlrbse != null ? formatMoney(p.vlrbse) : "—"),
+  },
   {
     nome: "vlrliq",
     titulo: "Valor Líquido",

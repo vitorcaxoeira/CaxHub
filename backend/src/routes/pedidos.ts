@@ -260,7 +260,7 @@ registrarListaConsultavel(
     return {
       interna: Prisma.sql`
         SELECT p.codemp, p.codfil, p.numped, p.codcli, p.datemi, p.datprv, p.obsped, NULLIF(trim(p.obsmot), '') AS obsmot,
-               p.vlrliq::float8 AS vlrliq, p.pedcli, p.sitped,
+               p.vlrbse::float8 AS vlrbse, p.vlrliq::float8 AS vlrliq, p.pedcli, p.sitped,
                COALESCE(c.codcli || ' - ' || c.nomcli, p.codcli::text) AS cliente,
                ${SITPED_ROTULO_SQL} AS situacao, ${SITPED_TOM_SQL} AS "sitpedTone",
                p.numrat::text AS numrat, r.id AS "ratId",
@@ -305,6 +305,7 @@ registrarListaConsultavel(
         col.texto("modalidade"),
         col.texto("situacaoProposta"),
         col.texto("faturamento"),
+        col.decimal("vlrbse"),
         col.decimal("vlrliq"),
         col.texto("obsmot"),
         col.data("datemi", { obrigatoria: true }),
@@ -313,7 +314,7 @@ registrarListaConsultavel(
         col.texto("formaPagamento"),
         col.texto("condicaoPagamento"),
       ],
-      totais: ["vlrliq"],
+      totais: ["vlrbse", "vlrliq"],
       ordemPadrao: Prisma.sql`x."datemi" DESC, x."numped" DESC`,
       pageSizePadrao: 30,
     };
