@@ -300,12 +300,22 @@ const COLUNAS_PROPOSTAS_ALOCACAO: ColunaMemoria[] = [
   { nome: "sitproLabel", tipo: "texto", obrigatoria: true },
   { nome: "datret", tipo: "data", utc: true },
   { nome: "depexeLabel", tipo: "texto", obrigatoria: true },
+  // Departamentos de Custo/Receita DISTINTOS dos itens da proposta, "A, B" (05/11/2026); texto para filtrar/ordenar, sem aba Valores (lista composta).
+  { nome: "depcusrecLabel", tipo: "texto", semValores: true },
   { nome: "modproLabel", tipo: "texto", obrigatoria: true },
   { nome: "totalItens", tipo: "inteiro", obrigatoria: true },
   { nome: "qtdhorTotal", tipo: "decimal", obrigatoria: true },
   { nome: "horasAlocadas", tipo: "decimal", obrigatoria: true },
   { nome: "saldo", tipo: "decimal", obrigatoria: true },
 ];
+
+// Dep. Custo/Rec. dos itens de uma proposta: os rótulos dos departamentos distintos, em ordem de código.
+function rotulosDepcusrec(codigos: Iterable<number>): string[] {
+  return [...new Set(codigos)].sort((x, y) => x - y).map((d) => depexeLabel(d));
+}
+function depcusrecDistintos(itens: { depcusrec: number | null }[]): string[] {
+  return rotulosDepcusrec(itens.map((i) => i.depcusrec).filter((d): d is number => d != null));
+}
 
 registrarListaEmMemoria(
   alocacaoRouter,
@@ -473,6 +483,8 @@ registrarListaEmMemoria(
       // Soma de |duracaoHoras - qtdhor| dos nós divergentes desta proposta — 0 quando não
       // há divergência. Ver comentário acima de `divergenciaSomaPorProposta`.
       horasDivergentesSoma: number;
+      // Departamentos de Custo/Receita distintos dos itens (PropostaItem.depcusrec), como código.
+      depcusrecs: Set<number>;
     }
     // Semeia pelas PROPOSTAS do escopo (não pelos itens) — só assim a proposta existe
     // no mapa antes de se saber se ela tem item, o que torna a exclusão das vazias uma
@@ -495,6 +507,7 @@ registrarListaEmMemoria(
         qtdhorTotal: 0,
         horasAlocadas: 0,
         horasDivergentesSoma: divergenciaSomaPorProposta.get(chaveProposta) ?? 0,
+        depcusrecs: new Set<number>(),
       });
     }
     // Sem recorte por item.depexe: se a proposta está no escopo, TODOS os itens dela
@@ -504,6 +517,7 @@ registrarListaEmMemoria(
       const agregado = porProposta.get(`${item.codemp}-${item.codpro}`);
       if (!agregado) continue;
       agregado.totalItens += 1;
+      if (item.depcusrec != null) agregado.depcusrecs.add(item.depcusrec);
       agregado.qtdhorTotal += item.qtdhor ?? 0;
       agregado.horasAlocadas += alocadoPorItem.get(`${item.codemp}-${item.codpro}-${item.seqite}`) ?? 0;
     }
@@ -601,6 +615,9 @@ registrarListaEmMemoria(
       // proposta compartilhada mostrando o depto de quem está vendo, não o real).
       depexeLabel: depexeLabel(a.propostaDepexe),
       modproLabel: modproLabel(a.propostaModpro),
+      // Dep. Custo/Rec. dos ITENS (o do cabeçalho acima é o da proposta): os distintos, em ordem de código, e o mesmo texto para filtro/ordem.
+      depcusrecLista: rotulosDepcusrec(a.depcusrecs),
+      depcusrecLabel: rotulosDepcusrec(a.depcusrecs).join(", "),
       totalItens: a.totalItens,
       qtdhorTotal: a.qtdhorTotal,
       horasAlocadas: a.horasAlocadas,
@@ -680,6 +697,8 @@ registrarListaEmMemoria(
             datret: p.datret,
             depexeLabel: depexeLabel(p.depexe),
             modproLabel: modproLabel(p.modpro),
+            depcusrecLista: depcusrecDistintos(itensDaProposta),
+            depcusrecLabel: depcusrecDistintos(itensDaProposta).join(", "),
             totalItens: itensDaProposta.length,
             qtdhorTotal,
             horasAlocadas,

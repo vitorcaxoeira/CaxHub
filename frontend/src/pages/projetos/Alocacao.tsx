@@ -36,6 +36,9 @@ interface PropostaRow {
   // da aprovação pra toda linha aqui.
   datret: string | null;
   depexeLabel: string;
+  /** Dep. Custo/Rec. distintos dos itens da proposta (o depexeLabel acima é o da proposta). */
+  depcusrecLista: string[];
+  depcusrecLabel: string;
   modproLabel: string;
   totalItens: number;
   qtdhorTotal: number;
@@ -147,6 +150,26 @@ const COLUNAS_ALOCACAO: DefColuna<PropostaRow, AcoesAlocacao>[] = [
     titulo: "Departamento",
     largura: 160,
     render: (r) => <span className={`whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>{r.depexeLabel}</span>,
+  },
+  {
+    // Dep. Custo/Rec. dos ITENS da proposta (05/11/2026): os distintos, um selo por departamento, logo depois do Departamento da proposta.
+    nome: "depcusrecLabel",
+    titulo: "Dep. Custo/Rec.",
+    dica: "Departamentos de Custo/Receita distintos dos itens da proposta",
+    largura: 190,
+    texto: (r) => r.depcusrecLabel,
+    render: (r) =>
+      r.depcusrecLista.length === 0 ? (
+        <span className="text-muted">—</span>
+      ) : (
+        <span className="flex gap-1 whitespace-nowrap">
+          {r.depcusrecLista.map((d) => (
+            <span key={d} className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${toneBadge.neutral}`}>
+              {d}
+            </span>
+          ))}
+        </span>
+      ),
   },
   {
     nome: "modproLabel",
