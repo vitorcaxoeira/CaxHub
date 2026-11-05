@@ -4,8 +4,8 @@ import { col, registrarListaConsultavel } from "./listaConsultavel";
 import { rotuloSql } from "../consultas/rotuloSql";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { sitpedLabel, sitpedTone, SITPED_LABELS } from "../domain/pedidoDominio";
-import { FORFAT_LABELS, MODPRO_LABELS, SITPRO_LABELS, forfatLabel, modproLabel, modproTone, sitproLabel, sitproTone } from "../domain/propostasDominio";
+import { sitpedTone, SITPED_LABELS } from "../domain/pedidoDominio";
+import { FORFAT_LABELS, MODPRO_LABELS, SITPRO_LABELS, forfatLabel } from "../domain/propostasDominio";
 import { runPedidoSyncPorClientes, ResultadoSyncPorCliente } from "../sync/pedidoSync";
 
 // Tela "Mercado > Listar Pedidos" — espelho de E120PED (ver backend/src/sync/pedidoSync.ts).
@@ -99,6 +99,8 @@ interface FiltrosPedidos {
   modproFiltro: number[];
   datemiDe: Date | null;
   datemiAte: Date | null;
+  /** Só os pedidos deste cliente (tabela do cliente expandido na aba Por Cliente); null = todos. */
+  codcli: number | null;
 }
 
 // Data de emissão vem do <input type="date"> como "yyyy-mm-dd". Comparada em UTC de
@@ -134,6 +136,7 @@ function lerFiltros(req: import("express").Request): FiltrosPedidos {
     modproFiltro: lerFiltroMultiSelect(req.query.modpro),
     datemiDe: lerData(req.query.datemiDe),
     datemiAte: lerData(req.query.datemiAte),
+    codcli: typeof req.query.codcli === "string" && /^\d{1,9}$/.test(req.query.codcli) ? Number(req.query.codcli) : null,
   };
 }
 
@@ -225,56 +228,6 @@ function filtrarPorModalidade(
   });
 }
 
-interface Lookups {
-  clientePorCodcli: Map<number, Cliente>;
-  ratPorChave: Awaited<ReturnType<typeof resolverRatEProposta>>["ratPorChave"];
-  propostaPorChave: Awaited<ReturnType<typeof resolverRatEProposta>>["propostaPorChave"];
-  consultorPorCodfor: Awaited<ReturnType<typeof resolverRatEProposta>>["consultorPorCodfor"];
-  formaPagamentoPorChave: Awaited<ReturnType<typeof resolverFormaECondicaoPagamento>>["formaPagamentoPorChave"];
-  condicaoPagamentoPorChave: Awaited<ReturnType<typeof resolverFormaECondicaoPagamento>>["condicaoPagamentoPorChave"];
-}
-
-// Monta a linha de resposta de um pedido com todos os labels/vínculos resolvidos —
-// reaproveitada por GET /, GET /por-cliente/:codcli/itens (e qualquer rota futura que
-// precise da mesma forma de linha).
-function mapearPedido(p: Pedido, lookups: Lookups) {
-  const cliente = lookups.clientePorCodcli.get(p.codcli);
-  const rat = p.numrat != null ? lookups.ratPorChave.get(`${p.codemp}-${Number(p.numrat)}`) : undefined;
-  const proposta = rat?.codpro != null ? lookups.propostaPorChave.get(`${rat.codemp}-${rat.codpro}`) : undefined;
-  const consultor = rat ? lookups.consultorPorCodfor.get(rat.codfor) : undefined;
-  const formaPagamento = p.codfpg != null ? lookups.formaPagamentoPorChave.get(`${p.codemp}-${p.codfpg}`) : undefined;
-  const condicaoPagamento = lookups.condicaoPagamentoPorChave.get(`${p.codemp}-${p.codcpg}`);
-  return {
-    codemp: p.codemp,
-    codfil: p.codfil,
-    numped: p.numped,
-    cliente: cliente ? `${cliente.codcli} - ${cliente.nomcli}` : String(p.codcli),
-    datemi: p.datemi,
-    datprv: p.datprv,
-    obsped: p.obsped,
-    obsmot: p.obsmot,
-    vlrliq: p.vlrliq != null ? Number(p.vlrliq) : null,
-    pedcli: p.pedcli,
-    sitped: p.sitped,
-    sitpedLabel: sitpedLabel(p.sitped),
-    sitpedTone: sitpedTone(p.sitped),
-    numrat: p.numrat != null ? p.numrat.toString() : null,
-    // Id local da RAT vinculada (PK de Rat, não o numrat do Senior) — usado pra linkar
-    // pra tela de visualização da RAT (frontend/src/pages/projetos/RatVisualizacao.tsx).
-    ratId: rat?.id ?? null,
-    // Nome do consultor executor da RAT vinculada — só existe quando há RAT (rat != null).
-    consultorNome: rat ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`) : null,
-    propostaCodpro: rat?.codpro ?? null,
-    propostaCodlev2: proposta?.codlev2 ?? null,
-    propostaModproLabel: proposta ? modproLabel(proposta.modpro) : null,
-    propostaModproTone: proposta ? modproTone(proposta.modpro) : null,
-    propostaSitproLabel: proposta ? sitproLabel(proposta.sitpro) : null,
-    propostaSitproTone: proposta ? sitproTone(proposta.sitpro) : null,
-    faturamentoLabel: proposta ? forfatLabel(proposta.forfat) : null,
-    formaPagamentoLabel: formaPagamento?.desfpg ?? null,
-    condicaoPagamentoLabel: condicaoPagamento?.descpg ?? null,
-  };
-}
 
 // GET / — lista de pedidos (aba Lista). Desde 03/11/2026 (trazido do CaxHub_Dash) é uma lista consultável (listaConsultavel.ts): a
 // consulta resolve Pedido -> RAT -> Proposta -> Consultor e Forma/Condição de Pagamento em SQL, com os MESMOS filtros da barra de
@@ -331,6 +284,7 @@ registrarListaConsultavel(
         LEFT JOIN formas_pagamento fp ON fp.codemp = p.codemp AND fp.codfpg = p.codfpg
         LEFT JOIN condicoes_pagamento cp ON cp.codemp = p.codemp AND cp.codcpg = p.codcpg
         WHERE p.removido_em_senior IS NULL
+          AND (${f.codcli}::int IS NULL OR p.codcli = ${f.codcli}::int)
           AND (${f.buscaCliente} = '' OR position(${f.buscaCliente} IN lower(COALESCE(c.codcli || ' - ' || c.nomcli, p.codcli::text))) > 0)
           AND (${numped.length === 0} OR ${algumTermo(numped, Prisma.sql`p.numped::text`)})
           AND (${numrat.length === 0} OR (p.numrat IS NOT NULL AND ${algumTermo(numrat, Prisma.sql`p.numrat::text`)}))
@@ -420,17 +374,11 @@ async function resolverGruposPorCliente(req: import("express").Request) {
 // "Qtd. Pedidos"/"Valor Líquido" de cada grupo, nem esconder cliente que ficou sem
 // resultado. Esse índice dá exatamente isso e nada mais.
 //
-// Só os campos usados para filtrar e somar — a linha completa continua vindo de
-// /por-cliente/:codcli/itens ao expandir. Medido em produção: a resposta completa dos
+// Só os campos usados para filtrar e somar — os pedidos de um cliente (ao expandir) vêm de GET /?codcli=, a lista do padrão. Medido em produção: a resposta completa dos
 // pedidos daria 7,7 MB, este índice dá 1,7 MB.
-//
-// `codpro`/`codlev2` vão crus, não como rótulo pronto: quem monta o texto da coluna
-// Proposta é o frontend, e derivar nos dois lugares abriria espaço pra divergirem — aí o
-// filtro deixaria de casar com a linha exibida.
 pedidosRouter.get("/por-cliente/indice", async (req, res) => {
   try {
-    const { pedidos, clientePorCodcli, ratPorChave, propostaPorChave, consultorPorCodfor } =
-      await resolverPedidosFiltrados(req);
+    const { pedidos, clientePorCodcli } = await resolverPedidosFiltrados(req);
 
     const codclisPresentes = [...new Set(pedidos.map((p) => p.codcli))];
 
@@ -441,69 +389,14 @@ pedidosRouter.get("/por-cliente/indice", async (req, res) => {
         const cliente = clientePorCodcli.get(codcli);
         return { codcli, nome: cliente ? `${cliente.codcli} - ${cliente.nomcli}` : String(codcli) };
       }),
-      pedidos: pedidos.map((p) => {
-        const rat = p.numrat != null ? ratPorChave.get(`${p.codemp}-${Number(p.numrat)}`) : undefined;
-        const proposta = rat?.codpro != null ? propostaPorChave.get(`${rat.codemp}-${rat.codpro}`) : undefined;
-        const consultor = rat ? consultorPorCodfor.get(rat.codfor) : undefined;
-        return {
-          // Mesma chave da linha completa, pra casar índice e linha exibida.
-          chave: `${p.codemp}-${p.codfil}-${p.numped}`,
-          codcli: p.codcli,
-          vlrliq: p.vlrliq != null ? Number(p.vlrliq) : null,
-          numrat: p.numrat != null ? p.numrat.toString() : null,
-          consultorNome: rat ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`) : null,
-          propostaCodpro: rat?.codpro ?? null,
-          propostaCodlev2: proposta?.codlev2 ?? null,
-          propostaModproLabel: proposta ? modproLabel(proposta.modpro) : null,
-          propostaSitproLabel: proposta ? sitproLabel(proposta.sitpro) : null,
-          faturamentoLabel: proposta ? forfatLabel(proposta.forfat) : null,
-        };
-      }),
+      pedidos: pedidos.map((p) => ({
+        chave: `${p.codemp}-${p.codfil}-${p.numped}`,
+        codcli: p.codcli,
+        vlrliq: p.vlrliq != null ? Number(p.vlrliq) : null,
+      })),
     });
   } catch (error) {
     handleError(res, error, "indice-por-cliente");
-  }
-});
-
-// GET /por-cliente/:codcli/itens — pedidos de um cliente específico, sob os mesmos
-// filtros de Pedido/Situação/RAT (não de Cliente, que já é o :codcli do path). Sem
-// paginação, mesmo padrão de GET /rats/:id/itens — mostra tudo do grupo já filtrado.
-pedidosRouter.get("/por-cliente/:codcli/itens", async (req, res) => {
-  try {
-    const codcli = Number(req.params.codcli);
-    if (!Number.isFinite(codcli)) {
-      res.status(400).json({ error: "codcli inválido" });
-      return;
-    }
-
-    let pedidos = await prisma.pedido.findMany({
-      where: { codcli, removidoEmSenior: null },
-      orderBy: [{ datemi: "desc" }, { numped: "desc" }],
-    });
-
-    const cliente = await prisma.cliente.findUnique({ where: { codcli } });
-    const clientePorCodcli = new Map(cliente ? [[cliente.codcli, cliente]] : []);
-
-    const filtros = lerFiltros(req);
-    pedidos = aplicarFiltros(pedidos, filtros, clientePorCodcli, { comCliente: false });
-
-    const { ratPorChave, propostaPorChave, consultorPorCodfor } = await resolverRatEProposta(pedidos);
-    pedidos = filtrarPorProposta(pedidos, filtros.buscaCodpro, ratPorChave, propostaPorChave);
-    pedidos = filtrarPorModalidade(pedidos, filtros.modproFiltro, ratPorChave, propostaPorChave);
-
-    const { formaPagamentoPorChave, condicaoPagamentoPorChave } = await resolverFormaECondicaoPagamento(pedidos);
-    const lookups: Lookups = {
-      clientePorCodcli,
-      ratPorChave,
-      propostaPorChave,
-      consultorPorCodfor,
-      formaPagamentoPorChave,
-      condicaoPagamentoPorChave,
-    };
-
-    res.json({ itens: pedidos.map((p) => mapearPedido(p, lookups)) });
-  } catch (error) {
-    handleError(res, error, "por-cliente-itens");
   }
 });
 

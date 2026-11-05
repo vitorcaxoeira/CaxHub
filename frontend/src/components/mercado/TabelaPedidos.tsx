@@ -161,27 +161,49 @@ const COLUNAS: DefColuna<PedidoLista, Navegar>[] = [
   },
 ];
 
-export function TabelaPedidos({ params, recarga }: { params: Record<string, unknown>; recarga?: unknown }) {
+// Dentro de um cliente expandido (aba Por Cliente) a coluna Cliente é o cabeçalho do próprio grupo: sai da tabela. Constante do módulo
+// porque ListaServidor exige defs estáveis.
+const COLUNAS_SEM_CLIENTE = COLUNAS.filter((c) => c.nome !== "cliente");
+
+/**
+ * `semCliente`: tabela de UM cliente (aba Por Cliente) — sem a coluna Cliente e sem o total do rodapé (Qtd./Valor já estão na linha do
+ * cliente). `chave` separa a arrumação das colunas (e as calculadas) da aba Lista.
+ */
+export function TabelaPedidos({
+  params,
+  recarga,
+  chave = "mercado.pedidos",
+  semCliente = false,
+}: {
+  params: Record<string, unknown>;
+  recarga?: unknown;
+  chave?: string;
+  semCliente?: boolean;
+}) {
   const navigate = useNavigate();
   return (
     <ListaServidor<PedidoLista, Navegar>
-      chave="mercado.pedidos"
+      chave={chave}
       url="/api/pedidos"
       params={params}
       recarga={recarga}
-      defs={COLUNAS}
+      defs={semCliente ? COLUNAS_SEM_CLIENTE : COLUNAS}
       ctx={navigate}
       chaveLinha={(p) => `${p.codemp}-${p.codfil}-${p.numped}`}
       rotulo="pedidos"
       vazio="Nenhum pedido encontrado com esses filtros."
       pageSize={30}
       opcoesPorPagina={[30, 50, 100, 200]}
-      rodape={(d) => (
-        <div className="border-t border-border bg-surface px-5 py-3">
-          <p className="text-[10.5px] text-muted">Valor líquido (filtro atual)</p>
-          <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatMoney(d?.totais?.vlrliq ?? 0)}</p>
-        </div>
-      )}
+      rodape={
+        semCliente
+          ? undefined
+          : (d) => (
+              <div className="border-t border-border bg-surface px-5 py-3">
+                <p className="text-[10.5px] text-muted">Valor líquido (filtro atual)</p>
+                <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatMoney(d?.totais?.vlrliq ?? 0)}</p>
+              </div>
+            )
+      }
     />
   );
 }
