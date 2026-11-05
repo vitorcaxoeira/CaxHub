@@ -27,6 +27,12 @@ export interface ResumoConsultor {
   deslocamento: { minutos: number; valor: number | null };
   ganhoAteAgora: number | null;
   projecaoGanho: number | null;
+  // Gestão de Descontos: o que sai da nota nas competências do período. Mês aberto = previsto das parcelas pendentes; fechado = o descontado.
+  descontos: {
+    total: number;
+    parcial: boolean;
+    competencias: { competencia: string; ano: number; mes: number; total: number; fechada: boolean; parcial: boolean; qtd: number }[];
+  };
   sessoesPendentes: number;
   ratsPendentes: number;
   notificacoesNaoLidas: number;

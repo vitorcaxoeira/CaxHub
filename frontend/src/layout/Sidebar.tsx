@@ -3,9 +3,11 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Award,
+  BadgePercent,
   BookOpen,
   Banknote,
   Briefcase,
+  CalendarCheck,
   CalendarClock,
   CalendarRange,
   CalendarX,
@@ -51,6 +53,7 @@ import {
   Sparkles,
   SquareKanban,
   Store,
+  Tags,
   Target,
   Timer,
   TreePalm,
@@ -94,6 +97,9 @@ interface NavLeaf {
   // Aparece pra admin e pra quem é gestor da Consultoria ERP (8) ou HCM (9) — dinâmico, via DepartamentoGestor. Só o Plano de Evolução PJ
   // usa. Em sincronia com o RequireGestorOuAdmin (depexe) em App.tsx e com o carregarAcesso de routes/planoEvolucaoComum.ts.
   gestorConsultoria?: boolean;
+  // Gestão de Descontos: o acesso vem do backend (GET /descontos/meu-acesso), não do papel.
+  // "ver" = quem tem o que ver (administra, gestor de área ou consultor); "gestao" = administra ou gestor; "administrar" = admin/administrativo.
+  descontos?: "ver" | "gestao" | "administrar";
   // Restringe ESTE item a papéis específicos dentro de um grupo aberto a todos (ex.: Atendimento
   // de viagens). Mantido em sincronia com o RequireRole em App.tsx e o backend.
   roles?: string[];
@@ -172,6 +178,17 @@ const groups: NavGroup[] = [
       { to: "/projetos/plano-evolucao", label: "Plano de Evolução PJ", gestorConsultoria: true },
       { to: "/projetos/jornadas", label: "Meta diária", gestorOuAdmin: true, souConsultor: true },
       { to: "/projetos/auditoria", label: "Auditoria", gestorOuAdmin: true },
+      // Descontos abatidos da nota dos consultores. Cada item traz o próprio filtro (`descontos`): o consultor vê só os lançamentos e
+      // parcelas dele; o gestor de área, os do time; admin e administrativo administram.
+      {
+        label: "Gestão de Descontos",
+        children: [
+          { to: "/projetos/descontos", label: "Lançamentos", descontos: "ver", end: true },
+          { to: "/projetos/descontos/parcelas", label: "Parcelas", descontos: "ver" },
+          { to: "/projetos/descontos/fechamentos", label: "Fechamentos", descontos: "gestao" },
+          { to: "/projetos/descontos/tipos", label: "Tipos de desconto", descontos: "administrar" },
+        ],
+      },
     ],
     roles: "*",
   },
@@ -331,6 +348,10 @@ const ICONE_DA_ROTA: Record<string, LucideIcon> = {
   "/financeiro/historico": History,
   "/financeiro/contas-a-pagar": ReceiptText,
   "/contabil/resultado-analitico": ChartColumn,
+  "/projetos/descontos": ReceiptText,
+  "/projetos/descontos/parcelas": ListChecks,
+  "/projetos/descontos/fechamentos": CalendarCheck,
+  "/projetos/descontos/tipos": Tags,
   "/mercado/pedidos": ClipboardList,
   "/mercado/analise-faturamento": ChartColumn,
   "/rh/quadro": IdCard,
@@ -355,6 +376,7 @@ const ICONE_DO_GRUPO: Record<string, LucideIcon> = {
   Comercial: Briefcase,
   "Gestão de Metas": Target,
   "Gestão de Projetos": FolderKanban,
+  "Gestão de Descontos": BadgePercent,
   "Gestão de Solicitações": Plane,
   "Gestão 5S": Sparkles,
   "Cadastros 5S": Settings2,
@@ -465,6 +487,20 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
   const [ehGestorConsultoria, setEhGestorConsultoria] = useState(false);
   // Papel no módulo 5S (null = não é participante). Mesma guarda de efeito superado do /meu-perfil.
   const [papel5s, setPapel5s] = useState<string | null>(null);
+  // Acesso à Gestão de Descontos (GET /descontos/meu-acesso): decide os itens do subgrupo.
+  const [acessoDescontos, setAcessoDescontos] = useState<{ administra: boolean; gestao: boolean; visualiza: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelado = false;
+    axios
+      .get<{ administra: boolean; gestao: boolean; visualiza: boolean }>("/api/descontos/meu-acesso")
+      .then(({ data }) => !cancelado && setAcessoDescontos(data))
+      .catch(() => !cancelado && setAcessoDescontos(null));
+    return () => {
+      cancelado = true;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -529,6 +565,10 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
   function leafVisivel(item: NavLeaf): boolean {
     if (item.roles && !(user && item.roles.includes(user.role))) return false;
     if (item.papel5s) return !!papel5s && (item.papel5s as string[]).includes(papel5s);
+    if (item.descontos) {
+      if (!acessoDescontos) return false;
+      return item.descontos === "administrar" ? acessoDescontos.administra : item.descontos === "gestao" ? acessoDescontos.gestao : acessoDescontos.visualiza;
+    }
     if (item.gestorDho) return ehGestorDho;
     if (item.gestorComercial) return ehGestorComercial;
     if (item.gestorConsultoria) return ehGestorConsultoria;

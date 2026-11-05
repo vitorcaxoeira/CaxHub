@@ -11,6 +11,7 @@ import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { Skeleton } from "../ui/Skeleton";
 import { Spinner } from "../ui/Spinner";
 import { CardValorHora } from "./CardValorHora";
+import { ModalDescontosDoMes } from "./ModalDescontosDoMes";
 import { CardRdv } from "./CardRdv";
 import { DetalheDiaProdutividade } from "./DetalheDiaProdutividade";
 
@@ -228,6 +229,8 @@ interface DashboardConsultorProps {
 export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: DashboardConsultorProps) {
   const { resumo, semConsultor, loading, erro } = useDashboardConsultor({ anos, meses, codfor });
   const [feriados, setFeriados] = useState<Feriado[]>([]);
+  // Detalhe dos descontos que saem da nota (Gestão de Descontos), aberto pelo link do card Valor-hora.
+  const [verDescontos, setVerDescontos] = useState(false);
 
   useEffect(() => {
     if (!resumo) return;
@@ -359,6 +362,9 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
           projecaoGanho={resumo.projecaoGanho}
           deslocamentoValor={resumo.deslocamento.valor}
           deslocamentoMinutos={resumo.deslocamento.minutos}
+          descontos={resumo.descontos}
+          rotuloPeriodoDescontos={resumo.descontos.competencias.length > 1 ? "Descontos do período" : "Descontos do mês"}
+          onVerDescontos={() => setVerDescontos(true)}
         />
 
         <section className="rounded-lg border border-border bg-surface p-5">
@@ -396,6 +402,14 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
         <DonutChart titulo="Horas por projeto" itens={itensDonut} formatarValor={(v) => `${formatHorasCompacto(v)} h`} />
         <ListaFeriados feriados={feriados} />
       </div>
+
+      {verDescontos && (
+        <ModalDescontosDoMes
+          codfor={codfor}
+          competencias={resumo.descontos.competencias.filter((c) => c.qtd > 0).map((c) => c.competencia)}
+          onFechar={() => setVerDescontos(false)}
+        />
+      )}
     </div>
   );
 }

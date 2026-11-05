@@ -107,6 +107,8 @@ import { recuperarEnviosDespesaInterrompidos, scheduleOutboxSeniorDespesaSync } 
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 import { agendarAcoesVencidas } from "./sync/acoesEficienciaVencidas";
+import { agendarFechamentoDescontos } from "./sync/fechamentoDescontos";
+import { descontosRouter } from "./routes/descontos";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
 import { carregarModosVarreduraAtivos } from "./sync/politicaVarredura";
 import { carregarTamanhosLoteAtivos } from "./sync/politicaLote";
@@ -189,6 +191,7 @@ app.use("/proposta-visualizacao", propostaVisualizacaoRouter);
 app.use("/auditoria", auditoriaRouter);
 app.use("/5s", gestao5sRouter);
 app.use("/metas-comercial", metasComercialRouter);
+app.use("/descontos", descontosRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 
@@ -305,6 +308,8 @@ async function iniciar() {
     agendarParadaPorFechamento();
     // Plano de ação do Painel de Eficiência: avisa pelo sino a ação que passou do prazo (de hora em hora, dias úteis).
     agendarAcoesVencidas();
+    // Gestão de Descontos: fecha a competência que acabou (reparte a nota do consultor entre as parcelas), todo dia 03:10, idempotente.
+    agendarFechamentoDescontos();
     // Kyria — segunda origem de dados, ao lado do Senior (ver src/kyria/).
     scheduleKyriaTeamsSync();
     scheduleKyriaMembersSync();

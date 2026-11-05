@@ -25,6 +25,11 @@ export const ENTIDADES_AUDITORIA = {
   // Gestão de Metas do Comercial: o ano de metas (entidadeId = ano) e os indicadores (entidadeId = "indicador:<id>"). Metas individuais de
   // pessoas: SÓ ADMIN no histórico geral (routes/auditoria.ts esconderEntidadesSoAdmin).
   META_COMERCIAL: "meta_comercial",
+  // Gestão de Descontos (Gestão de Projetos): o tipo, o processo (entidadeId = id) e a parcela (entidadeId = id; metadata.processoId liga ao
+  // processo). Trazem valores de consultores: SÓ ADMIN no histórico geral (routes/auditoria.ts); o histórico do processo vai pela própria tela.
+  DESCONTO_TIPO: "desconto_tipo",
+  DESCONTO_PROCESSO: "desconto_processo",
+  DESCONTO_PARCELA: "desconto_parcela",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -278,5 +283,19 @@ export const EVENTOS_AUDITORIA = {
   META_COMERCIAL_LANCAMENTO: "META_COMERCIAL_LANCAMENTO",
   META_COMERCIAL_INDICADOR_CRIADO: "META_COMERCIAL_INDICADOR_CRIADO",
   META_COMERCIAL_INDICADOR_ALTERADO: "META_COMERCIAL_INDICADOR_ALTERADO",
+
+  // Gestão de Descontos.
+  DESCONTO_TIPO_CRIADO: "DESCONTO_TIPO_CRIADO",
+  DESCONTO_TIPO_ALTERADO: "DESCONTO_TIPO_ALTERADO",
+  DESCONTO_TIPO_EXCLUIDO: "DESCONTO_TIPO_EXCLUIDO",
+  DESCONTO_PROCESSO_CRIADO: "DESCONTO_PROCESSO_CRIADO",
+  DESCONTO_PROCESSO_ALTERADO: "DESCONTO_PROCESSO_ALTERADO",
+  DESCONTO_PROCESSO_CANCELADO: "DESCONTO_PROCESSO_CANCELADO",
+  DESCONTO_PROCESSO_QUITADO: "DESCONTO_PROCESSO_QUITADO",
+  DESCONTO_PARCELA_CANCELADA: "DESCONTO_PARCELA_CANCELADA",
+  DESCONTO_PARCELA_ESTORNADA: "DESCONTO_PARCELA_ESTORNADA",
+  DESCONTO_PARCELA_DESCONTADA: "DESCONTO_PARCELA_DESCONTADA",
+  DESCONTO_PARCELA_PARCIAL: "DESCONTO_PARCELA_PARCIAL",
+  DESCONTO_PARCELA_TRANSPORTADA: "DESCONTO_PARCELA_TRANSPORTADA",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];
