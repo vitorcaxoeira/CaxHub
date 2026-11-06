@@ -4454,3 +4454,119 @@ model PedidoRateio {
 
   @@map("pedidos_rateios")
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Gestão de Descontos (05/11/2026): descontos abatidos do valor da prestação de serviços (nota) dos consultores. Cada lançamento é um
+// PROCESSO independente (DESC-AAAA-000001) que gera parcelas por competência; a Home do consultor mostra o desconto do mês e o líquido.
+// Tudo local: nada disto vai para o Senior. Consultor = codemp + codfor (mesma identidade de valorHoraVigente), sem FK formal.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// Tipo de desconto (Uniforme, Adiantamento, Uniodonto...). Com processo vinculado não se exclui: só inativa.
+model DescontoTipo {
+  id                  Int      @id @default(autoincrement())
+  nome                String   @db.VarChar(80) // único sem distinguir maiúsculas: índice em lower(nome) na migration
+  descricao           String?  @db.VarChar(250)
+  ativo               Boolean  @default(true)
+  permiteParcelamento Boolean  @default(true) @map("permite_parcelamento")
+  maxParcelas         Int?     @map("max_parcelas")
+  valorMinimo         Decimal? @map("valor_minimo") @db.Decimal(15, 2)
+  valorMaximo         Decimal? @map("valor_maximo") @db.Decimal(15, 2)
+  exigeObservacao     Boolean  @default(false) @map("exige_observacao")
+  ordem               Int      @default(0)
+  criadoPorId         Int?     @map("criado_por_id") // User.id, sem FK: o histórico sobrevive ao usuário
+  criadoEm            DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm        DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  processos DescontoProcesso[]
+
+  @@map("descontos_tipos")
+}
+
+/// Número sequencial do processo por ano (DESC-2026-000001): uma linha por ano, incrementada na mesma transação que cria o processo.
+model DescontoSequencia {
+  ano    Int @id
+  ultimo Int @default(0)
+
+  @@map("descontos_sequencias")
+}
+
+/// Um desconto lançado para um consultor. Modo "total_parcelado" (valor total dividido, última parcela absorve os centavos) ou
+/// "mensal_fixo" (valor igual em todas as parcelas, total = valor × quantidade).
+model DescontoProcesso {
+  id                 Int      @id @default(autoincrement())
+  ano                Int
+  sequencia          Int
+  codemp             Int
+  codfor             Int
+  tipoId             Int      @map("tipo_id")
+  tipo               DescontoTipo @relation(fields: [tipoId], references: [id])
+  /// "total_parcelado" | "mensal_fixo"
+  modo               String   @db.VarChar(20)
+  valorTotal         Decimal  @map("valor_total") @db.Decimal(15, 2)
+  /// Valor de uma parcela (no modo total é a parcela regular; a última pode diferir pelos centavos).
+  valorParcela       Decimal  @map("valor_parcela") @db.Decimal(15, 2)
+  qtdParcelas        Int      @map("qtd_parcelas")
+  vigenciaInicio     DateTime @map("vigencia_inicio") @db.Date
+  vigenciaFim        DateTime @map("vigencia_fim") @db.Date
+  /// Sempre o dia 1 do mês.
+  competenciaInicial DateTime @map("competencia_inicial") @db.Date
+  diaVencimento      Int      @map("dia_vencimento")
+  observacao         String?  @db.VarChar(500)
+  /// "ativo" | "quitado" | "cancelado" | "parcialmente_cancelado" | "vigencia_encerrada" (derivado das parcelas, ver domain/descontos.ts)
+  status             String   @default("ativo") @db.VarChar(30)
+  criadoPorId        Int?     @map("criado_por_id")
+  criadoEm           DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm       DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  parcelas DescontoParcela[]
+
+  @@unique([ano, sequencia], map: "descontos_processos_numero_key")
+  @@index([codemp, codfor], map: "descontos_processos_consultor_idx")
+  @@index([tipoId], map: "descontos_processos_tipo_idx")
+  @@index([status], map: "descontos_processos_status_idx")
+  @@map("descontos_processos")
+}
+
+/// Parcela de um processo, contabilizada na competência do vencimento. O que não coube na nota do mês vira uma parcela nova na
+/// competência seguinte (origemParcelaId aponta a parcela parcial de onde veio o saldo).
+model DescontoParcela {
+  id               Int      @id @default(autoincrement())
+  processoId       Int      @map("processo_id")
+  processo         DescontoProcesso @relation(fields: [processoId], references: [id], onDelete: Cascade)
+  numero           Int
+  /// Dia 1 do mês da competência.
+  competencia      DateTime @db.Date
+  vencimento       DateTime @db.Date
+  valor            Decimal  @db.Decimal(15, 2)
+  valorDescontado  Decimal  @default(0) @map("valor_descontado") @db.Decimal(15, 2)
+  /// "pendente" | "descontada" | "parcial" | "cancelada" | "estornada" | "quitada_antecipadamente"
+  situacao         String   @default("pendente") @db.VarChar(30)
+  /// Parcela parcial de onde este saldo foi transportado (sem FK: é só rastreio).
+  origemParcelaId  Int?     @map("origem_parcela_id")
+  observacao       String?  @db.VarChar(500)
+  criadoEm         DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm     DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  @@index([processoId, numero], map: "descontos_parcelas_processo_idx")
+  @@index([competencia, situacao], map: "descontos_parcelas_competencia_idx")
+  @@map("descontos_parcelas")
+}
+
+/// Fechamento mensal de um consultor: congela o valor da nota (Valor Nota do Relatório de Produtividade) e o que foi descontado. Um por
+/// (competência, consultor). Feito pelo job do dia 1º ou manualmente por quem administra; reprocessar a mesma competência não repete.
+model DescontoFechamento {
+  competencia       DateTime @db.Date
+  codemp            Int
+  codfor            Int
+  valorNota         Decimal  @map("valor_nota") @db.Decimal(15, 2)
+  totalPrevisto     Decimal  @map("total_previsto") @db.Decimal(15, 2)
+  totalDescontado   Decimal  @map("total_descontado") @db.Decimal(15, 2)
+  saldoTransportado Decimal  @map("saldo_transportado") @db.Decimal(15, 2)
+  /// "job" | "manual"
+  origem            String   @db.VarChar(10)
+  fechadoEm         DateTime @default(now()) @map("fechado_em") @db.Timestamptz(6)
+  fechadoPorId      Int?     @map("fechado_por_id")
+
+  @@id([competencia, codemp, codfor])
+  @@map("descontos_fechamentos")
+}

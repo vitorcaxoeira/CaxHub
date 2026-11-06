@@ -9,6 +9,10 @@ import { DEPEXE_DHO } from "./auth/acessoRh";
 import { DEPEXES_PLANO_EVOLUCAO } from "./auth/acessoPlanoEvolucao";
 import { Require5S } from "./auth/Require5S";
 import { RequireGestorOuAdmin } from "./auth/RequireGestorOuAdmin";
+import { DescontosLancamentos } from "./pages/projetos/descontos/DescontosLancamentos";
+import { DescontosParcelas } from "./pages/projetos/descontos/DescontosParcelas";
+import { DescontosFechamentos } from "./pages/projetos/descontos/DescontosFechamentos";
+import { DescontosTipos } from "./pages/projetos/descontos/DescontosTipos";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
@@ -202,6 +206,14 @@ export default function App() {
               <Route path="/projetos/jornadas" element={<Jornadas />} />
               <Route path="/projetos/aprovacoes" element={<Aprovacoes />} />
               <Route path="/projetos/auditoria" element={<Auditoria />} />
+              {/* Gestão de Descontos: sem guarda de papel nas telas de leitura (o backend recorta: consultor vê os próprios, gestor o time,
+                  admin/administrativo tudo — domain/descontosAcesso.ts). Os tipos de desconto são só de quem administra. */}
+              <Route path="/projetos/descontos" element={<DescontosLancamentos />} />
+              <Route path="/projetos/descontos/parcelas" element={<DescontosParcelas />} />
+              <Route path="/projetos/descontos/fechamentos" element={<DescontosFechamentos />} />
+              <Route element={<RequireRole roles={["admin", "administrativo"]} />}>
+                <Route path="/projetos/descontos/tipos" element={<DescontosTipos />} />
+              </Route>
               <Route path="/projetos/alocacao/:codemp/:codpro" element={<AlocacaoPropostaDetalhe />} />
               <Route path="/projetos/alocacao/:codemp/:codpro/cronograma" element={<CronogramaProposta />} />
               <Route path="/projetos/proposta/:codemp/:codpro" element={<PropostaVisualizacao />} />

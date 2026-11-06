@@ -124,6 +124,27 @@ export async function linhasFiltradasDaLista(lista: ListaConsultavel, q: Record<
   return (await executar(montar(colunas)(filtros)(selecao))).map(limpar);
 }
 
+/** Teto de linhas de uma exportação CSV (uma lista de tela nunca chega perto; é guarda contra filtro vazio numa tabela enorme). */
+const LIMITE_CSV = 50000;
+
+const DIA_BR = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
+const DIA_HORA_BR = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" });
+
+/** Uma célula do CSV em português: ";" como separador, vírgula decimal, datas dd/mm/aaaa, Sim/Não. */
+function celulaCsv(valor: unknown, tipo: ColunaConsulta["tipo"] | undefined): string {
+  let texto: string;
+  if (valor == null) texto = "";
+  else if (valor instanceof Date) {
+    const meiaNoiteUtc = valor.getUTCHours() === 0 && valor.getUTCMinutes() === 0 && valor.getUTCSeconds() === 0;
+    texto = meiaNoiteUtc ? DIA_BR.format(valor) : DIA_HORA_BR.format(valor);
+  } else if (typeof valor === "boolean") texto = valor ? "Sim" : "Não";
+  else if (typeof valor === "number") texto = (tipo === "decimal" ? valor.toFixed(2) : String(valor)).replace(".", ",");
+  else texto = String(valor);
+  // Células que o Excel interpretaria como fórmula (=, +, -, @) ganham um apóstrofo na frente: texto vindo do banco nunca vira fórmula.
+  if (typeof valor === "string" && /^[=+\-@]/.test(texto)) texto = `'${texto}`;
+  return /[;"\r\n]/.test(texto) ? `"${texto.replace(/"/g, '""')}"` : texto;
+}
+
 export function registrarListaConsultavel(
   router: Router,
   caminho: string,
@@ -201,4 +222,40 @@ export function registrarListaConsultavel(
       erroHttp(res, erro, `${rotulo}-valores`);
     }
   });
+
+  // Exportação: TODAS as linhas do filtro atual (não só a página), na ordem pedida, com as colunas que a pessoa deixou visíveis
+  // (`colunasCsv`, na ordem da tela) e os títulos da tela (`cabecalhos`, JSON { nome: título }). Mesma consulta e mesmos filtros da lista.
+  if (!jaTemGet(router, sub("/csv"))) {
+    router.get(sub("/csv"), async (req, res) => {
+      try {
+        const q = req.query as Record<string, unknown>;
+        const lista = await ler(req);
+        const montar = montarDe(lista);
+        const { colunas, filtros, ordem } = await prepararColunasConsulta(executar, lista.colunas, q, montar(lista.colunas));
+        const linhas = (
+          await executar(Prisma.sql`${montar(colunas)(filtros)(Prisma.sql`x.*${selecaoCalculadas(colunas)}`)}
+            ORDER BY ${ordenacaoSql(colunas, ordem, lista.ordemPadrao)} LIMIT ${LIMITE_CSV}`)
+        ).map(limpar);
+
+        const porNome = new Map(colunas.map((c) => [c.nome, c]));
+        const pedidas = typeof q.colunasCsv === "string" ? q.colunasCsv.split(",").filter((n) => porNome.has(n)) : [];
+        const nomes = pedidas.length ? pedidas : lista.colunas.map((c) => c.nome);
+        let titulos: Record<string, unknown> = {};
+        try {
+          const lido = typeof q.cabecalhos === "string" ? JSON.parse(q.cabecalhos) : {};
+          if (lido && typeof lido === "object") titulos = lido as Record<string, unknown>;
+        } catch {
+          /* cabeçalho é só enfeite: sem JSON válido usa o nome técnico */
+        }
+        const cabecalho = nomes.map((n) => celulaCsv(typeof titulos[n] === "string" ? titulos[n] : n, undefined));
+        const corpo = linhas.map((l) => nomes.map((n) => celulaCsv(l[n], porNome.get(n)?.tipo)).join(";"));
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${rotulo.replace(/[^a-z0-9_-]/gi, "_")}_${Date.now()}.csv"`);
+        // BOM + ponto e vírgula + vírgula decimal: abre direto no Excel em português (mesma convenção das outras exportações).
+        res.send(`\uFEFF${[cabecalho.join(";"), ...corpo].join("\r\n")}`);
+      } catch (erro) {
+        erroHttp(res, erro, `${rotulo}-csv`);
+      }
+    });
+  }
 }

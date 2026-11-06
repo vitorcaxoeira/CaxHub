@@ -17,6 +17,8 @@ import {
 import { produtividadeDoMes } from "../domain/relatorioProdutividade";
 import { parseIntListParam } from "../lib/queryParams";
 import { diaBrasilComoData } from "../domain/fusoBrasil";
+import { somarReais } from "../domain/descontos";
+import { descontosPorCompetencia } from "../domain/descontosDados";
 import { rdvConsultorEmAndamento, runSincronizacaoRdvConsultor, statusRdvConsultor } from "../sync/rdvConsultorSync";
 
 export const dashboardRouter = Router();
@@ -315,6 +317,11 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
 
     let totalMinutos = 0;
     let realizadoAteHojeTotal = 0;
+    const descontosDoPeriodo = await descontosPorCompetencia(
+      codemp,
+      codfor,
+      combos.map(({ ano, mes }) => new Date(Date.UTC(ano, mes - 1, 1)))
+    );
     let metaTotalMinutos = 0;
     let diasComJornadaTotal = 0;
     let deslocamentoMinutosTotal = 0;
@@ -388,6 +395,13 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       },
       ganhoAteAgora,
       projecaoGanho,
+      // Gestão de Descontos: o que sai da nota nas competências do período (a tela subtrai de ganhoAteAgora e projecaoGanho e abre o detalhe
+      // por GET /descontos/competencias). Mês aberto = previsto das parcelas pendentes; mês fechado = o que foi descontado de fato.
+      descontos: {
+        total: somarReais(descontosDoPeriodo.map((c) => c.total)),
+        parcial: descontosDoPeriodo.some((c) => c.parcial),
+        competencias: descontosDoPeriodo.map(({ itens, ...c }) => ({ ...c, qtd: itens.length })),
+      },
       sessoesPendentes,
       ratsPendentes,
       notificacoesNaoLidas,
