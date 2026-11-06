@@ -23,7 +23,7 @@ export interface TituloRow {
   sittit: string;
   dias_atraso: number;
   situacao: string;
-  tom: "success" | "warning" | "destructive";
+  tom: "success" | "warning" | "destructive" | "neutral";
 }
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -33,6 +33,7 @@ const toneTag: Record<string, string> = {
   success: "bg-success/15 text-success",
   warning: "bg-warning/15 text-warning",
   destructive: "bg-destructive/15 text-destructive",
+  neutral: "bg-muted/15 text-muted",
 };
 
 // Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (ListaServidor, 29/10/2026).
@@ -88,7 +89,7 @@ export function TitulosTable({ url, params, recarga }: { url: string; params: Re
       rotulo="títulos"
       vazio="Nenhum título encontrado com os filtros atuais."
       rodape={(d) => (
-        <div className="grid grid-cols-1 gap-px border-t border-border bg-border sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-px border-t border-border bg-border sm:grid-cols-4">
           <div className="bg-surface px-5 py-3">
             <p className="text-[10.5px] text-muted">Total Vencido (filtro atual)</p>
             <p className="font-mono text-sm font-semibold tabular-nums text-destructive">R$ {currencyFormatter.format(d?.totais?.vlr_vencido ?? 0)}</p>
@@ -96,6 +97,10 @@ export function TitulosTable({ url, params, recarga }: { url: string; params: Re
           <div className="bg-surface px-5 py-3">
             <p className="text-[10.5px] text-muted">Total A Vencer (filtro atual)</p>
             <p className="font-mono text-sm font-semibold tabular-nums text-success">R$ {currencyFormatter.format(d?.totais?.vlr_a_vencer ?? 0)}</p>
+          </div>
+          <div className="bg-surface px-5 py-3" title="Adiantamentos e devoluções de clientes em aberto (tipo de título que soma créditos): valor negativo, fora do vencido e do a vencer">
+            <p className="text-[10.5px] text-muted">Créditos de clientes (filtro atual)</p>
+            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">R$ {currencyFormatter.format(d?.totais?.vlr_credito ?? 0)}</p>
           </div>
           <div className="bg-surface px-5 py-3">
             <p className="text-[10.5px] text-muted">Total Pago (filtro atual)</p>

@@ -123,19 +123,22 @@ financeiroRouter.get("/contas-a-receber/kpis", async (req, res) => {
           titulos_abertos_qtd: number;
           aging_medio_dias: number;
           vendas_90d: number;
+          total_creditos: number;
         }[]
       >`
         SELECT
-          COALESCE(SUM(CASE WHEN vlrabe > 0 THEN vlrabe END), 0)::float8 AS total_aberto,
-          COALESCE(SUM(CASE WHEN vlrabe > 0 AND vctpro < CURRENT_DATE THEN vlrabe END), 0)::float8 AS total_vencido,
-          COALESCE(SUM(CASE WHEN vlrabe > 0 AND vctpro >= CURRENT_DATE THEN vlrabe END), 0)::float8 AS total_a_vencer,
-          COUNT(*) FILTER (WHERE vlrabe > 0)::int AS titulos_abertos_qtd,
+          COALESCE(SUM(CASE WHEN vlrabe > 0 AND tp.recsom <> 'C' THEN vlrabe END), 0)::float8 AS total_aberto,
+          COALESCE(SUM(CASE WHEN vlrabe > 0 AND tp.recsom <> 'C' AND vctpro < CURRENT_DATE THEN vlrabe END), 0)::float8 AS total_vencido,
+          COALESCE(SUM(CASE WHEN vlrabe > 0 AND tp.recsom <> 'C' AND vctpro >= CURRENT_DATE THEN vlrabe END), 0)::float8 AS total_a_vencer,
+          COUNT(*) FILTER (WHERE vlrabe > 0 AND tp.recsom <> 'C')::int AS titulos_abertos_qtd,
           COALESCE(
-            SUM(CASE WHEN vlrabe > 0 AND vctpro < CURRENT_DATE THEN vlrabe * (CURRENT_DATE - vctpro) END)
-            / NULLIF(SUM(CASE WHEN vlrabe > 0 AND vctpro < CURRENT_DATE THEN vlrabe END), 0)
+            SUM(CASE WHEN vlrabe > 0 AND tp.recsom <> 'C' AND vctpro < CURRENT_DATE THEN vlrabe * (CURRENT_DATE - vctpro) END)
+            / NULLIF(SUM(CASE WHEN vlrabe > 0 AND tp.recsom <> 'C' AND vctpro < CURRENT_DATE THEN vlrabe END), 0)
           , 0)::float8 AS aging_medio_dias,
-          COALESCE(SUM(CASE WHEN datemi >= CURRENT_DATE - INTERVAL '90 days' THEN vlrori END), 0)::float8 AS vendas_90d
+          COALESCE(SUM(CASE WHEN datemi >= CURRENT_DATE - INTERVAL '90 days' AND tp.recsom <> 'C' THEN vlrori END), 0)::float8 AS vendas_90d,
+          COALESCE(SUM(CASE WHEN vlrabe > 0 AND tp.recsom = 'C' THEN vlrabe END), 0)::float8 AS total_creditos
         FROM titulos_receber
+        JOIN tipos_titulo tp ON tp.codtpt = titulos_receber.codtpt
         WHERE (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
           AND (${clientes}::int[] IS NULL OR codcli = ANY(${clientes}::int[]))
           AND (${portadores}::text[] IS NULL OR codpor = ANY(${portadores}::text[]))
@@ -210,6 +213,8 @@ financeiroRouter.get("/contas-a-receber/kpis", async (req, res) => {
       totalVencido: aberto.total_vencido,
       totalAVencer: aberto.total_a_vencer,
       titulosAbertosQtd: aberto.titulos_abertos_qtd,
+      // Créditos de clientes em aberto (tipo com recsom = C: adiantamento, devolução). Ficam fora dos totais acima; negativo, como no ERP.
+      totalCreditos: -aberto.total_creditos,
       agingMedioDias: aberto.aging_medio_dias,
       recebidoHoje: recebido.recebido_hoje,
       recebidoSemana: recebido.recebido_semana,
@@ -260,7 +265,8 @@ financeiroRouter.get("/contas-a-receber/aging-buckets", async (req, res) => {
         SUM(vlrabe)::float8 AS valor,
         COUNT(*)::int AS quantidade
       FROM titulos_receber
-      WHERE vlrabe > 0
+      JOIN tipos_titulo tp ON tp.codtpt = titulos_receber.codtpt
+      WHERE vlrabe > 0 AND tp.recsom <> 'C'
         AND (${empFil}::text[] IS NULL OR (codemp::text || ':' || codfil::text) = ANY(${empFil}::text[]))
         AND (${clientes}::int[] IS NULL OR codcli = ANY(${clientes}::int[]))
         AND (${portadores}::text[] IS NULL OR codpor = ANY(${portadores}::text[]))
@@ -312,13 +318,17 @@ registrarListaConsultavel(
       interna: Prisma.sql`
         SELECT t.codemp, t.codfil, t.numtit, t.codtpt, tt.abrtpt, (t.codemp || '/' || t.codfil) AS unidade, (t.numtit || '·' || tt.abrtpt) AS titulo,
                t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente, e.nomemp, f.nomfil,
-               t.datemi, t.vctpro, t.vlrori::float8 AS vlrori, t.vlrabe::float8 AS vlrabe, t.sittit,
-               GREATEST(0, (CURRENT_DATE - t.vctpro))::int AS dias_atraso,
-               ${situacaoSql.rotulo} AS situacao,
-               ${situacaoSql.tom} AS tom,
+               t.datemi, t.vctpro,
+               -- Título de crédito do cliente (tipo com recsom = C: adiantamento, devolução) aparece NEGATIVO, como no ERP, e não é atraso.
+               (CASE WHEN tt.recsom = 'C' THEN -t.vlrori ELSE t.vlrori END)::float8 AS vlrori,
+               (CASE WHEN tt.recsom = 'C' THEN -t.vlrabe ELSE t.vlrabe END)::float8 AS vlrabe, t.sittit,
+               (CASE WHEN tt.recsom = 'C' THEN 0 ELSE GREATEST(0, (CURRENT_DATE - t.vctpro)) END)::int AS dias_atraso,
+               (CASE WHEN tt.recsom = 'C' AND t.sittit = 'AB' THEN 'Crédito' ELSE ${situacaoSql.rotulo} END) AS situacao,
+               (CASE WHEN tt.recsom = 'C' AND t.sittit = 'AB' THEN 'neutral' ELSE ${situacaoSql.tom} END) AS tom,
                NULL::text AS moeda_sigla,
-               (CASE WHEN t.sittit = 'AB' AND t.vctpro < CURRENT_DATE THEN t.vlrabe ELSE 0 END)::float8 AS vlr_vencido,
-               (CASE WHEN t.sittit = 'AB' AND t.vctpro >= CURRENT_DATE THEN t.vlrabe ELSE 0 END)::float8 AS vlr_a_vencer,
+               (CASE WHEN t.sittit = 'AB' AND tt.recsom <> 'C' AND t.vctpro < CURRENT_DATE THEN t.vlrabe ELSE 0 END)::float8 AS vlr_vencido,
+               (CASE WHEN t.sittit = 'AB' AND tt.recsom <> 'C' AND t.vctpro >= CURRENT_DATE THEN t.vlrabe ELSE 0 END)::float8 AS vlr_a_vencer,
+               (CASE WHEN tt.recsom = 'C' AND t.sittit LIKE 'A%' THEN -t.vlrabe ELSE 0 END)::float8 AS vlr_credito,
                COALESCE((SELECT SUM(m.vlrliq) FROM movimentos_receber m JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
                           WHERE m.codemp = t.codemp AND m.codfil = t.codfil AND m.numtit = t.numtit AND m.codtpt = t.codtpt AND tr.rectpb = 'PG'), 0)::float8 AS vlr_pago
         FROM titulos_receber t
@@ -330,8 +340,8 @@ registrarListaConsultavel(
           AND (${empFil}::text[] IS NULL OR (t.codemp::text || ':' || t.codfil::text) = ANY(${empFil}::text[]))
           AND (${situacao}::text[] IS NULL OR (
             t.sittit = ANY(${situacao}::text[]) OR
-            ('AB_VENCER' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND t.vctpro >= CURRENT_DATE) OR
-            ('AB_VENCIDO' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND t.vctpro < CURRENT_DATE)
+            ('AB_VENCER' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND tt.recsom <> 'C' AND t.vctpro >= CURRENT_DATE) OR
+            ('AB_VENCIDO' = ANY(${situacao}::text[]) AND t.sittit = 'AB' AND tt.recsom <> 'C' AND t.vctpro < CURRENT_DATE)
           ))
           AND (${clientes}::int[] IS NULL OR t.codcli = ANY(${clientes}::int[]))
           AND (${portadores}::text[] IS NULL OR t.codpor = ANY(${portadores}::text[]))
@@ -339,14 +349,14 @@ registrarListaConsultavel(
           AND (${vctproFim}::date IS NULL OR t.vctpro <= ${vctproFim}::date)
           AND (${datemiInicio}::date IS NULL OR t.datemi >= ${datemiInicio}::date)
           AND (${datemiFim}::date IS NULL OR t.datemi <= ${datemiFim}::date)
-          AND (${faixa}::text IS NULL OR (
+          AND (${faixa}::text IS NULL OR (tt.recsom <> 'C' AND (
             (${faixa} = 'a_vencer' AND t.vctpro >= CURRENT_DATE) OR
             (${faixa} = 'd1_30' AND CURRENT_DATE - t.vctpro BETWEEN 1 AND 30) OR
             (${faixa} = 'd31_60' AND CURRENT_DATE - t.vctpro BETWEEN 31 AND 60) OR
             (${faixa} = 'd61_90' AND CURRENT_DATE - t.vctpro BETWEEN 61 AND 90) OR
             (${faixa} = 'd91_180' AND CURRENT_DATE - t.vctpro BETWEEN 91 AND 180) OR
             (${faixa} = 'd180_mais' AND CURRENT_DATE - t.vctpro > 180)
-          ))`,
+          )))`,
       colunas: [
         col.texto("unidade", { obrigatoria: true }),
         col.texto("titulo", { obrigatoria: true }),
@@ -360,9 +370,10 @@ registrarListaConsultavel(
         // Somadas só para o rodapé de totais da tela (não são colunas da tabela).
         col.decimal("vlr_vencido", { obrigatoria: true, semValores: true }),
         col.decimal("vlr_a_vencer", { obrigatoria: true, semValores: true }),
+        col.decimal("vlr_credito", { obrigatoria: true, semValores: true }),
         col.decimal("vlr_pago", { obrigatoria: true, semValores: true }),
       ],
-      totais: ["vlr_vencido", "vlr_a_vencer", "vlr_pago"],
+      totais: ["vlr_vencido", "vlr_a_vencer", "vlr_credito", "vlr_pago"],
       ordemPadrao: Prisma.sql`x."dias_atraso" DESC`,
     };
   },

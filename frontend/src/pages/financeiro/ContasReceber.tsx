@@ -15,6 +15,8 @@ interface Kpis {
   totalVencido: number;
   totalAVencer: number;
   titulosAbertosQtd: number;
+  // Créditos de clientes em aberto (adiantamento, devolução): negativo e fora dos totais.
+  totalCreditos: number;
   agingMedioDias: number;
   recebidoHoje: number;
   recebidoSemana: number;
@@ -139,7 +141,7 @@ export function ContasReceber() {
 
   const kpiCards = kpis
     ? [
-        { label: "Total em Aberto", value: fmtMoney(kpis.totalAberto), sub: `${kpis.titulosAbertosQtd} títulos abertos`, tone: "neutral" as const },
+        { label: "Total em Aberto", value: fmtMoney(kpis.totalAberto), sub: `${kpis.titulosAbertosQtd} títulos abertos${kpis.totalCreditos !== 0 ? ` · créditos à parte: ${fmtMoney(kpis.totalCreditos)}` : ""}`, tone: "neutral" as const },
         { label: "Valor Vencido", value: fmtMoney(kpis.totalVencido), sub: "vencidos até hoje", tone: "destructive" as const },
         { label: "Valor a Vencer", value: fmtMoney(kpis.totalAVencer), sub: "ainda dentro do prazo", tone: "success" as const },
         { label: "Recebido Hoje", value: fmtMoney(kpis.recebidoHoje), sub: "caixa de hoje", tone: "success" as const },
