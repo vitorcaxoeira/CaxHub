@@ -94,6 +94,18 @@ function lerInteiro(v: unknown): number | null {
 }
 const qTexto = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const qInteiro = (v: unknown) => (typeof v === "string" && /^\d{1,9}$/.test(v) ? Number(v) : null);
+/** "2026,2027" → [2026, 2027] (ignora o que não for ano); vazio → null (sem filtro). */
+function qAnos(v: unknown): number[] | null {
+  if (typeof v !== "string") return null;
+  const anos = [...new Set(v.split(",").map((x) => x.trim()).filter((x) => /^[0-9]{4}$/.test(x)).map(Number))];
+  return anos.length ? anos : null;
+}
+/** Lista de situações de parcela separada por vírgula, só as válidas; vazio → null (sem filtro). */
+function qSituacoes(v: unknown): string[] | null {
+  if (typeof v !== "string") return null;
+  const lista = [...new Set(v.split(",").map((x) => x.trim()).filter((x) => x in SITUACAO_PARCELA_ROTULO))];
+  return lista.length ? lista : null;
+}
 const qCompetencia = (v: unknown) => {
   const d = lerCompetencia(v);
   return d ? isoDia(d) : null;
@@ -451,6 +463,9 @@ registrarListaConsultavel(
     const situacao = ehSituacao(qTexto(q.situacao)) ? qTexto(q.situacao) : null;
     const compDe = qCompetencia(q.competenciaDe);
     const compAte = qCompetencia(q.competenciaAte);
+    // Seleção múltipla (Home › Descontos · Parcelas): vários anos da competência e várias situações de uma vez.
+    const anos = qAnos(q.anos);
+    const situacoes = qSituacoes(q.situacoes);
     return {
       interna: Prisma.sql`
         SELECT dp.id, p.id AS "processoId", 'DESC-' || p.ano || '-' || lpad(p.sequencia::text, 6, '0') AS processo, p.codemp, p.codfor,
@@ -469,6 +484,8 @@ registrarListaConsultavel(
           AND (${tipoId}::int IS NULL OR p.tipo_id = ${tipoId}::int)
           AND (${processo} = '' OR position(${processo} IN ('DESC-' || p.ano || '-' || lpad(p.sequencia::text, 6, '0'))) > 0)
           AND (${situacao}::text IS NULL OR dp.situacao = ${situacao}::text)
+          AND (${situacoes}::text[] IS NULL OR dp.situacao = ANY(${situacoes}::text[]))
+          AND (${anos}::int[] IS NULL OR EXTRACT(YEAR FROM dp.competencia)::int = ANY(${anos}::int[]))
           AND (${compDe}::date IS NULL OR dp.competencia >= ${compDe}::date)
           AND (${compAte}::date IS NULL OR dp.competencia <= ${compAte}::date)`,
       colunas: [
@@ -492,6 +509,26 @@ registrarListaConsultavel(
   },
   "descontos-parcelas"
 );
+
+// Anos distintos das competências das parcelas (opções do filtro "Ano" da Home › Descontos · Parcelas). Mesmo escopo da lista: o consultor só
+// enxerga os próprios; `codfor` restringe a um consultor.
+descontosRouter.get("/parcelas-anos", async (req, res) => {
+  try {
+    const escopo = await escopoOuErro(req, res);
+    if (!escopo) return;
+    const codfor = qInteiro(req.query.codfor);
+    const linhas = await prisma.$queryRaw<{ ano: number }[]>(Prisma.sql`
+      SELECT DISTINCT EXTRACT(YEAR FROM dp.competencia)::int AS ano
+      FROM descontos_parcelas dp
+      JOIN descontos_processos p ON p.id = dp.processo_id
+      WHERE ${escopoSql(escopo, Prisma.sql`p.codfor`)}
+        AND (${codfor}::int IS NULL OR p.codfor = ${codfor}::int)
+      ORDER BY ano`);
+    res.json({ anos: linhas.map((l) => Number(l.ano)) });
+  } catch (error) {
+    handleError(res, error, "parcelas-anos");
+  }
+});
 
 registrarListaConsultavel(
   descontosRouter,

@@ -1,42 +1,10 @@
 import { useMemo, useState } from "react";
 import { ListaServidor } from "../../../components/colunas/ListaServidor";
-import type { DefColuna } from "../../../components/colunas/useColunasConfiguraveis";
-import { classeFiltro, fmtCompetencia, fmtData, fmtMoeda, Selo, SITUACAO_OPCOES, TOM_SITUACAO, useOpcoesDescontos, type SituacaoParcela } from "./comum";
+import { COLUNAS_PARCELAS, type ParcelaLista } from "./colunasParcelas";
+import { classeFiltro, fmtMoeda, SITUACAO_OPCOES, useOpcoesDescontos } from "./comum";
 
 // Gestão de Descontos › Parcelas: uma linha por parcela, de todos os processos. É a base dos relatórios (por competência, parcelas pendentes,
 // previsão de descontos futuros, canceladas/estornadas, saldo por consultor): filtre, ordene, agrupe pelo resumo do rodapé e exporte.
-
-interface ParcelaLista {
-  id: number;
-  processo: string;
-  consultor: string;
-  tipo: string;
-  parcela: number;
-  qtdParcelas: number;
-  competencia: string;
-  vencimento: string;
-  valor: number;
-  valorDescontado: number;
-  restante: number;
-  situacao: string;
-  situacaoCodigo: SituacaoParcela;
-  observacao: string | null;
-}
-
-const dinheiro = "font-mono text-sm tabular-nums text-foreground";
-const COLUNAS: DefColuna<ParcelaLista>[] = [
-  { nome: "processo", titulo: "Processo", fixa: true, largura: 150, resumos: ["contagem", "distintos"], classe: "font-mono text-sm font-semibold text-primary", render: (p) => p.processo },
-  { nome: "consultor", titulo: "Consultor", largura: 190, classe: "text-sm text-foreground", texto: (p) => p.consultor, render: (p) => p.consultor },
-  { nome: "tipo", titulo: "Tipo de desconto", largura: 150, classe: "text-sm text-muted", texto: (p) => p.tipo, render: (p) => p.tipo },
-  { nome: "parcela", titulo: "Parcela", centro: true, largura: 90, classe: "font-mono text-sm text-muted", render: (p) => (p.parcela > p.qtdParcelas ? <span className="text-warning" title="Saldo transportado de uma parcela que não coube na nota">Saldo ({p.parcela})</span> : `${p.parcela}/${p.qtdParcelas}`) },
-  { nome: "competencia", titulo: "Competência", largura: 110, classe: "font-mono text-sm text-foreground", render: (p) => fmtCompetencia(p.competencia) },
-  { nome: "vencimento", titulo: "Vencimento", largura: 110, classe: "font-mono text-sm text-muted", render: (p) => fmtData(p.vencimento) },
-  { nome: "valor", titulo: "Valor", direita: true, largura: 120, classe: dinheiro, formatarResumo: fmtMoeda, render: (p) => fmtMoeda(p.valor) },
-  { nome: "valorDescontado", titulo: "Descontado", direita: true, largura: 120, classe: dinheiro, formatarResumo: fmtMoeda, render: (p) => fmtMoeda(p.valorDescontado) },
-  { nome: "restante", titulo: "Restante", direita: true, largura: 120, classe: dinheiro, formatarResumo: fmtMoeda, render: (p) => fmtMoeda(p.restante) },
-  { nome: "situacao", titulo: "Situação", largura: 170, render: (p) => <Selo texto={p.situacao} tone={TOM_SITUACAO[p.situacaoCodigo] ?? "neutral"} /> },
-  { nome: "observacao", titulo: "Observação", ocultaPorPadrao: true, largura: 260, classe: "text-sm text-muted", texto: (p) => p.observacao, render: (p) => p.observacao ?? "—" },
-];
 
 export function DescontosParcelas() {
   const { consultores, tipos } = useOpcoesDescontos();
@@ -111,7 +79,7 @@ export function DescontosParcelas() {
         exportavel="descontos-parcelas"
         url="/api/descontos/parcelas"
         params={params}
-        defs={COLUNAS}
+        defs={COLUNAS_PARCELAS}
         chaveLinha={(p) => String(p.id)}
         rotulo="parcelas"
         vazio="Nenhuma parcela encontrada."

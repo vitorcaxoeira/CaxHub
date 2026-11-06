@@ -13,6 +13,7 @@ import { Spinner } from "../ui/Spinner";
 import { CardValorHora } from "./CardValorHora";
 import { ModalDescontosDoMes } from "./ModalDescontosDoMes";
 import { CardRdv } from "./CardRdv";
+import { CardDescontosParcelas } from "./CardDescontosParcelas";
 import { DetalheDiaProdutividade } from "./DetalheDiaProdutividade";
 
 const dateFormatterCurto = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
@@ -386,6 +387,9 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
       </div>
 
       <CardRdv filtro={{ anos, meses, codfor }} rotuloPeriodo={rotuloPeriodo} />
+
+      {/* Gestão de Descontos: parcelas do consultor em foco (todas, não só o período do topo). */}
+      <CardDescontosParcelas codfor={codfor} />
 
       {/* Horas por dia e por semana ocupam a largura toda, alinhadas ao card de RDV logo acima. */}
       <SerieTemporalBarra
