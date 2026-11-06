@@ -114,10 +114,10 @@ const COLUNAS_ALOCACAO: DefColuna<PropostaRow, AcoesAlocacao>[] = [
     nome: "codpro",
     titulo: "Proposta",
     fixa: true,
-    largura: 220,
+    largura: 150,
     resumos: ["contagem", "distintos"],
     render: (row, a) => (
-      // Número e badge de situação numa linha só: sem nowrap o badge desce sozinho e a linha dobra de altura.
+      // Número (e o aviso "Fora do recorte", quando houver) numa linha só: sem nowrap o aviso desce sozinho e a linha dobra de altura. A situação da proposta tem coluna própria.
       <p className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-foreground">
         <button
           onClick={(e) => {
@@ -128,7 +128,6 @@ const COLUNAS_ALOCACAO: DefColuna<PropostaRow, AcoesAlocacao>[] = [
         >
           {row.codpro}
         </button>
-        <span className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge[row.sitproTone]}`}>{row.sitproLabel}</span>
         {!row.alocavel && (
           <span
             className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge.warning}`}
@@ -140,7 +139,17 @@ const COLUNAS_ALOCACAO: DefColuna<PropostaRow, AcoesAlocacao>[] = [
       </p>
     ),
   },
-  { nome: "sitproLabel", ocultaPorPadrao: true, titulo: "Situação", largura: 130, classe: "text-sm text-muted", render: (r) => r.sitproLabel },
+  {
+    nome: "sitproLabel",
+    titulo: "Situação",
+    largura: 130,
+    texto: (r) => r.sitproLabel,
+    render: (r) => (
+      <span className={`inline-block max-w-full truncate whitespace-nowrap align-bottom rounded-full px-2 py-0.5 font-mono text-[10.5px] font-medium ${toneBadge[r.sitproTone]}`} title={r.sitproLabel}>
+        {r.sitproLabel}
+      </span>
+    ),
+  },
   { nome: "numprj", ocultaPorPadrao: true, titulo: "Projeto", largura: 90, classe: "font-mono text-sm text-muted", render: (r) => r.numprj || "—" },
   { nome: "cliente", titulo: "Cliente", largura: 200, classe: "text-sm text-foreground", texto: (r) => r.cliente, render: (r) => r.cliente },
   { nome: "datret", titulo: "Data Aprovação", largura: 110, classe: "text-sm text-muted", render: (r) => formatData(r.datret) },
