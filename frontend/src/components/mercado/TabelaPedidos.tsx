@@ -179,19 +179,22 @@ const COLUNAS: DefColuna<PedidoLista, Navegar>[] = [
 const COLUNAS_SEM_CLIENTE = COLUNAS.filter((c) => c.nome !== "cliente");
 
 /**
- * `semCliente`: tabela de UM cliente (aba Por Cliente) — sem a coluna Cliente e sem o total do rodapé (Qtd./Valor já estão na linha do
- * cliente). `chave` separa a arrumação das colunas (e as calculadas) da aba Lista.
+ * `semCliente`: tabela de UM cliente (aba Por Cliente) — sem a coluna Cliente (Qtd./Valor já estão na linha do cliente). `chave` separa a
+ * arrumação das colunas (e as calculadas) da aba Lista. Nenhuma das duas tem rodapé de total; o resumo por coluna é opcional (ícone Σ).
  */
 export function TabelaPedidos({
   params,
   recarga,
   chave = "mercado.pedidos",
   semCliente = false,
+  tituloImpressao = "Listar Pedidos",
 }: {
   params: Record<string, unknown>;
   recarga?: unknown;
   chave?: string;
   semCliente?: boolean;
+  /** Título do relatório impresso (na aba Por Cliente, o nome do cliente). */
+  tituloImpressao?: string;
 }) {
   const navigate = useNavigate();
   return (
@@ -201,22 +204,16 @@ export function TabelaPedidos({
       params={params}
       recarga={recarga}
       defs={semCliente ? COLUNAS_SEM_CLIENTE : COLUNAS}
+      exportavel="pedidos"
+      rotuloExportar="Exportar Excel"
+      imprimir={{ titulo: tituloImpressao }}
+      pdf={{ titulo: tituloImpressao, arquivo: "pedidos" }}
       ctx={navigate}
       chaveLinha={(p) => `${p.codemp}-${p.codfil}-${p.numped}`}
       rotulo="pedidos"
       vazio="Nenhum pedido encontrado com esses filtros."
       pageSize={30}
       opcoesPorPagina={[30, 50, 100, 200]}
-      rodape={
-        semCliente
-          ? undefined
-          : (d) => (
-              <div className="border-t border-border bg-surface px-5 py-3">
-                <p className="text-[10.5px] text-muted">Valor líquido (filtro atual)</p>
-                <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatMoney(d?.totais?.vlrliq ?? 0)}</p>
-              </div>
-            )
-      }
     />
   );
 }

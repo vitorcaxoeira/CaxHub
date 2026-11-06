@@ -566,6 +566,7 @@ export function ListarPedidos() {
                               <TabelaPedidos
                                 chave="mercado.pedidos.por-cliente"
                                 semCliente
+                                tituloImpressao={`Pedidos · ${c.nome}`}
                                 params={{ ...paramsFiltros(), cliente: undefined, codcli: c.codcli }}
                                 recarga={recargaCliente[c.codcli] ?? 0}
                               />

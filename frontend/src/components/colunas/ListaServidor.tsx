@@ -1,6 +1,7 @@
 import axios from "axios";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
+import { baixarPdfDoServidor } from "../relatorio/relatorioComum";
 import { Pagination } from "../ui/Pagination";
 import { SkeletonLinhas } from "../ui/Skeleton";
 import { ChipOrdem, ChipsFiltros } from "./ChipsFiltros";
@@ -74,6 +75,18 @@ interface Props<T, C> {
    * pelo GET `<url>/csv` que `registrarListaConsultavel` registra. O valor é o nome base do arquivo (ex.: "descontos-parcelas").
    */
   exportavel?: string;
+  /** Texto do botão de exportação (padrão "Exportar CSV"; o arquivo abre direto no Excel, ex.: "Exportar Excel"). */
+  rotuloExportar?: string;
+  /**
+   * Mostra "Imprimir" (06/11/2026): abre em aba nova o relatório impresso (/relatorio/lista) com TODAS as linhas do filtro atual, na ordem
+   * escolhida e só com as colunas visíveis, pelo GET `<url>/impressao` que `registrarListaConsultavel` registra.
+   */
+  imprimir?: { titulo: string };
+  /**
+   * Mostra "Exportar PDF" (06/11/2026): o mesmo relatório do "Imprimir", gerado no servidor, com TODAS as linhas do filtro (sem o corte de 5.000 do
+   * relatório de tela) e texto inteiro nas células. `arquivo` é o nome base do PDF.
+   */
+  pdf?: { titulo: string; arquivo: string };
 }
 
 export function ListaServidor<T extends object, C = undefined>({
@@ -101,6 +114,9 @@ export function ListaServidor<T extends object, C = undefined>({
   aoErro,
   alturaMax,
   exportavel,
+  rotuloExportar = "Exportar CSV",
+  imprimir,
+  pdf,
 }: Props<T, C>) {
   const titulosBase = useMemo(() => titulosDe(base), [base]);
   const estado = useFiltroOrdemLocal();
@@ -111,6 +127,7 @@ export function ListaServidor<T extends object, C = undefined>({
   const [erro, setErro] = useState<string | null>(null);
   const [aberta, setAberta] = useState<string | null>(null);
   const [exportando, setExportando] = useState(false);
+  const [gerandoPdf, setGerandoPdf] = useState(false);
 
   const calc = useCalculadasServidor(chave, titulosBase, dados?.colunas, dados?.itens, dados?.calculadasComProblema);
   const defs = useMemo(() => [...base, ...calc.defs] as DefColuna<T, C>[], [base, calc.defs]);
@@ -158,22 +175,49 @@ export function ListaServidor<T extends object, C = undefined>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chaveParams, estado.chave, page, pageSize, recarga]);
 
+  // Parâmetros de exportação/impressão: os da lista + filtros e ordem por coluna + colunas visíveis (na ordem da tela) com os títulos da tela.
+  function parametrosDeExportacao() {
+    const cabecalhos = Object.fromEntries(tc.layout.visiveis.map((n) => [n, calc.titulos[n] ?? n]));
+    return { ...paramsFixos, filtros: estado.filtrosParam, ordem: estado.ordemParam, colunasCsv: tc.layout.visiveis.join(","), cabecalhos: JSON.stringify(cabecalhos) };
+  }
+
+  async function exportarPdf() {
+    if (!pdf) return;
+    setGerandoPdf(true);
+    try {
+      await baixarPdfDoServidor(`${url}/pdf`, { titulo: pdf.titulo, params: parametrosDeExportacao(), orientacao: "paisagem", tema: "claro" }, `${pdf.arquivo}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Não foi possível gerar o PDF");
+    } finally {
+      setGerandoPdf(false);
+    }
+  }
+
+  function abrirImpressao() {
+    if (!imprimir) return;
+    // A aba nova lê a especificação do relatório no localStorage (mesma origem); a chave vai na URL.
+    const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      localStorage.setItem(`caxhub-relatorio-lista:${id}`, JSON.stringify({ titulo: imprimir.titulo, url, params: parametrosDeExportacao(), criadoEm: Date.now() }));
+    } catch {
+      setErro("Não foi possível preparar a impressão neste navegador");
+      return;
+    }
+    window.open(`/relatorio/lista/${id}`, "_blank");
+  }
+
   async function exportarCsv() {
     if (!exportavel) return;
     setExportando(true);
     try {
-      const cabecalhos = Object.fromEntries(tc.layout.visiveis.map((n) => [n, calc.titulos[n] ?? n]));
-      const { data } = await axios.get<Blob>(`${url}/csv`, {
-        params: { ...paramsFixos, filtros: estado.filtrosParam, ordem: estado.ordemParam, colunasCsv: tc.layout.visiveis.join(","), cabecalhos: JSON.stringify(cabecalhos) },
-        responseType: "blob",
-      });
+      const { data } = await axios.get<Blob>(`${url}/csv`, { params: parametrosDeExportacao(), responseType: "blob" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(data);
       link.download = `${exportavel}_${new Date().toISOString().slice(0, 10)}.csv`;
       link.click();
       URL.revokeObjectURL(link.href);
     } catch {
-      setErro("Não foi possível exportar o CSV");
+      setErro("Não foi possível exportar");
     } finally {
       setExportando(false);
     }
@@ -183,7 +227,7 @@ export function ListaServidor<T extends object, C = undefined>({
   const cabecalhoExtra = topo?.(dados);
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-surface">
-      {(filtrando || estado.ordem.length > 0 || cabecalhoExtra || exportavel) && (
+      {(filtrando || estado.ordem.length > 0 || cabecalhoExtra || exportavel || imprimir || pdf) && (
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
           <ChipsFiltros
             filtros={estado.filtros}
@@ -196,16 +240,42 @@ export function ListaServidor<T extends object, C = undefined>({
           />
           <ChipOrdem ordem={estado.ordem} titulos={calc.titulos} onLimpar={estado.limparOrdem} />
           {cabecalhoExtra}
-          {exportavel && (
-            <button
-              type="button"
-              onClick={exportarCsv}
-              disabled={exportando || loading || (dados?.total ?? 0) === 0}
-              title="Baixa todas as linhas do filtro atual, com as colunas visíveis"
-              className="ml-auto rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {exportando ? "Exportando…" : "Exportar CSV"}
-            </button>
+          {(exportavel || imprimir || pdf) && (
+            <div className="ml-auto flex items-center gap-2">
+              {exportavel && (
+                <button
+                  type="button"
+                  onClick={exportarCsv}
+                  disabled={exportando || loading || (dados?.total ?? 0) === 0}
+                  title="Baixa todas as linhas do filtro atual, com as colunas visíveis (abre no Excel)"
+                  className="rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {exportando ? "Exportando…" : rotuloExportar}
+                </button>
+              )}
+              {pdf && (
+                <button
+                  type="button"
+                  onClick={exportarPdf}
+                  disabled={gerandoPdf || loading || (dados?.total ?? 0) === 0}
+                  title="Gera um PDF com todas as linhas do filtro atual e as colunas visíveis, sem cortar nada (listas grandes podem levar alguns segundos)"
+                  className="rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {gerandoPdf ? "Gerando PDF…" : "Exportar PDF"}
+                </button>
+              )}
+              {imprimir && (
+                <button
+                  type="button"
+                  onClick={abrirImpressao}
+                  disabled={loading || (dados?.total ?? 0) === 0}
+                  title="Abre o relatório para imprimir (ou salvar em PDF) com todas as linhas do filtro atual e as colunas visíveis"
+                  className="rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Imprimir
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

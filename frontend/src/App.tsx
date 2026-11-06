@@ -54,6 +54,7 @@ import { RelatorioDespesasRat } from "./pages/projetos/RelatorioDespesasRat";
 import { RelatorioCronograma } from "./pages/projetos/RelatorioCronograma";
 import { RelatorioMemoriaPlano } from "./pages/projetos/RelatorioMemoriaPlano";
 import { RelatorioProdutividade } from "./pages/projetos/RelatorioProdutividade";
+import { RelatorioLista } from "./pages/relatorios/RelatorioLista";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
 import { SincronizacaoErp, SincronizacaoHcm } from "./pages/admin/SincronizacaoErp";
@@ -141,6 +142,16 @@ export default function App() {
             {/* Relatório "Produtividade por Fornecedor" (botão Imprimir da Home do consultor) — fora do
                 AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o acesso é o da própria Home, e o
                 backend (GET /dashboard/produtividade) decide de quem o usuário pode ver os dados. */}
+            {/* Relatório impresso genérico das listas do padrão de colunas (botão "Imprimir" do ListaServidor, 06/11/2026): fora do AppShell
+                pelo mesmo motivo das rotas acima. O acesso é o da própria lista: o backend (GET <lista>/impressao) aplica o mesmo escopo. */}
+            <Route
+              path="/relatorio/lista/:id"
+              element={
+                <ProtectedRoute>
+                  <RelatorioLista />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/relatorio/produtividade"
               element={

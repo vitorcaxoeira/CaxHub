@@ -51,7 +51,9 @@ function naFila<T>(tarefa: () => Promise<T>): Promise<T> {
 const HOSTS_PERMITIDOS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
 
 // `caminho` começa com "/" e é sempre da própria aplicação (o chamador monta; nunca vem do usuário).
-export function gerarPdfDaPagina(caminho: string, token: string): Promise<Buffer> {
+// `armazenamento` (opcional): entradas extras de localStorage gravadas junto do token antes da página abrir; é como relatórios sem URL própria
+// (ex.: o das listas do padrão de colunas) entregam a especificação ao Chromium.
+export function gerarPdfDaPagina(caminho: string, token: string, armazenamento: Record<string, string> = {}): Promise<Buffer> {
   return naFila(async () => {
     const origem = origemDoFrontend();
     const permitida = new URL(origem);
@@ -82,7 +84,8 @@ export function gerarPdfDaPagina(caminho: string, token: string): Promise<Buffer
       });
 
       // Strings (não funções): o tsconfig do backend não tem a lib DOM, e o código roda no navegador.
-      await page.evaluateOnNewDocument(`localStorage.setItem("token", ${JSON.stringify(token)})`);
+      const gravacoes = [["token", token], ...Object.entries(armazenamento)];
+      await page.evaluateOnNewDocument(gravacoes.map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)});`).join(""));
       await page.goto(`${origem}${caminho}`, { waitUntil: "domcontentloaded" });
 
       // A página avisa quando carregou tudo (dados, detalhes e fotos) ou quando falhou. Além do aviso,
