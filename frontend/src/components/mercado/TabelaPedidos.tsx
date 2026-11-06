@@ -26,6 +26,7 @@ export interface PedidoLista {
   propostaCodpro: number | null;
   propostaCodlev2: number | null;
   proposta: string | null;
+  propostaDescricao: string | null;
   modalidade: string | null;
   modalidadeTone: Tone | null;
   situacaoProposta: string | null;
@@ -135,6 +136,7 @@ const COLUNAS: DefColuna<PedidoLista, Navegar>[] = [
         <span className="text-sm text-muted">—</span>
       ),
   },
+  { nome: "propostaDescricao", titulo: "Desc. Proposta", largura: 220, classe: "text-sm text-muted", texto: (p) => p.propostaDescricao, render: (p) => texto(p.propostaDescricao) },
   { nome: "modalidade", titulo: "Mod. Prop.", largura: 130, render: (p) => <Selo texto={p.modalidade} tone={p.modalidadeTone} /> },
   { nome: "situacaoProposta", titulo: "Sit. Prop.", largura: 150, render: (p) => <Selo texto={p.situacaoProposta} tone={p.situacaoPropostaTone} /> },
   { nome: "faturamento", titulo: "Faturamento", largura: 130, classe: "text-sm text-muted", texto: (p) => p.faturamento, render: (p) => texto(p.faturamento) },

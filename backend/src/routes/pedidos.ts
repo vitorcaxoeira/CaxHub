@@ -269,6 +269,7 @@ registrarListaConsultavel(
                CASE WHEN r.codpro IS NULL THEN NULL
                     WHEN pr.codlev2 IS NOT NULL AND pr.codlev2 <> 0 THEN r.codpro || ' → ' || pr.codlev2
                     ELSE r.codpro::text END AS proposta,
+               pr.despro AS "propostaDescricao",
                CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${rotuloSql(Prisma.sql`pr.modpro`, MODPRO_LABELS, "Modalidade")} END AS modalidade,
                CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${MODPRO_TOM_SQL} END AS "modalidadeTone",
                CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${rotuloSql(Prisma.sql`pr.sitpro`, SITPRO_LABELS, "Situação", "Sem situação")} END AS "situacaoProposta",
@@ -302,6 +303,7 @@ registrarListaConsultavel(
         col.texto("numrat"),
         col.texto("consultor"),
         col.texto("proposta"),
+        col.texto("propostaDescricao"),
         col.texto("modalidade"),
         col.texto("situacaoProposta"),
         col.texto("faturamento"),
