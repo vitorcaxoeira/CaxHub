@@ -1,5 +1,5 @@
 import axios from "axios";
-import { type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode, useRef, useState } from "react";
+import { type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
 import { TH, TH_DIR } from "./estilosTabela";
 import { CabecalhoColuna } from "./CabecalhoColuna";
@@ -62,6 +62,8 @@ interface Props {
   redimensionar?: RedimensionarColuna;
   /** Classes extras do `<th>` (espaçamento e alinhamento próprios da tela); vencem as padrão. */
   className?: string;
+  /** Estilo do `<th>` (ex.: o `left` da coluna parada). */
+  style?: CSSProperties;
   /** Valor como aparece na lista do funil; padrão: formatarValorColuna pelo tipo (ex.: domínio "código · rótulo" no Ver dados). */
   formatarValor?: (valor: unknown) => string;
   /** A coluna tem funil mas não ordena (ex.: json). */
@@ -150,7 +152,7 @@ function AlcaLargura({ th, r, onRedimensionando }: { th: () => HTMLElement | nul
   );
 }
 
-export function ThColuna({ nome, titulo, direita, colunas, estado, carregarValores, dica, title, rotulo, arrastar, redimensionar, className, formatarValor, semOrdenar }: Props) {
+export function ThColuna({ nome, titulo, direita, colunas, estado, carregarValores, dica, title, rotulo, arrastar, redimensionar, className, style, formatarValor, semOrdenar }: Props) {
   const c = colunas?.find((x) => x.nome === nome);
   const [alvo, setAlvo] = useState(false);
   // Puxando a alça de largura: o título não pode virar arrasto de coluna ao mesmo tempo.
@@ -200,6 +202,7 @@ export function ThColuna({ nome, titulo, direita, colunas, estado, carregarValor
         alvo && "ring-2 ring-inset ring-primary",
         className,
       )}
+      style={style}
       aria-sort={ariaSort(estado.ordem, nome)}
       title={title ?? (arrastar ? "Arraste para mudar a ordem das colunas" : undefined)}
       {...propsArrastar}

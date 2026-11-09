@@ -819,6 +819,97 @@ export async function fecharRatViaSoap(payload: FecharRatPayload): Promise<Fecha
   };
 }
 
+// ---------------------------------------------------------------------------
+// Canal de ESCRITA — operação `alterarSituacaoProposta` (tela Gestão Propostas, 09/11/2026). Altera USU_SitPro de USU_TE077PRO (domínio USU_SitPro):
+// Finalizar leva a proposta para 8 (Executada); Em Execução, de 8 para 7.
+//
+// OPERAÇÃO A PUBLICAR NO SENIOR (ainda não existe). Envelope POR HIPÓTESE, no padrão exato de `fecharRAT` (o mais simples dos quatro): nome da
+// operação, nomes dos parâmetros (codEmp/codPro/sitPro) e nome do elemento de resposta (`ns2:alterarSituacaoPropostaResponse`) seguem o das
+// outras operações. O que se espera do publicador é só o significado de `statusProcesso` (0=Erro, 1=Sucesso). CONFIRMAR NO PRIMEIRO ENVIO REAL e
+// ajustar aqui o que vier diferente — enquanto isso o worker (sync/outboxSeniorProposta.ts) fica desligado por SENIOR_PORTA_SITPRO.
+// ---------------------------------------------------------------------------
+
+export interface AlterarSituacaoPropostaPayload {
+  codEmp: number;
+  codPro: number;
+  /** Situação nova, domínio USU_SitPro (7 = Em Execução, 8 = Executada). */
+  sitPro: number;
+}
+
+// Sem `resultados[]`: a operação atua sobre a proposta inteira, como fecharRAT atua sobre a RAT.
+export interface AlterarSituacaoPropostaResposta {
+  /** 1 = sucesso (a confirmar com o publicador do serviço). */
+  statusProcesso: number | null;
+  mensagemProcesso: string | null;
+  erroExecucao: string | null;
+}
+
+/** Monta o XML que seria enviado, sem enviar — mesmo uso dos irmãos acima. */
+export function montarEnvelopeAlterarSituacaoProposta(payload: AlterarSituacaoPropostaPayload, user: string, password: string): string {
+  const parametersXml = `<codEmp>${payload.codEmp}</codEmp>` + `<codPro>${payload.codPro}</codPro>` + `<sitPro>${payload.sitPro}</sitPro>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ser:alterarSituacaoProposta>
+      <user>${escapeXml(user)}</user>
+      <password>${escapeXml(password)}</password>
+      <encryption>0</encryption>
+      <parameters>${parametersXml}</parameters>
+    </ser:alterarSituacaoProposta>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+}
+
+/**
+ * Altera a situação de uma proposta no Senior via `alterarSituacaoProposta`.
+ *
+ * Mesmo contrato de responsabilidade dos irmãos: não decide sucesso/fracasso de negócio, só normaliza a resposta — quem decide é o chamador
+ * (sync/outboxSeniorProposta.ts).
+ */
+export async function alterarSituacaoPropostaViaSoap(payload: AlterarSituacaoPropostaPayload): Promise<AlterarSituacaoPropostaResposta> {
+  garantirEscritaNoSenior("alterarSituacaoProposta");
+  const soapUrl = process.env.SOAP_URL;
+  const soapUser = process.env.SOAP_USER;
+  const soapPassword = process.env.SOAP_PASSWORD;
+
+  if (!soapUrl || !soapUser || !soapPassword) {
+    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
+  }
+
+  const endpoint = soapUrl.replace(/\?wsdl$/i, "");
+  const envelope = montarEnvelopeAlterarSituacaoProposta(payload, soapUser, soapPassword);
+
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "alterarSituacaoProposta"));
+    });
+
+  const parsed = parser.parse(response.data);
+  // Nome do elemento de resposta — AINDA NÃO confirmado contra uma chamada real, ver comentário do bloco acima.
+  const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:alterarSituacaoPropostaResponse"]?.result;
+
+  if (!result) {
+    throw new Error("Resposta SOAP de alterarSituacaoProposta em formato inesperado — ajustar parsing em soap/client.ts");
+  }
+
+  const erroExecucao = textoOuNulo(result.erroExecucao);
+  if (erroExecucao) {
+    throw new Error(`Erro no serviço Senior (alterarSituacaoProposta): ${erroExecucao}`);
+  }
+
+  return {
+    statusProcesso: numeroOuNulo(result.statusProcesso),
+    mensagemProcesso: textoOuNulo(result.mensagemProcesso),
+    erroExecucao,
+  };
+}
+
 const PAGE_SIZE = 10000;
 
 /**

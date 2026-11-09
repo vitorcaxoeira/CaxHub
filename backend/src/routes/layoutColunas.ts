@@ -10,6 +10,11 @@ export interface LayoutColunas {
   larguras: Record<string, number>;
   /** Resumo do rodapé por coluna (função da lista FUNCOES_RESUMO); vazio = nenhum. */
   resumos: Record<string, string>;
+  /**
+   * Última coluna parada ("congelar até aqui", 09/11/2026): ela e as visíveis antes dela, na ordem, ficam paradas ao rolar na horizontal.
+   * null = sem escolha (vale o padrão da tela); "" = nenhuma parada, de propósito; "nome" = o limite.
+   */
+  congeladaAte: string | null;
 }
 
 const TABELA_VALIDA = /^[a-z0-9._-]{1,80}$/;
@@ -44,13 +49,18 @@ function resumosValidos(v: unknown): v is Record<string, string> {
   return pares.length <= MAX_COLUNAS && pares.every(([nome, f]) => nomeValido(nome) && typeof f === "string" && FUNCOES_RESUMO.has(f as FuncaoResumo));
 }
 
+/** `congeladaAte`: ausente/null = padrão da tela; texto (até MAX_NOME, pode ser vazio = nenhuma) = a escolha. Qualquer outra coisa é inválida. */
+function congeladaAteValida(v: unknown): v is string | null | undefined {
+  return v == null || (typeof v === "string" && v.length <= MAX_NOME);
+}
+
 /**
  * Corpo do PUT: `{ ordem: string[], ocultas: string[], larguras?: { coluna: px } }`, sem repetição e sem exagero de tamanho. `larguras`
  * ausente vale `{}` (tela anterior às larguras). null = inválido (400).
  */
 export function validarLayoutColunas(corpo: unknown): LayoutColunas | null {
   if (!corpo || typeof corpo !== "object") return null;
-  const { ordem, ocultas, larguras = {}, resumos = {} } = corpo as Record<string, unknown>;
-  if (!listaValida(ordem) || !listaValida(ocultas) || !largurasValidas(larguras) || !resumosValidos(resumos)) return null;
-  return { ordem, ocultas, larguras, resumos };
+  const { ordem, ocultas, larguras = {}, resumos = {}, congeladaAte } = corpo as Record<string, unknown>;
+  if (!listaValida(ordem) || !listaValida(ocultas) || !largurasValidas(larguras) || !resumosValidos(resumos) || !congeladaAteValida(congeladaAte)) return null;
+  return { ordem, ocultas, larguras, resumos, congeladaAte: congeladaAte ?? null };
 }

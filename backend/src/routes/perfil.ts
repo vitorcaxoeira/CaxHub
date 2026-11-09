@@ -249,9 +249,9 @@ perfilRouter.get("/colunas/:tabela", async (req: AuthenticatedRequest, res) => {
   }
   try {
     const [linha] = await prisma.$queryRaw<LayoutColunas[]>(
-      Prisma.sql`SELECT ordem, ocultas, larguras, resumos FROM preferencias_colunas WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`,
+      Prisma.sql`SELECT ordem, ocultas, larguras, resumos, congelada_ate AS "congeladaAte" FROM preferencias_colunas WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`,
     );
-    res.json(linha ?? { ordem: [], ocultas: [], larguras: {}, resumos: {} });
+    res.json(linha ?? { ordem: [], ocultas: [], larguras: {}, resumos: {}, congeladaAte: null });
   } catch (err) {
     console.error("[perfil] colunas-get:", err);
     res.status(500).json({ error: "Falha ao ler a arrumação das colunas" });
@@ -267,11 +267,11 @@ perfilRouter.put("/colunas/:tabela", async (req: AuthenticatedRequest, res) => {
   }
   try {
     await prisma.$executeRaw(Prisma.sql`
-      INSERT INTO preferencias_colunas (user_id, tabela, ordem, ocultas, larguras, resumos, atualizado_em)
+      INSERT INTO preferencias_colunas (user_id, tabela, ordem, ocultas, larguras, resumos, congelada_ate, atualizado_em)
       VALUES (${req.user!.userId}, ${tabela}, ${layout.ordem}::text[], ${layout.ocultas}::text[], ${JSON.stringify(layout.larguras)}::jsonb,
-              ${JSON.stringify(layout.resumos)}::jsonb, now())
+              ${JSON.stringify(layout.resumos)}::jsonb, ${layout.congeladaAte}, now())
       ON CONFLICT (user_id, tabela) DO UPDATE SET ordem = EXCLUDED.ordem, ocultas = EXCLUDED.ocultas, larguras = EXCLUDED.larguras,
-                                                 resumos = EXCLUDED.resumos, atualizado_em = now()`);
+                                                 resumos = EXCLUDED.resumos, congelada_ate = EXCLUDED.congelada_ate, atualizado_em = now()`);
     res.json(layout);
   } catch (err) {
     console.error("[perfil] colunas-put:", err);

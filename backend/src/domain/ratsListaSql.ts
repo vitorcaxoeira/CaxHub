@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { INTEGRACAO_ERP_LABELS, type IntegracaoErpStatus, SITRAT_LABELS, SITRAT_ORDER } from "./ratDominio";
+import { RAT_ITEM_VALIDO } from "./eficienciaDados";
+import { AGREGADOS_DE_FATURAMENTO, ITENS_COM_ITEM_DA_PROPOSTA } from "./gestaoPropostasSql";
 
 // Lista de RATs de Meus Apontamentos em SQL (04/11/2026): uma linha por RAT visível, com cliente, consultor, itens, minutos e o status
 // de integração com o Senior JÁ calculados no banco. É a consulta interna de `registrarListaConsultavel` (GET /rats/lista): por fora
@@ -30,6 +32,12 @@ export interface FiltrosTopoRats {
   /** Observação de algum item (trecho) ou id local da atividade de alguma sessão do item (só quando numérico). */
   buscaItem: string;
   integracao: IntegracaoErpStatus[];
+  /**
+   * Só as RATs de UMA proposta (tela Gestão Propostas, 09/11/2026). Opcionais para o resto do sistema não precisar informar. `codpro` sozinho
+   * recorta a proposta em qualquer empresa; com `codemp` recorta a chave inteira.
+   */
+  codemp?: number | null;
+  codpro?: number | null;
 }
 
 export const STATUS_INTEGRACAO: IntegracaoErpStatus[] = ["falha", "enviando", "pendente", "sincronizado"];
@@ -70,6 +78,12 @@ export interface OpcoesConsultaRats {
    * `precisaCalcularConjunto`. Sem isso, cada uma é subconsulta por linha e o Postgres só a calcula para as linhas da página.
    */
   conjunto?: boolean;
+  /**
+   * Acrescenta, por RAT, o que é faturável: `minutosFaturaveis`, `minutosNaoFaturaveis`, `valorFaturamento` e `valorNaoFaturado` (mesma régua da lista de
+   * propostas, domain/gestaoPropostasSql.ts: só apontamento válido, faturável = item com fatser S/A). Desligado, o SQL é idêntico ao de antes.
+   * Em MINUTOS, como `totalMinutos`. Subconsultas por linha nos dois modos: a lista é sempre de UMA proposta (no máximo algumas centenas de RATs).
+   */
+  comFaturamento?: boolean;
 }
 
 /** Colunas cujo cálculo por linha é caro (agregado de itens e pendências): filtrar, ordenar ou resumir por elas pede o modo conjunto. */
@@ -103,6 +117,8 @@ export function consultaRatsLista(
   if (filtros.codfors.length > 0) condicoes.push(Prisma.sql`r.codfor IN (${Prisma.join(filtros.codfors)})`);
   // RAT sem situação (sitrat null) fica de fora sempre que o filtro está ativo — `IN` já exclui NULL.
   if (filtros.sitrats.length > 0) condicoes.push(Prisma.sql`r.sitrat IN (${Prisma.join(filtros.sitrats)})`);
+  if (filtros.codpro != null) condicoes.push(Prisma.sql`r.codpro = ${filtros.codpro}`);
+  if (filtros.codemp != null) condicoes.push(Prisma.sql`r.codemp = ${filtros.codemp}`);
   if (opcoes.somenteDigitadasAtivas) condicoes.push(Prisma.sql`r.sitrat = 9 AND r.removido_em_senior IS NULL`);
   const ondeVis = condicoes.length > 0 ? Prisma.sql`WHERE ${Prisma.join(condicoes, " AND ")}` : Prisma.empty;
 
@@ -191,6 +207,17 @@ export function consultaRatsLista(
     ), ${RANK_INTEGRACAO.pendente})`;
   }
 
+  // Faturamento por RAT (opcional): o agregado de UMA RAT, sobre os mesmos apontamentos válidos que a lista de propostas soma.
+  const doRat = (agregado: Prisma.Sql, cast: string) =>
+    Prisma.sql`(SELECT COALESCE(${agregado}, 0)${Prisma.raw(cast)} FROM ${ITENS_COM_ITEM_DA_PROPOSTA} WHERE ri."ratId" = r.id AND ${RAT_ITEM_VALIDO})`;
+  const faturamento = opcoes.comFaturamento
+    ? Prisma.sql`,
+      ${doRat(AGREGADOS_DE_FATURAMENTO.minutosFaturaveis, "::int")} AS "minutosFaturaveis",
+      ${doRat(AGREGADOS_DE_FATURAMENTO.minutosNaoFaturaveis, "::int")} AS "minutosNaoFaturaveis",
+      ${doRat(AGREGADOS_DE_FATURAMENTO.valorFaturavel, "::float8")} AS "valorFaturamento",
+      ${doRat(AGREGADOS_DE_FATURAMENTO.valorNaoFaturavel, "::float8")} AS "valorNaoFaturado"`
+    : Prisma.empty;
+
   const base = Prisma.sql`
     SELECT r.id, r.numrat, r.datemi, r.codemp, r.codpro, r.numprj, r.codfor, r.sitrat, r.depexe,
       (r.removido_em_senior IS NOT NULL) AS excluida,
@@ -201,7 +228,7 @@ export function consultaRatsLista(
       COALESCE(cons.nome, 'Fornecedor ' || r.codfor::text) AS "consultorNome",
       ${totalItens} AS "totalItens",
       ${totalMinutos} AS "totalMinutos",
-      ${STATUS_POR_RANK(rank)} AS integracao
+      ${STATUS_POR_RANK(rank)} AS integracao${faturamento}
     FROM rats r
     LEFT JOIN cons ON cons.codfor = r.codfor
     ${juncoes} ${ondeVis}`;

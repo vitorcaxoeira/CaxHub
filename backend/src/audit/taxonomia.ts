@@ -37,6 +37,9 @@ export const EVENTOS_AUDITORIA = {
   PROPOSTA_CRIADA: "PROPOSTA_CRIADA",
   PROPOSTA_ALTERADA: "PROPOSTA_ALTERADA",
   PROPOSTA_STATUS_ALTERADO: "PROPOSTA_STATUS_ALTERADO",
+  // Pedido de mudança de SITUAÇÃO feito na tela Gestão Propostas (Finalizar / Em Execução), gravado na hora do clique. A mudança em si só vale
+  // quando o Senior confirma: aí sai o PROPOSTA_STATUS_ALTERADO acima, o mesmo que o sync de entrada emite (origem "job" em vez de "integracao_senior").
+  PROPOSTA_SITUACAO_SOLICITADA: "PROPOSTA_SITUACAO_SOLICITADA",
   PROPOSTA_ITEM_CRIADO: "PROPOSTA_ITEM_CRIADO",
   PROPOSTA_ITEM_ALTERADO: "PROPOSTA_ITEM_ALTERADO",
 

@@ -19,7 +19,7 @@ const SEM_OCULTAS: string[] = [];
  *   layout.visiveis.map((nome) => <ThColuna ... arrastar={layout.arrastar} />)
  *   <PainelColunas layout={layout} titulos={TITULOS} />
  */
-export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias: string[] = [], ocultasPadrao: string[] = SEM_OCULTAS) {
+export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias: string[] = [], ocultasPadrao: string[] = SEM_OCULTAS, congeladaAtePadrao = "") {
   const { mostrar } = useToast();
   const [salvo, setSalvo] = useState<LayoutSalvo | null>(null);
   const mexeu = useRef(false);
@@ -43,8 +43,8 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
 
   const gravar = useCallback(
     (layout: LayoutSalvo) =>
-      (ehPadrao(padrao, layout, ocultasPadrao) ? axios.delete(url) : axios.put(url, layout)).catch(() => mostrar("Não foi possível guardar a arrumação das colunas", "warning")),
-    [url, padrao, ocultasPadrao, mostrar],
+      (ehPadrao(padrao, layout, ocultasPadrao, congeladaAtePadrao) ? axios.delete(url) : axios.put(url, layout)).catch(() => mostrar("Não foi possível guardar a arrumação das colunas", "warning")),
+    [url, padrao, ocultasPadrao, congeladaAtePadrao, mostrar],
   );
 
   // Sai da tela com gravação pendente: grava já.
@@ -58,7 +58,10 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
     [gravar],
   );
 
-  const resolvido = useMemo(() => resolverLayout(padrao, salvo, obrigatorias, ocultasPadrao), [padrao, salvo, obrigatorias, ocultasPadrao]);
+  const resolvido = useMemo(
+    () => resolverLayout(padrao, salvo, obrigatorias, ocultasPadrao, congeladaAtePadrao),
+    [padrao, salvo, obrigatorias, ocultasPadrao, congeladaAtePadrao],
+  );
 
   const mudar = useCallback(
     (proximo: LayoutSalvo) => {
@@ -75,12 +78,14 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
   );
 
   const { ordem, ocultas, larguras, resumos } = resolvido;
+  // O que o usuário escolheu de fato (null = sem escolha, vale o padrão da tela): não vira "escolha" só porque outra coisa mudou.
+  const escolhaCongelada = salvo?.congeladaAte ?? null;
   // Toda mudança leva junto o que não mudou (a arrumação é gravada inteira).
-  const com = (parte: Partial<LayoutSalvo>) => mudar({ ordem, ocultas, larguras, resumos, ...parte });
+  const com = (parte: Partial<LayoutSalvo>) => mudar({ ordem, ocultas, larguras, resumos, congeladaAte: escolhaCongelada, ...parte });
   return {
     ...resolvido,
     obrigatorias,
-    personalizado: !ehPadrao(padrao, { ordem, ocultas, larguras }, ocultasPadrao),
+    personalizado: !ehPadrao(padrao, { ordem, ocultas, larguras, congeladaAte: escolhaCongelada }, ocultasPadrao, congeladaAtePadrao),
     /** Alguma largura ajustada: a tabela passa a ter larguras fixas (sem nenhuma, layout automático, como antes de qualquer ajuste). */
     comLarguras: Object.keys(larguras).length > 0,
     mover: (nome: string, destino: string) => com({ ordem: moverColuna(ordem, nome, destino) }),
@@ -93,7 +98,10 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
       const { [nome]: _antes, ...outros } = resumos;
       com({ resumos: funcao ? { ...outros, [nome]: funcao } : outros });
     },
-    restaurar: () => com({ ordem: padrao, ocultas: [], larguras: {} }),
+    /** Congelar até `nome` (ela e as visíveis antes dela ficam paradas); null = soltar todas ("" é a escolha explícita de nenhuma). */
+    congelarAte: (nome: string | null) => com({ congeladaAte: nome ?? "" }),
+    // Volta ao padrão da tela: ordem, ocultas POR PADRÃO (não todas visíveis: as que nascem ocultas continuam ocultas), larguras e colunas paradas.
+    restaurar: () => com({ ordem: padrao, ocultas: ocultasPadrao.filter((n) => padrao.includes(n)), larguras: {}, congeladaAte: null }),
     /** Para o `arrastar` do ThColuna: soltar a coluna `origem` em cima de `destino`. */
     arrastar: { grupo: tabela, onSoltar: (origem: string, destino: string) => com({ ordem: moverColuna(ordem, origem, destino) }) },
   };

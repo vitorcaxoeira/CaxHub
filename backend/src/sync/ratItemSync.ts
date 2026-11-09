@@ -282,6 +282,18 @@ export async function runRatItemSyncPorNumrat(codemp: number, numrat: number): P
   return seqratsVistos;
 }
 
+// Sincroniza os itens de TODAS as RATs de uma proposta — par de runRatSyncPorCodpro (ratSync.ts), sempre DEPOIS dele (RatItem.ratId depende do cabeçalho
+// já existir). Escolhe as RATs pelo CABEÇALHO (USU_CodPro da RAT), não pelo USU_CodPro do item: um apontamento sem proposta própria herda a da RAT e
+// ficaria de fora de um filtro direto no item. Não faz a desvinculação de itens ausentes (é por RAT). Devolve quantos itens vieram.
+export async function runRatItemSyncPorCodpro(codemp: number, codpro: number): Promise<number> {
+  const query = `${BASE_QUERY} WHERE USU_CODEMP = ${codemp} AND USU_NUMRAT IN (SELECT USU_NUMRAT FROM USU_TE777RAT WHERE USU_CODEMP = ${codemp} AND USU_CodPro = ${codpro})`;
+  const { seqratsVistos } = await executarUpsert(query);
+  await prisma.syncLog.create({
+    data: { jobName: JOB_NAME, query, status: "success", message: `${seqratsVistos.length} item(ns) no Senior` },
+  });
+  return seqratsVistos.length;
+}
+
 // O agendamento automático sempre roda completo (sem "desde") — o modo incremental só é
 // usado quando disparado manualmente pela tela de administração de sincronização.
 export function scheduleRatItemSync(): void {

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { cn } from "../../lib/cn";
 import { Skeleton } from "../ui/Skeleton";
 import { type FuncaoResumo, formatarResumo, funcoesDaColuna, NA_UNIDADE_DA_COLUNA, ROTULO_RESUMO, type TipoResumo } from "./resumo";
@@ -13,18 +14,22 @@ interface Props {
   carregando: boolean;
   erro?: string | null;
   direita?: boolean;
+  /** Classes a mais no `<td>` (ex.: a coluna congelada, parada à esquerda). */
+  className?: string;
+  /** Estilo do `<td>` (ex.: o `left` da coluna parada). */
+  style?: CSSProperties;
   formatar?: (v: number) => string;
   /** Aviso ao lado de soma/média/... (ex.: unidades misturadas). */
   aviso?: string;
 }
 
 /** Uma célula do rodapé de resumo: o valor (quando há função escolhida) e, embaixo, a escolha da função, discreta. */
-export function CelulaResumo({ titulo, tipo, permitidas, funcao, onEscolher, valor, carregando, erro, direita, formatar, aviso }: Props) {
+export function CelulaResumo({ titulo, tipo, permitidas, funcao, onEscolher, valor, carregando, erro, direita, formatar, aviso, className, style }: Props) {
   const funcoes = funcoesDaColuna(tipo, permitidas);
-  if (!funcoes.length) return <td className="px-[7px] py-1.5" />;
+  if (!funcoes.length) return <td className={cn("px-[7px] py-1.5", className)} style={style} />;
   const escolhida = funcao && funcoes.includes(funcao) ? funcao : undefined;
   return (
-    <td className={cn("px-[7px] py-1.5 align-top", direita ? "text-right" : "text-left")}>
+    <td className={cn("px-[7px] py-1.5 align-top", direita ? "text-right" : "text-left", className)} style={style}>
       <div className={cn("flex flex-col gap-0.5", direita ? "items-end" : "items-start")}>
         {escolhida &&
           (carregando ? (

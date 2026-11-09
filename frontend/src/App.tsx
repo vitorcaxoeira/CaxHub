@@ -38,6 +38,7 @@ import { Jornadas } from "./pages/projetos/Jornadas";
 import { Aprovacoes } from "./pages/projetos/Aprovacoes";
 import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
+import { GestaoPropostas } from "./pages/projetos/GestaoPropostas";
 import { Eficiencia } from "./pages/projetos/Eficiencia";
 import { MinhasAcoes } from "./pages/projetos/MinhasAcoes";
 import { MeuPlano } from "./pages/projetos/MeuPlano";
@@ -293,6 +294,7 @@ export default function App() {
               </Route>
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
+                <Route path="/projetos/gestao-propostas" element={<GestaoPropostas />} />
               </Route>
               {/* Comercial › Gestão de Metas: admin ou gestor do departamento 2 (Comercial). Gestor não é Role (vem de
                   DepartamentoGestor), então a guarda é dinâmica. Em sincronia com o item do menu (Sidebar, `gestorComercial`) e o

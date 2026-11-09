@@ -13,6 +13,7 @@ import { fluxoCaixaRouter } from "./routes/fluxoCaixa";
 import { historicoFinanceiroRouter } from "./routes/historicoFinanceiro";
 import { contabilRouter } from "./routes/contabil";
 import { projetosRouter } from "./routes/projetos";
+import { gestaoPropostasRouter } from "./routes/gestaoPropostas";
 import { atividadesRouter } from "./routes/atividades";
 import { apontamentosRouter } from "./routes/apontamentos";
 import { ratsRouter } from "./routes/rats";
@@ -104,6 +105,7 @@ import { schedulePedidoItemServicoSync } from "./sync/pedidoItemServicoSync";
 import { schedulePedidoRateioSync } from "./sync/pedidoRateioSync";
 import { recuperarEnviosInterrompidos, scheduleOutboxSeniorSync } from "./sync/outboxSenior";
 import { recuperarEnviosDespesaInterrompidos, scheduleOutboxSeniorDespesaSync } from "./sync/outboxSeniorDespesa";
+import { recuperarEnviosSituacaoInterrompidos, scheduleOutboxSeniorPropostaSync } from "./sync/outboxSeniorProposta";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 import { agendarAcoesVencidas } from "./sync/acoesEficienciaVencidas";
@@ -158,6 +160,7 @@ app.use("/financeiro/fluxo-caixa", fluxoCaixaRouter);
 app.use("/financeiro/historico", historicoFinanceiroRouter);
 app.use("/contabil", contabilRouter);
 app.use("/projetos", projetosRouter);
+app.use("/gestao-propostas", gestaoPropostasRouter);
 app.use("/atividades", atividadesRouter);
 app.use("/apontamentos", apontamentosRouter);
 app.use("/rats", ratsRouter);
@@ -233,6 +236,7 @@ async function iniciar() {
   try {
     await recuperarEnviosInterrompidos();
     await recuperarEnviosDespesaInterrompidos();
+    await recuperarEnviosSituacaoInterrompidos();
   } catch (error) {
     console.error("[boot] falhou ao recuperar envios interrompidos ao Senior:", error instanceof Error ? error.message : error);
   }
@@ -301,6 +305,7 @@ async function iniciar() {
     agendarSyncHcm();
     scheduleOutboxSeniorSync();
     scheduleOutboxSeniorDespesaSync();
+    scheduleOutboxSeniorPropostaSync();
     // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do
     // fim do expediente (5 em 5 min), e a que ficou sem resposta depois de a aba fechar
     // (15 em 15s — cadência bem mais curta, ver o comentário no arquivo).

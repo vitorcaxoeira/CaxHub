@@ -347,6 +347,15 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     resumo: (e) =>
       `Mudou a situação da ${rotuloEntidade(e)} de "${e.metadata?.status_de ?? "—"}" para "${e.metadata?.status_para ?? "—"}"`,
   },
+  PROPOSTA_SITUACAO_SOLICITADA: {
+    tone: "warning",
+    rotuloGrupo: "Proposta",
+    icone: IconeStatus,
+    resumo: (e) =>
+      e.metadata?.sucesso === false
+        ? `Falhou ao mudar a situação da ${rotuloEntidade(e)} para "${e.metadata?.para ?? "—"}": ${e.metadata?.erro ?? "erro no ERP"}`
+        : `Pediu para mudar a situação da ${rotuloEntidade(e)} de "${e.metadata?.de ?? "—"}" para "${e.metadata?.para ?? "—"}" (aguarda o ERP)`,
+  },
   PROPOSTA_ITEM_CRIADO: {
     tone: "success",
     rotuloGrupo: "Item da Proposta",

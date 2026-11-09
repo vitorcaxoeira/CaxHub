@@ -18,6 +18,7 @@ import {
   CircleCheck,
   CircleHelp,
   CirclePlus,
+  ClipboardCheck,
   ClipboardList,
   ClipboardPlus,
   Clock,
@@ -173,6 +174,9 @@ const groups: NavGroup[] = [
       // pra decidir os do time. O recorte de quem vê o quê é do servidor.
       { to: "/projetos/aprovacoes", label: "Aprovações" },
       { to: "/projetos/alocacao", label: "Alocação", gestorOuAdmin: true },
+      // Gestão das propostas (horas × RAT, faturável, Finalizar / Em Execução). Mesmo recorte do menu Propostas: admin e comercial. Em sincronia com
+      // o RequireRole de App.tsx e o requireRole de routes/gestaoPropostas.ts. Ao mudar quem entra, ampliar as três camadas.
+      { to: "/projetos/gestao-propostas", label: "Gestão Propostas", roles: ["admin", "comercial"] },
       { to: "/projetos/eficiencia", label: "Eficiência", gestorOuAdmin: true },
       // Gestão do Plano de Evolução dos consultores PJ (ciclos, participantes, prévia, apuração). Antes era um botão dentro da Eficiência.
       { to: "/projetos/plano-evolucao", label: "Plano de Evolução PJ", gestorConsultoria: true },
@@ -315,6 +319,7 @@ const groups: NavGroup[] = [
 const ICONE_DA_ROTA: Record<string, LucideIcon> = {
   "/": House,
   "/projetos/propostas": FileText,
+  "/projetos/gestao-propostas": ClipboardCheck,
   "/comercial/metas": LayoutDashboard,
   "/comercial/metas/lancamentos": PencilLine,
   "/comercial/metas/planejamento": CalendarRange,
