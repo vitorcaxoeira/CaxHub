@@ -7,8 +7,9 @@ import { INTEGRACAO_ERP_LABELS, type IntegracaoErpStatus, SITRAT_LABELS, SITRAT_
 // busca, busca em itens ou filtro de integração (o admin enxerga ~25 mil RATs; medido 3 s+ em produção).
 //
 // A integração repete em SQL a regra de `calcularIntegracaoErp`/`classificarItemIntegracao` (ratDominio.ts) sobre as mesmas entradas de
-// `buscarItensEIntegracao` (routes/rats.ts): por item, `numrat` preenchido = sincronizado; senão a pendência `criar_apontamento` mais
-// recente daquele item (payload.ratItemId): "invalido" ou com erro = falha, existente = enviando, ausente = pendente. Cada pendência de
+// `buscarItensEIntegracao` (routes/rats.ts): por item, uma alteração de sessão ainda não equalizada (`editar_apontamento` pendente/enviando/
+// bloqueada) vence tudo (com erro = falha, senão enviando); depois, `numrat` preenchido = sincronizado; senão a pendência
+// `criar_apontamento` mais recente daquele item (payload.ratItemId): "invalido" ou com erro = falha, existente = enviando, ausente = pendente. Cada pendência de
 // despesa ainda ativa (pendente/enviando/bloqueado) da RAT entra como mais uma entrada não confirmada. Agregado = pior caso
 // (falha > enviando > pendente > sincronizado); RAT sem entrada nenhuma = pendente. Qualquer mudança lá precisa vir para cá também:
 // o teste de paridade (scripts/paridadeIntegracaoRats.ts) compara as duas sobre todas as RATs do banco.
@@ -124,7 +125,19 @@ export function consultaRatsLista(
       ) q
       ORDER BY q.rid, q.id DESC
     )`;
+  // Alteração de sessão (tipEve A) ainda não equalizada: o item tem numrat mas não está sincronizado até ela sair.
+  const pendEd = Prisma.sql`pend_ed AS MATERIALIZED (
+      SELECT DISTINCT ON (q.rid) q.rid, q.status, q."ultimoErro"
+      FROM (
+        SELECT (sp.payload->>'ratItemId')::int AS rid, sp.id, sp.status, sp."ultimoErro"
+        FROM sincronizacao_pendente sp
+        WHERE sp.tipo = 'editar_apontamento' AND sp.status IN ('pendente', 'enviando', 'bloqueado')
+          AND (sp.payload->>'ratItemId') ~ '^[0-9]{1,9}$'
+      ) q
+      ORDER BY q.rid, q.id DESC
+    )`;
   const rankDoItem = Prisma.sql`CASE
+      WHEN e.rid IS NOT NULL THEN CASE WHEN COALESCE(e."ultimoErro", '') <> '' THEN ${RANK_INTEGRACAO.falha} ELSE ${RANK_INTEGRACAO.enviando} END
       WHEN i.numrat IS NOT NULL THEN ${RANK_INTEGRACAO.sincronizado}
       WHEN p.rid IS NULL THEN ${RANK_INTEGRACAO.pendente}
       WHEN p.status = 'invalido' OR COALESCE(p."ultimoErro", '') <> '' THEN ${RANK_INTEGRACAO.falha}
@@ -145,12 +158,13 @@ export function consultaRatsLista(
   let totalMinutos: Prisma.Sql;
   let rank: Prisma.Sql;
   if (opcoes.conjunto) {
-    com = Prisma.sql`WITH ${cons}, ${pend},
+    com = Prisma.sql`WITH ${cons}, ${pend}, ${pendEd},
       ia AS (
         SELECT i."ratId", COUNT(*)::int AS n, COALESCE(SUM(${minutosDoItem}), 0)::int AS minutos, MAX(${rankDoItem}) AS rk
         FROM rat_itens i
         JOIN rats r ON r.id = i."ratId"
         LEFT JOIN pend p ON p.rid = i.id
+        LEFT JOIN pend_ed e ON e.rid = i.id
         ${ondeVis}
         GROUP BY i."ratId"
       ),
@@ -167,12 +181,12 @@ export function consultaRatsLista(
     rank = Prisma.sql`COALESCE(GREATEST(ia.rk, da.rk), ${RANK_INTEGRACAO.pendente})`;
   } else {
     // MATERIALIZED (acima): é lida dentro de subconsulta correlacionada; sem isso o Postgres a refaria por linha.
-    com = Prisma.sql`WITH ${cons}, ${pend}`;
+    com = Prisma.sql`WITH ${cons}, ${pend}, ${pendEd}`;
     juncoes = Prisma.empty;
     totalItens = Prisma.sql`(SELECT COUNT(*)::int FROM rat_itens i WHERE i."ratId" = r.id)`;
     totalMinutos = Prisma.sql`(SELECT COALESCE(SUM(${minutosDoItem}), 0)::int FROM rat_itens i WHERE i."ratId" = r.id)`;
     rank = Prisma.sql`COALESCE(GREATEST(
-      (SELECT MAX(${rankDoItem}) FROM rat_itens i LEFT JOIN pend p ON p.rid = i.id WHERE i."ratId" = r.id),
+      (SELECT MAX(${rankDoItem}) FROM rat_itens i LEFT JOIN pend p ON p.rid = i.id LEFT JOIN pend_ed e ON e.rid = i.id WHERE i."ratId" = r.id),
       (SELECT MAX(${rankDaDespesa}) FROM ${despesasAtivas} WHERE d.codemp = r.codemp AND d.numrat = r.numrat AND d.excluida_em IS NULL)
     ), ${RANK_INTEGRACAO.pendente})`;
   }

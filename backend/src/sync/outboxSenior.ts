@@ -35,8 +35,13 @@ import {
   MOTIVO_ENVIO_INTERROMPIDO,
   MOTIVO_ENVIO_INTERROMPIDO_BLOQUEADO,
   destinoDaPendenciaInterrompida,
+  LinhaIatSenior,
+  ValoresApontamento,
   escolherAncoraRat,
+  linhaTemOsValores,
   motivoBloqueioAlterarSemSeqAti,
+  motivoBloqueioAntesDeAlterarApontamento,
+  motivoDivergenciaAposAlterarApontamento,
   motivoSeqAtiDeOutraAlocacao,
 } from "./regrasFilaSenior";
 
@@ -213,7 +218,22 @@ interface ResultadoEnvioFechamento {
   ratId: number;
 }
 
-type ResultadoEnvio = ResultadoEnvioApontamento | ResultadoEnvioAlocacaoCriada | ResultadoEnvioFechamento;
+// Apontamento já registrado, alterado no Senior (tipEve A). Não há identidade nova a gravar: a fila só
+// baixa para "enviado" e a auditoria da RAT ganha o evento companheiro.
+interface ResultadoEnvioEdicaoApontamento {
+  tipo: "apontamento_editado";
+  ratId: number;
+  ratItemId: number;
+  /** Os valores que o Senior ficou com. O write-back os regrava no RatItem: o rat-item-sync espelha o
+   * Senior por cima das colunas locais, então uma edição que ficou parada na fila podia ter sido revertida. */
+  valores: ValoresApontamento;
+}
+
+type ResultadoEnvio =
+  | ResultadoEnvioApontamento
+  | ResultadoEnvioAlocacaoCriada
+  | ResultadoEnvioFechamento
+  | ResultadoEnvioEdicaoApontamento;
 
 /** Só a identidade devolvida pelo ERP, antes de saber a quem ela pertence localmente. */
 interface IdentidadeSenior {
@@ -318,7 +338,9 @@ interface RatItemPronto {
 // (previewEnvioSenior) — não existe outro lugar que decida esse mapeamento de campo.
 function montarPayloadApontamento(
   ratItem: RatItemPronto,
-  ancora: AncoraRat = escolherAncoraRat(ratItem.rat.numrat, [])
+  ancora: AncoraRat = escolherAncoraRat(ratItem.rat.numrat, []),
+  // "I" (padrão) inclui; "A" altera um apontamento já registrado (ver enviarEdicaoApontamento).
+  tipEve: string = TIP_EVE
 ): RegistrarAtividadesPayload {
   // Âncora explícita da RAT (25/09/2026): RAT local que já
   // tem número no Senior manda `numRat` (é a RAT que quem confirmou escolheu, ou a que o
@@ -337,7 +359,7 @@ function montarPayloadApontamento(
     codPro: ratItem.rat.codpro,
     ideExt: ideExtRat(ratItem.ratId),
     sisOri: SIS_ORI,
-    tipEve: TIP_EVE,
+    tipEve,
     itens: [
       {
         ideExt: ideExtItem(ratItem.id),
@@ -474,6 +496,184 @@ async function garantirIdentidadeLivre(ratItemId: number, codemp: number, numrat
         `possível confusão entre apontamentos de consultores diferentes no mesmo horário. Nada foi gravado; confira no Senior.`
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Edição de apontamento já registrado — `registrarAtividades` com tipEve A (11/2026).
+//
+// Só o admin altera uma sessão já registrada (PATCH /apontamentos/:id/sessao) e só com a RAT Digitada.
+// O Senior localiza a linha pelo `ideExt` do item + `numRat`; o CaxHub não tem como provar de fora que
+// ele acertou a linha, então o envio é cercado por duas leituras da RAT na IAT (antes e depois) e
+// qualquer divergência vai direto para "bloqueado", sem reenvio — cada reenvio escreveria de novo.
+// ---------------------------------------------------------------------------
+
+/** Enfileira a equalização de um apontamento já registrado e dispara o envio na hora. Reaproveita a
+ * pendência de edição que ainda não saiu (ela relê o dado vivo ao enviar) e rearma a bloqueada. */
+export async function enfileirarEdicaoApontamento(
+  atividadeId: number,
+  ratItemId: number,
+  ratId: number,
+  opcoes: { adiarEnvio?: boolean } = {}
+): Promise<number> {
+  // Retrato dos valores DESEJADOS. É a fonte do envio (e não o RatItem vivo) porque o rat-item-sync espelha
+  // o Senior por cima das colunas locais: uma edição que ficou parada na fila (falha, bloqueio) seria
+  // revertida na próxima sincronização e se perderia sem aviso.
+  const atual = await prisma.ratItem.findUnique({
+    where: { id: ratItemId },
+    select: { numrat: true, seqrat: true, datati: true, horini: true, horfim: true, desati: true },
+  });
+  if (!atual || atual.datati == null || atual.horini == null || atual.horfim == null) {
+    throw new Error(`RatItem ${ratItemId} sem data/hora — nada a equalizar no Senior`);
+  }
+  const payload = {
+    ratItemId,
+    ratId,
+    numrat: atual.numrat,
+    seqrat: atual.seqrat,
+    datati: atual.datati.toISOString().slice(0, 10),
+    horini: atual.horini,
+    horfim: atual.horfim,
+    desati: atual.desati ?? "",
+  };
+
+  const candidatas = await prisma.sincronizacaoPendente.findMany({
+    where: { tipo: "editar_apontamento", atividadeId, status: { in: ["pendente", "bloqueado"] } },
+    orderBy: { id: "desc" },
+  });
+  const existente = candidatas.find((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === ratItemId);
+  if (existente) {
+    // Reaproveita a pendência que ainda não saiu: novos valores, tentativas zeradas.
+    await prisma.sincronizacaoPendente.update({
+      where: { id: existente.id },
+      data: { payload, status: "pendente", tentativas: 0, ultimoErro: null },
+    });
+    if (!opcoes.adiarEnvio) {
+      processarFilaSincronizacao({ apenasId: existente.id }).catch((erro) => {
+        console.error("[outbox] envio imediato (editar_apontamento) falhou:", erro instanceof Error ? erro.message : erro);
+      });
+    }
+    return existente.id;
+  }
+  return enfileirar(atividadeId, "editar_apontamento", payload, opcoes);
+}
+
+/** Rearma uma edição que falhou (botão "Reenviar" do admin). Devolve o id da pendência, ou null se não há. */
+export async function rearmarEdicaoApontamento(atividadeId: number, ratItemId: number): Promise<number | null> {
+  const candidatas = await prisma.sincronizacaoPendente.findMany({
+    where: { tipo: "editar_apontamento", atividadeId, status: { in: ["pendente", "bloqueado"] } },
+    orderBy: { id: "desc" },
+  });
+  const existente = candidatas.find((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === ratItemId);
+  if (!existente) return null;
+  await prisma.sincronizacaoPendente.update({
+    where: { id: existente.id },
+    data: { status: "pendente", tentativas: 0, ultimoErro: null },
+  });
+  return existente.id;
+}
+
+/** Todas as linhas da IAT da RAT (a nossa e as irmãs) + a situação da RAT no Senior, numa leitura só.
+ * Filtra pelo consultor e pela proposta além de codemp+numrat: o mesmo numrat aparece em propostas
+ * diferentes sob o mesmo codemp. */
+async function lerRatNoSenior(rat: {
+  codemp: number;
+  numrat: number;
+  codfor: number;
+  codpro: number;
+}): Promise<{ linhas: LinhaIatSenior[]; sitrat: number | null }> {
+  for (const n of [rat.codemp, rat.numrat, rat.codfor, rat.codpro]) {
+    if (!Number.isInteger(n)) throw new Error("Identificação inválida da RAT na conferência do Senior");
+  }
+  const rows = (await runSqlViaSoap(
+    `SELECT i.USU_SEQRAT AS seqrat, i.USU_DATATI AS datati, i.USU_HORINI AS horini, i.USU_HORFIM AS horfim, ` +
+      `i.USU_DESATI AS desati, r.USU_SITRAT AS sitrat FROM USU_TE777IAT i ` +
+      `JOIN USU_TE777RAT r ON r.USU_CODEMP = i.USU_CODEMP AND r.USU_NUMRAT = i.USU_NUMRAT ` +
+      `WHERE i.USU_CODEMP = ${rat.codemp} AND i.USU_NUMRAT = ${rat.numrat} AND i.USU_CODPRO = ${rat.codpro} ` +
+      `AND r.USU_CODFOR = ${rat.codfor} AND r.USU_CODPRO = ${rat.codpro}`
+  )) as { seqrat: number; datati: unknown; horini: number | null; horfim: number | null; desati: string | null; sitrat: number | null }[];
+
+  const linhas: LinhaIatSenior[] = rows.map((r) => ({
+    seqrat: Number(r.seqrat),
+    datati: r.datati != null ? String(r.datati).slice(0, 10) : null,
+    horini: r.horini != null ? Number(r.horini) : null,
+    horfim: r.horfim != null ? Number(r.horfim) : null,
+    desati: r.desati ?? "",
+  }));
+  const sitrat = rows.length > 0 && rows[0].sitrat != null ? Number(rows[0].sitrat) : null;
+  return { linhas, sitrat };
+}
+
+async function enviarEdicaoApontamento(item: SincronizacaoPendente): Promise<ResultadoEnvioEdicaoApontamento> {
+  const ratItemId = Number((item.payload as { ratItemId?: number })?.ratItemId);
+  if (!Number.isFinite(ratItemId)) throw new FalhaDefinitivaError(`Payload sem ratItemId (pendência ${item.id})`);
+
+  // Quem manda é o retrato dos valores desejados gravado na pendência (ver enfileirarEdicaoApontamento); o
+  // RatItem vivo só entrega a identidade (numrat/seqrat) e o consultor/proposta.
+  const p = item.payload as { datati?: unknown; horini?: unknown; horfim?: unknown; desati?: unknown };
+  const dataDesejada = typeof p.datati === "string" ? p.datati.slice(0, 10) : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dataDesejada) || !Number.isInteger(p.horini) || !Number.isInteger(p.horfim)) {
+    throw new FalhaDefinitivaError(`Pendência ${item.id} sem os valores a enviar (data/horário) — refaça a alteração da sessão`);
+  }
+  const esperado: ValoresApontamento = {
+    datati: dataDesejada,
+    horini: p.horini as number,
+    horfim: p.horfim as number,
+    desati: typeof p.desati === "string" ? p.desati : "",
+  };
+
+  const ratItemVivo = await prisma.ratItem.findUnique({ where: { id: ratItemId }, include: { rat: true } });
+  if (!ratItemVivo) throw new FalhaDefinitivaError(`RatItem ${ratItemId} não existe mais — nada a alterar`);
+  if (ratItemVivo.numrat == null || ratItemVivo.seqrat == null) {
+    throw new FalhaDefinitivaError(`RatItem ${ratItemId} não está registrado no Senior — a inclusão (tipEve I) leva os valores novos`);
+  }
+  if (ratItemVivo.rat.codpro == null) throw new FalhaDefinitivaError(`RAT ${ratItemVivo.rat.id} sem codpro — não dá pra alterar`);
+  const { numrat, seqrat } = { numrat: ratItemVivo.numrat, seqrat: ratItemVivo.seqrat };
+  const codpro = ratItemVivo.rat.codpro;
+  // O payload SOAP sai com os valores desejados, não com os do RatItem (que o sync pode ter revertido).
+  const ratItem = {
+    ...ratItemVivo,
+    datati: new Date(`${esperado.datati}T00:00:00.000Z`),
+    horini: esperado.horini,
+    horfim: esperado.horfim,
+    desati: esperado.desati,
+  };
+  const chaveRat = { codemp: ratItem.codemp, numrat, codfor: ratItem.rat.codfor, codpro };
+
+  const antes = await lerRatNoSenior(chaveRat);
+  const bloqueio = motivoBloqueioAntesDeAlterarApontamento(antes.linhas, antes.sitrat, seqrat, numrat);
+  if (bloqueio) throw new FalhaDefinitivaError(bloqueio);
+
+  // Já está igual lá (reprocessamento, reinício no meio do envio, ou o sync trouxe o valor): não envia.
+  const nossaAntes = antes.linhas.find((l) => l.seqrat === seqrat)!;
+  if (linhaTemOsValores(nossaAntes, esperado)) {
+    console.warn(`[${JOB_NAME}] apontamento ${ratItemId} (RAT ${numrat}/${seqrat}) já está com os valores no Senior — não reenvia`);
+    return { tipo: "apontamento_editado", ratId: ratItem.ratId, ratItemId: ratItem.id, valores: esperado };
+  }
+
+  // A âncora de um "A" é sempre a RAT já registrada — nunca `gerRat`, que abriria RAT nova.
+  const ancora: AncoraRat = { numRat: numrat, deSenior: false, ambigua: false };
+  const resposta = await registrarAtividadesViaSoap(montarPayloadApontamento(ratItem as RatItemPronto, ancora, TIP_EVE_ALTERAR));
+
+  const meuIdeExtRat = ideExtRat(ratItem.ratId);
+  const meuIdeExtItem = ideExtItem(ratItem.id);
+  const resultado = resposta.resultados.find((r) => r.ideExt === meuIdeExtRat) ?? resposta.resultados[0];
+  const itemRetornado = resultado?.itens.find((i) => i.ideExt === meuIdeExtItem) ?? resultado?.itens[0];
+  const recusa = mensagemDeRecusa(resposta, itemRetornado?.msg);
+  if (recusa) throw new Error(recusa);
+
+  // O Senior disse que alterou OUTRA linha: não adianta reenviar, cada envio grava de novo nela.
+  if (itemRetornado?.seqRat != null && itemRetornado.seqRat !== seqrat) {
+    throw new FalhaDefinitivaError(
+      `O Senior alterou a linha ${numrat}/${itemRetornado.seqRat} em vez da ${numrat}/${seqrat} deste apontamento. ` +
+        `Nada será reenviado automaticamente — confira e restaure a linha no Senior.`
+    );
+  }
+
+  const depois = await lerRatNoSenior(chaveRat);
+  const divergencia = motivoDivergenciaAposAlterarApontamento(antes.linhas, depois.linhas, seqrat, numrat, esperado);
+  if (divergencia) throw new FalhaDefinitivaError(divergencia);
+
+  return { tipo: "apontamento_editado", ratId: ratItem.ratId, ratItemId: ratItem.id, valores: esperado };
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +923,7 @@ async function enviarFecharRat(item: SincronizacaoPendente): Promise<ResultadoEn
 // consumir tentativa (ver CanalIndisponivelError).
 async function enviarParaSenior(item: SincronizacaoPendente): Promise<ResultadoEnvio | null> {
   if (item.tipo === "criar_apontamento") return enviarApontamento(item);
+  if (item.tipo === "editar_apontamento") return enviarEdicaoApontamento(item);
   if (item.tipo === "criar_atividade") return enviarCriarAtividade(item);
   if (item.tipo === "editar_atividade") return enviarEditarAtividade(item);
   if (item.tipo === "remover_atividade") return enviarRemoverAtividade(item);
@@ -949,6 +1150,20 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
               }),
             ]
           : []),
+        // Edição equalizada: regrava os valores no RatItem (o sync pode tê-los revertido enquanto a fila esperava).
+        ...(registrado?.tipo === "apontamento_editado"
+          ? [
+              prisma.ratItem.update({
+                where: { id: registrado.ratItemId },
+                data: {
+                  datati: new Date(`${registrado.valores.datati}T00:00:00.000Z`),
+                  horini: registrado.valores.horini,
+                  horfim: registrado.valores.horfim,
+                  desati: registrado.valores.desati,
+                },
+              }),
+            ]
+          : []),
         // Fechamento confirmado pelo Senior (statusProcesso=1) — só AQUI, depois da resposta
         // real, é que sitrat vira 1 (Fechado); nunca otimista na rota que enfileira (pedido
         // explícito do Vitor: "quando retornar 1 a RAT do nosso lado deve ser alterada").
@@ -975,6 +1190,22 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
         // genérico acima — só troca a entidade, pra "sincronizou com o ERP" aparecer junto do
         // histórico da RAT (aba Auditoria), não só o da Atividade. `ratDestinoId` (não
         // `registrado.ratId`) porque numa colisão é ele quem realmente fica dono do item.
+        ...(registrado?.tipo === "apontamento_editado"
+          ? [
+              criarEventoAuditoria({
+                origem: "job",
+                codemp: atividade?.codemp ?? null,
+                codpro: atividade?.codpro ?? null,
+                entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+                entidadeId: entidadeIdRat(registrado.ratId),
+                entidadeRotulo: `RAT ${registrado.ratId}`,
+                eventoTipo: EVENTOS_AUDITORIA.ATIVIDADE_ENVIADA_SENIOR,
+                alteracoes: null,
+                metadata: { tipo: item.tipo, payload: payloadResumo, sucesso: true, duracaoMs },
+                correlationId,
+              }),
+            ]
+          : []),
         ...(registrado?.tipo === "apontamento" && ratDestinoId != null
           ? [
               criarEventoAuditoria({
@@ -1063,7 +1294,8 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
         // `registrado` (a chamada falhou antes de devolver algo), então o `ratId` vem do
         // payload da própria pendência (`criar_apontamento` sempre carrega `ratId`, ver
         // prepararReenvioItem/montarPayloadApontamento).
-        ...(item.tipo === "criar_apontamento" && Number.isFinite(Number((item.payload as { ratId?: number })?.ratId))
+        ...((item.tipo === "criar_apontamento" || item.tipo === "editar_apontamento") &&
+        Number.isFinite(Number((item.payload as { ratId?: number })?.ratId))
           ? [
               criarEventoAuditoria({
                 origem: "job",
@@ -1125,6 +1357,34 @@ export async function previewEnvioSenior(item: SincronizacaoPendente): Promise<P
     if (ratItem.rat.codpro == null) throw new Error(`RAT ${ratItem.rat.id} sem codpro — não dá pra montar`);
 
     const payloadReal = montarPayloadApontamento(ratItem as RatItemPronto);
+    return { payload: payloadReal, envelopeXml: montarEnvelopeRegistrarAtividades(payloadReal, "***", "***") };
+  }
+
+  if (item.tipo === "editar_apontamento") {
+    const ratItemId = Number((item.payload as { ratItemId?: number })?.ratItemId);
+    if (!Number.isFinite(ratItemId)) throw new Error(`Payload sem ratItemId (pendência ${item.id})`);
+
+    const ratItem = await prisma.ratItem.findUnique({ where: { id: ratItemId }, include: { rat: true } });
+    if (!ratItem) throw new Error(`RatItem ${ratItemId} não existe mais — nada a montar`);
+    if (ratItem.numrat == null) throw new Error(`RatItem ${ratItemId} sem numrat — não está registrado no Senior`);
+    if (ratItem.datati == null || ratItem.horini == null || ratItem.horfim == null) {
+      throw new Error(`RatItem ${ratItemId} sem data/hora — nada a montar`);
+    }
+    if (ratItem.rat.codpro == null) throw new Error(`RAT ${ratItem.rat.id} sem codpro — não dá pra montar`);
+
+    const pv = item.payload as { datati?: unknown; horini?: unknown; horfim?: unknown; desati?: unknown };
+    const comRetrato = {
+      ...ratItem,
+      datati: typeof pv.datati === "string" ? new Date(`${pv.datati.slice(0, 10)}T00:00:00.000Z`) : ratItem.datati,
+      horini: Number.isInteger(pv.horini) ? (pv.horini as number) : ratItem.horini,
+      horfim: Number.isInteger(pv.horfim) ? (pv.horfim as number) : ratItem.horfim,
+      desati: typeof pv.desati === "string" ? pv.desati : ratItem.desati,
+    };
+    const payloadReal = montarPayloadApontamento(
+      comRetrato as RatItemPronto,
+      { numRat: ratItem.numrat, deSenior: false, ambigua: false },
+      TIP_EVE_ALTERAR
+    );
     return { payload: payloadReal, envelopeXml: montarEnvelopeRegistrarAtividades(payloadReal, "***", "***") };
   }
 

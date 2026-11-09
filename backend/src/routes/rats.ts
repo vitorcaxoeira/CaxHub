@@ -24,7 +24,8 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA, type EventoAuditoriaTipo } from
 import { COMPROVANTES_RAT_DIR } from "../config/uploads";
 import { montarPdfComprovantes, type ModoPdfComprovantes } from "../domain/pdfComprovantes";
 import { entidadeIdRat } from "../audit/identidadeEntidade";
-import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao, prepararReenvioItem, reprocessar } from "../sync/outboxSenior";
+import { motivoBloqueioManutencao } from "../domain/manutencaoSessao";
 import {
   enfileirarDespesa,
   enfileirarEdicaoDespesa,
@@ -299,15 +300,23 @@ export async function buscarItensEIntegracao(rats: { id: number; codemp: number;
   const pendencias =
     atividadeIds.length > 0
       ? await prisma.sincronizacaoPendente.findMany({
-          where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIds } },
-          select: { atividadeId: true, status: true, ultimoErro: true, payload: true },
+          where: { tipo: { in: ["criar_apontamento", "editar_apontamento"] }, atividadeId: { in: atividadeIds } },
+          select: { tipo: true, atividadeId: true, status: true, ultimoErro: true, payload: true },
           orderBy: { id: "desc" },
         })
       : [];
   const pendenciaPorRatItem = new Map<number, { status: string; ultimoErro: string | null }>();
+  // Alteração (tipEve A) ainda não equalizada no Senior: o item já tem numrat, mas NÃO está sincronizado até a edição sair
+  // (mesma ideia das despesas: `confirmado` só vale sem pendência ativa). Pendência de edição já enviada não conta. Mesma regra em SQL: pend_ed em ratsListaSql.ts.
+  const edicaoAtivaPorRatItem = new Map<number, { status: string; ultimoErro: string | null }>();
   for (const pendencia of pendencias) {
     const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
-    if (Number.isFinite(ratItemId) && !pendenciaPorRatItem.has(ratItemId)) {
+    if (!Number.isFinite(ratItemId)) continue;
+    if (pendencia.tipo === "editar_apontamento") {
+      if (["pendente", "enviando", "bloqueado"].includes(pendencia.status) && !edicaoAtivaPorRatItem.has(ratItemId)) {
+        edicaoAtivaPorRatItem.set(ratItemId, { status: pendencia.status, ultimoErro: pendencia.ultimoErro });
+      }
+    } else if (!pendenciaPorRatItem.has(ratItemId)) {
       pendenciaPorRatItem.set(ratItemId, { status: pendencia.status, ultimoErro: pendencia.ultimoErro });
     }
   }
@@ -349,7 +358,12 @@ export async function buscarItensEIntegracao(rats: { id: number; codemp: number;
   const integracaoPorRat = new Map<number, IntegracaoErpStatus>();
   for (const ratId of ratIds) {
     const itensDaRat = itensPorRat.get(ratId) ?? [];
-    const entradasItens = itensDaRat.map((item) => ({ confirmado: item.numrat != null, pendencia: pendenciaPorRatItem.get(item.id) }));
+    const entradasItens = itensDaRat.map((item) => {
+      const edicao = edicaoAtivaPorRatItem.get(item.id);
+      return edicao
+        ? { confirmado: false, pendencia: edicao }
+        : { confirmado: item.numrat != null, pendencia: pendenciaPorRatItem.get(item.id) };
+    });
     // Cada pendência de despesa ATIVA entra como uma entrada própria, `confirmado: false` —
     // por definição ainda não terminou (já filtrado no where acima); pior caso entre ela e os
     // itens de apontamento vence junto, mesmo espírito de calcularIntegracaoErp.
@@ -715,6 +729,13 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
     const itemPorChave = new Map(propostaItens.map((pi) => [`${pi.codemp}-${pi.codpro}-${pi.seqite}`, pi]));
 
     const souDono = contexto.consultor?.codfor === rat.codfor;
+    // Mesma regra que o PATCH /apontamentos/:id/sessao impõe — a tela nunca oferece o que o servidor recusa.
+    const bloqueioManutencao = motivoBloqueioManutencao({
+      souAdmin: role === "admin",
+      temRatItem: true,
+      removidaNoSenior: rat.removidoEmSenior != null,
+      sitrat: rat.sitrat,
+    });
 
     // Estado do envio ao Senior, pra tela conseguir explicar por que um item deixou de
     // ser editável (ver sync/outboxSenior.ts). A fila é indexada por atividade, e o
@@ -733,6 +754,22 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
       // orderBy id desc + "só o primeiro vence" = fica o envio mais recente de cada item.
       if (Number.isFinite(ratItemId) && !envioPorRatItem.has(ratItemId)) {
         envioPorRatItem.set(ratItemId, { status: pendencia.status, erro: pendencia.ultimoErro });
+      }
+    }
+
+    // Alteração do admin (tipEve A) ainda não equalizada no Senior, por item: "enviando" ou "falha".
+    const edicoes =
+      atividadeIds.length > 0
+        ? await prisma.sincronizacaoPendente.findMany({
+            where: { tipo: "editar_apontamento", atividadeId: { in: atividadeIds }, status: { in: ["pendente", "enviando", "bloqueado"] } },
+            orderBy: { id: "desc" },
+          })
+        : [];
+    const edicaoPorRatItem = new Map<number, { status: "enviando" | "falha"; erro: string | null }>();
+    for (const pendencia of edicoes) {
+      const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
+      if (Number.isFinite(ratItemId) && !edicaoPorRatItem.has(ratItemId)) {
+        edicaoPorRatItem.set(ratItemId, { status: pendencia.ultimoErro ? "falha" : "enviando", erro: pendencia.ultimoErro });
       }
     }
 
@@ -769,6 +806,12 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           // Motivo da última recusa do Senior, quando houve — é o que a tela mostra no
           // hover de "falha no envio".
           envioErro: envioPorRatItem.get(item.id)?.erro ?? null,
+          // Alteração da sessão ainda não equalizada no Senior (null = em dia): "enviando" | "falha".
+          edicaoStatus: edicaoPorRatItem.get(item.id)?.status ?? null,
+          edicaoErro: edicaoPorRatItem.get(item.id)?.erro ?? null,
+          // Manutenção da sessão (só admin, RAT Digitada). `motivoBloqueioManutencao` é o texto que a janela mostra em leitura.
+          podeManterSessao: item.sessoes[0] != null && bloqueioManutencao === null,
+          motivoBloqueioManutencao: item.sessoes[0] != null ? bloqueioManutencao : null,
         };
       }),
     });
@@ -1003,7 +1046,7 @@ async function desvincularItensAusentesNoSenior(
     });
     for (const sessao of atividadesDosItens) {
       const pendencias = await prisma.sincronizacaoPendente.findMany({
-        where: { tipo: "criar_apontamento", atividadeId: sessao.atividadeId },
+        where: { tipo: { in: ["criar_apontamento", "editar_apontamento"] }, atividadeId: sessao.atividadeId },
       });
       const obsoletas = pendencias.filter((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === sessao.ratItemId);
       if (obsoletas.length > 0) {
@@ -1124,6 +1167,21 @@ async function reenviarPendenciasDaRat(
       itensReenviados += 1;
     }
   }
+  // Alterações de sessão (tipEve A) que não saíram: "bloqueado" é rearmado, "pendente" só entra no lote.
+  const idsDosItens = new Set(itensDaRat.map((i) => i.id));
+  const edicoesParadas =
+    atividadeIdsDaRat.length > 0
+      ? await prisma.sincronizacaoPendente.findMany({
+          where: { tipo: "editar_apontamento", atividadeId: { in: atividadeIdsDaRat }, status: { in: ["pendente", "bloqueado"] } },
+        })
+      : [];
+  for (const edicao of edicoesParadas) {
+    if (!idsDosItens.has(Number((edicao.payload as { ratItemId?: number })?.ratItemId))) continue;
+    if (edicao.status === "bloqueado") await reprocessar(edicao.id);
+    pendenciaIdsParaProcessar.push(edicao.id);
+    itensReenviados += 1;
+  }
+
   if (pendenciaIdsParaProcessar.length > 0) {
     await processarFilaSincronizacao({ apenasIds: pendenciaIdsParaProcessar });
   }

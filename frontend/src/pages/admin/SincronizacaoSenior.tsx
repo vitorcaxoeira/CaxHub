@@ -47,11 +47,12 @@ const statusTone: Record<string, string> = {
   invalido: "bg-muted/15 text-muted",
 };
 
-// As 6 constantes reais usadas em enfileirar(...) pelo backend (routes/alocacao.ts,
+// As 7 constantes reais usadas em enfileirar(...) pelo backend (routes/alocacao.ts,
 // apontamentos.ts, atividades.ts, rats.ts, solicitacoesExcedente.ts) — não existe um catálogo
 // central deles, então mantém aqui igual à lista usada no filtro de Tipo.
 const TIPO_LABEL: Record<string, string> = {
   criar_apontamento: "Criar apontamento",
+  editar_apontamento: "Alterar apontamento",
   criar_atividade: "Criar alocação",
   editar_atividade: "Editar alocação",
   remover_atividade: "Remover alocação",
@@ -94,7 +95,7 @@ function numratDoPayload(payload: Record<string, unknown>): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-const TIPOS_APONTAMENTO = new Set(["criar_apontamento", "aprovar_rat"]);
+const TIPOS_APONTAMENTO = new Set(["criar_apontamento", "editar_apontamento", "aprovar_rat"]);
 
 // Resumo essencial de cada tipo de pendência, lido do payload já carregado (sem rota nova):
 // família apontamento/RAT (criar_apontamento, aprovar_rat) é sobre QUANDO foi trabalhado;

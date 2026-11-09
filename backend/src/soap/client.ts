@@ -177,9 +177,10 @@ export const ideExtItem = (ratItemId: number) => String(ratItemId);
 export const SIS_ORI = process.env.SENIOR_SIS_ORI ?? "CaxHub";
 
 // Domínio de tipEve no Senior: I = Incluir, E = Excluir, A = Alterar.
-// Hoje o CaxHub só inclui — editar e excluir apontamento ficam bloqueados depois do
-// registro (ver routes/apontamentos.ts). Quando esses fluxos existirem, é aqui que "A" e
-// "E" entram.
+// Apontamento usa "I" na confirmação e "A" na manutenção de sessão já registrada (só admin, RAT
+// Digitada — PATCH /apontamentos/:id/sessao; o Senior casa a linha pelo `ideExt` do item + `numRat`,
+// ver enviarEdicaoApontamento em sync/outboxSenior.ts). "E" continua sem uso: excluir apontamento
+// registrado segue bloqueado (ver routes/apontamentos.ts).
 export const TIP_EVE_INCLUIR = "I";
 export const TIP_EVE = process.env.SENIOR_TIP_EVE ?? TIP_EVE_INCLUIR;
 

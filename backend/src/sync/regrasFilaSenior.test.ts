@@ -3,8 +3,12 @@ import assert from "node:assert/strict";
 import {
   destinoDaPendenciaInterrompida,
   escolherAncoraRat,
+  linhaTemOsValores,
   motivoBloqueioAlterarSemSeqAti,
+  motivoBloqueioAntesDeAlterarApontamento,
+  motivoDivergenciaAposAlterarApontamento,
   motivoSeqAtiDeOutraAlocacao,
+  type LinhaIatSenior,
 } from "./regrasFilaSenior";
 
 test("RAT local com número: manda esse número, sem olhar o Senior", () => {
@@ -60,4 +64,52 @@ test("seqAti devolvido de outra alocação: motivo cita a dona, o nó e se ela e
   );
   const inativa = motivoSeqAtiDeOutraAlocacao(9, { id: 1, estruturaAtividadeId: null, sitreg: "I" });
   assert.match(inativa, /alocação 1, hoje inativa no CaxHub:/);
+});
+
+// ---- Edição de apontamento (tipEve A) --------------------------------------------------------------
+
+const linha = (seqrat: number, extra: Partial<LinhaIatSenior> = {}): LinhaIatSenior => ({
+  seqrat,
+  datati: "2026-11-05",
+  horini: 540,
+  horfim: 720,
+  desati: `Item ${seqrat}`,
+  ...extra,
+});
+const novo = { datati: "2026-11-05", horini: 600, horfim: 780, desati: "Texto novo" };
+
+test("editar apontamento: após reinício a pendência volta pra fila (repetir o A grava os mesmos valores)", () => {
+  assert.equal(destinoDaPendenciaInterrompida("editar_apontamento", null), "pendente");
+});
+
+test("editar apontamento: linhaTemOsValores ignora espaços repetidos e a hora do datati", () => {
+  assert.equal(linhaTemOsValores(linha(3, { ...novo, datati: "2026-11-05T00:00:00", desati: " Texto   novo " }), novo), true);
+  assert.equal(linhaTemOsValores(linha(3, { ...novo, horfim: 781 }), novo), false);
+});
+
+test("editar apontamento: antes do envio — linha ausente, ambígua ou RAT não Digitada bloqueiam", () => {
+  assert.match(motivoBloqueioAntesDeAlterarApontamento([linha(1)], 9, 2, 500)!, /não existe mais no Senior/);
+  assert.match(motivoBloqueioAntesDeAlterarApontamento([linha(2), linha(2)], 9, 2, 500)!, /mais de uma vez/);
+  assert.match(motivoBloqueioAntesDeAlterarApontamento([linha(2)], 6, 2, 500)!, /não está mais Digitada \(situação 6\)/);
+  assert.match(motivoBloqueioAntesDeAlterarApontamento([linha(2)], null, 2, 500)!, /desconhecida/);
+  assert.equal(motivoBloqueioAntesDeAlterarApontamento([linha(1), linha(2)], 9, 2, 500), null);
+});
+
+test("editar apontamento: depois do envio — tudo certo quando só a nossa linha mudou", () => {
+  const antes = [linha(1), linha(2), linha(3)];
+  const depois = [linha(1), linha(2), linha(3, novo)];
+  assert.equal(motivoDivergenciaAposAlterarApontamento(antes, depois, 3, 500, novo), null);
+});
+
+test("editar apontamento: depois do envio — nossa linha sem os valores enviados", () => {
+  const antes = [linha(1), linha(3)];
+  assert.match(motivoDivergenciaAposAlterarApontamento(antes, antes, 3, 500, novo)!, /não ficou com os valores enviados/);
+});
+
+test("editar apontamento: depois do envio — irmã alterada ou removida é divergência e cita o seqrat", () => {
+  const antes = [linha(1), linha(3)];
+  const irmaAlterada = [linha(1, { horfim: 999 }), linha(3, novo)];
+  assert.match(motivoDivergenciaAposAlterarApontamento(antes, irmaAlterada, 3, 500, novo)!, /alterou também a linha 500\/1/);
+  const irmaSumiu = [linha(3, novo)];
+  assert.match(motivoDivergenciaAposAlterarApontamento(antes, irmaSumiu, 3, 500, novo)!, /linha 500\/1/);
 });
