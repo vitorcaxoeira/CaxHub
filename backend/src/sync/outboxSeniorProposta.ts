@@ -4,9 +4,9 @@ import { SincronizacaoPendenteProposta } from "@prisma/client";
 import { escritaNoSeniorDesligada } from "../config/sistemaSenior";
 import { prisma } from "../db/prisma";
 import {
-  AlterarSituacaoPropostaPayload,
-  alterarSituacaoPropostaViaSoap,
-  montarEnvelopeAlterarSituacaoProposta,
+  ManterSituacaoPropostaPayload,
+  manterSituacaoPropostaViaSoap,
+  montarEnvelopeManterSituacaoProposta,
 } from "../soap/client";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
@@ -29,22 +29,26 @@ export const TIPO_FINALIZAR_PROPOSTA = "finalizar_proposta";
 export const TIPO_REABRIR_EXECUCAO_PROPOSTA = "reabrir_execucao_proposta";
 
 /**
- * A operação `alterarSituacaoProposta` do Senior ainda será publicada (soap/client.ts). Enquanto `SENIOR_PORTA_SITPRO` não for "1", a fila fica
- * parada: a pendência continua "pendente" SEM gastar tentativa — gastar levaria as 5 e bloquearia por um motivo que não é erro (a mesma lição dos
- * itens travados de julho/2026, CanalIndisponivelError em outboxSenior.ts). Quem publica a porta liga a variável depois de confirmar o envelope.
+ * A operação `ManterSituacaoProposta` já está publicada no Senior e o contrato foi conferido no WSDL/XSD (soap/client.ts), mas o envio real fica atrás de
+ * um interruptor: enquanto `SENIOR_PORTA_SITPRO` não for "1" a fila fica parada, e a pendência continua "pendente" SEM gastar tentativa — gastar levaria
+ * as 5 e bloquearia por um motivo que não é erro (a mesma lição dos itens travados de julho/2026, CanalIndisponivelError em outboxSenior.ts). Liga-se
+ * a variável no ambiente em que o primeiro envio real for conferido (de preferência numa proposta de teste).
  */
 export function portaDeSituacaoPublicada(): boolean {
   return process.env.SENIOR_PORTA_SITPRO === "1";
 }
 
 export const AVISO_PORTA_NAO_PUBLICADA =
+  "Aguardando: o envio da situação ao Senior (operação ManterSituacaoProposta) está desligado neste ambiente (SENIOR_PORTA_SITPRO). A pendência segue na fila.";
+/** Texto que as pendências criadas antes de 09/11/2026 (operação ainda não publicada) já têm gravado: continua valendo como aviso de espera. */
+const AVISO_PORTA_LEGADO =
   "Aguardando a publicação da operação alterarSituacaoProposta no Senior (SENIOR_PORTA_SITPRO desligada). A pendência segue na fila.";
 export const AVISO_ESCRITA_DESLIGADA =
   "Aguardando: a escrita no Senior está desligada neste ambiente (SENIOR_SOMENTE_LEITURA). A pendência segue na fila.";
 
 /** O `ultimoErro` é só um aviso de espera (a fila ainda não pode enviar), não uma falha de envio? A tela mostra "Aguardando ERP" em vez de erro. */
 export function ehAvisoDeEspera(ultimoErro: string | null | undefined): boolean {
-  return !ultimoErro || ultimoErro === AVISO_PORTA_NAO_PUBLICADA || ultimoErro === AVISO_ESCRITA_DESLIGADA;
+  return !ultimoErro || ultimoErro === AVISO_PORTA_NAO_PUBLICADA || ultimoErro === AVISO_PORTA_LEGADO || ultimoErro === AVISO_ESCRITA_DESLIGADA;
 }
 
 export interface NovaPendenciaSituacao {
@@ -84,7 +88,7 @@ export async function pendenciaDeSituacaoEmAndamento(codemp: number, codpro: num
 }
 
 /** O que seria enviado agora para esta pendência, relido do dado vivo (nunca do `payload` congelado). */
-function payloadDe(item: Pick<SincronizacaoPendenteProposta, "codemp" | "codpro" | "sitproPara">): AlterarSituacaoPropostaPayload {
+function payloadDe(item: Pick<SincronizacaoPendenteProposta, "codemp" | "codpro" | "sitproPara">): ManterSituacaoPropostaPayload {
   return { codEmp: item.codemp, codPro: item.codpro, sitPro: item.sitproPara };
 }
 
@@ -158,7 +162,7 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
             throw new PreCondicaoDaSituacaoError(`Há ${bloqueando} RAT(s) Digitada(s) ou Fechada(s) nesta proposta — finalize-as antes de finalizar a proposta.`);
           }
         }
-        const resposta = await alterarSituacaoPropostaViaSoap(payloadDe(item));
+        const resposta = await manterSituacaoPropostaViaSoap(payloadDe(item));
         if (resposta.statusProcesso !== 1) {
           throw new Error(
             `Senior recusou a mudança de situação (statusProcesso=${resposta.statusProcesso}): ${resposta.mensagemProcesso ?? resposta.erroExecucao ?? "sem mensagem"}`,
@@ -252,14 +256,14 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
 }
 
 export interface PreviewEnvioSituacaoProposta {
-  payload: AlterarSituacaoPropostaPayload;
+  payload: ManterSituacaoPropostaPayload;
   envelopeXml: string;
 }
 
 /** Reconstrói, SEM chamar o Senior, o que seria enviado agora para esta pendência (usuário e senha mascarados). */
 export function previewEnvioSituacaoProposta(item: SincronizacaoPendenteProposta): PreviewEnvioSituacaoProposta {
   const payload = payloadDe(item);
-  return { payload, envelopeXml: montarEnvelopeAlterarSituacaoProposta(payload, "***", "***") };
+  return { payload, envelopeXml: montarEnvelopeManterSituacaoProposta(payload, "***", "***") };
 }
 
 /** Reseta uma pendência bloqueada para pendente/0 tentativas, para tentar de novo manualmente. */
