@@ -102,6 +102,9 @@ export const EVENTOS_AUDITORIA = {
   // Exclusão lógica do apontamento pelo próprio consultor (ação direta, sem aprovação), e
   // o pedido de correção de horário, que passa pelo gestor.
   APONTAMENTO_EXCLUIDO: "APONTAMENTO_EXCLUIDO",
+  // Manutenção, pelo admin, de uma sessão já confirmada (data, horário, descrição) com a RAT Digitada. O envio
+  // ao Senior (tipEve A) é registrado à parte por ATIVIDADE_ENVIADA_SENIOR. Ver PATCH /apontamentos/:id/sessao.
+  APONTAMENTO_SESSAO_ALTERADA: "APONTAMENTO_SESSAO_ALTERADA",
   AJUSTE_SOLICITADO: "AJUSTE_SOLICITADO",
   AJUSTE_APROVADO: "AJUSTE_APROVADO",
   AJUSTE_REPROVADO: "AJUSTE_REPROVADO",

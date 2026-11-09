@@ -9,6 +9,7 @@ import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { ModalEditarDescricao } from "../../components/projetos/ModalEditarDescricao";
+import { ModalManutencaoSessao, type DadosManutencaoSessao } from "../../components/projetos/ModalManutencaoSessao";
 import { DespesasRatPainel } from "../../components/projetos/DespesasRatPainel";
 import { Tabs } from "../../components/ui/Tabs";
 import { Modal } from "../../components/ui/Modal";
@@ -21,7 +22,9 @@ import { useToast } from "../../components/ui/Toast";
 import { regras } from "../../components/ui/padroesFiltros/regras";
 import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { ListaServidor } from "../../components/colunas/ListaServidor";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
 import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
+import { formatHoraDoDia, LOCAIS_ATIVIDADES, lerAtividade, rotuloItem } from "./atividadesRat";
 
 // Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
 // apontamento ao Senior fica retido no servidor.
@@ -195,6 +198,12 @@ interface RatItemRow {
   seqrat: number | null;
   // Estado do envio ao ERP: pendente | enviando | enviado | bloqueado | null.
   envioStatus: string | null;
+  // Alteração da sessão pelo admin ainda não equalizada no Senior (tipEve A): "enviando" | "falha" | null (em dia).
+  edicaoStatus: "enviando" | "falha" | null;
+  edicaoErro: string | null;
+  // Manutenção da sessão (só admin, RAT Digitada) — decidido pelo servidor, a tela só reflete.
+  podeManterSessao: boolean;
+  motivoBloqueioManutencao: string | null;
 }
 
 interface ConsultorFiltro {
@@ -248,29 +257,12 @@ function formatMinutos(minutos: number): string {
   return formatHoras(minutos / 60);
 }
 
-// Item da proposta com a sequência como prefixo ("3 - Automação de indicadores"). Mesma
-// forma de "código - descrição" já usada em cliente (`${codcli} - ${nomcli}`).
-//
-// Assinatura estrutural pra servir às DUAS tabelas da tela (sessões pendentes e itens da
-// RAT): elas mostram o mesmo dado e antes divergiam — aqui era sufixo entre parênteses,
-// lá não havia sequência nenhuma.
-function rotuloItem(item: { seqite: number | null; itemDescricao: string | null }): string {
-  const descricao = item.itemDescricao ?? "—";
-  return item.seqite != null ? `${item.seqite} - ${descricao}` : descricao;
-}
-
 // Quando a observação de um item pode ser alterada: as mesmas condições que o backend
 // valida em PATCH /apontamentos/:id (dono, RAT ainda Digitada, item não registrado no
 // Senior) mais a guarda de envio em voo — nesse instante o job já leu o registro pra
 // montar o payload, então a edição não chegaria ao ERP.
 function podeEditarObservacao(item: RatItemRow): boolean {
   return item.editavel && item.sessaoId != null && item.envioStatus !== "enviando";
-}
-
-function formatHoraDoDia(minutosDesdeMeiaNoite: number): string {
-  const h = Math.floor(minutosDesdeMeiaNoite / 60);
-  const m = minutosDesdeMeiaNoite % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 // Tabela de RATs com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (04/11/2026): ListaServidor
@@ -462,6 +454,32 @@ function AcaoIntegracao({
     );
   }
 
+  // Alteração da sessão (tipEve A) a caminho ou recusada: o item está registrado, mas o Senior ainda não tem os valores novos.
+  if (item.confirmadoNoSenior && (reenviando || item.edicaoStatus === "enviando")) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[11px] text-muted" title="Enviando a alteração da sessão ao Senior">
+        <Spinner className="h-3 w-3" />
+        alterando no Senior...
+      </span>
+    );
+  }
+  if (item.confirmadoNoSenior && item.edicaoStatus === "falha") {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <button
+          onClick={onVerErro}
+          className="text-[11px] text-destructive underline decoration-dotted hover:decoration-solid"
+          title="A alteração não chegou ao Senior. Clique para ver o erro completo"
+        >
+          falha ao alterar
+        </button>
+        <button onClick={onReenviar} className="text-[11px] text-primary hover:underline">
+          Reenviar
+        </button>
+      </span>
+    );
+  }
+
   if (item.confirmadoNoSenior) {
     return (
       <span
@@ -530,6 +548,127 @@ function AcaoIntegracao({
     </span>
   );
 }
+
+// Tabela "Atividades" da RAT expandida, com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal,
+// mesmo kit das despesas da RAT). `COLUNAS_ATIVIDADES` e `LOCAIS_ATIVIDADES` (atividadesRat.ts) são constantes do módulo: o kit exige estabilidade,
+// então o que depende da RAT aberta (e das ações) entra pelo `ctx`.
+interface AcoesAtividades {
+  rat: RatRow;
+  reenviando: Set<number>;
+  abrirAtividade: (atividadeId: number) => void;
+  abrirManutencao: (item: RatItemRow, rat: RatRow) => void;
+  editarObservacao: (item: RatItemRow, ratId: number) => void;
+  reenviar: (ratItemId: number, ratId: number) => void;
+  excluir: (sessaoId: number, ratId: number) => void;
+  verErro: (item: RatItemRow) => void;
+}
+
+const COLUNAS_ATIVIDADES: DefColuna<RatItemRow, AcoesAtividades>[] = [
+  {
+    nome: "atividadeId",
+    titulo: "Atividade",
+    fixa: true,
+    direita: true,
+    largura: 90,
+    classe: "font-mono text-[12.5px] tabular-nums",
+    resumos: ["contagem", "distintos"],
+    render: (item, a) =>
+      item.atividadeId != null ? (
+        <button onClick={() => a.abrirAtividade(item.atividadeId!)} className="text-primary hover:underline" title="Abrir a atividade (somente visualização)">
+          {item.atividadeId}
+        </button>
+      ) : (
+        <span className="text-muted">—</span>
+      ),
+  },
+  {
+    nome: "sessaoId",
+    titulo: "Sessão",
+    direita: true,
+    largura: 100,
+    classe: "font-mono text-[12.5px] tabular-nums",
+    resumos: ["contagem", "distintos"],
+    render: (item, a) =>
+      item.sessaoId != null ? (
+        <button
+          onClick={() => a.abrirManutencao(item, a.rat)}
+          className="text-primary hover:underline"
+          title={item.podeManterSessao ? "Manter os dados da sessão" : "Ver os dados da sessão (somente leitura)"}
+        >
+          {item.sessaoId}
+        </button>
+      ) : (
+        <span className="text-muted">—</span>
+      ),
+  },
+  { nome: "codser", titulo: "Serviço", largura: 90, classe: "font-mono text-[12.5px] text-muted", render: (item) => item.codser ?? "—" },
+  {
+    nome: "item",
+    titulo: "Item",
+    largura: 260,
+    classe: "text-[12.5px] text-muted",
+    texto: (item) => rotuloItem(item),
+    render: (item) => <span className="block truncate">{rotuloItem(item)}</span>,
+  },
+  {
+    nome: "datati",
+    titulo: "Data",
+    largura: 95,
+    classe: "whitespace-nowrap font-mono text-[12.5px] tabular-nums text-muted",
+    render: (item) => (item.datati ? dateFormatter.format(new Date(item.datati)) : "—"),
+  },
+  {
+    nome: "horario",
+    titulo: "Horário",
+    largura: 120,
+    classe: "whitespace-nowrap font-mono text-[12.5px] tabular-nums text-muted",
+    render: (item) =>
+      item.horini != null && item.horfim != null ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}` : "—",
+  },
+  {
+    nome: "duracaoMinutos",
+    titulo: "Duração",
+    direita: true,
+    largura: 90,
+    classe: "whitespace-nowrap font-mono text-[12.5px] tabular-nums text-foreground",
+    formatarValor: (v) => (typeof v === "number" ? formatMinutos(v) : String(v ?? "")),
+    formatarResumo: formatMinutos,
+    render: (item) => (item.duracaoMinutos != null ? formatMinutos(item.duracaoMinutos) : "—"),
+  },
+  {
+    // Observação é o que trava a aprovação da RAT (todo item precisa ter) e vai no desAti do Senior — por isso ela mesma é o clique, em vez
+    // de mais uma ação na coluna da direita. Editável abre pra editar; já registrado no ERP abre a MESMA janela em leitura, que é onde se lê o
+    // texto completo sem depender do tooltip.
+    nome: "desati",
+    titulo: "Observação",
+    largura: 320,
+    texto: (item) => item.desati,
+    render: (item, a) => (
+      <button
+        onClick={() => a.editarObservacao(item, a.rat.id)}
+        title={item.desati?.trim() || "Sem observação"}
+        className={`block w-full truncate text-left text-[12.5px] hover:underline ${item.desati?.trim() ? "text-foreground" : "font-medium text-warning"}`}
+      >
+        {item.desati?.trim() || (podeEditarObservacao(item) ? "Sem observação — clique para preencher" : "Sem observação")}
+      </button>
+    ),
+  },
+  {
+    nome: "integracao",
+    titulo: "Integração",
+    direita: true,
+    largura: 190,
+    render: (item, a) => (
+      <AcaoIntegracao
+        item={item}
+        reenviando={a.reenviando.has(item.id)}
+        onReenviar={() => a.reenviar(item.id, a.rat.id)}
+        onExcluir={() => a.excluir(item.sessaoId!, a.rat.id)}
+        onVerErro={() => a.verErro(item)}
+      />
+    ),
+  },
+];
 
 const selectClass =
   "rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -888,6 +1027,10 @@ export function MeusApontamentos() {
     ratId: number;
     somenteLeitura: boolean;
   } | null>(null);
+  // Sessão aberta na manutenção (admin edita, os demais leem). Guarda a RAT junto: o contexto do cabeçalho e o recarregamento vêm dela.
+  const [mantendoSessao, setMantendoSessao] = useState<{ item: RatItemRow; rat: RatRow } | null>(null);
+  const [salvandoSessao, setSalvandoSessao] = useState(false);
+  const [erroSessao, setErroSessao] = useState<string | null>(null);
   // Item com "falha no envio" cujo erro completo está sendo visualizado — mesmo modal (só
   // leitura) usado pra ler a observação inteira de um item já confirmado.
   const [erroEnvioItem, setErroEnvioItem] = useState<RatItemRow | null>(null);
@@ -1183,107 +1326,26 @@ export function MeusApontamentos() {
           <div className={abaRat === "atividades" ? "" : "hidden"}>
           {itens === "carregando" && <p className="py-2 text-sm text-muted">Carregando itens...</p>}
           {itens === "erro" && <p className="py-2 text-sm text-destructive">Falha ao carregar os itens desta RAT.</p>}
-          {Array.isArray(itens) && itens.length === 0 && (
-            <p className="py-2 text-sm text-muted">Nenhum item nesta RAT.</p>
-          )}
-          {Array.isArray(itens) && itens.length > 0 && (
-            <table className="w-full border-collapse">
-              <thead>
-                <tr>
-                  <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    Id. Ativ.
-                  </th>
-                  <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    Serviço
-                  </th>
-                  <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    Item
-                  </th>
-                  <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    Data
-                  </th>
-                  <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    Horário
-                  </th>
-                  <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    Duração
-                  </th>
-                  <th className="w-2/5 py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    Observação
-                  </th>
-                  <th className="py-1.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {itens.map((item) => (
-                  <tr key={item.id} className="border-t border-border/40">
-                    <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums">
-                      {item.atividadeId != null ? (
-                        <button
-                          onClick={() => abrirDetalheAtividade(item.atividadeId!)}
-                          className="text-primary hover:underline"
-                          title="Abrir a atividade (somente visualização)"
-                        >
-                          {item.atividadeId}
-                        </button>
-                      ) : (
-                        <span className="text-muted">—</span>
-                      )}
-                    </td>
-                    <td className="py-1.5 pr-3 font-mono text-[12.5px] text-muted">{item.codser ?? "—"}</td>
-                    <td
-                      className="max-w-[260px] truncate py-1.5 pr-3 text-[12.5px] text-muted"
-                      title={rotuloItem(item)}
-                    >
-                      {rotuloItem(item)}
-                    </td>
-                    <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
-                      {item.datati ? dateFormatter.format(new Date(item.datati)) : "—"}
-                    </td>
-                    <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
-                      {item.horini != null && item.horfim != null
-                        ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}`
-                        : "—"}
-                    </td>
-                    <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">
-                      {item.duracaoMinutos != null ? formatMinutos(item.duracaoMinutos) : "—"}
-                    </td>
-                    {/* Observação é o que trava a aprovação da RAT (todo item precisa ter) e
-                        vai no desAti do Senior — por isso ela mesma é o clique, em vez de
-                        mais uma ação na coluna da direita. Editável abre pra editar; já
-                        registrado no ERP abre a MESMA janela em leitura, que é onde se lê o
-                        texto completo sem depender do tooltip. */}
-                    <td className="max-w-[320px] py-1.5 pr-3">
-                      <button
-                        onClick={() =>
-                          setEditandoObservacao({
-                            item,
-                            ratId: rat.id,
-                            somenteLeitura: !podeEditarObservacao(item),
-                          })
-                        }
-                        title={item.desati?.trim() || "Sem observação"}
-                        className={`block w-full truncate text-left text-[12.5px] hover:underline ${
-                          item.desati?.trim() ? "text-foreground" : "font-medium text-warning"
-                        }`}
-                      >
-                        {item.desati?.trim() ||
-                          (podeEditarObservacao(item) ? "Sem observação — clique para preencher" : "Sem observação")}
-                      </button>
-                    </td>
-                    <td className="py-1.5 text-right">
-                      <AcaoIntegracao
-                        item={item}
-                        reenviando={reenviando.has(item.id)}
-                        onReenviar={() => reenviarAoSenior(item.id, rat.id)}
-                        onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
-                        onVerErro={() => setErroEnvioItem(item)}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {Array.isArray(itens) && (
+            <TabelaLocal<RatItemRow, AcoesAtividades>
+              chave="projetos.rat.atividades"
+              defs={COLUNAS_ATIVIDADES}
+              colunas={LOCAIS_ATIVIDADES}
+              linhas={itens}
+              ler={lerAtividade}
+              chaveLinha={(item) => String(item.id)}
+              vazio="Nenhum item nesta RAT."
+              ctx={{
+                rat,
+                reenviando,
+                abrirAtividade: abrirDetalheAtividade,
+                abrirManutencao: abrirManutencaoSessao,
+                editarObservacao: (item, ratId) => setEditandoObservacao({ item, ratId, somenteLeitura: !podeEditarObservacao(item) }),
+                reenviar: reenviarAoSenior,
+                excluir: excluirApontamento,
+                verErro: setErroEnvioItem,
+              }}
+            />
           )}
           </div>
           {rdvJaAberto.has(rat.id) && (
@@ -1363,6 +1425,54 @@ export function MeusApontamentos() {
       carregarRats();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao salvar a observação");
+    }
+  }
+
+  // Depois de salvar uma manutenção que vai ao Senior, acompanha os itens da RAT até a alteração sair (ou o tempo acabar).
+  function acompanharEdicao(ratId: number, tentativa = 0) {
+    const timer = window.setTimeout(async () => {
+      let concluido = false;
+      try {
+        const { data } = await axios.get(`/api/rats/${ratId}/itens`);
+        setItensPorRat((i) => ({ ...i, [ratId]: data.itens }));
+        concluido = !data.itens.some((it: RatItemRow) => it.edicaoStatus === "enviando");
+        if (concluido) carregarRats();
+      } catch {
+        // Falha de rede no acompanhamento é transitória — tenta de novo no próximo tick.
+      }
+      if (concluido) return;
+      if (tentativa + 1 < ENVIO_MAX_TENTATIVAS) acompanharEdicao(ratId, tentativa + 1);
+    }, ENVIO_INTERVALO_MS);
+    timersEnvioRef.current.push(timer);
+  }
+
+  function abrirManutencaoSessao(item: RatItemRow, rat: RatRow) {
+    setErroSessao(null);
+    setMantendoSessao({ item, rat });
+  }
+
+  async function salvarManutencaoSessao(dados: DadosManutencaoSessao) {
+    if (!mantendoSessao) return;
+    const { item, rat } = mantendoSessao;
+    setSalvandoSessao(true);
+    setErroSessao(null);
+    try {
+      // Mesma convenção do pedido de ajuste: data + hora local do navegador viram o instante ISO.
+      const { data } = await axios.patch(`/api/apontamentos/${item.sessaoId}/sessao`, {
+        inicio: new Date(`${dados.data}T${dados.inicio}`).toISOString(),
+        fim: new Date(`${dados.data}T${dados.fim}`).toISOString(),
+        descricao: dados.descricao,
+      });
+      setMantendoSessao(null);
+      const { data: itensData } = await axios.get(`/api/rats/${rat.id}/itens`);
+      setItensPorRat((i) => ({ ...i, [rat.id]: itensData.itens }));
+      // Totais (minutos) e "Sinc. ERP" da RAT mudam com a alteração.
+      carregarRats();
+      if (data?.equalizacao === "enfileirada") acompanharEdicao(rat.id);
+    } catch (err: any) {
+      setErroSessao(err.response?.data?.error ?? "Falha ao salvar a sessão");
+    } finally {
+      setSalvandoSessao(false);
     }
   }
 
@@ -2388,6 +2498,34 @@ export function MeusApontamentos() {
         />
       )}
 
+      {/* Manutenção da sessão (coluna Sessão): admin edita com a RAT Digitada; os demais abrem em leitura com o motivo. */}
+      {mantendoSessao && (
+        <ModalManutencaoSessao
+          titulo={`Sessão ${mantendoSessao.item.sessaoId}`}
+          contexto={[
+            `Consultor: ${mantendoSessao.rat.consultorNome}`,
+            `Proposta ${mantendoSessao.rat.codpro ?? "—"} · ${mantendoSessao.rat.cliente ?? "—"}`,
+            mantendoSessao.item.confirmadoNoSenior
+              ? `Registrado no Senior: RAT ${mantendoSessao.item.numrat}/${mantendoSessao.item.seqrat}`
+              : "Ainda não registrado no Senior",
+            `Item: ${rotuloItem(mantendoSessao.item)}`,
+          ]}
+          inicial={{
+            data: mantendoSessao.item.datati ? mantendoSessao.item.datati.slice(0, 10) : "",
+            inicio: mantendoSessao.item.horini != null ? formatHoraDoDia(mantendoSessao.item.horini) : "",
+            fim: mantendoSessao.item.horfim != null ? formatHoraDoDia(mantendoSessao.item.horfim) : "",
+            descricao: mantendoSessao.item.desati ?? "",
+          }}
+          somenteLeitura={!mantendoSessao.item.podeManterSessao}
+          motivoSomenteLeitura={mantendoSessao.item.motivoBloqueioManutencao}
+          registradoNoSenior={mantendoSessao.item.confirmadoNoSenior}
+          salvando={salvandoSessao}
+          erro={erroSessao}
+          onSalvar={salvarManutencaoSessao}
+          onFechar={() => setMantendoSessao(null)}
+        />
+      )}
+
       {/* Erro completo de "falha no envio" — mesmo modal da observação, só leitura, só
           trocando o título e o texto mostrado (o erro do Senior, não a observação do item). */}
       {erroEnvioItem && (
@@ -2397,7 +2535,7 @@ export function MeusApontamentos() {
           titulo={`Apontamento de ${
             erroEnvioItem.datati ? dateFormatter.format(new Date(erroEnvioItem.datati)) : "—"
           }`}
-          valorInicial={erroEnvioItem.envioErro ?? ""}
+          valorInicial={(erroEnvioItem.edicaoStatus === "falha" ? erroEnvioItem.edicaoErro : erroEnvioItem.envioErro) ?? ""}
           onSalvar={() => {}}
           onFechar={() => setErroEnvioItem(null)}
         />

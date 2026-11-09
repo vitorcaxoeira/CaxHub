@@ -1,11 +1,19 @@
 import { Router } from "express";
-import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
+import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis, codforsDoTime } from "../domain/contextoProjeto";
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
 import { toleranciaTetoDoConsultor } from "../domain/toleranciaTeto";
 import { diaBrasilComoData, paraHoraBrasil } from "../domain/fusoBrasil";
-import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
+import {
+  enfileirar,
+  enfileirarEdicaoApontamento,
+  processarFilaSincronizacao,
+  prepararReenvioItem,
+  rearmarEdicaoApontamento,
+} from "../sync/outboxSenior";
+import { conflitosDoIntervalo, mensagemDeConflito } from "../domain/conflitoApontamento";
+import { camposQueMudaram, horariosDoSenior, motivoBloqueioManutencao } from "../domain/manutencaoSessao";
 import { calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone } from "../domain/ratDominio";
 import { randomUUID } from "crypto";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
@@ -1212,6 +1220,20 @@ apontamentosRouter.post("/envio/:ratItemId/reenviar", async (req: AuthenticatedR
     }
     const { ratItem, pendencia } = envio;
 
+    // Apontamento já registrado: o que pode ter falhado é a ALTERAÇÃO da sessão (tipEve A), que só o admin faz.
+    // Rearma a pendência de edição parada em vez de cair na recusa "já registrado" de prepararReenvioItem.
+    if (ratItem.numrat != null && ctx.role === "admin") {
+      const atividadeId = ratItem.sessoes[0]?.atividadeId;
+      const edicaoId = atividadeId != null ? await rearmarEdicaoApontamento(atividadeId, ratItem.id) : null;
+      if (edicaoId != null) {
+        processarFilaSincronizacao({ apenasIds: [edicaoId] }).catch((erro) => {
+          console.error("[apontamentos] reenvio da alteração ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+        });
+        res.status(202).json({ status: "reenviando" });
+        return;
+      }
+    }
+
     // Guardas de negócio (já registrado / envio em andamento) e o branch reset-vs-enfileirar
     // moram em prepararReenvioItem (28/08/2026) — reaproveitado também pelo reenvio em lote
     // de POST /rats/:id/sincronizar, ver outboxSenior.ts.
@@ -1298,6 +1320,229 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error, "editar-observacao");
+  }
+});
+
+// PATCH /:id/sessao — manutenção de uma sessão JÁ CONFIRMADA (vinculada a um RatItem), só admin, e só com a
+// RAT Digitada (sitrat 9). Altera data, início, fim e descrição — os 4 campos que viajam no
+// `registrarAtividades` (datAti, horIni, horFim, desAti). Se o apontamento já está registrado no Senior
+// (numrat preenchido) e algum desses campos mudou, a alteração é enfileirada na hora com tipEve A para
+// equalizar (ver enviarEdicaoApontamento em sync/outboxSenior.ts). Ainda não registrado: só grava local,
+// porque a pendência `criar_apontamento` relê o RatItem vivo ao enviar e já leva os valores novos.
+//
+// A janela de dias retroativos NÃO vale aqui: ela existe para o consultor pedir apontamento/ajuste, não para
+// a correção feita pelo admin. Teto da atividade e conflito de horário continuam valendo.
+apontamentosRouter.patch("/:id/sessao", requireRole("admin"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const sessaoId = Number(req.params.id);
+    if (!Number.isInteger(sessaoId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+
+    const inicio = new Date(String(req.body?.inicio ?? ""));
+    const fim = new Date(String(req.body?.fim ?? ""));
+    const descricao = typeof req.body?.descricao === "string" ? req.body.descricao.trim() : "";
+    if (Number.isNaN(inicio.getTime()) || Number.isNaN(fim.getTime())) {
+      res.status(400).json({ error: "Informe a data, a hora inicial e a hora final." });
+      return;
+    }
+    if (!descricao) {
+      res.status(400).json({ error: "A descrição é obrigatória." });
+      return;
+    }
+    if (descricao.length > 1000) {
+      res.status(400).json({ error: "A descrição pode ter no máximo 1000 caracteres." });
+      return;
+    }
+    if (!(fim.getTime() > inicio.getTime())) {
+      res.status(400).json({ error: "O fim precisa ser depois do início" });
+      return;
+    }
+    const diaIni = paraHoraBrasil(inicio);
+    const diaFim = paraHoraBrasil(fim);
+    if (diaIni.ano !== diaFim.ano || diaIni.mes !== diaFim.mes || diaIni.dia !== diaFim.dia) {
+      res.status(400).json({ error: "Início e fim precisam estar no mesmo dia." });
+      return;
+    }
+    const horarios = horariosDoSenior(inicio, fim);
+    if (!horarios.ok) {
+      res.status(400).json({ error: horarios.erro });
+      return;
+    }
+
+    const sessao = await prisma.atividadeSessaoExecucao.findUnique({
+      where: { id: sessaoId },
+      include: { atividade: true, ratItem: { include: { rat: true } } },
+    });
+    if (!sessao || sessao.excluidaEm != null) {
+      res.status(404).json({ error: "Apontamento não encontrado" });
+      return;
+    }
+    if (sessao.fim == null) {
+      res.status(400).json({ error: "Sessão ainda em andamento" });
+      return;
+    }
+    // Mesma regra que GET /rats/:id/itens usa para oferecer (ou não) a manutenção na tela.
+    const bloqueioManutencao = motivoBloqueioManutencao({
+      souAdmin: ctx.role === "admin",
+      temRatItem: sessao.ratItem != null,
+      removidaNoSenior: sessao.ratItem?.rat.removidoEmSenior != null,
+      sitrat: sessao.ratItem?.rat.sitrat ?? null,
+    });
+    if (bloqueioManutencao) {
+      res.status(400).json({ error: bloqueioManutencao });
+      return;
+    }
+    const ratItem = sessao.ratItem!;
+
+    // Antes (para o de/para e para decidir se algo vai ao Senior) e depois.
+    const atividade = sessao.atividade;
+    const datatiNova = diaBrasilComoData(inicio);
+    const mudou = camposQueMudaram(
+      { datati: ratItem.datati, horini: ratItem.horini, horfim: ratItem.horfim, desati: ratItem.desati },
+      { datati: datatiNova, horini: horarios.horini, horfim: horarios.horfim, desati: descricao }
+    );
+    const inicioMudou = inicio.getTime() !== sessao.inicio.getTime() || fim.getTime() !== sessao.fim.getTime();
+    if (mudou.length === 0 && !inicioMudou && (sessao.observacao ?? "").trim() === descricao) {
+      res.json({ ok: true, alterado: false, equalizacao: "nao_necessaria" });
+      return;
+    }
+
+    // Envio em voo (criação ou edição anterior): o job já leu o RatItem para montar o payload.
+    const emVoo = await prisma.sincronizacaoPendente.findFirst({
+      where: { tipo: { in: ["criar_apontamento", "editar_apontamento"] }, atividadeId: sessao.atividadeId, status: "enviando" },
+      select: { id: true },
+    });
+    if (emVoo) {
+      res.status(409).json({ error: "Envio ao Senior em andamento — aguarde para alterar" });
+      return;
+    }
+    // Não atropela uma decisão que o gestor ainda vai tomar.
+    const ajustePendente = await prisma.solicitacaoAjusteApontamento.findFirst({
+      where: { sessaoId, status: "pendente" },
+      select: { id: true },
+    });
+    if (ajustePendente) {
+      res.status(409).json({
+        error: `Há um ajuste de horário aguardando o gestor (solicitação ${ajustePendente.id}) — decida o pedido antes de alterar a sessão`,
+      });
+      return;
+    }
+
+    // Conflito com outro apontamento do MESMO consultor, ignorando esta sessão e o RatItem dela.
+    const conflitos = await conflitosDoIntervalo(atividade.codemp, atividade.codfor, inicio, fim, {
+      ignorarSessaoId: sessao.id,
+      ignorarRatItemId: ratItem.id,
+    });
+    if (conflitos.length > 0) {
+      res.status(409).json({ error: mensagemDeConflito(conflitos) });
+      return;
+    }
+
+    // Teto da atividade: desconta a duração ATUAL da sessão, que já entra no realizado (senão a mesma hora
+    // contaria duas vezes). Mesma tolerância da confirmação de sessão já trabalhada.
+    const duracaoAtual = Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000);
+    const toleranciaMin = await toleranciaTetoDoConsultor(atividade.codemp, atividade.codfor);
+    const recusaTeto = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtual, { toleranciaMin });
+    if (recusaTeto) {
+      res.status(recusaTeto.status).json(recusaTeto.body);
+      return;
+    }
+
+    const fato = `alterou o apontamento de ${descreverIntervaloSessao(sessao.inicio, sessao.fim)} para ${descreverIntervaloSessao(inicio, fim)}`;
+    const alteracoes = {
+      ...(inicioMudou || mudou.includes("horini") || mudou.includes("horfim") || mudou.includes("datati")
+        ? {
+            horario: {
+              de: descreverIntervaloSessao(sessao.inicio, sessao.fim),
+              para: descreverIntervaloSessao(inicio, fim),
+              rotulo: "Data e horário",
+            },
+          }
+        : {}),
+      ...(mudou.includes("desati")
+        ? { descricao: { de: ratItem.desati ?? null, para: descricao, rotulo: "Descrição" } }
+        : {}),
+    };
+
+    const registradoNoSenior = ratItem.numrat != null && ratItem.seqrat != null;
+    const vaiAoSenior = registradoNoSenior && mudou.length > 0;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.atividadeSessaoExecucao.update({
+        where: { id: sessaoId },
+        data: { inicio, fim, observacao: descricao },
+      });
+      await tx.ratItem.update({
+        where: { id: ratItem.id },
+        data: { datati: datatiNova, horini: horarios.horini, horfim: horarios.horfim, desati: descricao },
+      });
+      await tx.atividadeHistoricoMovimentacao.create({
+        data: {
+          atividadeId: sessao.atividadeId,
+          tipo: "apontamento_alterado",
+          descricao: fato.slice(0, 300),
+          userId: ctx.user.id,
+        },
+      });
+      await criarEventoAuditoria(
+        {
+          origem: "tela",
+          usuarioId: ctx.user.id,
+          codemp: atividade.codemp,
+          codpro: atividade.codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+          entidadeId: entidadeIdAtividade(sessao.atividadeId),
+          entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
+          eventoTipo: EVENTOS_AUDITORIA.APONTAMENTO_SESSAO_ALTERADA,
+          alteracoes,
+          metadata: {
+            sessaoId,
+            ratItemId: ratItem.id,
+            ratId: ratItem.ratId,
+            numrat: ratItem.numrat,
+            seqrat: ratItem.seqrat,
+            camposQueViajamAoSenior: mudou,
+            equalizacaoEnfileirada: vaiAoSenior,
+          },
+          correlationId: req.correlationId!,
+        },
+        tx
+      );
+    });
+
+    // Depois da transação, para o envio imediato já enxergar os valores novos.
+    if (vaiAoSenior) {
+      try {
+        await enfileirarEdicaoApontamento(sessao.atividadeId, ratItem.id, ratItem.ratId);
+      } catch (erroFila) {
+        // A alteração local já está gravada; sem a pendência o Senior ficaria para trás sem ninguém saber.
+        console.error("[apontamentos:manter-sessao] falha ao enfileirar a equalização:", erroFila);
+        res.status(500).json({
+          error:
+            "A alteração foi gravada no CaxHub, mas não foi possível enfileirar o envio ao Senior. " +
+            "Salve novamente para tentar de novo.",
+        });
+        return;
+      }
+    }
+
+    res.json({
+      ok: true,
+      alterado: true,
+      camposQueViajamAoSenior: mudou,
+      // enfileirada: tipEve A a caminho · no_envio_inicial: ainda não está no Senior, a inclusão leva os valores
+      // novos · nao_necessaria: só mudou algo que não viaja
+      equalizacao: vaiAoSenior ? "enfileirada" : registradoNoSenior ? "nao_necessaria" : "no_envio_inicial",
+    });
+  } catch (error) {
+    handleError(res, error, "manter-sessao");
   }
 });
 
