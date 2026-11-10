@@ -60,6 +60,15 @@ interface Props<T, C> {
   /** Avisa a tela quando os filtros de coluna (ou as calculadas) mudam, no formato dos parâmetros da API (ex.: ação em lote que respeita o filtro). */
   aoMudarConsulta?: (consulta: { filtros?: string; calculadas?: string }) => void;
   classeLinha?: (linha: T) => string | undefined;
+  /**
+   * Classes a mais em TODA célula do corpo (tailwind-merge: vence a padrão, ex.: `py-[4.5px]` troca os 9px verticais). Opcional: sem ela a lista fica
+   * como sempre foi. Criada na tela Gestão Propostas (09/11/2026), que pediu linhas mais compactas.
+   */
+  classeCelula?: string;
+  /** Avisa a tela quando a pessoa troca o "Por página" (ex.: a tela guarda o valor para a estrela de padrão). Só vale com `opcoesPorPagina`. */
+  aoMudarPorPagina?: (pageSize: number) => void;
+  /** Estrela de padrão do "Por página" (ver BotaoPadraoFiltro): a tela entrega pronta. Só vale com `opcoesPorPagina`. */
+  acessorioPorPagina?: ReactNode;
   /** Mostrado acima da tabela, ao lado dos chips (ex.: totais da lista). */
   topo?: (dados: Resposta<T> | null) => ReactNode;
   /** Mostrado entre a tabela e a paginação (ex.: totais do filtro, que vêm em `dados.totais`). */
@@ -108,6 +117,9 @@ export function ListaServidor<T extends object, C = undefined>({
   ajustarLinha,
   aoMudarConsulta,
   classeLinha,
+  classeCelula,
+  aoMudarPorPagina,
+  acessorioPorPagina,
   topo,
   rodape,
   aoCarregar,
@@ -131,7 +143,7 @@ export function ListaServidor<T extends object, C = undefined>({
 
   const calc = useCalculadasServidor(chave, titulosBase, dados?.colunas, dados?.itens, dados?.calculadasComProblema);
   const defs = useMemo(() => [...base, ...calc.defs] as DefColuna<T, C>[], [base, calc.defs]);
-  const tc = useColunasConfiguraveis(chave, defs, { calculadas: calc.painel });
+  const tc = useColunasConfiguraveis(chave, defs, { calculadas: calc.painel, td: classeCelula });
 
   const paramsFixos = { ...params, calculadas: calc.param };
   const chaveParams = JSON.stringify(paramsFixos);
@@ -302,7 +314,7 @@ export function ListaServidor<T extends object, C = undefined>({
                 return (
                   <Fragment key={chaveL}>
                     <tr
-                      className={cn("border-t border-border/60", clicavel && "cursor-pointer hover:bg-surface-2", abertaAqui && "bg-surface-2", classeLinha?.(l))}
+                      className={cn("border-t border-border/60", tc.temCongelada && "bg-surface", clicavel && "cursor-pointer hover:bg-surface-2", abertaAqui && "bg-surface-2", classeLinha?.(l))}
                       onClick={aoClicar}
                     >
                       {tc.celulas(l, ctx as C)}
@@ -337,7 +349,8 @@ export function ListaServidor<T extends object, C = undefined>({
         onPageChange={setPage}
         label={rotulo}
         opcoesPorPagina={opcoesPorPagina}
-        onPageSizeChange={opcoesPorPagina ? (n) => { setPageSize(n); setPage(1); } : undefined}
+        onPageSizeChange={opcoesPorPagina ? (n) => { setPageSize(n); setPage(1); aoMudarPorPagina?.(n); } : undefined}
+        acessorioPorPagina={acessorioPorPagina}
       />
     </div>
   );

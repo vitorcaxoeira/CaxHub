@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { alternarOculta, definirLargura, ehPadrao, moverColuna, moverPasso, resolverLayout } from "./layoutColunas";
+import {
+  alternarOculta,
+  colunasCongeladas,
+  definirLargura,
+  deslocamentosCongeladas,
+  ehPadrao,
+  moverColuna,
+  moverPasso,
+  quantasCongeladasCabem,
+  resolverLayout,
+} from "./layoutColunas";
 
 const PADRAO = ["codigo", "descricao", "unidade", "origem", "faixa"];
 
 describe("resolverLayout", () => {
   it("sem nada salvo, vale o padrão da tela", () => {
-    expect(resolverLayout(PADRAO, null)).toEqual({ ordem: PADRAO, ocultas: [], visiveis: PADRAO, larguras: {}, resumos: {} });
+    expect(resolverLayout(PADRAO, null)).toEqual({ ordem: PADRAO, ocultas: [], visiveis: PADRAO, larguras: {}, resumos: {}, congeladaAte: "", congeladas: [] });
   });
 
   it("resumos: só de coluna que a tela tem", () => {
@@ -97,5 +107,66 @@ describe("colunas ocultas por padrão (04/11/2026)", () => {
     expect(ehPadrao(PADRAO, { ordem: PADRAO, ocultas: ["origem"] }, ["origem"])).toBe(true);
     expect(ehPadrao(PADRAO, { ordem: PADRAO, ocultas: [] }, ["origem"])).toBe(false);
     expect(ehPadrao(PADRAO, { ordem: PADRAO, ocultas: ["origem", "faixa"] }, ["origem"])).toBe(false);
+  });
+});
+
+describe("colunas paradas ao rolar (congelar até aqui)", () => {
+  it("colunasCongeladas: as visíveis da primeira até o limite, na ordem; limite vazio ou inexistente = nenhuma", () => {
+    expect(colunasCongeladas(PADRAO, [], "descricao")).toEqual(["codigo", "descricao"]);
+    expect(colunasCongeladas(PADRAO, [], "faixa")).toEqual(PADRAO);
+    expect(colunasCongeladas(PADRAO, [], "")).toEqual([]);
+    expect(colunasCongeladas(PADRAO, [], "nao-existe")).toEqual([]);
+  });
+
+  it("colunasCongeladas: oculta no meio do trecho não para; limite oculto vale as visíveis antes dele", () => {
+    expect(colunasCongeladas(PADRAO, ["descricao"], "unidade")).toEqual(["codigo", "unidade"]);
+    expect(colunasCongeladas(PADRAO, ["unidade"], "unidade")).toEqual(["codigo", "descricao"]);
+  });
+
+  it("colunasCongeladas acompanha a ordem: mover uma coluna para dentro ou para fora do trecho muda quem fica parada", () => {
+    expect(colunasCongeladas(moverColuna(PADRAO, "origem", "codigo"), [], "descricao")).toEqual(["origem", "codigo", "descricao"]);
+    expect(colunasCongeladas(moverColuna(PADRAO, "codigo", "faixa"), [], "descricao")).toEqual(["descricao"]);
+  });
+
+  it("resolverLayout: sem escolha vale o padrão da tela; a escolha do usuário (inclusive nenhuma) vence", () => {
+    const r = (salvo: Parameters<typeof resolverLayout>[1]) => resolverLayout(PADRAO, salvo, [], [], "codigo");
+    expect(r(null).congeladas).toEqual(["codigo"]);
+    expect(r({ ordem: PADRAO, ocultas: [] }).congeladaAte).toBe("codigo");
+    expect(r({ ordem: PADRAO, ocultas: [], congeladaAte: null }).congeladaAte).toBe("codigo");
+    expect(r({ ordem: PADRAO, ocultas: [], congeladaAte: "unidade" }).congeladas).toEqual(["codigo", "descricao", "unidade"]);
+    expect(r({ ordem: PADRAO, ocultas: [], congeladaAte: "" })).toMatchObject({ congeladaAte: "", congeladas: [] });
+  });
+
+  it("resolverLayout: limite salvo de coluna que a tela não tem mais volta ao padrão; padrão que não existe vale nenhuma", () => {
+    expect(resolverLayout(PADRAO, { ordem: PADRAO, ocultas: [], congeladaAte: "sumiu" }, [], [], "codigo").congeladaAte).toBe("codigo");
+    expect(resolverLayout(PADRAO, null, [], [], "sumiu").congeladas).toEqual([]);
+  });
+
+  it("ehPadrao: sem escolha ou escolha igual ao padrão da tela não é personalização; outra escolha (ou nenhuma) é", () => {
+    const base = { ordem: PADRAO, ocultas: [] as string[] };
+    expect(ehPadrao(PADRAO, base, [], "codigo")).toBe(true);
+    expect(ehPadrao(PADRAO, { ...base, congeladaAte: null }, [], "codigo")).toBe(true);
+    expect(ehPadrao(PADRAO, { ...base, congeladaAte: "codigo" }, [], "codigo")).toBe(true);
+    expect(ehPadrao(PADRAO, { ...base, congeladaAte: "descricao" }, [], "codigo")).toBe(false);
+    expect(ehPadrao(PADRAO, { ...base, congeladaAte: "" }, [], "codigo")).toBe(false);
+    // Tela sem padrão de coluna parada: "nenhuma" é o padrão.
+    expect(ehPadrao(PADRAO, base)).toBe(true);
+    expect(ehPadrao(PADRAO, { ...base, congeladaAte: "" })).toBe(true);
+    expect(ehPadrao(PADRAO, { ...base, congeladaAte: "codigo" })).toBe(false);
+  });
+
+  it("quantasCongeladasCabem: só as primeiras que cabem em 60% da largura visível; sem largura medida, todas", () => {
+    expect(quantasCongeladasCabem([100, 100, 100], 1000)).toBe(3);
+    expect(quantasCongeladasCabem([300, 200, 200], 1000)).toBe(2); // 500 cabe, 700 passa de 600
+    expect(quantasCongeladasCabem([700, 100], 1000)).toBe(0); // a primeira sozinha já passa do teto
+    expect(quantasCongeladasCabem([300, 300], 1000)).toBe(2); // 600 exatos ainda cabem
+    expect(quantasCongeladasCabem([300, 400], 0)).toBe(2);
+    expect(quantasCongeladasCabem([], 1000)).toBe(0);
+  });
+
+  it("deslocamentosCongeladas: cada coluna parada começa onde a anterior termina, depois da coluna do ícone", () => {
+    expect(deslocamentosCongeladas(["a", "b", "c"], { a: 120, b: 80, c: 200 }, 28)).toEqual({ a: 28, b: 148, c: 228 });
+    expect(deslocamentosCongeladas([], {}, 28)).toEqual({});
+    expect(deslocamentosCongeladas(["a", "b"], { a: 50 }, 28)).toEqual({ a: 28, b: 78 });
   });
 });

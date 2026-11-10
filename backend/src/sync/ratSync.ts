@@ -266,6 +266,17 @@ export async function runRatSyncPorNumrat(codemp: number, numrat: number): Promi
   return total > 0;
 }
 
+// Sincroniza os cabeçalhos de TODAS as RATs de uma proposta — "Sinc. ERP" da tela Gestão Propostas (09/11/2026), que analisa as RATs da proposta
+// e valida o "Finalizar" contra elas. Mesmo contrato de runRatSyncPorNumrat (propaga erro; a rota precisa avisar o usuário).
+// Diferente da variante por numrat, NÃO desvincula RAT ausente no Senior: isso é por RAT e exige o numrat (ver desvincularRatAusenteNoSenior em
+// routes/rats.ts) — a RAT que sumiu de lá continua aparecendo até o "Sinc. ERP" da própria RAT em Meus Apontamentos. Devolve quantas RATs vieram.
+export async function runRatSyncPorCodpro(codemp: number, codpro: number): Promise<number> {
+  const query = `${BASE_QUERY} WHERE USU_CODEMP = ${codemp} AND USU_CodPro = ${codpro}`;
+  const total = await executarUpsert(query);
+  await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
+  return total;
+}
+
 // O agendamento automático sempre roda completo (sem "desde") — o modo incremental só é
 // usado quando disparado manualmente pela tela de administração de sincronização.
 export function scheduleRatSync(): void {

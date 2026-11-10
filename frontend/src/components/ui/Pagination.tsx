@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 interface PaginationProps {
   page: number;
   pageSize: number;
@@ -8,9 +10,11 @@ interface PaginationProps {
   /** Com as duas props abaixo aparece o seletor "Por página" (a pessoa escolhe quanto carregar, em vez de um teto fixo). */
   opcoesPorPagina?: number[];
   onPageSizeChange?: (pageSize: number) => void;
+  /** Estrela de "padrão" (BotaoPadraoFiltro) do seletor "Por página": fica no canto do seletor, como a dos filtros do topo. */
+  acessorioPorPagina?: ReactNode;
 }
 
-export function Pagination({ page, pageSize, total, loading, onPageChange, label = "registros", opcoesPorPagina, onPageSizeChange }: PaginationProps) {
+export function Pagination({ page, pageSize, total, loading, onPageChange, label = "registros", opcoesPorPagina, onPageSizeChange, acessorioPorPagina }: PaginationProps) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -22,17 +26,21 @@ export function Pagination({ page, pageSize, total, loading, onPageChange, label
         {opcoesPorPagina && onPageSizeChange && (
           <label className="mr-2 flex items-center gap-1.5 text-[11.5px] text-muted">
             Por página
-            <select
-              value={pageSize}
-              onChange={(e) => onPageSizeChange(Number(e.target.value))}
-              className="rounded-md border border-border bg-surface px-1.5 py-1 text-[11.5px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {opcoesPorPagina.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
+            {/* `relative` + recuo à direita: a estrela (absolute, canto superior direito) fica ao lado do seletor, sem cobrir a seta dele. */}
+            <span className={acessorioPorPagina ? "relative inline-flex pr-6" : "inline-flex"}>
+              <select
+                value={pageSize}
+                onChange={(e) => onPageSizeChange(Number(e.target.value))}
+                className="rounded-md border border-border bg-surface px-1.5 py-1 text-[11.5px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {opcoesPorPagina.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              {acessorioPorPagina}
+            </span>
           </label>
         )}
         <button

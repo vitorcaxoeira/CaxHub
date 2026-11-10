@@ -819,6 +819,99 @@ export async function fecharRatViaSoap(payload: FecharRatPayload): Promise<Fecha
   };
 }
 
+// ---------------------------------------------------------------------------
+// Canal de ESCRITA — operação `ManterSituacaoProposta` (tela Gestão Propostas, 09/11/2026). Altera USU_SitPro de USU_TE077PRO (domínio USU_SitPro):
+// Finalizar leva a proposta para 8 (Executada); Em Execução, de 8 para 7.
+//
+// OPERAÇÃO PUBLICADA NO SENIOR (nome informado pelo Vitor em 09/11/2026) e CONFERIDA contra o `?wsdl`/`?xsd` reais no mesmo dia: mensagem de entrada
+// `ManterSituacaoProposta` (user, password, encryption, parameters = CaxHubManterSituacaoPropostaIn: codEmp, codPro, sitPro e, opcionais e não usados
+// aqui, flowInstanceID e flowName) e resposta `ManterSituacaoPropostaResponse` (result = CaxHubManterSituacaoPropostaOut: statusProcesso,
+// mensagemProcesso, erroExecucao), o mesmo molde de `fecharRAT`. O significado de `statusProcesso` (0=Erro, 1=Sucesso) segue o das outras operações.
+// AINDA NÃO FOI FEITO UM ENVIO REAL: conferir no primeiro (o prefixo `ns2` do elemento de resposta e o texto de `mensagemProcesso`). O worker
+// (sync/outboxSeniorProposta.ts) envia sempre que a escrita no Senior está ligada (a variável SENIOR_PORTA_SITPRO foi aposentada em 10/11/2026).
+// ---------------------------------------------------------------------------
+
+export interface ManterSituacaoPropostaPayload {
+  codEmp: number;
+  codPro: number;
+  /** Situação nova, domínio USU_SitPro (7 = Em Execução, 8 = Executada). */
+  sitPro: number;
+}
+
+// Sem `resultados[]`: a operação atua sobre a proposta inteira, como fecharRAT atua sobre a RAT.
+export interface ManterSituacaoPropostaResposta {
+  /** 1 = sucesso (a confirmar com o publicador do serviço). */
+  statusProcesso: number | null;
+  mensagemProcesso: string | null;
+  erroExecucao: string | null;
+}
+
+/** Monta o XML que seria enviado, sem enviar — mesmo uso dos irmãos acima. */
+export function montarEnvelopeManterSituacaoProposta(payload: ManterSituacaoPropostaPayload, user: string, password: string): string {
+  const parametersXml = `<codEmp>${payload.codEmp}</codEmp>` + `<codPro>${payload.codPro}</codPro>` + `<sitPro>${payload.sitPro}</sitPro>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ser:ManterSituacaoProposta>
+      <user>${escapeXml(user)}</user>
+      <password>${escapeXml(password)}</password>
+      <encryption>0</encryption>
+      <parameters>${parametersXml}</parameters>
+    </ser:ManterSituacaoProposta>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+}
+
+/**
+ * Altera a situação de uma proposta no Senior via `ManterSituacaoProposta`.
+ *
+ * Mesmo contrato de responsabilidade dos irmãos: não decide sucesso/fracasso de negócio, só normaliza a resposta — quem decide é o chamador
+ * (sync/outboxSeniorProposta.ts).
+ */
+export async function manterSituacaoPropostaViaSoap(payload: ManterSituacaoPropostaPayload): Promise<ManterSituacaoPropostaResposta> {
+  garantirEscritaNoSenior("ManterSituacaoProposta");
+  const soapUrl = process.env.SOAP_URL;
+  const soapUser = process.env.SOAP_USER;
+  const soapPassword = process.env.SOAP_PASSWORD;
+
+  if (!soapUrl || !soapUser || !soapPassword) {
+    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
+  }
+
+  const endpoint = soapUrl.replace(/\?wsdl$/i, "");
+  const envelope = montarEnvelopeManterSituacaoProposta(payload, soapUser, soapPassword);
+
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "ManterSituacaoProposta"));
+    });
+
+  const parsed = parser.parse(response.data);
+  // Nome do elemento de resposta — AINDA NÃO confirmado contra uma chamada real, ver comentário do bloco acima.
+  const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:ManterSituacaoPropostaResponse"]?.result;
+
+  if (!result) {
+    throw new Error("Resposta SOAP de ManterSituacaoProposta em formato inesperado — ajustar parsing em soap/client.ts");
+  }
+
+  const erroExecucao = textoOuNulo(result.erroExecucao);
+  if (erroExecucao) {
+    throw new Error(`Erro no serviço Senior (ManterSituacaoProposta): ${erroExecucao}`);
+  }
+
+  return {
+    statusProcesso: numeroOuNulo(result.statusProcesso),
+    mensagemProcesso: textoOuNulo(result.mensagemProcesso),
+    erroExecucao,
+  };
+}
+
 const PAGE_SIZE = 10000;
 
 /**

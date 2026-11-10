@@ -96,3 +96,30 @@ test("domínios do funil: rótulos de situação (com Excluída) e de sincroniza
 test("ordem padrão: Digitado primeiro, emissão mais recente, proposta crescente, id decrescente", () => {
   assert.match(ORDEM_PADRAO_RATS.text, /CASE WHEN x\."sitrat" = 9 THEN 0 ELSE 1 END.*x\."datemi" DESC NULLS LAST.*COALESCE\(x\."codpro", 0\).*x\."id" DESC/);
 });
+
+test("filtro por proposta: codpro e codemp viram parâmetros e recortam a lista (e as CTEs do cálculo do conjunto)", () => {
+  const porLinha = sql(tudo, { codemp: 1, codpro: 8638 });
+  assert.match(porLinha.text, /r\.codpro = \$\d+/);
+  assert.match(porLinha.text, /r\.codemp = \$\d+/);
+  assert.ok(porLinha.values.includes(8638) && porLinha.values.includes(1));
+  // No cálculo do conjunto o mesmo recorte vale para os agregados (ia/da), senão eles varreriam as 25 mil RATs.
+  const conjunto = sql(tudo, { codemp: 1, codpro: 8638 }, { conjunto: true });
+  assert.ok((conjunto.text.match(/r\.codpro = \$\d+/g) ?? []).length >= 3, "o recorte da proposta entra na base e nas CTEs ia e da");
+  // Sem o filtro, nada de proposta no SQL (o resto do sistema não informa codpro).
+  assert.doesNotMatch(sql().text, /r\.codpro = \$\d+/);
+});
+
+test("faturamento por RAT é opcional: desligado, o SQL é idêntico ao de antes (Meus Apontamentos não muda)", () => {
+  const sem = sql();
+  const explicitoFalse = sql(tudo, {}, { comFaturamento: false });
+  assert.equal(sem.text, explicitoFalse.text);
+  assert.doesNotMatch(sem.text, /minutosFaturaveis|valorFaturamento|valorNaoFaturado/);
+  const com = sql(tudo, {}, { comFaturamento: true });
+  for (const c of ["minutosFaturaveis", "minutosNaoFaturaveis", "valorFaturamento", "valorNaoFaturado"]) {
+    assert.match(com.text, new RegExp(`AS "${c}"`));
+  }
+  // Mesma régua da lista de propostas: só apontamento válido e faturável = fatser S/A, vindo de FATSER_FATURAVEL (parâmetros).
+  assert.match(com.text, /UPPER\(BTRIM\(COALESCE\(pi\.fatser, ''\)\)\) IN/);
+  assert.match(com.text, /ri\.horfim > ri\.horini/);
+  assert.ok(com.values.includes("S") && com.values.includes("A"));
+});

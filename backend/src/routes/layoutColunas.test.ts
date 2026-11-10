@@ -17,12 +17,14 @@ test("validarLayoutColunas: aceita ordem e ocultas de texto; sem larguras nem re
     ocultas: ["unidade"],
     larguras: {},
     resumos: {},
+    congeladaAte: null,
   });
   assert.deepEqual(validarLayoutColunas({ ordem: [], ocultas: [], larguras: { descricao: 280, codigo: 40 }, resumos: { quantidade: "soma" } }), {
     ordem: [],
     ocultas: [],
     larguras: { descricao: 280, codigo: 40 },
     resumos: { quantidade: "soma" },
+    congeladaAte: null,
   });
 });
 
@@ -44,6 +46,18 @@ test("validarLayoutColunas: largura só inteira, de 40 a 2000, em objeto simples
   assert.equal(com([120]), null);
   assert.equal(com(null), null);
   assert.equal(com({ ["x".repeat(61)]: 100 }), null);
+});
+
+test("validarLayoutColunas: congeladaAte ausente/null = padrão da tela, texto vazio = nenhuma, nome = o limite; o resto é inválido", () => {
+  const com = (congeladaAte: unknown) => validarLayoutColunas({ ordem: ["a", "b"], ocultas: [], congeladaAte });
+  assert.equal(com(undefined)?.congeladaAte, null);
+  assert.equal(com(null)?.congeladaAte, null);
+  assert.equal(com("")?.congeladaAte, "");
+  assert.equal(com("cliente")?.congeladaAte, "cliente");
+  assert.equal(com(5), null);
+  assert.equal(com(["a"]), null);
+  assert.equal(com({}), null);
+  assert.equal(com("x".repeat(61)), null);
 });
 
 test("validarLayoutColunas: recusa formato errado, repetição e exagero", () => {

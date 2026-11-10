@@ -1,3 +1,4 @@
+import { Pin } from "lucide-react";
 import { useState } from "react";
 import { raizDoPortal } from "../ui/raizDoPortal";
 import { autoUpdate, FloatingPortal, offset, shift, size, useClick, useDismiss, useFloating, useInteractions } from "@floating-ui/react";
@@ -102,6 +103,10 @@ export function PainelColunas({ layout, titulos, calculadas }: { layout: LayoutC
               {layout.ordem.map((nome, i) => {
                 const obrigatoria = layout.obrigatorias.includes(nome);
                 const titulo = titulos[nome] ?? nome;
+                // "Congelar até aqui" (09/11/2026): a coluna e as visíveis antes dela ficam paradas ao rolar na horizontal. Clicar no limite solta tudo.
+                const parada = layout.congeladas.includes(nome);
+                const eLimite = layout.congeladaAte === nome;
+                const oculta = layout.ocultas.includes(nome);
                 return (
                   <li key={nome} className="flex items-center gap-2 px-3 py-0.5 hover:bg-surface-2/60">
                     <label className={cn("flex min-w-0 flex-1 items-center gap-2 py-1 text-[12.5px]", obrigatoria ? "text-muted" : "cursor-pointer text-foreground")}>
@@ -139,6 +144,23 @@ export function PainelColunas({ layout, titulos, calculadas }: { layout: LayoutC
                         </button>
                       </>
                     )}
+                    <button
+                      type="button"
+                      className={cn(setaCls, parada && "text-primary")}
+                      disabled={oculta}
+                      aria-pressed={parada}
+                      onClick={() => layout.congelarAte(eLimite ? null : nome)}
+                      aria-label={eLimite ? `Descongelar as colunas paradas (até ${titulo})` : `Congelar as colunas até ${titulo}`}
+                      title={
+                        oculta
+                          ? "Mostre a coluna para poder congelar até ela"
+                          : eLimite
+                            ? "Descongelar (soltar as colunas paradas)"
+                            : "Congelar até esta coluna: ela e as anteriores ficam paradas ao rolar na horizontal"
+                      }
+                    >
+                      <Pin size={13} strokeWidth={1.75} aria-hidden className={parada ? "fill-current" : undefined} />
+                    </button>
                     <button type="button" className={setaCls} disabled={i === 0} onClick={() => layout.passo(nome, -1)} aria-label={`Subir ${titulo}`} title="Subir (mais à esquerda)">
                       <Seta direcao="cima" />
                     </button>
@@ -162,8 +184,8 @@ export function PainelColunas({ layout, titulos, calculadas }: { layout: LayoutC
               </button>
             )}
             <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
-              <span className="text-[11px] text-muted" title="A largura muda puxando a borda direita do título da coluna">
-                Ordem, colunas e larguras ficam no seu usuário
+              <span className="text-[11px] text-muted" title="A largura muda puxando a borda direita do título da coluna; o alfinete congela até a coluna escolhida">
+                Ordem, colunas, larguras e colunas paradas ficam no seu usuário
               </span>
               <button
                 type="button"

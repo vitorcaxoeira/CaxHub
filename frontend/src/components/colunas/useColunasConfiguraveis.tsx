@@ -15,6 +15,7 @@ export interface PosicaoColuna {
   primeira: boolean;
   ultima: boolean;
 }
+import { useDeslocamentosCongeladas } from "./useDeslocamentosCongeladas";
 import { useLayoutColunas } from "./useLayoutColunas";
 import { useRedimensionarColunas } from "./useRedimensionarColunas";
 
@@ -43,6 +44,12 @@ export interface DefColuna<T, C = undefined> {
   largura?: number;
   /** Não pode ser ocultada (ex.: a coluna que abre o detalhe da linha). */
   fixa?: boolean;
+  /**
+   * Parada à esquerda ao rolar na horizontal, por PADRÃO da tela (09/11/2026, Gestão Propostas). A última coluna marcada vira o limite padrão
+   * ("congelar até aqui": ela e as visíveis antes dela, na ordem); cada usuário escolhe o próprio limite no painel Colunas (alfinete). As linhas
+   * ganham fundo opaco herdado da linha (`bg-inherit`), então a tela só precisa dar fundo à linha (ver `temCongelada`).
+   */
+  congelada?: boolean;
   /** Nasce oculta enquanto o usuário não arrumou as colunas (04/11/2026): coluna que não existia na tabela antes do kit; liga no painel. */
   ocultaPorPadrao?: boolean;
   classe?: string | ((linha: T, ctx: C, pos: PosicaoColuna) => string | undefined);
@@ -61,6 +68,9 @@ export interface DefColuna<T, C = undefined> {
 }
 
 const LARGURA_SEM_PADRAO = 120;
+/** Coluna parada: `sticky` (o `left` vem de useDeslocamentosCongeladas), acima das células que rolam; só a ÚLTIMA parada leva o fio na borda direita. */
+const PARADA = "sticky z-[1]";
+const FIO_DA_ULTIMA = "shadow-[1px_0_0_var(--border)]";
 /**
  * Coluna reservada no começo de toda tabela configurável (27/10/2026): o ícone das Colunas fica sempre no canto esquerdo do cabeçalho, no
  * mesmo lugar em todas as listas, parado na rolagem horizontal (sticky). Nas linhas é uma célula vazia da mesma largura.
@@ -96,10 +106,19 @@ export function useColunasConfiguraveis<T, C = undefined>(
   const larguraPadrao = useMemo(() => Object.fromEntries(defs.map((d) => [d.nome, d.largura ?? LARGURA_SEM_PADRAO])), [defs]);
   const porNome = useMemo(() => new Map(defs.map((d) => [d.nome, d])), [defs]);
   const ocultasPadrao = useMemo(() => defs.filter((d) => d.ocultaPorPadrao && !d.fixa).map((d) => d.nome), [defs]);
-  const layout = useLayoutColunas(chave, padrao, fixas, ocultasPadrao);
+  // Limite padrão das colunas paradas: a última def marcada `congelada` na ordem do código ("" = nenhuma).
+  const congeladaAtePadrao = useMemo(() => [...defs].reverse().find((d) => d.congelada)?.nome ?? "", [defs]);
+  const layout = useLayoutColunas(chave, padrao, fixas, ocultasPadrao, congeladaAtePadrao);
   const larg = useRedimensionarColunas(layout, larguraPadrao);
   const visiveis = layout.visiveis.map((n) => porNome.get(n)).filter((d): d is DefColuna<T, C> => !!d);
   const cortar = larg.larguras !== null;
+  // Colunas paradas: as escolhidas (ou do padrão da tela) que cabem na tela, cada uma com o `left` medido.
+  const parada = useDeslocamentosCongeladas(larg.refCabecalho, layout.congeladas, LARGURA_PAINEL, larguraPadrao);
+  const paradas = new Set(parada.nomes);
+  const ultimaParada = parada.nomes[parada.nomes.length - 1];
+  const temCongelada = parada.nomes.length > 0;
+  /** Classe e estilo de uma coluna parada (nada para as que rolam). */
+  const deParada = (nome: string) => (paradas.has(nome) ? { classe: cn(PARADA, nome === ultimaParada && FIO_DA_ULTIMA), left: parada.lefts[nome] } : null);
 
   const cabecalho = ({
     colunas,
@@ -117,7 +136,8 @@ export function useColunasConfiguraveis<T, C = undefined>(
           titulo={d.cabecalho ?? d.titulo}
           rotulo={d.titulo}
           direita={d.direita}
-          className={cn(opcoes.th, d.centro && "text-center")}
+          className={cn(opcoes.th, d.centro && "text-center", deParada(d.nome)?.classe)}
+          style={deParada(d.nome) ? { left: deParada(d.nome)!.left } : undefined}
           title={d.dica}
           formatarValor={d.formatarValor}
           semOrdenar={d.semOrdenar}
@@ -153,9 +173,12 @@ export function useColunasConfiguraveis<T, C = undefined>(
       </td>
       {visiveis.map((d) => {
         const funcao = layout.resumos[d.nome];
+        const p = deParada(d.nome);
         return (
           <CelulaResumo
             key={d.nome}
+            className={p ? cn(p.classe, "bg-inherit") : undefined}
+            style={p ? { left: p.left } : undefined}
             titulo={d.titulo}
             tipo={colunas?.find((c) => c.nome === d.nome)?.tipo}
             permitidas={d.resumos}
@@ -179,9 +202,10 @@ export function useColunasConfiguraveis<T, C = undefined>(
   const tetoTexto = (d: DefColuna<T, C>) => (!cortar && d.texto ? (d.largura ?? LARGURA_SEM_PADRAO) : undefined);
 
   const celulas = (linha: T, ctx: C) => [
-    <td key="__colunas" aria-hidden className={cn("w-7 min-w-7 max-w-7 p-0", opcoes.classeEspaco?.(linha, ctx))} />,
+    <td key="__colunas" aria-hidden className={cn("w-7 min-w-7 max-w-7 p-0", temCongelada && "sticky left-0 z-[1] bg-inherit", opcoes.classeEspaco?.(linha, ctx))} />,
     ...visiveis.map((d, i) => {
       const teto = tetoTexto(d);
+      const p = deParada(d.nome);
       return (
         <td
           key={d.nome}
@@ -189,11 +213,12 @@ export function useColunasConfiguraveis<T, C = undefined>(
           className={cn(
             d.direita ? TD_DIR : TD,
             opcoes.td,
+            p && cn(p.classe, "bg-inherit"),
             d.centro && "text-center",
             typeof d.classe === "function" ? d.classe(linha, ctx, { primeira: i === 0, ultima: i === visiveis.length - 1 }) : d.classe,
             (cortar || teto != null) && "overflow-hidden text-ellipsis",
           )}
-          style={teto != null ? { maxWidth: teto } : undefined}
+          style={teto != null || p ? { ...(teto != null ? { maxWidth: teto } : {}), ...(p ? { left: p.left } : {}) } : undefined}
           title={d.title?.(linha) ?? (cortar || teto != null ? d.texto?.(linha) || undefined : undefined)}
         >
           {d.render(linha, ctx, cortar || teto != null)}
@@ -208,6 +233,8 @@ export function useColunasConfiguraveis<T, C = undefined>(
     /** Colunas visíveis + a do ícone: é o colSpan de uma linha que ocupa a tabela inteira. */
     nColunas: visiveis.length + 1,
     cortar,
+    /** A primeira coluna visível está congelada: a linha precisa de fundo próprio (`bg-surface`) para as células paradas ficarem opacas (`bg-inherit`). */
+    temCongelada,
     /** Sem largura ajustada: layout automático, como sempre foi. Com ajuste: larguras fixas e texto cortado com "…". */
     classeTabela: cn("border-collapse", cortar ? "table-fixed" : "w-full"),
     estiloTabela: (larg.total ? { width: larg.total + LARGURA_PAINEL } : undefined) as CSSProperties | undefined,

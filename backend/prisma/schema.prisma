@@ -128,6 +128,9 @@ model PreferenciaColunas {
   larguras     Json     @default("{}")
   /// Resumo do rodapé por coluna ({"quantidade": "soma"}); vazio = nenhum (28/10/2026).
   resumos      Json     @default("{}")
+  /// Última coluna parada ao rolar na horizontal ("congelar até aqui", 09/11/2026): ela e as visíveis antes dela, na ordem. NULL = sem escolha (vale o
+  /// padrão da tela); vazio = nenhuma parada, de propósito.
+  congeladaAte String?  @map("congelada_ate") @db.VarChar(80)
   atualizadoEm DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -636,6 +639,8 @@ model Proposta {
   cliente      Cliente        @relation(fields: [codcli], references: [codcli])
   itens        PropostaItem[]
   auditEventos AuditEvento[]
+  // Fila de saída das mudanças de SITUAÇÃO feitas na tela Gestão Propostas (ver SincronizacaoPendenteProposta).
+  pendenciasSituacao SincronizacaoPendenteProposta[]
 
   @@id([codemp, codpro])
   @@index([sitpro])
@@ -1327,6 +1332,9 @@ model Rat {
   comprovantes ComprovanteRat[]
 
   @@unique([codemp, numprj, codfpj, numrat])
+  // Agregado de RAT por proposta (Gestão Propostas) e a lista de RATs de uma proposta filtram por (codemp, codpro): sem este índice cada
+  // proposta custava um seq scan em ~25 mil RATs (medido 95 ms para 25 linhas em 09/11/2026).
+  @@index([codemp, codpro])
   @@map("rats")
 }
 
@@ -2086,6 +2094,35 @@ model SincronizacaoPendenteDespesa {
   processadoEm DateTime?
 
   @@map("sincronizacao_pendente_despesa")
+}
+
+// Fila de saída das mudanças de SITUAÇÃO de proposta feitas na tela Gestão Propostas (Finalizar: sitpro -> 8; Em Execução: 8 -> 7).
+// Fila IRMÃ de SincronizacaoPendente/SincronizacaoPendenteDespesa, não a mesma tabela: a chave aqui é a PROPOSTA (codemp+codpro), não uma
+// AtividadeConsultor — uma proposta sem nenhuma alocação ficaria infinalizável com a âncora técnica que SincronizacaoPendente exige (a
+// mesma cicatriz do fechar_rat, ver prepararFechamentoRat em routes/rats.ts). Ver sync/outboxSeniorProposta.ts.
+model SincronizacaoPendenteProposta {
+  id           Int       @id @default(autoincrement())
+  codemp       Int
+  codpro       Int
+  proposta     Proposta  @relation(fields: [codemp, codpro], references: [codemp, codpro])
+  // finalizar_proposta (sitpro -> 8) | reabrir_execucao_proposta (sitpro 8 -> 7)
+  tipo         String    @db.VarChar(40)
+  /// sitpro ANTES do envio: a origem auditada e a guarda de idempotência.
+  sitproDe     Int?
+  /// sitpro pedido (7 ou 8). O banco local só muda para ele DEPOIS que o Senior confirmar.
+  sitproPara   Int
+  payload      Json
+  // pendente | enviando | enviado | bloqueado — mesmo significado das filas irmãs.
+  status       String    @default("pendente") @db.VarChar(20)
+  tentativas   Int       @default(0)
+  ultimoErro   String?
+  usuarioId    Int?
+  criadoEm     DateTime  @default(now())
+  processadoEm DateTime?
+
+  @@index([codemp, codpro, status])
+  @@index([status])
+  @@map("sincronizacao_pendente_proposta")
 }
 
 // Espelho local da tabela USU_TRDVROTAS do Senior ERP (Tabela de Rotas) — rota de viagem

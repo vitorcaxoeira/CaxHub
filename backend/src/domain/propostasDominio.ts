@@ -41,6 +41,13 @@ export const SITPRO_DECIDIDAS = [4, 5, 6, 7, 8];
 // usado pela área de Alocação (backend/src/routes/alocacao.ts).
 export const SITPRO_ALOCAVEL = [4, 7];
 
+// Tela Gestão Propostas (09/11/2026): "Finalizar" leva a proposta para Executada (8) e só parte de Em Execução (7); "Em Execução" volta de
+// Executada (8) para 7. O domínio USU_SitPro não tem "Finalizada": o estado terminal é 8 = Executada. As 59 propostas Aprovadas (4) não podem
+// ser finalizadas por esta tela (decisão do Vitor): para finalizar uma, ela precisa antes estar Em Execução.
+export const SITPRO_EM_EXECUCAO = 7;
+export const SITPRO_EXECUTADA = 8;
+export const SITPRO_FINALIZAVEL = [SITPRO_EM_EXECUCAO];
+
 // Domínio "USU_TipVen" do Senior (tipo de venda de serviços).
 export const TIPVEN_LABELS: Record<number, string> = {
   1: "Venda Serviços Cliente Novo",

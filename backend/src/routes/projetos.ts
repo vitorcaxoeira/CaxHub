@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { col, registrarListaConsultavel } from "./listaConsultavel";
+import { SITUACAO_PROPOSTA_SQL, TOM_PROPOSTA_SQL } from "../domain/gestaoPropostasSql";
 import { rotuloSql } from "../consultas/rotuloSql";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
@@ -823,11 +824,6 @@ function condicaoAlertaSql(alerta: string | null, estagnadaDias: number): Prisma
       return Prisma.sql`TRUE`;
   }
 }
-
-const SITUACAO_PROPOSTA_SQL = rotuloSql(Prisma.sql`p.sitpro`, SITPRO_LABELS, "Situação", "Sem situação");
-// Mesma regra de sitproTone.
-const TOM_PROPOSTA_SQL = Prisma.sql`(CASE WHEN p.sitpro IN (4, 7, 8) THEN 'success' WHEN p.sitpro IN (5, 6) THEN 'destructive'
-  WHEN p.sitpro IN (1, 2, 3, 9) THEN 'warning' ELSE 'neutral' END)`;
 
 registrarListaConsultavel(
   projetosRouter,
