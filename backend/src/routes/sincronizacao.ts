@@ -4,6 +4,15 @@ import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { reprocessar, processarFilaSincronizacao, previewEnvioSenior } from "../sync/outboxSenior";
 import { reprocessarDespesa, processarFilaDespesas, previewEnvioDespesa } from "../sync/outboxSeniorDespesa";
+import {
+  ehAvisoDeEspera,
+  envioDeSituacaoLigado,
+  previewEnvioSituacaoProposta,
+  processarFilaSituacaoProposta,
+  reprocessarSituacaoProposta,
+} from "../sync/outboxSeniorProposta";
+import { escritaNoSeniorDesligada } from "../config/sistemaSenior";
+import { sitproLabel } from "../domain/propostasDominio";
 
 // Painel de administração da fila de sincronização CaxHub -> Senior (outbox). Só admin,
 // já que é uma tela operacional/infra, não de negócio.
@@ -318,5 +327,136 @@ sincronizacaoRouter.post("/despesas/:id/reprocessar", async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error, "reprocessar-despesa");
+  }
+});
+
+
+// ---------- Situação de proposta (Gestão Propostas, 09/11/2026) ----------
+//
+// Terceira fila IRMÃ: SincronizacaoPendenteProposta (Finalizar / Em Execução pedidos na tela Gestão Propostas; operação `ManterSituacaoProposta`).
+// Mesmo formato de resposta das duas anteriores, para reaproveitar o layout da tela (aba "Situação de proposta"). A chave aqui é a PROPOSTA.
+const STATUS_VALIDOS_PROPOSTA = ["pendente", "enviando", "enviado", "bloqueado"] as const;
+
+sincronizacaoRouter.get("/propostas-situacao", async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
+    const status =
+      typeof req.query.status === "string" && (STATUS_VALIDOS_PROPOSTA as readonly string[]).includes(req.query.status)
+        ? req.query.status
+        : null;
+    const tipos = parseStringListParam(req.query.tipo);
+    const codpros = parseIntListParam(req.query.codpro);
+
+    const where: Prisma.SincronizacaoPendentePropostaWhereInput = {};
+    if (status) where.status = status;
+    if (tipos) where.tipo = { in: tipos };
+    if (codpros) where.codpro = { in: codpros };
+
+    const [total, itens] = await Promise.all([
+      prisma.sincronizacaoPendenteProposta.count({ where }),
+      prisma.sincronizacaoPendenteProposta.findMany({
+        where,
+        orderBy: { criadoEm: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { proposta: { select: { despro: true, sitpro: true, cliente: { select: { nomcli: true } } } } },
+      }),
+    ]);
+
+    // Quem pediu: 1 consulta em lote para os usuários da página (a fila guarda só o id).
+    const usuarioIds = Array.from(new Set(itens.map((i) => i.usuarioId).filter((id): id is number => id != null)));
+    const usuarios = usuarioIds.length > 0 ? await prisma.user.findMany({ where: { id: { in: usuarioIds } }, select: { id: true, nome: true } }) : [];
+    const nomePorId = new Map(usuarios.map((u) => [u.id, u.nome]));
+
+    res.json({
+      total,
+      itens: itens.map((i) => ({
+        id: i.id,
+        codemp: i.codemp,
+        codpro: i.codpro,
+        despro: i.proposta.despro,
+        cliente: i.proposta.cliente?.nomcli ?? null,
+        // Situação ATUAL da proposta no CaxHub (só muda depois que o Senior confirmar) e a que foi pedida.
+        sitproAtual: i.proposta.sitpro,
+        sitproAtualLabel: sitproLabel(i.proposta.sitpro),
+        sitproDeLabel: sitproLabel(i.sitproDe),
+        sitproParaLabel: sitproLabel(i.sitproPara),
+        tipo: i.tipo,
+        payload: i.payload,
+        status: i.status,
+        tentativas: i.tentativas,
+        ultimoErro: i.ultimoErro,
+        // pendente sem falha real: só espera o envio poder sair (porta desligada neste ambiente). Não é erro.
+        aguardando: i.status === "pendente" && ehAvisoDeEspera(i.ultimoErro),
+        usuario: i.usuarioId != null ? nomePorId.get(i.usuarioId) ?? `Usuário ${i.usuarioId}` : null,
+        criadoEm: i.criadoEm,
+        processadoEm: i.processadoEm,
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "listar-propostas-situacao");
+  }
+});
+
+sincronizacaoRouter.get("/propostas-situacao/indicadores", async (_req, res) => {
+  try {
+    const grupos = await prisma.sincronizacaoPendenteProposta.groupBy({ by: ["status"], _count: true });
+    const totais: Record<string, number> = { pendente: 0, enviando: 0, enviado: 0, bloqueado: 0 };
+    for (const g of grupos) {
+      if (g.status in totais) totais[g.status] = g._count;
+    }
+    res.json({
+      ...totais,
+      // O envio só fica parado com a trava geral SENIOR_SOMENTE_LEITURA: a tela explica por que as pendências estariam paradas.
+      envioLigado: envioDeSituacaoLigado(),
+      somenteLeitura: escritaNoSeniorDesligada(),
+    });
+  } catch (error) {
+    handleError(res, error, "indicadores-propostas-situacao");
+  }
+});
+
+sincronizacaoRouter.get("/propostas-situacao/:id/preview", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const item = await prisma.sincronizacaoPendenteProposta.findUnique({ where: { id } });
+    if (!item) {
+      res.status(404).json({ error: "Pendência não encontrada" });
+      return;
+    }
+    res.json(previewEnvioSituacaoProposta(item));
+  } catch (error) {
+    handleError(res, error, "preview-proposta-situacao");
+  }
+});
+
+// Reseta (tentativas 0, sem erro) e já tenta na hora, restrito a este item. Com o envio desligado no ambiente a pendência só volta a "pendente".
+sincronizacaoRouter.post("/propostas-situacao/:id/reprocessar", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const item = await prisma.sincronizacaoPendenteProposta.findUnique({ where: { id }, select: { status: true } });
+    if (!item) {
+      res.status(404).json({ error: "Pendência não encontrada" });
+      return;
+    }
+    // Já enviada ou em voo: não reabre (reenviar uma mudança já confirmada não faz sentido).
+    if (item.status === "enviado" || item.status === "enviando") {
+      res.status(409).json({ error: `A pendência está "${item.status}": não há o que reenviar` });
+      return;
+    }
+    await reprocessarSituacaoProposta(id);
+    await processarFilaSituacaoProposta({ apenasId: id });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "reprocessar-proposta-situacao");
   }
 });

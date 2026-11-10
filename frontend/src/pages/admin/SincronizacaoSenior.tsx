@@ -9,6 +9,7 @@ import { Skeleton } from "../../components/ui/Skeleton";
 import { Tabs } from "../../components/ui/Tabs";
 import { copiarParaAreaDeTransferencia } from "../../utils/clipboard";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { PainelSituacaoProposta } from "./PainelSituacaoProposta";
 
 interface ItemSincronizacao {
   id: number;
@@ -126,7 +127,7 @@ function detalheEssencial(item: ItemSincronizacao): string | null {
 // próprios — juntar as duas listas numa paginação só exigiria misturar dois formatos de linha
 // bem diferentes (Proposta/Atividade vs RAT/Despesa) só pra economizar uma aba a mais.
 export function SincronizacaoSenior() {
-  const [aba, setAba] = useState<"rat" | "despesa">("rat");
+  const [aba, setAba] = useState<"rat" | "despesa" | "situacao">("rat");
 
   return (
     <div>
@@ -139,7 +140,7 @@ export function SincronizacaoSenior() {
         <p className="mt-1 text-sm text-muted">
           Fila (outbox) de mudanças feitas no CaxHub que precisam ser propagadas de volta pro ERP Senior. Apontamento
           (<code>registrarAtividades</code>), alocação (<code>alocarAtividades</code>) e despesa de viagem
-          (<code>ManterItemDespesa</code>) já têm canal publicado; um item de Atividades só fica represado sem
+          (<code>ManterItemDespesa</code>) e situação de proposta (<code>ManterSituacaoProposta</code>) já têm canal publicado; um item de Atividades só fica represado sem
           consumir tentativa quando o tipo ainda não tem operação do lado do Senior.
         </p>
       </div>
@@ -148,12 +149,13 @@ export function SincronizacaoSenior() {
         tabs={[
           { key: "rat", label: "Atividades" },
           { key: "despesa", label: "Despesas de viagem" },
+          { key: "situacao", label: "Situação de proposta" },
         ]}
         activeKey={aba}
-        onChange={(key) => setAba(key as "rat" | "despesa")}
+        onChange={(key) => setAba(key as "rat" | "despesa" | "situacao")}
       />
 
-      {aba === "rat" ? <PainelAtividades /> : <PainelDespesas />}
+      {aba === "rat" ? <PainelAtividades /> : aba === "despesa" ? <PainelDespesas /> : <PainelSituacaoProposta />}
     </div>
   );
 }

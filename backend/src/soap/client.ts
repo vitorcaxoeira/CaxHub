@@ -828,7 +828,7 @@ export async function fecharRatViaSoap(payload: FecharRatPayload): Promise<Fecha
 // aqui, flowInstanceID e flowName) e resposta `ManterSituacaoPropostaResponse` (result = CaxHubManterSituacaoPropostaOut: statusProcesso,
 // mensagemProcesso, erroExecucao), o mesmo molde de `fecharRAT`. O significado de `statusProcesso` (0=Erro, 1=Sucesso) segue o das outras operações.
 // AINDA NÃO FOI FEITO UM ENVIO REAL: conferir no primeiro (o prefixo `ns2` do elemento de resposta e o texto de `mensagemProcesso`). O worker
-// (sync/outboxSeniorProposta.ts) só envia com SENIOR_PORTA_SITPRO=1.
+// (sync/outboxSeniorProposta.ts) envia sempre que a escrita no Senior está ligada (a variável SENIOR_PORTA_SITPRO foi aposentada em 10/11/2026).
 // ---------------------------------------------------------------------------
 
 export interface ManterSituacaoPropostaPayload {

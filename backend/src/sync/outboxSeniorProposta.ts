@@ -29,26 +29,26 @@ export const TIPO_FINALIZAR_PROPOSTA = "finalizar_proposta";
 export const TIPO_REABRIR_EXECUCAO_PROPOSTA = "reabrir_execucao_proposta";
 
 /**
- * A operação `ManterSituacaoProposta` já está publicada no Senior e o contrato foi conferido no WSDL/XSD (soap/client.ts), mas o envio real fica atrás de
- * um interruptor: enquanto `SENIOR_PORTA_SITPRO` não for "1" a fila fica parada, e a pendência continua "pendente" SEM gastar tentativa — gastar levaria
- * as 5 e bloquearia por um motivo que não é erro (a mesma lição dos itens travados de julho/2026, CanalIndisponivelError em outboxSenior.ts). Liga-se
- * a variável no ambiente em que o primeiro envio real for conferido (de preferência numa proposta de teste).
+ * A operação `ManterSituacaoProposta` está publicada no Senior e o contrato foi conferido no WSDL/XSD (soap/client.ts). Desde 10/11/2026 o envio NÃO tem
+ * mais interruptor próprio (a variável SENIOR_PORTA_SITPRO foi aposentada por decisão do Vitor): a fila envia sempre que a escrita no Senior está ligada.
+ * A única trava que sobra é a geral, `SENIOR_SOMENTE_LEITURA` (escritaNoSeniorDesligada): com ela ligada nada sai e as pendências esperam SEM gastar tentativa
+ * (gastar levaria as 5 e bloquearia por um motivo que não é erro, a lição dos itens travados de julho/2026, CanalIndisponivelError em outboxSenior.ts).
  */
-export function portaDeSituacaoPublicada(): boolean {
-  return process.env.SENIOR_PORTA_SITPRO === "1";
+export function envioDeSituacaoLigado(): boolean {
+  return !escritaNoSeniorDesligada();
 }
 
-export const AVISO_PORTA_NAO_PUBLICADA =
-  "Aguardando: o envio da situação ao Senior (operação ManterSituacaoProposta) está desligado neste ambiente (SENIOR_PORTA_SITPRO). A pendência segue na fila.";
-/** Texto que as pendências criadas antes de 09/11/2026 (operação ainda não publicada) já têm gravado: continua valendo como aviso de espera. */
-const AVISO_PORTA_LEGADO =
-  "Aguardando a publicação da operação alterarSituacaoProposta no Senior (SENIOR_PORTA_SITPRO desligada). A pendência segue na fila.";
 export const AVISO_ESCRITA_DESLIGADA =
   "Aguardando: a escrita no Senior está desligada neste ambiente (SENIOR_SOMENTE_LEITURA). A pendência segue na fila.";
+// Textos que pendências criadas ANTES de 10/11/2026 já têm gravados (quando existia o interruptor SENIOR_PORTA_SITPRO): continuam valendo como espera.
+const AVISO_PORTA_LEGADO =
+  "Aguardando a publicação da operação alterarSituacaoProposta no Senior (SENIOR_PORTA_SITPRO desligada). A pendência segue na fila.";
+const AVISO_PORTA_LEGADO_2 =
+  "Aguardando: o envio da situação ao Senior (operação ManterSituacaoProposta) está desligado neste ambiente (SENIOR_PORTA_SITPRO). A pendência segue na fila.";
 
 /** O `ultimoErro` é só um aviso de espera (a fila ainda não pode enviar), não uma falha de envio? A tela mostra "Aguardando ERP" em vez de erro. */
 export function ehAvisoDeEspera(ultimoErro: string | null | undefined): boolean {
-  return !ultimoErro || ultimoErro === AVISO_PORTA_NAO_PUBLICADA || ultimoErro === AVISO_PORTA_LEGADO || ultimoErro === AVISO_ESCRITA_DESLIGADA;
+  return !ultimoErro || ultimoErro === AVISO_PORTA_LEGADO || ultimoErro === AVISO_PORTA_LEGADO_2 || ultimoErro === AVISO_ESCRITA_DESLIGADA;
 }
 
 export interface NovaPendenciaSituacao {
@@ -104,14 +104,13 @@ export function processarFilaSituacaoProposta(opcoes: { apenasId?: number; apena
 async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): Promise<void> {
   const ids = opcoes.apenasIds ?? (opcoes.apenasId != null ? [opcoes.apenasId] : undefined);
 
-  // Somente leitura (SENIOR_SOMENTE_LEITURA) ou porta ainda não publicada: nada sai; os itens ficam "pendente" e NÃO gastam tentativa. O motivo
-  // fica à vista na tela (selo "Aguardando ERP" + title) pelo `ultimoErro`, que só recebe o aviso se estiver vazio (não apaga uma falha real).
-  const motivoDeEspera = escritaNoSeniorDesligada() ? AVISO_ESCRITA_DESLIGADA : !portaDeSituacaoPublicada() ? AVISO_PORTA_NAO_PUBLICADA : null;
-  if (motivoDeEspera) {
-    if (motivoDeEspera === AVISO_ESCRITA_DESLIGADA) console.warn("[outbox-proposta] escrita no Senior desligada (SENIOR_SOMENTE_LEITURA): fila não enviada");
+  // Somente leitura (SENIOR_SOMENTE_LEITURA): nada sai; os itens ficam "pendente" e NÃO gastam tentativa. O motivo fica à vista na tela (selo "Aguardando
+  // ERP" + title) pelo `ultimoErro`, que só recebe o aviso se estiver vazio (não apaga uma falha real).
+  if (!envioDeSituacaoLigado()) {
+    console.warn("[outbox-proposta] escrita no Senior desligada (SENIOR_SOMENTE_LEITURA): fila não enviada");
     await prisma.sincronizacaoPendenteProposta.updateMany({
       where: { status: "pendente", ultimoErro: null, ...(ids != null ? { id: { in: ids } } : {}) },
-      data: { ultimoErro: motivoDeEspera },
+      data: { ultimoErro: AVISO_ESCRITA_DESLIGADA },
     });
     return;
   }

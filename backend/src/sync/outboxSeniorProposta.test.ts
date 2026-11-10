@@ -1,36 +1,38 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AVISO_ESCRITA_DESLIGADA, AVISO_PORTA_NAO_PUBLICADA, ehAvisoDeEspera, portaDeSituacaoPublicada } from "./outboxSeniorProposta";
+import { AVISO_ESCRITA_DESLIGADA, ehAvisoDeEspera, envioDeSituacaoLigado } from "./outboxSeniorProposta";
 
-test("ehAvisoDeEspera: vazio e os avisos da própria fila são espera; erro de verdade não é", () => {
+test("ehAvisoDeEspera: vazio e o aviso de escrita desligada são espera; erro de verdade não é", () => {
   assert.equal(ehAvisoDeEspera(null), true);
   assert.equal(ehAvisoDeEspera(undefined), true);
   assert.equal(ehAvisoDeEspera(""), true);
-  assert.equal(ehAvisoDeEspera(AVISO_PORTA_NAO_PUBLICADA), true);
   assert.equal(ehAvisoDeEspera(AVISO_ESCRITA_DESLIGADA), true);
   assert.equal(ehAvisoDeEspera("Senior recusou a mudança de situação (statusProcesso=0): proposta bloqueada"), false);
 });
 
-test("ehAvisoDeEspera: a pendência criada antes da operação ser publicada (texto antigo) continua sendo espera, não falha", () => {
+test("ehAvisoDeEspera: pendências criadas no tempo do interruptor SENIOR_PORTA_SITPRO (textos antigos) continuam sendo espera, não falha", () => {
   const antigo = "Aguardando a publicação da operação alterarSituacaoProposta no Senior (SENIOR_PORTA_SITPRO desligada). A pendência segue na fila.";
+  const antigo2 =
+    "Aguardando: o envio da situação ao Senior (operação ManterSituacaoProposta) está desligado neste ambiente (SENIOR_PORTA_SITPRO). A pendência segue na fila.";
   assert.equal(ehAvisoDeEspera(antigo), true);
+  assert.equal(ehAvisoDeEspera(antigo2), true);
 });
 
-test("o aviso de espera cita a operação publicada (ManterSituacaoProposta)", () => {
-  assert.match(AVISO_PORTA_NAO_PUBLICADA, /ManterSituacaoProposta/);
-});
-
-test("portaDeSituacaoPublicada: só liga com SENIOR_PORTA_SITPRO=1", () => {
-  const anterior = process.env.SENIOR_PORTA_SITPRO;
+test("envioDeSituacaoLigado: só depende da trava geral SENIOR_SOMENTE_LEITURA (SENIOR_PORTA_SITPRO não vale mais)", () => {
+  const somente = process.env.SENIOR_SOMENTE_LEITURA;
+  const porta = process.env.SENIOR_PORTA_SITPRO;
   try {
+    delete process.env.SENIOR_SOMENTE_LEITURA;
     delete process.env.SENIOR_PORTA_SITPRO;
-    assert.equal(portaDeSituacaoPublicada(), false);
-    process.env.SENIOR_PORTA_SITPRO = "true";
-    assert.equal(portaDeSituacaoPublicada(), false);
-    process.env.SENIOR_PORTA_SITPRO = "1";
-    assert.equal(portaDeSituacaoPublicada(), true);
+    assert.equal(envioDeSituacaoLigado(), true, "sem nenhuma variável, envia");
+    process.env.SENIOR_PORTA_SITPRO = "0";
+    assert.equal(envioDeSituacaoLigado(), true, "SENIOR_PORTA_SITPRO é ignorada");
+    process.env.SENIOR_SOMENTE_LEITURA = "true";
+    assert.equal(envioDeSituacaoLigado(), false, "somente leitura segura o envio");
   } finally {
-    if (anterior === undefined) delete process.env.SENIOR_PORTA_SITPRO;
-    else process.env.SENIOR_PORTA_SITPRO = anterior;
+    if (somente === undefined) delete process.env.SENIOR_SOMENTE_LEITURA;
+    else process.env.SENIOR_SOMENTE_LEITURA = somente;
+    if (porta === undefined) delete process.env.SENIOR_PORTA_SITPRO;
+    else process.env.SENIOR_PORTA_SITPRO = porta;
   }
 });

@@ -38,7 +38,7 @@ import {
   ehAvisoDeEspera,
   enfileirarSituacaoProposta,
   pendenciaDeSituacaoEmAndamento,
-  portaDeSituacaoPublicada,
+  envioDeSituacaoLigado,
   TIPO_FINALIZAR_PROPOSTA,
   TIPO_REABRIR_EXECUCAO_PROPOSTA,
 } from "../sync/outboxSeniorProposta";
@@ -395,7 +395,7 @@ async function pedirMudancaSituacao(req: Request, res: Response, acao: AcaoSitua
       sitproLabel: sitproLabel(preparo.proposta.sitpro),
       destino: preparo.destino,
       destinoLabel: sitproLabel(preparo.destino),
-      portaPublicada: portaDeSituacaoPublicada(),
+      envioLigado: envioDeSituacaoLigado(),
     });
   } catch (erro) {
     erroInterno(res, erro, acao);
@@ -422,7 +422,7 @@ gestaoPropostasRouter.get("/propostas/:codemp/:codpro/situacao", async (req, res
       sitpro: proposta.sitpro,
       sitproLabel: sitproLabel(proposta.sitpro),
       sitproTone: sitproTone(proposta.sitpro),
-      portaPublicada: portaDeSituacaoPublicada(),
+      envioLigado: envioDeSituacaoLigado(),
       pendencia: pendencia && {
         id: pendencia.id,
         tipo: pendencia.tipo,

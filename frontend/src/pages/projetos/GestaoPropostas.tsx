@@ -366,7 +366,8 @@ const COLUNAS: DefColuna<PropostaRow, AcoesGestao>[] = [
                 {a.estaSincronizando(chave) ? "Sincronizando..." : "Sinc. ERP"}
               </DropdownMenu.Item>
               <DropdownMenu.Item onSelect={() => a.pedirAcao(row, "finalizar")} disabled={motivoFinalizar != null} title={motivoFinalizar ?? undefined}>
-                Finalizar
+                {/* "(Rat Pendente)": avisa que há RAT Digitada/Fechada impedindo finalizar (Finalizar = passar para Executada); o motivo completo está no title. */}
+                {row.sitpro === 7 && row.ratsBloqueando > 0 ? "Finalizar (Rat Pendente)" : "Finalizar"}
               </DropdownMenu.Item>
               <DropdownMenu.Item onSelect={() => a.pedirAcao(row, "em-execucao")} disabled={motivoExecucao != null} title={motivoExecucao ?? undefined}>
                 Em Execução
@@ -432,10 +433,10 @@ const COLUNAS_RATS: DefColuna<RatRow, (rota: string) => void>[] = [
   {
     nome: "minutosFaturaveis",
     ocultaPorPadrao: true,
-    titulo: "Horas Faturadas",
-    dica: "Apontamentos válidos em itens com faturamento normal ou antecipado",
+    titulo: "Hrs. Fat.",
+    dica: "Horas Faturadas: apontamentos válidos em itens com faturamento normal ou antecipado",
     direita: true,
-    largura: 120,
+    largura: 90,
     classe: CLASSE_HORAS,
     formatarResumo: (v) => minutos(v),
     render: (r) => minutos(r.minutosFaturaveis),
@@ -443,9 +444,10 @@ const COLUNAS_RATS: DefColuna<RatRow, (rota: string) => void>[] = [
   {
     nome: "minutosNaoFaturaveis",
     ocultaPorPadrao: true,
-    titulo: "Horas Não Faturadas",
+    titulo: "Hrs. Não Fat.",
+    dica: "Horas Não Faturadas: apontamentos válidos em itens sem faturamento, comercial, suporte ou investimento (e sem item de proposta)",
     direita: true,
-    largura: 130,
+    largura: 110,
     classe: CLASSE_HORAS,
     formatarResumo: (v) => minutos(v),
     render: (r) => minutos(r.minutosNaoFaturaveis),
@@ -453,9 +455,10 @@ const COLUNAS_RATS: DefColuna<RatRow, (rota: string) => void>[] = [
   {
     nome: "valorFaturamento",
     ocultaPorPadrao: true,
-    titulo: "Valor para Faturamento",
+    titulo: "Vlr. Fat.",
+    dica: "Valor para Faturamento: horas faturáveis da RAT × valor-hora do item da proposta (R$)",
     direita: true,
-    largura: 150,
+    largura: 110,
     classe: CLASSE_VALOR,
     formatarResumo: formatMoeda,
     render: (r) => formatMoeda(r.valorFaturamento),
@@ -463,9 +466,10 @@ const COLUNAS_RATS: DefColuna<RatRow, (rota: string) => void>[] = [
   {
     nome: "valorNaoFaturado",
     ocultaPorPadrao: true,
-    titulo: "Valor Não Faturado",
+    titulo: "Vlr. Não Fat.",
+    dica: "Valor Não Faturado: horas não faturáveis da RAT × valor-hora do item da proposta (R$)",
     direita: true,
-    largura: 140,
+    largura: 120,
     classe: CLASSE_VALOR,
     formatarResumo: formatMoeda,
     render: (r) => formatMoeda(r.valorNaoFaturado),
@@ -800,12 +804,12 @@ export function GestaoPropostas() {
       const { data } = await axios.post(`/api/gestao-propostas/propostas/${row.codemp}/${row.codpro}/${acao}`);
       setAlvo(null);
       carregar();
-      if (data.portaPublicada) {
+      if (data.envioLigado) {
         toast.mostrar(`Pedido enviado: proposta ${row.codpro} para ${data.destinoLabel}. Aguardando o Senior confirmar.`, "success");
         void acompanhar(row, data.destinoLabel);
       } else {
         toast.mostrar(
-          `Pedido registrado para a proposta ${row.codpro} (${data.destinoLabel}). Ele fica aguardando o ERP: a situação não mudou e só muda quando o Senior confirmar.`,
+          `Pedido registrado para a proposta ${row.codpro} (${data.destinoLabel}). O servidor está em somente leitura, então ele fica aguardando: a situação não mudou e só muda quando o Senior confirmar. Acompanhe em Administração › Exportados para o Senior › Situação de proposta.`,
           "warning",
         );
       }
