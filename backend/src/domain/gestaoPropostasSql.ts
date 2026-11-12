@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import type { ExtrasDaConsulta, FonteCampos } from "../consultas/camposRelacionados";
 import { rotuloSql } from "../consultas/rotuloSql";
 import { RAT_ITEM_VALIDO } from "./eficienciaDados";
 import { FATSER_FATURAVEL } from "./eficienciaPropostas";
@@ -45,9 +46,20 @@ export interface OpcoesGestaoPropostas {
    * ordena, resume ou lista valores de uma coluna pesada (ver `precisaCalcularConjunto`).
    */
   conjunto?: boolean;
+  /** Campos extras de proposta/cliente que a pessoa ligou (consultas/camposRelacionados.ts). Sem eles a consulta é a de sempre. */
+  extras?: ExtrasDaConsulta;
   /** As duas colunas em R$ só existem para quem pode ver valores de proposta: quem não pode nem recebe o número na resposta. */
   comValores?: boolean;
 }
+
+/**
+ * Tabelas cujos campos a pessoa pode ligar como coluna (12/11/2026): a própria proposta (alias `p`) e o cliente (alias `c`), os dois já ligados
+ * na consulta. `sencli` (senha do cliente no Senior) nunca é oferecido.
+ */
+export const FONTES_GESTAO_PROPOSTAS: FonteCampos[] = [
+  { id: "proposta", titulo: "Proposta", tabela: "propostas", alias: "p" },
+  { id: "cliente", titulo: "Cliente", tabela: "clientes", alias: "c", omitir: ["sencli"] },
+];
 
 /** Colunas cujo cálculo é caro (agregado de RAT): filtrar, ordenar ou resumir por elas pede o modo conjunto. */
 export const COLUNAS_PESADAS_GESTAO_PROPOSTAS = [
@@ -222,6 +234,7 @@ export function consultaGestaoPropostas(filtros: FiltrosGestaoPropostas, opcoes:
            ${comValores ? Prisma.sql`${valFat} AS val_fat, ${valNaoFat} AS val_nfat,` : Prisma.empty}
            ${totalRats} AS "totalRats",
            ${ratsBloqueando} AS "ratsBloqueando"
+           ${opcoes.extras?.selecao ?? Prisma.empty}
     FROM propostas p
     JOIN clientes c ON c.codcli = p.codcli
     LEFT JOIN itens it ON it.codemp = p.codemp AND it.codpro = p.codpro
@@ -240,6 +253,7 @@ export function consultaGestaoPropostas(filtros: FiltrosGestaoPropostas, opcoes:
            (b.min_fat::numeric / 60)::float8 AS "horasFaturadas",
            ((b.min_rat - b.min_fat)::numeric / 60)::float8 AS "horasNaoFaturadas"
            ${comValores ? Prisma.sql`, b.val_fat::float8 AS "valorFaturamento", b.val_nfat::float8 AS "valorNaoFaturado"` : Prisma.empty}
+           ${opcoes.extras?.repasse ?? Prisma.empty}
     FROM (${base}) b`;
   return { com, interna };
 }

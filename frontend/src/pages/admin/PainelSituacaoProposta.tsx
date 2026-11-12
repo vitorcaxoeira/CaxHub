@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { usePorPagina } from "../../components/ui/padroesFiltros/usePorPagina";
 import { Link } from "react-router-dom";
 import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Modal } from "../../components/ui/Modal";
@@ -50,6 +51,7 @@ interface PreviewEnvio {
 }
 
 const PAGE_SIZE = 30;
+const OPCOES_POR_PAGINA = [10, 25, 30, 50, 100]; // a API aceita até 100 por página
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
@@ -82,6 +84,9 @@ export function PainelSituacaoProposta() {
   const [itens, setItens] = useState<ItemSituacao[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  // "Por página" com a estrela de padrão (12/11/2026): a 1ª consulta espera o padrão salvo.
+  const pp = usePorPagina({ tela: "admin.sincronizacao.situacao-proposta", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const pageSize = pp.porPagina;
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState<number | null>(null);
@@ -107,7 +112,7 @@ export function PainelSituacaoProposta() {
       .get("/api/sincronizacao/propostas-situacao", {
         params: {
           page,
-          pageSize: PAGE_SIZE,
+          pageSize,
           status: statusFiltro || undefined,
           tipo: tipoFiltro.length > 0 ? tipoFiltro.join(",") : undefined,
           codpro: codproDebounced || undefined,
@@ -134,9 +139,10 @@ export function PainelSituacaoProposta() {
   }, []);
 
   useEffect(() => {
+    if (!pp.pronto) return;
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFiltro, tipoFiltro, codproDebounced]);
+  }, [page, pageSize, pp.pronto, statusFiltro, tipoFiltro, codproDebounced]);
 
   useEffect(() => {
     setPage(1);
@@ -333,7 +339,20 @@ export function PainelSituacaoProposta() {
             </tbody>
           </table>
         </div>
-        <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPageChange={setPage} label="pendências" />
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          loading={loading}
+          onPageChange={setPage}
+          label="pendências"
+          opcoesPorPagina={pp.opcoes}
+          onPageSizeChange={(n) => {
+            pp.mudar(n);
+            setPage(1);
+          }}
+          acessorioPorPagina={pp.estrela}
+        />
       </div>
 
       <Modal

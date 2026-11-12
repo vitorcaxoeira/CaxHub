@@ -3,6 +3,8 @@ import { cn } from "../../lib/cn";
 import { Skeleton } from "../ui/Skeleton";
 import { type FuncaoResumo, formatarResumo, funcoesDaColuna, NA_UNIDADE_DA_COLUNA, ROTULO_RESUMO, type TipoResumo } from "./resumo";
 
+const OPCAO = "bg-surface font-sans normal-case tracking-normal text-foreground";
+
 interface Props {
   titulo: string;
   tipo: TipoResumo | undefined;
@@ -54,9 +56,10 @@ export function CelulaResumo({ titulo, tipo, permitidas, funcao, onEscolher, val
             direita && "text-right",
           )}
         >
-          <option value="">{escolhida ? "sem resumo" : "Σ resumo"}</option>
+          {/* O menu aberto é do navegador (fundo claro mesmo no tema escuro): sem cor própria nas opções, herdam o texto claro do rodapé e somem. */}
+          <option value="" className={OPCAO}>{escolhida ? "sem resumo" : "Σ resumo"}</option>
           {funcoes.map((f) => (
-            <option key={f} value={f}>
+            <option key={f} value={f} className={OPCAO}>
               {ROTULO_RESUMO[f]}
             </option>
           ))}

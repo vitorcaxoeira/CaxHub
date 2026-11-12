@@ -15,7 +15,7 @@ const PADRAO = ["codigo", "descricao", "unidade", "origem", "faixa"];
 
 describe("resolverLayout", () => {
   it("sem nada salvo, vale o padrão da tela", () => {
-    expect(resolverLayout(PADRAO, null)).toEqual({ ordem: PADRAO, ocultas: [], visiveis: PADRAO, larguras: {}, resumos: {}, congeladaAte: "", congeladas: [] });
+    expect(resolverLayout(PADRAO, null)).toEqual({ ordem: PADRAO, ocultas: [], visiveis: PADRAO, larguras: {}, resumos: {}, titulos: {}, congeladaAte: "", congeladas: [] });
   });
 
   it("resumos: só de coluna que a tela tem", () => {
@@ -168,5 +168,22 @@ describe("colunas paradas ao rolar (congelar até aqui)", () => {
     expect(deslocamentosCongeladas(["a", "b", "c"], { a: 120, b: 80, c: 200 }, 28)).toEqual({ a: 28, b: 148, c: 228 });
     expect(deslocamentosCongeladas([], {}, 28)).toEqual({});
     expect(deslocamentosCongeladas(["a", "b"], { a: 50 }, 28)).toEqual({ a: 28, b: 78 });
+  });
+});
+
+describe("título próprio da coluna", () => {
+  const BASE = ["codigo", "descricao", "unidade"];
+  it("sem nada salvo não há título próprio", () => {
+    expect(resolverLayout(BASE, null).titulos).toEqual({});
+    expect(resolverLayout(BASE, { ordem: [], ocultas: [] }).titulos).toEqual({});
+  });
+  it("guarda o título mesmo de coluna que a tela ainda não tem (campo extra só vira coluna depois que a lista responde) e ignora título vazio", () => {
+    const r = resolverLayout(BASE, { ordem: BASE, ocultas: [], titulos: { descricao: "Descrição curta", proposta__consol: "Contato", unidade: "  " } });
+    expect(r.titulos).toEqual({ descricao: "Descrição curta", proposta__consol: "Contato" });
+    expect(r.ordem).toEqual(BASE);
+  });
+  it("ter título próprio tira a arrumação do padrão (senão seria apagada em vez de gravada)", () => {
+    expect(ehPadrao(BASE, { ordem: BASE, ocultas: [], titulos: {} })).toBe(true);
+    expect(ehPadrao(BASE, { ordem: BASE, ocultas: [], titulos: { codigo: "Cód." } })).toBe(false);
   });
 });

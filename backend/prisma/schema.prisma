@@ -35,6 +35,7 @@ model User {
   preferenciaTela         PreferenciaTela?
 
   preferenciasColunas     PreferenciaColunas[]
+  preferenciasCamposExtras PreferenciaCamposExtras[]
   preferenciasFiltros     PreferenciaFiltro[]
   colunasCalculadas       ColunaCalculada[]
 
@@ -128,6 +129,8 @@ model PreferenciaColunas {
   larguras     Json     @default("{}")
   /// Resumo do rodapé por coluna ({"quantidade": "soma"}); vazio = nenhum (28/10/2026).
   resumos      Json     @default("{}")
+  /// Título próprio de cada coluna ({"proposta__consol": "Contato"}); só o texto exibido, o nome técnico não muda; vazio = títulos da tela (12/11/2026).
+  titulos      Json     @default("{}")
   /// Última coluna parada ao rolar na horizontal ("congelar até aqui", 09/11/2026): ela e as visíveis antes dela, na ordem. NULL = sem escolha (vale o
   /// padrão da tela); vazio = nenhuma parada, de propósito.
   congeladaAte String?  @map("congelada_ate") @db.VarChar(80)
@@ -137,6 +140,22 @@ model PreferenciaColunas {
 
   @@id([userId, tabela])
   @@map("preferencias_colunas")
+}
+
+/// Campos de tabelas relacionadas que o usuário ligou como colunas de uma lista (12/11/2026, ex.: Gestão Propostas -> cliente__cidcli).
+/// `tabela` é a mesma chave da arrumação das colunas; `campos` guarda os NOMES (`<fonte>__<campo>`, consultas/camposRelacionados.ts), na ordem em que
+/// foram ligados. Tabela à parte (e não coluna de preferencias_colunas) porque "Restaurar padrão" apaga a linha da arrumação e não deve desligar os campos.
+/// Lida e gravada só por SQL (routes/perfil.ts).
+model PreferenciaCamposExtras {
+  userId       Int      @map("user_id")
+  tabela       String   @db.VarChar(80)
+  campos       String[]
+  atualizadoEm DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, tabela])
+  @@map("preferencias_campos_extras")
 }
 
 /// Padrão de um filtro de uma tela, por usuário (03/11/2026, Acompanhamento de Compra): o disquete ao lado do filtro grava SÓ aquele campo.

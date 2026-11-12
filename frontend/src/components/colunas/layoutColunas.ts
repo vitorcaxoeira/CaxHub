@@ -10,6 +10,8 @@ export interface LayoutSalvo {
   larguras?: Record<string, number>;
   /** Resumo do rodapé por coluna (soma, média...; ver resumo.ts); vazio = nenhum (28/10/2026). */
   resumos?: Record<string, FuncaoResumo>;
+  /** Título próprio por coluna (12/11/2026): só o texto exibido; o nome técnico (filtro, ordem, resumo, fórmula) não muda. */
+  titulos?: Record<string, string>;
   /**
    * Última coluna parada ao rolar na horizontal ("congelar até aqui", 09/11/2026). null/ausente = sem escolha (vale o padrão da tela);
    * "" = nenhuma parada, de propósito; "nome" = ela e as visíveis antes dela, na ordem atual, ficam paradas.
@@ -23,6 +25,8 @@ export interface LayoutResolvido {
   visiveis: string[];
   larguras: Record<string, number>;
   resumos: Record<string, FuncaoResumo>;
+  /** Título próprio por coluna. Fica mesmo o da coluna que a tela ainda não tem (campo extra e calculada só viram coluna depois que a lista responde). */
+  titulos: Record<string, string>;
   /** O limite que vale (a escolha do usuário ou o padrão da tela); "" = nenhuma parada. */
   congeladaAte: string;
   /** As colunas paradas: visíveis, da primeira até o limite, na ordem. */
@@ -66,6 +70,7 @@ export function resolverLayout(
       .map(([n, px]) => [n, limitarLargura(px)]),
   );
   const resumos = Object.fromEntries(Object.entries(salvo?.resumos ?? {}).filter(([n]) => existe.has(n))) as Record<string, FuncaoResumo>;
+  const titulos = Object.fromEntries(Object.entries(salvo?.titulos ?? {}).filter(([, t]) => typeof t === "string" && t.trim() !== ""));
   // Escolha do usuário (inclusive "" = nenhuma); sem escolha ou com coluna que a tela não tem mais, vale o padrão da tela.
   const escolhida = salvo?.congeladaAte;
   const padraoExiste = existe.has(congeladaAtePadrao) ? congeladaAtePadrao : "";
@@ -76,6 +81,7 @@ export function resolverLayout(
     visiveis: ordem.filter((n) => !ocultas.includes(n)),
     larguras,
     resumos,
+    titulos,
     congeladaAte,
     congeladas: colunasCongeladas(ordem, ocultas, congeladaAte),
   };
@@ -150,7 +156,7 @@ export function definirLargura(larguras: Record<string, number>, nome: string, p
   return { ...base, [nome]: limitarLargura(px) };
 }
 
-/** Igual ao padrão da tela (mesma ordem, só as ocultas por padrão ocultas, sem largura ajustada e sem resumo): não há o que guardar. */
+/** Igual ao padrão da tela (mesma ordem, só as ocultas por padrão ocultas, sem largura ajustada, sem resumo e sem título próprio): não há o que guardar. */
 export function ehPadrao(padrao: string[], layout: LayoutSalvo, ocultasPadrao: string[] = [], congeladaAtePadrao = ""): boolean {
   const esperadas = ocultasPadrao.filter((n) => padrao.includes(n));
   // Sem escolha (null/ausente) ou escolha igual ao padrão da tela: nada a guardar.
@@ -161,6 +167,7 @@ export function ehPadrao(padrao: string[], layout: LayoutSalvo, ocultasPadrao: s
     esperadas.every((n) => layout.ocultas.includes(n)) &&
     Object.keys(layout.larguras ?? {}).length === 0 &&
     Object.keys(layout.resumos ?? {}).length === 0 &&
+    Object.keys(layout.titulos ?? {}).length === 0 &&
     layout.ordem.length === padrao.length &&
     layout.ordem.every((n, i) => n === padrao[i])
   );

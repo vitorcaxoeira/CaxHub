@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { usePorPagina } from "../../components/ui/padroesFiltros/usePorPagina";
 import { Link } from "react-router-dom";
 import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Modal } from "../../components/ui/Modal";
@@ -64,6 +65,7 @@ const TIPO_LABEL: Record<string, string> = {
 const TIPO_OPCOES: MultiSelectOption<string>[] = Object.entries(TIPO_LABEL).map(([value, label]) => ({ value, label }));
 
 const PAGE_SIZE = 30;
+const OPCOES_POR_PAGINA = [10, 25, 30, 50, 100]; // a API aceita até 100 por página
 
 // "07/08" — dia/mês de uma data (ISO) vinda do payload congelado da pendência.
 function formatarDataCurta(valor: unknown): string | null {
@@ -164,6 +166,9 @@ function PainelAtividades() {
   const [itens, setItens] = useState<ItemSincronizacao[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  // "Por página" com a estrela de padrão (12/11/2026): a 1ª consulta espera o padrão salvo.
+  const pp = usePorPagina({ tela: "admin.sincronizacao.atividades", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const pageSize = pp.porPagina;
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState<number | null>(null);
@@ -204,7 +209,7 @@ function PainelAtividades() {
       .get("/api/sincronizacao", {
         params: {
           page,
-          pageSize: PAGE_SIZE,
+          pageSize,
           status: statusFiltro || undefined,
           tipo: tipoFiltro.length > 0 ? tipoFiltro.join(",") : undefined,
           codpro: codproDebounced || undefined,
@@ -236,9 +241,10 @@ function PainelAtividades() {
   }, []);
 
   useEffect(() => {
+    if (!pp.pronto) return;
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFiltro, tipoFiltro, codproDebounced, atividadeIdDebounced]);
+  }, [page, pageSize, pp.pronto, statusFiltro, tipoFiltro, codproDebounced, atividadeIdDebounced]);
 
   // Trocar qualquer filtro volta pra página 1 — senão a busca pode "sumir" numa página que
   // não existe mais no recorte novo (mesmo padrão de ListarPedidos.tsx).
@@ -561,7 +567,20 @@ function PainelAtividades() {
             </tbody>
           </table>
         </div>
-        <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPageChange={setPage} label="pendências" />
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          loading={loading}
+          onPageChange={setPage}
+          label="pendências"
+          opcoesPorPagina={pp.opcoes}
+          onPageSizeChange={(n) => {
+            pp.mudar(n);
+            setPage(1);
+          }}
+          acessorioPorPagina={pp.estrela}
+        />
       </div>
 
       <Modal
@@ -756,6 +775,9 @@ function PainelDespesas() {
   const [itens, setItens] = useState<ItemSincronizacaoDespesa[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  // "Por página" com a estrela de padrão (12/11/2026): a 1ª consulta espera o padrão salvo.
+  const pp = usePorPagina({ tela: "admin.sincronizacao.despesas", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const pageSize = pp.porPagina;
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState<number | null>(null);
@@ -784,7 +806,7 @@ function PainelDespesas() {
       .get("/api/sincronizacao/despesas", {
         params: {
           page,
-          pageSize: PAGE_SIZE,
+          pageSize,
           status: statusFiltro || undefined,
           tipo: tipoFiltro.length > 0 ? tipoFiltro.join(",") : undefined,
           numrat: numratDebounced || undefined,
@@ -815,9 +837,10 @@ function PainelDespesas() {
   }, []);
 
   useEffect(() => {
+    if (!pp.pronto) return;
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFiltro, tipoFiltro, numratDebounced, despesaIdDebounced]);
+  }, [page, pageSize, pp.pronto, statusFiltro, tipoFiltro, numratDebounced, despesaIdDebounced]);
 
   useEffect(() => {
     setPage(1);
@@ -1071,7 +1094,20 @@ function PainelDespesas() {
             </tbody>
           </table>
         </div>
-        <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPageChange={setPage} label="pendências" />
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          loading={loading}
+          onPageChange={setPage}
+          label="pendências"
+          opcoesPorPagina={pp.opcoes}
+          onPageSizeChange={(n) => {
+            pp.mudar(n);
+            setPage(1);
+          }}
+          acessorioPorPagina={pp.estrela}
+        />
       </div>
 
       <Modal

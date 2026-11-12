@@ -4,6 +4,7 @@ import { TD, TD_DIR, TH } from "./estilosTabela";
 import type { RespostaValores } from "./FiltroColunaServidor";
 import { CelulaResumo } from "./CelulaResumo";
 import { type CalculadasDoPainel, PainelColunas } from "./PainelColunas";
+import type { ExtrasDoPainel } from "./useCamposRelacionados";
 import type { FuncaoResumo, PedidoResumo, ResultadoResumo } from "./resumo";
 import { type ColunaApi, type EstadoColunas, ThColuna } from "./ThColuna";
 
@@ -98,18 +99,24 @@ export function useColunasConfiguraveis<T, C = undefined>(
     classeEspaco?: (linha: T, ctx: C) => string | undefined;
     /** Oferece "+ Coluna calculada" no painel (28/10/2026); as calculadas em si entram em `defs` (useTabelaLocal.defsCalculadas). */
     calculadas?: CalculadasDoPainel;
+    /** Oferece "Mais campos" no painel (12/11/2026): campos das tabelas relacionadas como colunas (useCamposRelacionados). */
+    extras?: ExtrasDoPainel;
   } = {},
 ) {
   const padrao = useMemo(() => defs.map((d) => d.nome), [defs]);
   const fixas = useMemo(() => defs.filter((d) => d.fixa).map((d) => d.nome), [defs]);
-  const titulos = useMemo(() => Object.fromEntries(defs.map((d) => [d.nome, d.titulo])), [defs]);
+  const titulosOriginais = useMemo(() => Object.fromEntries(defs.map((d) => [d.nome, d.titulo])), [defs]);
   const larguraPadrao = useMemo(() => Object.fromEntries(defs.map((d) => [d.nome, d.largura ?? LARGURA_SEM_PADRAO])), [defs]);
   const porNome = useMemo(() => new Map(defs.map((d) => [d.nome, d])), [defs]);
   const ocultasPadrao = useMemo(() => defs.filter((d) => d.ocultaPorPadrao && !d.fixa).map((d) => d.nome), [defs]);
   // Limite padrão das colunas paradas: a última def marcada `congelada` na ordem do código ("" = nenhuma).
   const congeladaAtePadrao = useMemo(() => [...defs].reverse().find((d) => d.congelada)?.nome ?? "", [defs]);
   const layout = useLayoutColunas(chave, padrao, fixas, ocultasPadrao, congeladaAtePadrao);
+  // Título que a pessoa deu à coluna (12/11/2026) vale no lugar do original em tudo o que se lê: cabeçalho, painel, rodapé, chips, exportação.
+  const titulos = useMemo(() => ({ ...titulosOriginais, ...layout.titulos }), [titulosOriginais, layout.titulos]);
   const larg = useRedimensionarColunas(layout, larguraPadrao);
+  /** Dica do cabeçalho: com título próprio, lembra o original. */
+  const dicaDe = (d: DefColuna<T, C>) => (layout.titulos[d.nome] ? `Original: ${d.titulo}${d.dica ? ` — ${d.dica}` : ""}` : d.dica);
   const visiveis = layout.visiveis.map((n) => porNome.get(n)).filter((d): d is DefColuna<T, C> => !!d);
   const cortar = larg.larguras !== null;
   // Colunas paradas: as escolhidas (ou do padrão da tela) que cabem na tela, cada uma com o `left` medido.
@@ -127,18 +134,18 @@ export function useColunasConfiguraveis<T, C = undefined>(
   }: { colunas?: ColunaApi[] | undefined; estado?: EstadoColunas; valores?: (nome: string) => (termo: string) => Promise<RespostaValores> } = {}) => (
     <tr ref={larg.refCabecalho}>
       <th className={cn(TH, "sticky left-0 z-[1] w-7 min-w-7 max-w-7 p-0 text-center")}>
-        <PainelColunas layout={layout} titulos={titulos} calculadas={opcoes.calculadas} />
+        <PainelColunas layout={layout} titulos={titulos} titulosOriginais={titulosOriginais} calculadas={opcoes.calculadas} extras={opcoes.extras} />
       </th>
       {visiveis.map((d) => (
         <ThColuna
           key={d.nome}
           nome={d.nome}
-          titulo={d.cabecalho ?? d.titulo}
-          rotulo={d.titulo}
+          titulo={layout.titulos[d.nome] ?? d.cabecalho ?? d.titulo}
+          rotulo={titulos[d.nome]}
           direita={d.direita}
           className={cn(opcoes.th, d.centro && "text-center", deParada(d.nome)?.classe)}
           style={deParada(d.nome) ? { left: deParada(d.nome)!.left } : undefined}
-          title={d.dica}
+          title={dicaDe(d)}
           formatarValor={d.formatarValor}
           semOrdenar={d.semOrdenar}
           colunas={colunas}
@@ -179,7 +186,7 @@ export function useColunasConfiguraveis<T, C = undefined>(
             key={d.nome}
             className={p ? cn(p.classe, "bg-inherit") : undefined}
             style={p ? { left: p.left } : undefined}
-            titulo={d.titulo}
+            titulo={titulos[d.nome] ?? d.titulo}
             tipo={colunas?.find((c) => c.nome === d.nome)?.tipo}
             permitidas={d.resumos}
             funcao={funcao}
@@ -229,7 +236,9 @@ export function useColunasConfiguraveis<T, C = undefined>(
 
   return {
     layout,
+    /** Títulos que valem na tela (o próprio da pessoa, senão o da tela). */
     titulos,
+    titulosOriginais,
     /** Colunas visíveis + a do ícone: é o colSpan de uma linha que ocupa a tabela inteira. */
     nColunas: visiveis.length + 1,
     cortar,

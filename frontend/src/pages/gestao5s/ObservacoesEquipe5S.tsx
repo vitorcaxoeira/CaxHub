@@ -6,6 +6,7 @@ import { Visualizador } from "../../components/ui/Visualizador";
 import { classeBotaoPrimario, classeBotaoSecundario, classeCampo, classeRotulo } from "../../components/gestao5s/campos";
 import { Modal } from "../../components/ui/Modal";
 import { Pagination } from "../../components/ui/Pagination";
+import { usePorPagina } from "../../components/ui/padroesFiltros/usePorPagina";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useToast } from "../../components/ui/Toast";
 import { mensagemDeErro } from "../../utils/gestao5s";
@@ -29,6 +30,8 @@ interface AreaOpcao {
 
 // Observações recebidas da equipe (fora da auditoria): "foi relatado que havia um talher sujo
 // sobre a mesa da sala de reunião no dia XX/XX". Líderes registram nas áreas que enxergam.
+const OPCOES_POR_PAGINA = [10, 20, 50, 100];
+
 export function ObservacoesEquipe5S() {
   const { mostrar } = useToast();
   const [areas, setAreas] = useState<AreaOpcao[]>([]);
@@ -39,7 +42,9 @@ export function ObservacoesEquipe5S() {
   const [loading, setLoading] = useState(true);
   const [editando, setEditando] = useState<Observacao | "nova" | null>(null);
   const [foto, setFoto] = useState<string | null>(null);
-  const pageSize = 20;
+  // "Por página" com a estrela de padrão (12/11/2026): a 1ª consulta espera o padrão salvo. A API aceita até 100 por página.
+  const pp = usePorPagina({ tela: "gestao5s.observacoes", inicial: 20, opcoes: OPCOES_POR_PAGINA });
+  const pageSize = pp.porPagina;
 
   const carregar = useCallback(() => {
     setLoading(true);
@@ -53,11 +58,11 @@ export function ObservacoesEquipe5S() {
       })
       .catch((err) => setErro(mensagemDeErro(err, "Falha ao carregar as observações")))
       .finally(() => setLoading(false));
-  }, [filtros, page]);
+  }, [filtros, page, pageSize]);
 
   useEffect(() => {
-    carregar();
-  }, [carregar]);
+    if (pp.pronto) carregar();
+  }, [carregar, pp.pronto]);
 
   useEffect(() => {
     axios.get<AreaOpcao[]>("/api/5s/areas").then(({ data }) => setAreas(data)).catch(() => {});
@@ -146,7 +151,20 @@ export function ObservacoesEquipe5S() {
             </li>
           ))}
         </ul>
-        <Pagination page={page} pageSize={pageSize} total={dados?.total ?? 0} loading={loading} onPageChange={setPage} label="observações" />
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={dados?.total ?? 0}
+          loading={loading}
+          onPageChange={setPage}
+          label="observações"
+          opcoesPorPagina={pp.opcoes}
+          onPageSizeChange={(n) => {
+            pp.mudar(n);
+            setPage(1);
+          }}
+          acessorioPorPagina={pp.estrela}
+        />
       </div>
 
       {editando && <FormObservacao inicial={editando === "nova" ? null : editando} areas={areas} onFechar={() => { setEditando(null); carregar(); }} onAbrirFoto={setFoto} />}

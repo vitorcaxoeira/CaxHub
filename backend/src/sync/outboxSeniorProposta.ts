@@ -12,7 +12,7 @@ import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdProposta } from "../audit/identidadeEntidade";
 import { sitproLabel } from "../domain/propostasDominio";
-import { SITRAT_BLOQUEIA_FINALIZAR } from "../domain/gestaoPropostasSql";
+import { buscarImpedimentosDeFinalizar, mensagemDosImpedimentos } from "../domain/impedimentosDeFinalizar";
 import { criarFilaUnica } from "./filaUnica";
 
 // Fila de saída das mudanças de SITUAÇÃO de proposta feitas na tela Gestão Propostas (09/11/2026). Fila IRMÃ de outboxSenior.ts e
@@ -152,14 +152,10 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
             `A situação da proposta mudou desde o pedido (era "${sitproLabel(item.sitproDe)}", agora "${sitproLabel(proposta.sitpro)}"). Refaça a ação na tela.`,
           );
         }
-        // Finalizar: a regra das RATs vale no ENVIO também, não só no clique (a pendência pode ter esperado pela porta).
+        // Finalizar: a regra (RATs, sessões em curso e pendentes) vale no ENVIO também, não só no clique (a pendência pode ter esperado pela porta).
         if (item.tipo === TIPO_FINALIZAR_PROPOSTA) {
-          const bloqueando = await prisma.rat.count({
-            where: { codemp: item.codemp, codpro: item.codpro, removidoEmSenior: null, sitrat: { in: [...SITRAT_BLOQUEIA_FINALIZAR] } },
-          });
-          if (bloqueando > 0) {
-            throw new PreCondicaoDaSituacaoError(`Há ${bloqueando} RAT(s) Digitada(s) ou Fechada(s) nesta proposta — finalize-as antes de finalizar a proposta.`);
-          }
+          const motivo = mensagemDosImpedimentos(await buscarImpedimentosDeFinalizar(item.codemp, item.codpro));
+          if (motivo) throw new PreCondicaoDaSituacaoError(motivo);
         }
         const resposta = await manterSituacaoPropostaViaSoap(payloadDe(item));
         if (resposta.statusProcesso !== 1) {
