@@ -4,10 +4,12 @@ import {
   AGREGADOS_DE_FATURAMENTO,
   COLUNAS_PESADAS_GESTAO_PROPOSTAS,
   consultaGestaoPropostas,
+  FONTES_GESTAO_PROPOSTAS,
   precisaCalcularConjunto,
   SITRAT_BLOQUEIA_FINALIZAR,
   type FiltrosGestaoPropostas,
 } from "./gestaoPropostasSql";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
 import { FATSER_FATURAVEL } from "./eficienciaPropostas";
 
 const SEM_FILTROS: FiltrosGestaoPropostas = { tipo: "all", situacoes: null, depexes: null, modpros: null, busca: "" };
@@ -157,4 +159,16 @@ test("sem filtro nenhum não há WHERE de situação nem de busca", () => {
   const s = sql();
   assert.doesNotMatch(s.text, /p\.sitpro = ANY/);
   assert.doesNotMatch(s.text, /lower\(c\.nomcli\) LIKE/);
+});
+
+test("campos extras: sem eles a consulta é a de sempre; com eles entram no SELECT da base e passam pela camada de fora", () => {
+  const sem = sql();
+  assert.equal(sql({}, { extras: undefined }).text, sem.text);
+  const extras = extrasDaConsulta(FONTES_GESTAO_PROPOSTAS, { campos: "cliente__cidcli,proposta__tippro" });
+  const com = sql({}, { extras });
+  assert.match(com.text, /c\."cidcli" AS "cliente__cidcli",p\."tippro" AS "proposta__tippro"\s+FROM propostas p/);
+  assert.match(com.text, /b\."cliente__cidcli",b\."proposta__tippro"\s+FROM \(/);
+  assert.deepEqual(com.values, sem.values, "campo extra não vira parâmetro");
+  // Também no modo conjunto e sem valores (quem não vê R$ continua podendo ligar campos).
+  assert.match(sql({}, { extras, conjunto: true, comValores: false }).text, /b\."proposta__tippro"/);
 });

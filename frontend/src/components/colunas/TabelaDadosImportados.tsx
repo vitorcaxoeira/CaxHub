@@ -1,5 +1,7 @@
 import axios from "axios";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Pagination } from "../ui/Pagination";
+import { usePorPagina } from "../ui/padroesFiltros/usePorPagina";
 import { Skeleton } from "../ui/Skeleton";
 import { ChipOrdem, ChipsFiltros } from "./ChipsFiltros";
 import type { ColunaComFiltro, RespostaValores } from "./FiltroColunaServidor";
@@ -25,6 +27,8 @@ export interface RespostaDadosBase {
 }
 
 const PAGE_SIZE = 30;
+// O servidor aceita até 1.000 por página (PAGE_SIZE_MAXIMO em sync/dadosSincronizados.ts).
+const OPCOES_POR_PAGINA = [30, 50, 100, 200, 500];
 
 // Resumos do rodapé que a rota `<endpoint>/resumo` calcula (agregação do Prisma: sem mediana nem distintos; ver
 // backend/src/sync/dadosSincronizados.ts, FUNCOES_RESUMO_DADOS). Coluna com domínio é código: só contagem/vazios.
@@ -79,6 +83,9 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
   const { filtros, ordem, filtrosParam, ordemParam, aplicarFiltro, limparFiltros, limparOrdem, limparTudo, chave } = colunasEstado;
   const [resposta, setResposta] = useState<R | null>(null);
   const [pagina, setPagina] = useState(1);
+  // "Por página" com a estrela de padrão (12/11/2026): um padrão só para todas as tabelas do Ver dados; a 1ª consulta espera o padrão salvo.
+  const pp = usePorPagina({ tela: "admin.ver-dados", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const porPagina = pp.porPagina;
   const [busca, setBusca] = useState("");
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -101,12 +108,13 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
   useEffect(() => setPagina(1), [chave]);
 
   useEffect(() => {
+    if (!pp.pronto) return;
     let cancelado = false;
     const timer = window.setTimeout(
       () => {
         setCarregando(true);
         axios
-          .get<R>(endpoint, { params: { ...JSON.parse(extras), busca, page: pagina, pageSize: PAGE_SIZE, filtros: filtrosParam, ordem: ordemParam } })
+          .get<R>(endpoint, { params: { ...JSON.parse(extras), busca, page: pagina, pageSize: porPagina, filtros: filtrosParam, ordem: ordemParam } })
           .then(({ data }) => {
             if (cancelado) return;
             setResposta(data);
@@ -121,14 +129,13 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
       cancelado = true;
       window.clearTimeout(timer);
     };
-  }, [endpoint, extras, busca, pagina, filtrosParam, ordemParam]);
+  }, [endpoint, extras, busca, pagina, porPagina, pp.pronto, filtrosParam, ordemParam]);
 
   useEffect(() => onResposta?.(resposta), [resposta]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const colunas = useMemo(() => resposta?.colunas ?? [], [resposta]);
   const itens = resposta?.itens ?? [];
   const totalRegistros = resposta?.total ?? 0;
-  const totalPaginas = Math.max(1, Math.ceil(totalRegistros / PAGE_SIZE));
   const colunaPorNome = (nome: string) => colunas.find((c) => c.nome === nome);
 
   const carregarValores = (coluna: string) => (termo: string) =>
@@ -230,16 +237,21 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
       </div>
 
       {totalRegistros > 0 && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted">
-          <button onClick={() => setPagina((p) => Math.max(1, p - 1))} disabled={pagina <= 1} className="hover:text-foreground disabled:opacity-40">
-            ← Anterior
-          </button>
-          <span>
-            página {pagina} de {totalPaginas.toLocaleString("pt-BR")} ({totalRegistros.toLocaleString("pt-BR")} registros)
-          </span>
-          <button onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))} disabled={pagina >= totalPaginas} className="hover:text-foreground disabled:opacity-40">
-            Próxima →
-          </button>
+        <div className="mt-3 overflow-hidden rounded-lg border border-border bg-surface">
+          <Pagination
+            page={pagina}
+            pageSize={porPagina}
+            total={totalRegistros}
+            loading={carregando}
+            onPageChange={setPagina}
+            label="registros"
+            opcoesPorPagina={pp.opcoes}
+            onPageSizeChange={(n) => {
+              pp.mudar(n);
+              setPagina(1);
+            }}
+            acessorioPorPagina={pp.estrela}
+          />
         </div>
       )}
     </>

@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Avatar } from "../ui/Avatar";
 import { Pagination } from "../ui/Pagination";
+import { usePorPagina } from "../ui/padroesFiltros/usePorPagina";
 import { Skeleton } from "../ui/Skeleton";
 import { IconePlay, IconeStop, IconeLapis } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
@@ -65,6 +66,7 @@ interface GrupoAtividades {
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
 
 const PAGE_SIZE = 25;
+const OPCOES_POR_PAGINA = [10, 25, 50, 100, 200];
 
 const TH_CLASS = "bg-surface-2 px-2.5 py-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted";
 const TH_SUB_CLASS = "py-[3px] pr-2 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted";
@@ -203,6 +205,8 @@ export function AtividadesTable({
   processando,
 }: AtividadesTableProps) {
   const navigate = useNavigate();
+  // "Por página" com a estrela de padrão (12/11/2026); a paginação é por GRUPO, no navegador, então não há consulta para esperar.
+  const pp = usePorPagina({ tela: "projetos.atividades.grupos", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
   const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
 
   // Um relógio pra tabela inteira, e não um por linha: o realizado exibido soma o tempo da
@@ -217,7 +221,7 @@ export function AtividadesTable({
   const grupos = useMemo(() => agrupar(rows, agora), [rows, agora]);
   // Paginação por GRUPO, client-side. Paginar por atividade no servidor partiria um grupo
   // ao meio entre duas páginas — por isso Atividades.tsx parou de mandar page/pageSize.
-  const gruposPagina = useMemo(() => grupos.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [grupos, page]);
+  const gruposPagina = useMemo(() => grupos.slice((page - 1) * pp.porPagina, page * pp.porPagina), [grupos, page, pp.porPagina]);
 
   function alternar(chave: string) {
     setExpandidos((atual) => {
@@ -594,11 +598,17 @@ export function AtividadesTable({
             atividades (`total`) vira o complemento do rótulo, pra não sumir da tela. */}
         <Pagination
           page={page}
-          pageSize={PAGE_SIZE}
+          pageSize={pp.porPagina}
           total={grupos.length}
           loading={loading}
           onPageChange={onPageChange}
           label={`grupos · ${total} atividade${total === 1 ? "" : "s"}`}
+          opcoesPorPagina={pp.opcoes}
+          onPageSizeChange={(n) => {
+            pp.mudar(n);
+            onPageChange(1);
+          }}
+          acessorioPorPagina={pp.estrela}
         />
       </div>
     </div>

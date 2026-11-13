@@ -2,6 +2,7 @@ import axios from "axios";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { Pagination } from "../../components/ui/Pagination";
+import { usePorPagina } from "../../components/ui/padroesFiltros/usePorPagina";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useToast } from "../../components/ui/Toast";
@@ -49,6 +50,7 @@ const MODPRO_OPCOES: MultiSelectOption<number>[] = [
 ];
 
 const PAGE_SIZE = 30;
+const OPCOES_POR_PAGINA = [10, 30, 50, 100, 200];
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const formatMoney = (v: number) => `R$ ${currencyFormatter.format(v)}`;
@@ -114,6 +116,8 @@ export function ListarPedidos() {
   });
 
   const [pageCliente, setPageCliente] = useState(1);
+  // "Por página" da aba Por Cliente com a estrela de padrão (12/11/2026); a paginação é no navegador, sem consulta para esperar.
+  const pp = usePorPagina({ tela: "mercado.pedidos.por-cliente", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
   // Índice de TODOS os pedidos do filtro atual (ver GET /pedidos/por-cliente/indice).
   // Os grupos da aba passam a ser derivados dele, não de uma chamada agregada: só assim
   // dá pra recalcular Qtd./Valor de cada accordion depois do filtro de coluna e esconder
@@ -225,8 +229,8 @@ export function ListarPedidos() {
   // Paginação passou a ser client-side: o filtro de coluna precisa ser aplicado ANTES de
   // paginar, senão a página 1 mostraria os clientes de sempre com contagens filtradas.
   const clientes = useMemo(
-    () => grupos.slice((pageCliente - 1) * PAGE_SIZE, pageCliente * PAGE_SIZE),
-    [grupos, pageCliente]
+    () => grupos.slice((pageCliente - 1) * pp.porPagina, pageCliente * pp.porPagina),
+    [grupos, pageCliente, pp.porPagina]
   );
 
   function toggleExpandirCliente(cliente: ClienteGrupo) {
@@ -588,11 +592,17 @@ export function ListarPedidos() {
           </div>
           <Pagination
             page={pageCliente}
-            pageSize={PAGE_SIZE}
+            pageSize={pp.porPagina}
             total={grupos.length}
             loading={loadingClientes}
             onPageChange={setPageCliente}
             label="clientes"
+            opcoesPorPagina={pp.opcoes}
+            onPageSizeChange={(n) => {
+              pp.mudar(n);
+              setPageCliente(1);
+            }}
+            acessorioPorPagina={pp.estrela}
           />
         </div>
       )}

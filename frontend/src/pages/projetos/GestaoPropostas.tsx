@@ -561,7 +561,19 @@ const TEXTO_ACAO: Record<Acao, { titulo: (r: PropostaRow) => string; destino: st
   },
 };
 
-function ModalAcao({ alvo, enviando, onConfirmar, onFechar }: { alvo: { row: PropostaRow; acao: Acao }; enviando: boolean; onConfirmar: () => void; onFechar: () => void }) {
+function ModalAcao({
+  alvo,
+  enviando,
+  erro,
+  onConfirmar,
+  onFechar,
+}: {
+  alvo: { row: PropostaRow; acao: Acao };
+  enviando: boolean;
+  erro: string | null;
+  onConfirmar: () => void;
+  onFechar: () => void;
+}) {
   const { row, acao } = alvo;
   const texto = TEXTO_ACAO[acao];
   return (
@@ -583,6 +595,12 @@ function ModalAcao({ alvo, enviando, onConfirmar, onFechar }: { alvo: { row: Pro
           </dd>
         </dl>
         <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-muted">{texto.aviso}</p>
+        {erro && (
+          // O servidor barrou o pedido (RAT Digitada/Fechada, sessão em curso, sessão pendente de RAT...): o motivo fica À VISTA, com as quebras de linha.
+          <div role="alert" className="whitespace-pre-line rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
+            {erro}
+          </div>
+        )}
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onFechar} disabled={enviando} className={classeBotaoSecundario}>
             Cancelar
@@ -795,11 +813,13 @@ export function GestaoPropostas() {
 
   const [alvo, setAlvo] = useState<{ row: PropostaRow; acao: Acao } | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const [erroAcao, setErroAcao] = useState<string | null>(null);
 
   async function confirmarAcao() {
     if (!alvo) return;
     const { row, acao } = alvo;
     setEnviando(true);
+    setErroAcao(null);
     try {
       const { data } = await axios.post(`/api/gestao-propostas/propostas/${row.codemp}/${row.codpro}/${acao}`);
       setAlvo(null);
@@ -814,9 +834,16 @@ export function GestaoPropostas() {
         );
       }
     } catch (err: any) {
-      // 400/409: o motivo vem do servidor (situação de origem, RAT impedindo, ação já em andamento). Fecha o modal e atualiza a linha.
-      toast.mostrar(err.response?.data?.error ?? "Falha ao pedir a mudança de situação", "destructive");
-      setAlvo(null);
+      const mensagem: string = err.response?.data?.error ?? "Falha ao pedir a mudança de situação";
+      const status = err.response?.status;
+      if (status === 400 || status === 409) {
+        // O motivo vem do servidor (situação de origem, RAT impedindo, sessão em curso ou pendente de RAT, ação já em andamento). O modal FICA aberto
+        // com o texto dentro dele (um toast some e a mensagem tem várias linhas); a linha da lista é atualizada por baixo.
+        setErroAcao(mensagem);
+      } else {
+        toast.mostrar(mensagem, "destructive");
+        setAlvo(null);
+      }
       carregar();
     } finally {
       setEnviando(false);
@@ -914,6 +941,7 @@ export function GestaoPropostas() {
       {padroes.pronto && (
         <ListaServidor<PropostaRow, AcoesGestao>
           chave="projetos.gestao-propostas.propostas"
+          camposRelacionados
           url="/api/gestao-propostas/propostas"
           params={{
             tipo,
@@ -928,7 +956,10 @@ export function GestaoPropostas() {
             navegar: navigate,
             estaSincronizando,
             sincronizar: sincronizarLinha,
-            pedirAcao: (row, acao) => setAlvo({ row, acao }),
+            pedirAcao: (row, acao) => {
+              setErroAcao(null);
+              setAlvo({ row, acao });
+            },
           }}
           chaveLinha={(r) => `${r.codemp}-${r.codpro}`}
           detalhe={(r) => (
@@ -951,7 +982,7 @@ export function GestaoPropostas() {
         />
       )}
 
-      {alvo && <ModalAcao alvo={alvo} enviando={enviando} onConfirmar={confirmarAcao} onFechar={() => !enviando && setAlvo(null)} />}
+      {alvo && <ModalAcao alvo={alvo} enviando={enviando} erro={erroAcao} onConfirmar={confirmarAcao} onFechar={() => !enviando && setAlvo(null)} />}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import axios from "axios";
 import { useEffect, useRef, useState } from "react";
 import { useDashboardConsultor, ResumoConsultor } from "../../hooks/useDashboardConsultor";
 import { formatHorasCompacto } from "../../lib/cronograma";
-import { carregarFeriados, Feriado } from "../../lib/feriados";
+import { cn } from "../../lib/cn";
 import { rotuloMesAno } from "../../lib/periodos";
 import { BlocoProdutividade, MesProdutividade } from "../../lib/produtividade";
 import { DonutChart, DonutItem } from "../ui/DonutChart";
@@ -10,6 +10,7 @@ import { SerieTemporalBarra, SeriePonto } from "../ui/SerieTemporalBarra";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { Skeleton } from "../ui/Skeleton";
 import { Spinner } from "../ui/Spinner";
+import { CardCalendario } from "./CardCalendario";
 import { CardValorHora } from "./CardValorHora";
 import { ModalDescontosDoMes } from "./ModalDescontosDoMes";
 import { CardRdv } from "./CardRdv";
@@ -194,26 +195,6 @@ function AcordeaoSemanal({ porDia, filtro }: { porDia: ResumoConsultor["porDia"]
   );
 }
 
-function ListaFeriados({ feriados }: { feriados: Feriado[] }) {
-  return (
-    <section className="rounded-lg border border-border bg-surface p-6 shadow-sm">
-      <p className="mb-4 font-mono text-[10px] uppercase tracking-widest text-muted">Feriados no período</p>
-      {feriados.length === 0 ? (
-        <p className="text-sm text-muted">Nenhum feriado nacional no período.</p>
-      ) : (
-        <ul className="space-y-1.5">
-          {feriados.map((f) => (
-            <li key={f.date} className="flex items-center justify-between text-[12.5px]">
-              <span className="text-muted">{formatarDiaCurto(f.date)}</span>
-              <span className="text-foreground">{f.name}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
 interface DashboardConsultorProps {
   anos: number[];
   meses: number[];
@@ -228,26 +209,9 @@ interface DashboardConsultorProps {
 // vindo do Senior (ContratoConsultor). Nasceu só pro consultor comum; gestor/admin ganharam
 // acesso depois, escolhendo QUEM ver via `codfor` (ver Home.tsx).
 export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: DashboardConsultorProps) {
-  const { resumo, semConsultor, loading, erro } = useDashboardConsultor({ anos, meses, codfor });
-  const [feriados, setFeriados] = useState<Feriado[]>([]);
+  const { resumo, semConsultor, loading, erro, recarregar } = useDashboardConsultor({ anos, meses, codfor });
   // Detalhe dos descontos que saem da nota (Gestão de Descontos), aberto pelo link do card Valor-hora.
   const [verDescontos, setVerDescontos] = useState(false);
-
-  useEffect(() => {
-    if (!resumo) return;
-    let cancelado = false;
-    const mesesSelecionados = new Set(resumo.periodo.meses);
-    // Um combo pode não ter feriado nenhum dentro dele mesmo tendo feriado no ano — busca por
-    // ano inteiro (com cache, ver lib/feriados.ts) e filtra só os meses realmente selecionados,
-    // pra não misturar feriado de um mês fora do filtro quando o período tem lacunas.
-    Promise.all(resumo.periodo.anos.map((ano) => carregarFeriados(ano))).then((listas) => {
-      if (cancelado) return;
-      setFeriados(listas.flat().filter((f) => mesesSelecionados.has(Number(f.date.slice(5, 7)))));
-    });
-    return () => {
-      cancelado = true;
-    };
-  }, [resumo?.periodo.anos.join(","), resumo?.periodo.meses.join(",")]);
 
   if (loading) {
     return (
@@ -271,6 +235,18 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
   }
 
   const avancoMeta = resumo.metaTotalMinutos > 0 ? resumo.totalMinutos / resumo.metaTotalMinutos : null;
+  const abonadoMinutos = resumo.abonado.feriasMinutos + resumo.abonado.folgaMinutos;
+  // Horas marcadas (férias e folgas) no período inteiro, com os dias que ainda vão chegar: não entram na meta, mas o consultor vê quantas são.
+  const foraDaMeta = resumo.abonadoPeriodo.feriasMinutos + resumo.abonadoPeriodo.folgaMinutos;
+  const detalheForaDaMeta = (
+    <p className="mt-2 text-[11.5px] text-muted" title="Horas de férias e folgas marcadas no calendário no período. Não entram na meta do Progresso da meta.">
+      <span className="font-mono font-semibold text-foreground">{formatHorasCompacto(foraDaMeta)} h</span> marcadas fora da meta (
+      {[resumo.abonadoPeriodo.feriasMinutos > 0 && `férias ${formatHorasCompacto(resumo.abonadoPeriodo.feriasMinutos)} h`, resumo.abonadoPeriodo.folgaMinutos > 0 && `folgas ${formatHorasCompacto(resumo.abonadoPeriodo.folgaMinutos)} h`]
+        .filter(Boolean)
+        .join(" · ")}
+      )
+    </p>
+  );
 
   const totalProjeto = resumo.porProjeto.reduce((soma, p) => soma + p.valor, 0);
   const itensDonut: DonutItem[] = resumo.porProjeto
@@ -356,11 +332,14 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
         <Estatistica label="RATs pendentes" valor={String(resumo.ratsPendentes)} destaque={resumo.ratsPendentes > 0 ? "warning" : undefined} />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* Com contrato de valor fixo o card de valor-hora tem 5 KPIs na linha (a fixa ao lado da projeção): em telas largas ele ganha o dobro da largura do progresso da meta. */}
+      <div className={cn("grid grid-cols-1 gap-4 lg:grid-cols-2", resumo.contratoFixo && "xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]")}>
         <CardValorHora
           valorHora={resumo.valorHora}
           ganhoAteAgora={resumo.ganhoAteAgora}
           projecaoGanho={resumo.projecaoGanho}
+          contratoFixo={resumo.contratoFixo}
+          ferias={resumo.ferias}
           deslocamentoValor={resumo.deslocamento.valor}
           deslocamentoMinutos={resumo.deslocamento.minutos}
           descontos={resumo.descontos}
@@ -371,7 +350,12 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
         <section className="rounded-lg border border-border bg-surface p-5">
           <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Progresso da meta</p>
           {avancoMeta == null ? (
-            <p className="mt-3 text-sm text-muted">Sem jornada cadastrada no período — meta não configurada.</p>
+            <>
+              <p className="mt-3 text-sm text-muted">
+                {abonadoMinutos > 0 ? "Período todo em férias ou folga: sem meta para cumprir." : "Sem jornada cadastrada no período — meta não configurada."}
+              </p>
+              {foraDaMeta > 0 && detalheForaDaMeta}
+            </>
           ) : (
             <>
               <p className="mt-2 font-mono text-2xl font-semibold text-foreground">{Math.round(avancoMeta * 100)}%</p>
@@ -381,6 +365,7 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
               <div className="mt-2">
                 <IndicadorProgresso avanco={avancoMeta} cor={tomMeta(avancoMeta)} alturaPx={6} />
               </div>
+              {foraDaMeta > 0 && detalheForaDaMeta}
             </>
           )}
         </section>
@@ -401,10 +386,10 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
 
       <AcordeaoSemanal porDia={resumo.porDia} filtro={{ anos: resumo.periodo.anos, meses: resumo.periodo.meses, codfor }} />
 
-      {/* Fim da página, lado a lado: o resumo por projeto e os feriados do período. */}
+      {/* Fim da página, lado a lado: o resumo por projeto e o calendário de trabalho do período (férias, folgas e feriados). */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <DonutChart titulo="Horas por projeto" itens={itensDonut} formatarValor={(v) => `${formatHorasCompacto(v)} h`} />
-        <ListaFeriados feriados={feriados} />
+        <CardCalendario anos={resumo.periodo.anos} meses={resumo.periodo.meses} codfor={codfor} aoMudar={recarregar} />
       </div>
 
       {verDescontos && (

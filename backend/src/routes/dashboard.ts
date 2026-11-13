@@ -7,7 +7,9 @@ import { temViagemComoViajante } from "../domain/solicitacoesViagem";
 import { resolverContextoConsultor, ContextoConsultor, codforsDoTime, consultoresFiltraveis } from "../domain/contextoProjeto";
 import {
   FATOR_HORA_DESLOCAMENTO,
+  carregarAbonos,
   deslocamentoNoPeriodo,
+  diasInteirosAbonados,
   diasDoPeriodo,
   horasRealizadasNoPeriodo,
   metaDoPeriodo,
@@ -20,6 +22,9 @@ import { diaBrasilComoData } from "../domain/fusoBrasil";
 import { somarReais } from "../domain/descontos";
 import { descontosPorCompetencia } from "../domain/descontosDados";
 import { rdvConsultorEmAndamento, runSincronizacaoRdvConsultor, statusRdvConsultor } from "../sync/rdvConsultorSync";
+import { totalDoContratoFixo } from "../domain/contratoFixo";
+import { feriasPagasNasCompetencias } from "../domain/feriasNota";
+import { diasUteisLiquidos } from "../domain/calendarioTrabalho";
 
 export const dashboardRouter = Router();
 
@@ -256,18 +261,23 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
         // cobrar meta ainda; o gráfico por dia (porDia) continua indo até `ate` de propósito.
         const ateParaMeta = hojeUtc.getTime() < ate.getTime() ? hojeUtc : ate;
 
+        // Férias e folgas do calendário do mês inteiro, uma consulta só: a meta (até hoje) e os dias úteis da projeção (mês todo) usam a mesma.
+        const abonos = await carregarAbonos(codemp, codfor, de, ate);
+        const diasAbonados = diasInteirosAbonados(abonos);
         const [{ porDia, porProjeto, totalMinutos }, realizadoAteHoje, meta, deslocamento] = await Promise.all([
           horasRealizadasNoPeriodo(codemp, codfor, de, ate),
           horasRealizadasNoPeriodo(codemp, codfor, de, ateParaMeta),
-          metaDoPeriodo(codemp, codfor, de, ateParaMeta),
+          metaDoPeriodo(codemp, codfor, de, ateParaMeta, abonos),
           deslocamentoNoPeriodo(codemp, codfor, de, ate),
         ]);
+        // Férias e folgas marcadas no mês INTEIRO (inclusive os dias que ainda vão chegar): a Home mostra quantas horas ficam fora da meta. Sem dia futuro no mês, é a própria meta.
+        const metaDoMesInteiro = ateParaMeta.getTime() < ate.getTime() ? await metaDoPeriodo(codemp, codfor, de, ate, abonos) : meta;
         const deslocamentoMinutos = deslocamento.reduce((soma, d) => soma + d.minutos, 0);
         const deslocamentoAteHojeMinutos = deslocamento
           .filter((d) => d.data.getTime() <= ateParaMeta.getTime())
           .reduce((soma, d) => soma + d.minutos, 0);
 
-        return { de, ate, ateParaMeta, porDia, porProjeto, totalMinutos, realizadoAteHoje, meta, deslocamentoMinutos, deslocamentoAteHojeMinutos };
+        return { de, ate, ateParaMeta, porDia, porProjeto, totalMinutos, realizadoAteHoje, meta, metaDoMesInteiro, deslocamentoMinutos, deslocamentoAteHojeMinutos, diasAbonados };
       })
     );
 
@@ -309,12 +319,6 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       ),
     };
 
-    const diasUteisEntre = (de: Date, ate: Date) =>
-      diasDoPeriodo(de, ate).filter((d) => {
-        const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
-        return dow !== 0 && dow !== 6;
-      }).length;
-
     let totalMinutos = 0;
     let realizadoAteHojeTotal = 0;
     const descontosDoPeriodo = await descontosPorCompetencia(
@@ -322,7 +326,15 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       codfor,
       combos.map(({ ano, mes }) => new Date(Date.UTC(ano, mes - 1, 1)))
     );
+    // Férias remuneradas pagas nas competências do período: NÃO entram no ganho/projeção (são horas); a tela soma ao LÍQUIDO da nota em uma linha própria, como os descontos.
+    // No líquido do "ganho até agora" só valem as de competência já iniciada; no da projeção e do valor fixo, todas.
+    const feriasNota = await feriasPagasNasCompetencias(codemp, codfor, combos.map(({ ano, mes }) => new Date(Date.UTC(ano, mes - 1, 1))));
+    const mesDeHoje = `${hojeUtc.getUTCFullYear()}-${String(hojeUtc.getUTCMonth() + 1).padStart(2, "0")}`;
     let metaTotalMinutos = 0;
+    let abonadoFeriasMinutos = 0;
+    let abonadoFolgaMinutos = 0;
+    let abonadoPeriodoFeriasMinutos = 0;
+    let abonadoPeriodoFolgaMinutos = 0;
     let diasComJornadaTotal = 0;
     let deslocamentoMinutosTotal = 0;
     let ganhoAteAgora: number | null = valorHora ? 0 : null;
@@ -334,6 +346,10 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       totalMinutos += combo.totalMinutos;
       realizadoAteHojeTotal += combo.realizadoAteHoje.totalMinutos;
       metaTotalMinutos += combo.meta.metaTotalMinutos;
+      abonadoFeriasMinutos += combo.meta.abonadoFeriasMinutos;
+      abonadoFolgaMinutos += combo.meta.abonadoFolgaMinutos;
+      abonadoPeriodoFeriasMinutos += combo.metaDoMesInteiro.abonadoFeriasMinutos;
+      abonadoPeriodoFolgaMinutos += combo.metaDoMesInteiro.abonadoFolgaMinutos;
       diasComJornadaTotal += combo.meta.diasComJornada;
       deslocamentoMinutosTotal += combo.deslocamentoMinutos;
 
@@ -348,8 +364,9 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       // levar feriado em conta) pros dias úteis do mês inteiro daquele combo, e soma entre
       // combos — cada mês projeta o resto de si mesmo, não o período inteiro junto.
       if (valorHora) {
-        const diasUteisPassados = diasUteisEntre(combo.de, combo.ateParaMeta);
-        const diasUteisTotais = diasUteisEntre(combo.de, combo.ate);
+        // Dia inteiro de férias ou de folga não é dia útil de trabalho: sai da média e do total (13/11/2026).
+        const diasUteisPassados = diasUteisLiquidos(combo.de, combo.ateParaMeta, combo.diasAbonados);
+        const diasUteisTotais = diasUteisLiquidos(combo.de, combo.ate, combo.diasAbonados);
         const mediaMinutosPorDiaUtil = diasUteisPassados > 0 ? combo.realizadoAteHoje.totalMinutos / diasUteisPassados : 0;
         const projecaoMinutos = mediaMinutosPorDiaUtil * diasUteisTotais;
         // Deslocamento vale metade do valor-hora e NÃO é extrapolado na projeção: viagem é
@@ -385,6 +402,17 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       // potencialmente diferentes) não tem uma meta diária única pra mostrar.
       metaDiariaMinutos: combos.length === 1 ? porCombo[0].meta.metaDiariaMinutos : null,
       metaTotalMinutos,
+      // O que as férias (gozos lançados pelo gestor) e as folgas do calendário tiraram da meta, até hoje: a Home mostra "X h abonadas".
+      abonado: { feriasMinutos: abonadoFeriasMinutos, folgaMinutos: abonadoFolgaMinutos },
+      // O mesmo, mas do período INTEIRO (dias que ainda vão chegar inclusive): as horas marcadas que não são contabilizadas na meta.
+      abonadoPeriodo: { feriasMinutos: abonadoPeriodoFeriasMinutos, folgaMinutos: abonadoPeriodoFolgaMinutos },
+      // Férias remuneradas cujo mês de pagamento cai no período. NÃO estão em ganhoAteAgora/projecaoGanho/contratoFixo.total: a tela soma ao líquido da nota (total = período inteiro;
+      // ateAgora = só as de competência já iniciada, para o líquido do ganho até agora).
+      ferias: {
+        total: feriasNota.total,
+        ateAgora: somarReais(feriasNota.itens.filter((f) => f.competencia.slice(0, 7) <= mesDeHoje).map((f) => f.valor)),
+        itens: feriasNota.itens.map((f) => ({ ...f, competenciaIniciada: f.competencia.slice(0, 7) <= mesDeHoje })),
+      },
       saldoMinutos: diasComJornadaTotal > 0 ? realizadoAteHojeTotal - metaTotalMinutos : null,
       valorHora: valorHora?.vlrhor ?? null,
       // Horas de deslocamento do período (minutos) e quanto valem (metade do valor-hora; null
@@ -395,6 +423,11 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       },
       ganhoAteAgora,
       projecaoGanho,
+      // Contrato de VALOR FIXO (codmot 12): nota = valor-hora × qtdctr por mês do período, mais o deslocamento lançado (domain/contratoFixo.ts). Null nos contratos
+      // por hora. Os descontos não entram aqui: a tela deduz de `contratoFixo.total`, como faz com o ganho e a projeção.
+      contratoFixo: valorHora?.fixo
+        ? totalDoContratoFixo(valorHora.fixo, combos.length, (valorHora.vlrhor * FATOR_HORA_DESLOCAMENTO * deslocamentoMinutosTotal) / 60)
+        : null,
       // Gestão de Descontos: o que sai da nota nas competências do período (a tela subtrai de ganhoAteAgora e projecaoGanho e abre o detalhe
       // por GET /descontos/competencias). Mês aberto = previsto das parcelas pendentes; mês fechado = o que foi descontado de fato.
       descontos: {

@@ -77,11 +77,11 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
     [gravar],
   );
 
-  const { ordem, ocultas, larguras, resumos } = resolvido;
+  const { ordem, ocultas, larguras, resumos, titulos } = resolvido;
   // O que o usuário escolheu de fato (null = sem escolha, vale o padrão da tela): não vira "escolha" só porque outra coisa mudou.
   const escolhaCongelada = salvo?.congeladaAte ?? null;
   // Toda mudança leva junto o que não mudou (a arrumação é gravada inteira).
-  const com = (parte: Partial<LayoutSalvo>) => mudar({ ordem, ocultas, larguras, resumos, congeladaAte: escolhaCongelada, ...parte });
+  const com = (parte: Partial<LayoutSalvo>) => mudar({ ordem, ocultas, larguras, resumos, titulos, congeladaAte: escolhaCongelada, ...parte });
   return {
     ...resolvido,
     obrigatorias,
@@ -97,6 +97,12 @@ export function useLayoutColunas(tabela: string, padrao: string[], obrigatorias:
     definirResumo: (nome: string, funcao: FuncaoResumo | null) => {
       const { [nome]: _antes, ...outros } = resumos;
       com({ resumos: funcao ? { ...outros, [nome]: funcao } : outros });
+    },
+    /** Título próprio da coluna (12/11/2026); null = volta ao original da tela. Só o texto exibido: o nome técnico (filtro, ordem, fórmula) não muda. Não entra no "Restaurar" das colunas. */
+    renomear: (nome: string, titulo: string | null) => {
+      const { [nome]: _antes, ...outros } = titulos;
+      const novo = titulo?.trim().slice(0, 60);
+      com({ titulos: novo ? { ...outros, [nome]: novo } : outros });
     },
     /** Congelar até `nome` (ela e as visíveis antes dela ficam paradas); null = soltar todas ("" é a escolha explícita de nenhuma). */
     congelarAte: (nome: string | null) => com({ congeladaAte: nome ?? "" }),

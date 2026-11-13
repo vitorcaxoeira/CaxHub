@@ -3,12 +3,14 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Award,
+  Palmtree,
   BadgePercent,
   BookOpen,
   Banknote,
   Briefcase,
   CalendarCheck,
   CalendarClock,
+  CalendarDays,
   CalendarRange,
   CalendarX,
   ChartBar,
@@ -181,6 +183,9 @@ const groups: NavGroup[] = [
       // Gestão do Plano de Evolução dos consultores PJ (ciclos, participantes, prévia, apuração). Antes era um botão dentro da Eficiência.
       { to: "/projetos/plano-evolucao", label: "Plano de Evolução PJ", gestorConsultoria: true },
       { to: "/projetos/jornadas", label: "Meta diária", gestorOuAdmin: true, souConsultor: true },
+      // Calendário de trabalho (férias e folgas do consultor, que saem da meta) e controle de férias da equipe (só gestor e admin lançam).
+      { to: "/projetos/calendario", label: "Calendário", gestorOuAdmin: true, souConsultor: true },
+      { to: "/projetos/ferias", label: "Férias", gestorOuAdmin: true },
       { to: "/projetos/auditoria", label: "Auditoria", gestorOuAdmin: true },
       // Descontos abatidos da nota dos consultores. Cada item traz o próprio filtro (`descontos`): o consultor vê só os lançamentos e
       // parcelas dele; o gestor de área, os do time; admin e administrativo administram.
@@ -333,6 +338,8 @@ const ICONE_DA_ROTA: Record<string, LucideIcon> = {
   "/projetos/eficiencia": Gauge,
   "/projetos/plano-evolucao": TrendingUp,
   "/projetos/jornadas": CalendarClock,
+  "/projetos/calendario": CalendarDays,
+  "/projetos/ferias": Palmtree,
   "/projetos/auditoria": History,
   "/solicitacoes/nova": CirclePlus,
   "/solicitacoes/minhas": Inbox,

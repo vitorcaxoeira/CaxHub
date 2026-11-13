@@ -18,6 +18,9 @@ export interface ColunaApi {
   agregada?: boolean;
   semAbaValores?: boolean;
   dominio?: { valor: string; rotulo: string }[];
+  /** Só nas colunas de campo de tabela relacionada (useCamposRelacionados): id da fonte ("cliente") e nome técnico do campo. */
+  fonte?: string;
+  titulo?: string;
 }
 
 /** O que a tabela precisa do hook de estado (useFiltroOrdemNaUrl ou useFiltroOrdemLocal). */

@@ -35,6 +35,7 @@ model User {
   preferenciaTela         PreferenciaTela?
 
   preferenciasColunas     PreferenciaColunas[]
+  preferenciasCamposExtras PreferenciaCamposExtras[]
   preferenciasFiltros     PreferenciaFiltro[]
   colunasCalculadas       ColunaCalculada[]
 
@@ -128,6 +129,8 @@ model PreferenciaColunas {
   larguras     Json     @default("{}")
   /// Resumo do rodapé por coluna ({"quantidade": "soma"}); vazio = nenhum (28/10/2026).
   resumos      Json     @default("{}")
+  /// Título próprio de cada coluna ({"proposta__consol": "Contato"}); só o texto exibido, o nome técnico não muda; vazio = títulos da tela (12/11/2026).
+  titulos      Json     @default("{}")
   /// Última coluna parada ao rolar na horizontal ("congelar até aqui", 09/11/2026): ela e as visíveis antes dela, na ordem. NULL = sem escolha (vale o
   /// padrão da tela); vazio = nenhuma parada, de propósito.
   congeladaAte String?  @map("congelada_ate") @db.VarChar(80)
@@ -137,6 +140,22 @@ model PreferenciaColunas {
 
   @@id([userId, tabela])
   @@map("preferencias_colunas")
+}
+
+/// Campos de tabelas relacionadas que o usuário ligou como colunas de uma lista (12/11/2026, ex.: Gestão Propostas -> cliente__cidcli).
+/// `tabela` é a mesma chave da arrumação das colunas; `campos` guarda os NOMES (`<fonte>__<campo>`, consultas/camposRelacionados.ts), na ordem em que
+/// foram ligados. Tabela à parte (e não coluna de preferencias_colunas) porque "Restaurar padrão" apaga a linha da arrumação e não deve desligar os campos.
+/// Lida e gravada só por SQL (routes/perfil.ts).
+model PreferenciaCamposExtras {
+  userId       Int      @map("user_id")
+  tabela       String   @db.VarChar(80)
+  campos       String[]
+  atualizadoEm DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, tabela])
+  @@map("preferencias_campos_extras")
 }
 
 /// Padrão de um filtro de uma tela, por usuário (03/11/2026, Acompanhamento de Compra): o disquete ao lado do filtro grava SÓ aquele campo.
@@ -736,7 +755,7 @@ model Consultor {
 // widget de valor-hora/projeção de ganhos PRECISA tratar ausência como estado normal, não erro.
 // `codmot` (motivo do contrato) observado com os valores 16/12/0 no dado real — sem domínio
 // mapeado ainda (não é um dos USU_L* documentados em propostasDominio.ts), guardado como código
-// opaco por ora.
+// opaco por ora. EXCEÇÃO (13/11/2026): codmot 12 = contrato de VALOR FIXO, com `qtdctr` (domain/contratoFixo.ts).
 model ContratoConsultor {
   codemp Int
   codusu Int
@@ -748,6 +767,8 @@ model ContratoConsultor {
   // jeito que a origem manda em vez de recalculado aqui, mesmo espírito de nunca duplicar
   // conta que a origem já fez.
   vlrmin Decimal? @db.Decimal(15, 8)
+  /// Quantidade fixa do contrato (13/11/2026): com codmot = 12 (contrato de VALOR FIXO) a nota do mês é vlrhor × qtdctr (domain/contratoFixo.ts). Nulo nos demais.
+  qtdctr Decimal? @db.Decimal(15, 5)
 
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -851,6 +872,90 @@ model JornadaConsultor {
 
   @@id([codemp, codfor, diaSemana])
   @@map("jornada_consultor")
+}
+
+/// Controle de férias dos consultores PJ (13/11/2026, planilha "Simulação Férias PJs"). O PERÍODO AQUISITIVO é o direito: "05/2025 à 05/2026 - direito a 20 dias".
+/// Lançado pelo gestor do departamento ou admin; o consultor só visualiza. Saldo = diasDireito - dias corridos dos gozos não cancelados - folgas inteiras que descontam.
+model FeriasPeriodoAquisitivo {
+  id           Int      @id @default(autoincrement())
+  codemp       Int
+  codfor       Int
+  inicio       DateTime @db.Date
+  fim          DateTime @db.Date
+  /// Dias CORRIDOS a que o consultor tem direito neste período (20 a cada 12 meses ou 10 a cada 6, conforme o contrato).
+  diasDireito  Int      @map("dias_direito")
+  /// As férias deste período são REMUNERADAS (conforme o contrato)? Sim: o gozo calcula o valor (simulação da planilha). Não: o gozo só marca os dias no calendário e consome
+  /// o saldo, sem valor a pagar (13/11/2026). Padrão sim: períodos anteriores ao campo seguem como eram.
+  remunerado   Boolean  @default(true)
+  observacao   String?  @db.VarChar(300)
+  criadoPor    Int?     @map("criado_por")
+  criadoEm     DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+
+  gozos     FeriasGozo[]
+  ausencias CalendarioAusencia[]
+
+  @@index([codemp, codfor])
+  @@map("ferias_periodos_aquisitivos")
+}
+
+/// Um gozo de férias dentro de um período aquisitivo. Os dias do gozo aparecem no calendário do consultor como "Férias" e saem da meta.
+/// As colunas de cálculo são o RETRATO da simulação do valor no momento em que o gestor gravou (dias úteis x horas/dia x média % trabalhado x valor-hora);
+/// o valor NÃO entra sozinho na nota nem no fechamento de descontos.
+model FeriasGozo {
+  id                   Int       @id @default(autoincrement())
+  aquisitivoId         Int       @map("aquisitivo_id")
+  inicio               DateTime  @db.Date
+  fim                  DateTime  @db.Date
+  diasCorridos         Int       @map("dias_corridos")
+  /// programada | cancelada (cancelada não conta no saldo nem no calendário).
+  situacao             String    @default("programada") @db.VarChar(12)
+  observacao           String?   @db.VarChar(300)
+  /// Primeiro dia do mês da nota em que as férias são pagas ("Pago na nota referente ao mês 07/2026").
+  competenciaPagamento DateTime? @map("competencia_pagamento") @db.Date
+  diasUteis            Int?      @map("dias_uteis")
+  horasDia             Decimal?  @map("horas_dia") @db.Decimal(5, 2)
+  mediaPct             Decimal?  @map("media_pct") @db.Decimal(8, 4)
+  valorHora            Decimal?  @map("valor_hora") @db.Decimal(15, 5)
+  horasFerias          Decimal?  @map("horas_ferias") @db.Decimal(9, 2)
+  valorFerias          Decimal?  @map("valor_ferias") @db.Decimal(15, 2)
+  /// Meses da média do % trabalhado ([{ano, mes, minutos, pct}]), gravados com o valor para o aviso de férias mostrar o que foi calculado. Nulo nos gozos antigos.
+  mesesMedia           Json?     @map("meses_media")
+  calculadoEm          DateTime? @map("calculado_em") @db.Timestamptz(6)
+  criadoPor            Int?      @map("criado_por")
+  criadoEm             DateTime  @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm         DateTime  @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+
+  aquisitivo FeriasPeriodoAquisitivo @relation(fields: [aquisitivoId], references: [id], onDelete: Cascade)
+
+  @@index([aquisitivoId])
+  @@index([inicio, fim])
+  @@map("ferias_gozos")
+}
+
+/// Dia (ou parte do dia) em que o consultor NÃO vai trabalhar, lançado por ele mesmo no calendário (sem aprovação; o gestor é avisado). Sai da meta do
+/// "Progresso da meta". Parcial = intervalo em MINUTOS desde a meia-noite (mesma convenção de JornadaConsultor). Só folga de dia inteiro pode descontar do
+/// saldo de férias (valendo 1 dia), e só quando o consultor marca isso.
+model CalendarioAusencia {
+  id             Int       @id @default(autoincrement())
+  codemp         Int
+  codfor         Int
+  data           DateTime  @db.Date
+  diaInteiro     Boolean   @default(true) @map("dia_inteiro")
+  inicioMin      Int?      @map("inicio_min")
+  fimMin         Int?      @map("fim_min")
+  motivo         String?   @db.VarChar(200)
+  descontaFerias Boolean   @default(false) @map("desconta_ferias")
+  aquisitivoId   Int?      @map("aquisitivo_id")
+  criadoPor      Int?      @map("criado_por")
+  criadoEm       DateTime  @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm   DateTime  @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+  excluidaEm     DateTime? @map("excluida_em") @db.Timestamptz(6)
+
+  aquisitivo FeriasPeriodoAquisitivo? @relation(fields: [aquisitivoId], references: [id], onDelete: SetNull)
+
+  @@index([codemp, codfor, data])
+  @@map("calendario_ausencias")
 }
 
 // Configuração de apontamento por consultor, mantida pelo admin ou pelo líder do departamento dele

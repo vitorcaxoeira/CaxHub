@@ -1,6 +1,7 @@
 import axios from "axios";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
+import { usePorPagina } from "../ui/padroesFiltros/usePorPagina";
 import { baixarPdfDoServidor } from "../relatorio/relatorioComum";
 import { Pagination } from "../ui/Pagination";
 import { SkeletonLinhas } from "../ui/Skeleton";
@@ -8,6 +9,7 @@ import { ChipOrdem, ChipsFiltros } from "./ChipsFiltros";
 import { valoresDoServidor, type ColunaApi } from "./ThColuna";
 import { type DefColuna, titulosDe, useColunasConfiguraveis } from "./useColunasConfiguraveis";
 import { useCalculadasServidor } from "./useCalculadasServidor";
+import { useCamposRelacionados } from "./useCamposRelacionados";
 import { useFiltroOrdemLocal } from "./useFiltroOrdemLocal";
 import { useResumoServidor } from "./useResumoServidor";
 
@@ -41,7 +43,7 @@ interface Props<T, C> {
   rotulo: string;
   vazio: string;
   pageSize?: number;
-  /** Tamanhos de página que a pessoa pode escolher (Pagination); sem isso, fixo em `pageSize`. */
+  /** Tamanhos de página que a pessoa pode escolher (Pagination); sem isso valem 10, 25, 50, 100 e 200 (e o `pageSize` inicial). A estrela do seletor grava o padrão do usuário. */
   opcoesPorPagina?: number[];
   /** Muda para buscar de novo sem mudar os filtros (ex.: depois de uma ação). */
   recarga?: unknown;
@@ -65,9 +67,9 @@ interface Props<T, C> {
    * como sempre foi. Criada na tela Gestão Propostas (09/11/2026), que pediu linhas mais compactas.
    */
   classeCelula?: string;
-  /** Avisa a tela quando a pessoa troca o "Por página" (ex.: a tela guarda o valor para a estrela de padrão). Só vale com `opcoesPorPagina`. */
+  /** Avisa a tela quando a pessoa troca o "Por página". Com esta prop ou `acessorioPorPagina` a TELA controla o padrão salvo (ex.: Gestão Propostas) e a lista não aplica o dela. */
   aoMudarPorPagina?: (pageSize: number) => void;
-  /** Estrela de padrão do "Por página" (ver BotaoPadraoFiltro): a tela entrega pronta. Só vale com `opcoesPorPagina`. */
+  /** Estrela de padrão do "Por página" entregue pela tela (ver `aoMudarPorPagina`). Sem ela a lista tem a própria (usePorPagina, chave = `chave`). */
   acessorioPorPagina?: ReactNode;
   /** Mostrado acima da tabela, ao lado dos chips (ex.: totais da lista). */
   topo?: (dados: Resposta<T> | null) => ReactNode;
@@ -96,6 +98,11 @@ interface Props<T, C> {
    * relatório de tela) e texto inteiro nas células. `arquivo` é o nome base do PDF.
    */
   pdf?: { titulo: string; arquivo: string };
+  /**
+   * Oferece "Mais campos" no painel de colunas (12/11/2026): a pessoa liga como coluna qualquer campo da tabela da lista e das relacionadas. A rota
+   * precisa declarar `fontes` (ListaConsultavel) e somar as colunas pedidas em `campos` (consultas/camposRelacionados.ts). Ver useCamposRelacionados.
+   */
+  camposRelacionados?: boolean;
 }
 
 export function ListaServidor<T extends object, C = undefined>({
@@ -129,11 +136,15 @@ export function ListaServidor<T extends object, C = undefined>({
   rotuloExportar = "Exportar CSV",
   imprimir,
   pdf,
+  camposRelacionados = false,
 }: Props<T, C>) {
-  const titulosBase = useMemo(() => titulosDe(base), [base]);
   const estado = useFiltroOrdemLocal();
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(pageSizeInicial);
+  // "Por página" com a estrela de padrão (12/11/2026): a lista cuida sozinha, salvo se a tela assumir (`acessorioPorPagina`/`aoMudarPorPagina`).
+  const porPaginaDaTela = acessorioPorPagina !== undefined || aoMudarPorPagina !== undefined;
+  const pp = usePorPagina({ tela: chave, inicial: pageSizeInicial, opcoes: opcoesPorPagina, ativo: !porPaginaDaTela });
+  const [pageSizeDaTela, setPageSizeDaTela] = useState(pageSizeInicial);
+  const pageSize = porPaginaDaTela ? pageSizeDaTela : pp.porPagina;
   const [dados, setDados] = useState<Resposta<T> | null>(null);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -141,11 +152,18 @@ export function ListaServidor<T extends object, C = undefined>({
   const [exportando, setExportando] = useState(false);
   const [gerandoPdf, setGerandoPdf] = useState(false);
 
+  const rel = useCamposRelacionados<T>({ chave, url, params, ativo: camposRelacionados, colunas: dados?.colunas, aoRemover: estado.tirarColuna });
+  const titulosBase = useMemo(() => titulosDe([...base, ...(rel.defs as DefColuna<T, C>[])]), [base, rel.defs]);
   const calc = useCalculadasServidor(chave, titulosBase, dados?.colunas, dados?.itens, dados?.calculadasComProblema);
-  const defs = useMemo(() => [...base, ...calc.defs] as DefColuna<T, C>[], [base, calc.defs]);
-  const tc = useColunasConfiguraveis(chave, defs, { calculadas: calc.painel, td: classeCelula });
+  // Os campos extras entram antes da coluna final "acoes" (botão de ações da linha), se a tela tiver uma: ela continua sendo a última.
+  const defs = useMemo(() => {
+    const ultima = base[base.length - 1];
+    const corte = ultima?.nome === "acoes" ? base.length - 1 : base.length;
+    return [...base.slice(0, corte), ...rel.defs, ...base.slice(corte), ...calc.defs] as DefColuna<T, C>[];
+  }, [base, rel.defs, calc.defs]);
+  const tc = useColunasConfiguraveis(chave, defs, { calculadas: calc.painel, extras: rel.painel, td: classeCelula });
 
-  const paramsFixos = { ...params, calculadas: calc.param };
+  const paramsFixos = { ...params, calculadas: calc.param, campos: rel.param };
   const chaveParams = JSON.stringify(paramsFixos);
   const valores = (coluna: string) => valoresDoServidor(`${url}/valores`, paramsFixos, estado.filtrosParam, coluna);
   const resumo = useResumoServidor(`${url}/resumo`, { ...paramsFixos, filtros: estado.filtrosParam }, tc.pedidosResumo, recarga);
@@ -164,6 +182,9 @@ export function ListaServidor<T extends object, C = undefined>({
   const estaAberta = (chaveL: string) => (controladas ? abertas.has(chaveL) : aberta === chaveL);
 
   useEffect(() => {
+    // Com campos extras, espera os salvos chegarem: a primeira busca já leva `campos` (sem isso a lista carregaria duas vezes).
+    // (e o "por página" salvo, pelo mesmo motivo)
+    if (!rel.pronto || !pp.pronto) return;
     let cancelado = false;
     setLoading(true);
     axios
@@ -185,11 +206,11 @@ export function ListaServidor<T extends object, C = undefined>({
       cancelado = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chaveParams, estado.chave, page, pageSize, recarga]);
+  }, [chaveParams, estado.chave, page, pageSize, recarga, rel.pronto, pp.pronto]);
 
   // Parâmetros de exportação/impressão: os da lista + filtros e ordem por coluna + colunas visíveis (na ordem da tela) com os títulos da tela.
   function parametrosDeExportacao() {
-    const cabecalhos = Object.fromEntries(tc.layout.visiveis.map((n) => [n, calc.titulos[n] ?? n]));
+    const cabecalhos = Object.fromEntries(tc.layout.visiveis.map((n) => [n, tc.titulos[n] ?? n]));
     return { ...paramsFixos, filtros: estado.filtrosParam, ordem: estado.ordemParam, colunasCsv: tc.layout.visiveis.join(","), cabecalhos: JSON.stringify(cabecalhos) };
   }
 
@@ -245,12 +266,12 @@ export function ListaServidor<T extends object, C = undefined>({
             filtros={estado.filtros}
             coluna={(n) => {
               const c = dados?.colunas.find((x) => x.nome === n);
-              return c ? { tipo: c.tipo, dominio: c.dominio, titulo: calc.titulos[n] } : undefined;
+              return c ? { tipo: c.tipo, dominio: c.dominio, titulo: tc.titulos[n] } : undefined;
             }}
             onRemover={(n) => estado.aplicarFiltro(n, null)}
             onLimpar={estado.limparFiltros}
           />
-          <ChipOrdem ordem={estado.ordem} titulos={calc.titulos} onLimpar={estado.limparOrdem} />
+          <ChipOrdem ordem={estado.ordem} titulos={tc.titulos} onLimpar={estado.limparOrdem} />
           {cabecalhoExtra}
           {(exportavel || imprimir || pdf) && (
             <div className="ml-auto flex items-center gap-2">
@@ -348,9 +369,14 @@ export function ListaServidor<T extends object, C = undefined>({
         loading={loading}
         onPageChange={setPage}
         label={rotulo}
-        opcoesPorPagina={opcoesPorPagina}
-        onPageSizeChange={opcoesPorPagina ? (n) => { setPageSize(n); setPage(1); aoMudarPorPagina?.(n); } : undefined}
-        acessorioPorPagina={acessorioPorPagina}
+        opcoesPorPagina={pp.opcoes}
+        onPageSizeChange={(n) => {
+          if (porPaginaDaTela) setPageSizeDaTela(n);
+          else pp.mudar(n);
+          setPage(1);
+          aoMudarPorPagina?.(n);
+        }}
+        acessorioPorPagina={porPaginaDaTela ? acessorioPorPagina : pp.estrela}
       />
     </div>
   );

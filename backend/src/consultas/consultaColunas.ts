@@ -27,6 +27,10 @@ export interface ColunaConsulta {
   /** Sem aba "Valores" (ex.: subconsulta cara por linha). */
   semValores?: boolean;
   dominio?: { valor: string; rotulo: string }[];
+  /** Coluna de campo de tabela relacionada (camposRelacionados.ts): título do campo (nome técnico até o dicionário do Senior responder). */
+  titulo?: string;
+  /** Id da fonte do campo (ex.: "cliente"); só as colunas vindas de camposRelacionados.ts têm. */
+  fonte?: string;
 }
 
 /** Descrição da coluna que a API devolve à tela (operadores que o funil oferece, domínio, se tem aba Valores). */
@@ -37,6 +41,8 @@ export interface ColunaDescrita {
   agregada: boolean;
   semAbaValores: boolean;
   dominio?: { valor: string; rotulo: string }[];
+  titulo?: string;
+  fonte?: string;
 }
 
 export function descreverColunas(colunas: ColunaConsulta[]): ColunaDescrita[] {
@@ -47,6 +53,7 @@ export function descreverColunas(colunas: ColunaConsulta[]): ColunaDescrita[] {
     agregada: !!c.agregada,
     semAbaValores: !!(c.agregada || c.semValores),
     ...(c.dominio ? { dominio: c.dominio } : {}),
+    ...(c.fonte ? { fonte: c.fonte, titulo: c.titulo } : {}),
   }));
 }
 

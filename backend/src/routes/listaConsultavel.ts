@@ -16,6 +16,9 @@ import {
   selecaoCalculadas,
   valoresDaColunaSql,
 } from "../consultas/consultaColunas";
+import { col } from "../consultas/colunasDeSubconsulta";
+import { catalogoDaFonte, type FonteCampos } from "../consultas/camposRelacionados";
+import { titulosDaTabela } from "../consultas/titulosDosCampos";
 import type { FiltroColuna } from "../sync/filtroColunaLocal";
 import { lerInteiro } from "./parametrosConsulta";
 import { gerarPdfDaPagina, RelatorioPdfError } from "../lib/relatorioPdf";
@@ -43,24 +46,17 @@ export interface ListaConsultavel {
   decorar?: (linhas: Record<string, unknown>[]) => Promise<Record<string, unknown>[]> | Record<string, unknown>[];
   /** Teto de linhas por página (padrão 200). */
   paginaMaxima?: number;
+  /**
+   * Tabelas cujos campos a pessoa pode ligar como colunas extras (consultas/camposRelacionados.ts). Quem monta a lista já somou as colunas
+   * pedidas em `campos` a `colunas`; aqui fica só a declaração, para o GET `<caminho>/campos` oferecer o catálogo.
+   */
+  fontes?: FonteCampos[];
 }
 
 const MAX_PAGINA = 200;
 const executar = (sql: Prisma.Sql) => prisma.$queryRaw<Record<string, unknown>[]>(sql);
 
-const ref = (nome: string) => Prisma.raw(`x."${nome}"`);
-const DIA_BRT = (nome: string) => Prisma.raw(`(x."${nome}"::timestamp AT TIME ZONE 'America/Sao_Paulo')`);
-
-type OpcoesColuna = Pick<ColunaConsulta, "obrigatoria" | "semValores" | "dominio">;
-/** Colunas da subconsulta `x`: a expressão é sempre o próprio nome da coluna exposta pela consulta interna. */
-export const col = {
-  texto: (nome: string, o: OpcoesColuna = {}): ColunaConsulta => ({ nome, tipo: "texto", expr: ref(nome), ...o }),
-  inteiro: (nome: string, o: OpcoesColuna = {}): ColunaConsulta => ({ nome, tipo: "inteiro", expr: ref(nome), ...o }),
-  decimal: (nome: string, o: OpcoesColuna = {}): ColunaConsulta => ({ nome, tipo: "decimal", expr: ref(nome), ...o }),
-  booleano: (nome: string, o: OpcoesColuna = {}): ColunaConsulta => ({ nome, tipo: "booleano", expr: ref(nome), ...o }),
-  /** Data (date ou timestamp): compara pelo dia de Brasília, como as outras listas. */
-  data: (nome: string, o: OpcoesColuna = {}): ColunaConsulta => ({ nome, tipo: "data", expr: DIA_BRT(nome), ...o }),
-};
+export { col };
 
 /**
  * Consulta escrita com parâmetros posicionais ($1, $2...) como texto (as telas mais antigas montam o WHERE assim) vira Prisma.Sql para
@@ -164,7 +160,7 @@ export function registrarListaConsultavel(
   // Rota GET já registrada em `/resumo` ou `/valores` responde no lugar da lista (o Express atende a primeira): falha ao subir, não em
   // silêncio na tela. Aconteceu em Notas de Saída (29/10/2026): o `/resumo` antigo dos KPIs engolia o resumo do rodapé. O caminho da própria
   // lista fica de fora: há rota antes dela de propósito, que só trata `formato=csv` e chama next() (fluxo de caixa operacional).
-  for (const p of [sub("/resumo"), sub("/valores")]) {
+  for (const p of [sub("/resumo"), sub("/valores"), sub("/campos")]) {
     if (jaTemGet(router, p)) throw new Error(`registrarListaConsultavel(${rotulo}): GET ${p} já existe neste router`);
   }
 
@@ -229,6 +225,35 @@ export function registrarListaConsultavel(
       );
     } catch (erro) {
       erroHttp(res, erro, `${rotulo}-valores`);
+    }
+  });
+
+  // Catálogo dos campos que a pessoa pode ligar como coluna (só listas com `fontes`): a tela chama quando abre "Mais campos" ou quando já tem
+  // campos ligados (para os títulos). O título vem do dicionário do Senior; sem ele, o nome do campo.
+  router.get(sub("/campos"), async (req, res) => {
+    try {
+      const lista = await ler(req);
+      const fontes = lista.fontes ?? [];
+      res.json({
+        fontes: await Promise.all(
+          fontes.map(async (f) => {
+            const titulos = await titulosDaTabela(f.tabela);
+            return {
+              id: f.id,
+              titulo: f.titulo,
+              campos: catalogoDaFonte(f).map((c) => ({
+                nome: c.nome,
+                tipo: c.tipo,
+                titulo: titulos[c.coluna] ?? c.campo,
+                descritivo: c.coluna in titulos,
+                ...(c.dominio ? { dominio: c.dominio } : {}),
+              })),
+            };
+          }),
+        ),
+      });
+    } catch (erro) {
+      erroHttp(res, erro, `${rotulo}-campos`);
     }
   });
 

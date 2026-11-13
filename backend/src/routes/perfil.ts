@@ -7,7 +7,7 @@ import rateLimit from "express-rate-limit";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { Prisma } from "@prisma/client";
-import { type LayoutColunas, tabelaValida, validarLayoutColunas } from "./layoutColunas";
+import { type LayoutColunas, tabelaValida, validarCamposExtras, validarLayoutColunas } from "./layoutColunas";
 import { MAX_CALCULADAS_POR_LISTA, validarColunaCalculada } from "./colunasCalculadas";
 import { campoFiltroValido, validarValorFiltro } from "./preferenciasFiltros";
 import { AVATARS_DIR } from "../config/uploads";
@@ -249,9 +249,9 @@ perfilRouter.get("/colunas/:tabela", async (req: AuthenticatedRequest, res) => {
   }
   try {
     const [linha] = await prisma.$queryRaw<LayoutColunas[]>(
-      Prisma.sql`SELECT ordem, ocultas, larguras, resumos, congelada_ate AS "congeladaAte" FROM preferencias_colunas WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`,
+      Prisma.sql`SELECT ordem, ocultas, larguras, resumos, titulos, congelada_ate AS "congeladaAte" FROM preferencias_colunas WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`,
     );
-    res.json(linha ?? { ordem: [], ocultas: [], larguras: {}, resumos: {}, congeladaAte: null });
+    res.json(linha ?? { ordem: [], ocultas: [], larguras: {}, resumos: {}, titulos: {}, congeladaAte: null });
   } catch (err) {
     console.error("[perfil] colunas-get:", err);
     res.status(500).json({ error: "Falha ao ler a arrumação das colunas" });
@@ -267,15 +267,59 @@ perfilRouter.put("/colunas/:tabela", async (req: AuthenticatedRequest, res) => {
   }
   try {
     await prisma.$executeRaw(Prisma.sql`
-      INSERT INTO preferencias_colunas (user_id, tabela, ordem, ocultas, larguras, resumos, congelada_ate, atualizado_em)
+      INSERT INTO preferencias_colunas (user_id, tabela, ordem, ocultas, larguras, resumos, titulos, congelada_ate, atualizado_em)
       VALUES (${req.user!.userId}, ${tabela}, ${layout.ordem}::text[], ${layout.ocultas}::text[], ${JSON.stringify(layout.larguras)}::jsonb,
-              ${JSON.stringify(layout.resumos)}::jsonb, ${layout.congeladaAte}, now())
+              ${JSON.stringify(layout.resumos)}::jsonb, ${JSON.stringify(layout.titulos)}::jsonb, ${layout.congeladaAte}, now())
       ON CONFLICT (user_id, tabela) DO UPDATE SET ordem = EXCLUDED.ordem, ocultas = EXCLUDED.ocultas, larguras = EXCLUDED.larguras,
-                                                 resumos = EXCLUDED.resumos, congelada_ate = EXCLUDED.congelada_ate, atualizado_em = now()`);
+                                                 resumos = EXCLUDED.resumos, titulos = EXCLUDED.titulos, congelada_ate = EXCLUDED.congelada_ate, atualizado_em = now()`);
     res.json(layout);
   } catch (err) {
     console.error("[perfil] colunas-put:", err);
     res.status(500).json({ error: "Falha ao gravar a arrumação das colunas" });
+  }
+});
+
+// ---- Campos de tabelas relacionadas ligados como colunas (12/11/2026) ---------------------------------------------------------------
+// Os NOMES (`<fonte>__<campo>`) que o usuário ligou numa lista, na ordem em que ligou (`preferencias_campos_extras`, só por SQL). O servidor só
+// confere o formato aqui; quem confere contra o catálogo da lista é a própria lista (consultas/camposRelacionados.ts), que ignora o que não existe.
+perfilRouter.get("/campos-extras/:tabela", async (req: AuthenticatedRequest, res) => {
+  const { tabela } = req.params;
+  if (!tabelaValida(tabela)) {
+    res.status(400).json({ error: "Tabela inválida" });
+    return;
+  }
+  try {
+    const [linha] = await prisma.$queryRaw<{ campos: string[] }[]>(
+      Prisma.sql`SELECT campos FROM preferencias_campos_extras WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`,
+    );
+    res.json({ campos: linha?.campos ?? [] });
+  } catch (err) {
+    console.error("[perfil] campos-extras-get:", err);
+    res.status(500).json({ error: "Falha ao ler os campos extras" });
+  }
+});
+
+perfilRouter.put("/campos-extras/:tabela", async (req: AuthenticatedRequest, res) => {
+  const { tabela } = req.params;
+  const campos = validarCamposExtras(req.body?.campos);
+  if (!tabelaValida(tabela) || !campos) {
+    res.status(400).json({ error: "Campos extras inválidos" });
+    return;
+  }
+  try {
+    // Lista vazia = nada ligado: apaga a linha em vez de guardar um vazio.
+    if (campos.length === 0) {
+      await prisma.$executeRaw(Prisma.sql`DELETE FROM preferencias_campos_extras WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`);
+    } else {
+      await prisma.$executeRaw(Prisma.sql`
+        INSERT INTO preferencias_campos_extras (user_id, tabela, campos, atualizado_em)
+        VALUES (${req.user!.userId}, ${tabela}, ${campos}::text[], now())
+        ON CONFLICT (user_id, tabela) DO UPDATE SET campos = EXCLUDED.campos, atualizado_em = now()`);
+    }
+    res.json({ campos });
+  } catch (err) {
+    console.error("[perfil] campos-extras-put:", err);
+    res.status(500).json({ error: "Falha ao gravar os campos extras" });
   }
 });
 
@@ -287,7 +331,7 @@ perfilRouter.delete("/colunas/:tabela", async (req: AuthenticatedRequest, res) =
   }
   try {
     await prisma.$executeRaw(Prisma.sql`DELETE FROM preferencias_colunas WHERE user_id = ${req.user!.userId} AND tabela = ${tabela}`);
-    res.json({ ordem: [], ocultas: [], larguras: {}, resumos: {} });
+    res.json({ ordem: [], ocultas: [], larguras: {}, resumos: {}, titulos: {} });
   } catch (err) {
     console.error("[perfil] colunas-delete:", err);
     res.status(500).json({ error: "Falha ao restaurar as colunas" });

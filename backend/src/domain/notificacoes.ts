@@ -47,7 +47,8 @@ export async function notificarGestoresDoDepartamento(
   depexe: number,
   tipo: string,
   mensagem: string,
-  atividadeId: number,
+  // Sem atividade (ex.: folga lançada no calendário do consultor) passe undefined.
+  atividadeId: number | undefined,
   excluirUserId?: number
 ): Promise<void> {
   const gestores = await prisma.departamentoGestor.findMany({ where: { codemp, depexe } });

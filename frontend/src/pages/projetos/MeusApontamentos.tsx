@@ -269,6 +269,7 @@ function podeEditarObservacao(item: RatItemRow): boolean {
 // sobre GET /rats/lista (backend/src/domain/ratsListaSql.ts, tudo resolvido no banco). Os filtros do topo continuam os mesmos e com a
 // estrela de padrão; a linha abre o acordeão de Atividades/RDVs (várias abertas ao mesmo tempo, como antes).
 const PAGE_SIZE_RATS = 30;
+const OPCOES_POR_PAGINA_RATS = [10, 25, 30, 50, 100];
 
 interface AcoesRats {
   navegar: (rota: string) => void;
@@ -2449,6 +2450,8 @@ export function MeusApontamentos() {
               rotulo="RATs"
               vazio="Nenhuma RAT ainda — confirme uma sessão pendente pra começar."
               pageSize={PAGE_SIZE_RATS}
+              // GET /rats/lista aceita até 100 por página (paginaMaxima no backend).
+              opcoesPorPagina={OPCOES_POR_PAGINA_RATS}
               recarga={recargaRats}
               detalhe={renderDetalheRat}
               abertas={abertasRats}

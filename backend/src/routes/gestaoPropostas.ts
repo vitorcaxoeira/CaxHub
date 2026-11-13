@@ -1,5 +1,7 @@
+import { buscarImpedimentosDeFinalizar, mensagemDosImpedimentos } from "../domain/impedimentosDeFinalizar";
 import { Router, type Request, type Response } from "express";
 import { AuthenticatedRequest, requireAuth, requireRole } from "../auth/middleware";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
 import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { prisma } from "../db/prisma";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
@@ -8,9 +10,9 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
 import {
   consultaGestaoPropostas,
+  FONTES_GESTAO_PROPOSTAS,
   ORDEM_PADRAO_GESTAO_PROPOSTAS,
   precisaCalcularConjunto,
-  SITRAT_BLOQUEIA_FINALIZAR,
   type FiltrosGestaoPropostas,
 } from "../domain/gestaoPropostasSql";
 import {
@@ -95,13 +97,17 @@ registrarListaConsultavel(
   "/propostas",
   async (req): Promise<ListaConsultavel> => {
     const comValores = await podeVerValores(req);
+    // Campos de proposta/cliente que a pessoa ligou no painel de colunas (?campos=cliente__cidcli,...): só entram na consulta os pedidos.
+    const extras = extrasDaConsulta(FONTES_GESTAO_PROPOSTAS, req.query as Record<string, unknown>);
     const { com, interna } = consultaGestaoPropostas(lerFiltrosTopo(req), {
       conjunto: precisaCalcularConjunto(req.query as Record<string, unknown>),
       comValores,
+      extras,
     });
     return {
       com,
       interna,
+      fontes: FONTES_GESTAO_PROPOSTAS,
       colunas: [
         col.inteiro("codpro", { obrigatoria: true }),
         col.inteiro("codlev2"),
@@ -126,6 +132,7 @@ registrarListaConsultavel(
         col.decimal("horasFaturadas", { obrigatoria: true }),
         col.decimal("horasNaoFaturadas", { obrigatoria: true }),
         ...(comValores ? [col.decimal("valorFaturamento", { obrigatoria: true }), col.decimal("valorNaoFaturado", { obrigatoria: true })] : []),
+        ...extras.colunas,
       ],
       ordemPadrao: ORDEM_PADRAO_GESTAO_PROPOSTAS,
       pageSizePadrao: 15,
@@ -325,26 +332,9 @@ async function prepararMudancaSituacao({ codemp, codpro }: ChaveProposta, acao: 
   }
 
   if (acao === "finalizar") {
-    // removidoEmSenior != null NÃO bloqueia: a RAT não existe mais no Senior (o sitrat fica congelado em 9) e nem dá para fechá-la; bloquear criaria
-    // um impasse sem saída pela tela. sitrat 0 (fora do domínio) também não bloqueia: não é 9 nem 1. Rascunho do CaxHub (sem numrat) BLOQUEIA.
-    const bloqueando = await prisma.rat.findMany({
-      where: { codemp, codpro, removidoEmSenior: null, sitrat: { in: [...SITRAT_BLOQUEIA_FINALIZAR] } },
-      select: { id: true, numrat: true },
-      orderBy: [{ sitrat: "asc" }, { numrat: "asc" }],
-      take: 11,
-    });
-    if (bloqueando.length > 0) {
-      const lista = bloqueando
-        .slice(0, 10)
-        .map((r) => (r.numrat != null ? String(r.numrat) : `local ${r.id}`))
-        .join(", ");
-      const total = bloqueando.length > 10 ? "mais de 10" : String(bloqueando.length);
-      return {
-        ok: false,
-        status: 409,
-        motivo: `Há ${total} RAT(s) em situação Digitada ou Fechada nesta proposta — resolva-as antes de finalizar (RAT ${lista}${bloqueando.length > 10 ? ", ..." : ""})`,
-      };
-    }
+    // RATs Digitada/Fechada + sessões em curso + sessões pendentes de RAT: regra única em domain/impedimentosDeFinalizar.ts (a mesma do envio).
+    const motivo = mensagemDosImpedimentos(await buscarImpedimentosDeFinalizar(codemp, codpro));
+    if (motivo) return { ok: false, status: 409, motivo };
   }
 
   return acao === "finalizar"

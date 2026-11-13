@@ -18,6 +18,11 @@ export function useFiltroOrdemLocal() {
 
   const limparFiltros = useCallback(() => setFiltros([]), []);
   const limparOrdem = useCallback(() => setOrdem([]), []);
+  /** Tira os filtros e a ordem que citam uma coluna que saiu da lista (o servidor recusaria o pedido). */
+  const tirarColuna = useCallback((coluna: string) => {
+    setFiltros((atual) => (atual.some((f) => f.coluna === coluna) ? atual.filter((f) => f.coluna !== coluna) : atual));
+    setOrdem((atual) => (atual.some((o) => o.coluna === coluna) ? atual.filter((o) => o.coluna !== coluna) : atual));
+  }, []);
   const limparTudo = useCallback(() => {
     setFiltros([]);
     setOrdem([]);
@@ -32,6 +37,7 @@ export function useFiltroOrdemLocal() {
     limparFiltros,
     limparOrdem,
     limparTudo,
+    tirarColuna,
     ordenar,
     chave: `${JSON.stringify(filtros)}|${JSON.stringify(ordem)}`,
   };

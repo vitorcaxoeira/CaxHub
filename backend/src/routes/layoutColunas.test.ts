@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tabelaValida, validarLayoutColunas } from "./layoutColunas";
+import { tabelaValida, validarCamposExtras, validarLayoutColunas } from "./layoutColunas";
 
 test("tabelaValida: só minúsculas, dígitos, ponto, hífen e sublinhado, até 80", () => {
   assert.equal(tabelaValida("plannix.obra.materiais"), true);
@@ -17,6 +17,7 @@ test("validarLayoutColunas: aceita ordem e ocultas de texto; sem larguras nem re
     ocultas: ["unidade"],
     larguras: {},
     resumos: {},
+    titulos: {},
     congeladaAte: null,
   });
   assert.deepEqual(validarLayoutColunas({ ordem: [], ocultas: [], larguras: { descricao: 280, codigo: 40 }, resumos: { quantidade: "soma" } }), {
@@ -24,6 +25,7 @@ test("validarLayoutColunas: aceita ordem e ocultas de texto; sem larguras nem re
     ocultas: [],
     larguras: { descricao: 280, codigo: 40 },
     resumos: { quantidade: "soma" },
+    titulos: {},
     congeladaAte: null,
   });
 });
@@ -69,4 +71,27 @@ test("validarLayoutColunas: recusa formato errado, repetição e exagero", () =>
   assert.equal(validarLayoutColunas({ ordem: [""], ocultas: [] }), null);
   assert.equal(validarLayoutColunas({ ordem: ["x".repeat(61)], ocultas: [] }), null);
   assert.equal(validarLayoutColunas({ ordem: Array.from({ length: 101 }, (_, i) => `c${i}`), ocultas: [] }), null);
+});
+
+test("validarCamposExtras: nomes fonte__campo sem repetição, até o teto; o resto é inválido", () => {
+  assert.deepEqual(validarCamposExtras([]), []);
+  assert.deepEqual(validarCamposExtras(["cliente__cidcli", "proposta__tippro"]), ["cliente__cidcli", "proposta__tippro"]);
+  assert.equal(validarCamposExtras(["cliente__cidcli", "cliente__cidcli"]), null, "repetido");
+  assert.equal(validarCamposExtras(["cidcli"]), null, "sem fonte");
+  assert.equal(validarCamposExtras(["Cliente__x"]), null, "fonte só minúscula");
+  assert.equal(validarCamposExtras(["a__b c"]), null);
+  assert.equal(validarCamposExtras(["cliente__x\"; DROP"]), null);
+  assert.equal(validarCamposExtras("cliente__cidcli"), null, "precisa ser lista");
+  assert.equal(validarCamposExtras(Array.from({ length: 41 }, (_, i) => "x__c" + i)), null, "acima do teto");
+});
+
+test("validarLayoutColunas: titulos próprios (1 a 60 caracteres, sem pontas em branco); ausente vale {}", () => {
+  const base = { ordem: ["a", "b"], ocultas: [] as string[] };
+  assert.deepEqual(validarLayoutColunas(base)?.titulos, {});
+  assert.deepEqual(validarLayoutColunas({ ...base, titulos: { a: "Contato" } })?.titulos, { a: "Contato" });
+  assert.equal(validarLayoutColunas({ ...base, titulos: { a: "" } }), null, "vazio não se guarda: volta ao original");
+  assert.equal(validarLayoutColunas({ ...base, titulos: { a: " Contato" } }), null, "pontas em branco");
+  assert.equal(validarLayoutColunas({ ...base, titulos: { a: "x".repeat(61) } }), null, "longo demais");
+  assert.equal(validarLayoutColunas({ ...base, titulos: { a: 3 } }), null);
+  assert.equal(validarLayoutColunas({ ...base, titulos: ["Contato"] }), null);
 });
