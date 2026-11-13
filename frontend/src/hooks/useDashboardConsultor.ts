@@ -19,6 +19,12 @@ export interface ResumoConsultor {
   porProjeto: PontoPorProjeto[];
   metaDiariaMinutos: number | null;
   metaTotalMinutos: number;
+  // O que as férias (lançadas pelo gestor) e as folgas do calendário tiraram da meta até hoje: a meta acima já vem sem esses minutos.
+  abonado: { feriasMinutos: number; folgaMinutos: number };
+  // As mesmas horas, do período INTEIRO (inclusive os dias que ainda vão chegar): o que está marcado e não é contabilizado na meta.
+  abonadoPeriodo: { feriasMinutos: number; folgaMinutos: number };
+  // Férias remuneradas cujo mês de pagamento cai no período: a tela soma ao LÍQUIDO da nota (não estão no ganho/projeção/valor fixo). `ateAgora` = só as de competência já iniciada.
+  ferias: { total: number; ateAgora: number; itens: { gozoId: number; inicio: string; fim: string; competencia: string; valor: number; competenciaIniciada: boolean }[] };
   // null = nenhum dia do período tem jornada cadastrada (sem meta pra falar de saldo).
   saldoMinutos: number | null;
   valorHora: number | null;
@@ -27,6 +33,9 @@ export interface ResumoConsultor {
   deslocamento: { minutos: number; valor: number | null };
   ganhoAteAgora: number | null;
   projecaoGanho: number | null;
+  // Contrato de VALOR FIXO (codmot 12): nota = valor-hora × quantidade fixa por mês do período + deslocamento lançado. Null nos contratos por hora.
+  // Os descontos não estão aqui: a tela deduz de `total`.
+  contratoFixo: { qtd: number; valorMensal: number; meses: number; deslocamento: number; total: number } | null;
   // Gestão de Descontos: o que sai da nota nas competências do período. Mês aberto = previsto das parcelas pendentes; fechado = o descontado.
   descontos: {
     total: number;
@@ -66,8 +75,9 @@ export function useDashboardConsultor(filtro: FiltroDashboard) {
   const anosChave = filtro.anos.join(",");
   const mesesChave = filtro.meses.join(",");
 
-  const carregar = useCallback(() => {
-    setLoading(true);
+  const carregar = useCallback((silencioso = false) => {
+    // Recarga "silenciosa" (ex.: depois de lançar uma folga no calendário da Home): atualiza os números sem trocar a tela pelo esqueleto.
+    if (!silencioso) setLoading(true);
     axios
       .get<RespostaResumo>("/api/dashboard/meu-resumo", {
         params: { anos: anosChave, meses: mesesChave, codfor: filtro.codfor },
@@ -91,5 +101,5 @@ export function useDashboardConsultor(filtro: FiltroDashboard) {
     carregar();
   }, [carregar]);
 
-  return { resumo, semConsultor, loading, erro, recarregar: carregar };
+  return { resumo, semConsultor, loading, erro, recarregar: () => carregar(true) };
 }

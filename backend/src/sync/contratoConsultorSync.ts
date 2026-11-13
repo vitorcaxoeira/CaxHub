@@ -15,7 +15,7 @@ export const CRON_EXPR = "20 3 * * *";
 export const CAMPO_DATA: string | null = null;
 // Só as colunas de chave (pra casar com Consultor por codemp+codusu/codfor) + as 4 novas —
 // nomfor/sitfor/depexe/etc. da mesma view já vivem em Consultor, não duplicamos aqui.
-export const QUERY =`SELECT codemp AS codemp, codusu AS codusu, codfor AS codfor, numctr AS numctr, codmot AS codmot, vlrhor AS vlrhor, vlrmin AS vlrmin FROM USU_VBI01CTRCS`;
+export const QUERY =`SELECT codemp AS codemp, codusu AS codusu, codfor AS codfor, numctr AS numctr, codmot AS codmot, vlrhor AS vlrhor, vlrmin AS vlrmin, qtdctr AS qtdctr FROM USU_VBI01CTRCS`;
 
 interface ContratoConsultorRow {
   codemp: number;
@@ -25,9 +25,11 @@ interface ContratoConsultorRow {
   codmot?: number;
   vlrhor?: number;
   vlrmin?: number;
+  // Quantidade fixa do contrato (13/11/2026): com codmot = 12 (valor fixo) a nota é vlrhor × qtdctr. Ver domain/contratoFixo.ts.
+  qtdctr?: number;
 }
 
-// schema.prisma (ContratoConsultor): vlrhor Decimal(15,5), vlrmin Decimal(15,8) — toFixed no
+// schema.prisma (ContratoConsultor): vlrhor Decimal(15,5), vlrmin Decimal(15,8), qtdctr Decimal(15,5) — toFixed no
 // número exato de casas do schema, mesmo cuidado do resto do projeto (nunca String() cru,
 // que herdaria a representação de ponto flutuante do JS).
 const COLUNAS: ColunaUpsert[] = [
@@ -38,6 +40,7 @@ const COLUNAS: ColunaUpsert[] = [
   { nome: "codmot", cast: "int" },
   { nome: "vlrhor", cast: "numeric" },
   { nome: "vlrmin", cast: "numeric" },
+  { nome: "qtdctr", cast: "numeric" },
 ];
 
 function linhaDe(row: ContratoConsultorRow): LinhaUpsert {
@@ -51,6 +54,7 @@ function linhaDe(row: ContratoConsultorRow): LinhaUpsert {
       row.codmot != null ? String(row.codmot) : null,
       row.vlrhor != null ? row.vlrhor.toFixed(5) : null,
       row.vlrmin != null ? row.vlrmin.toFixed(8) : null,
+      row.qtdctr != null ? row.qtdctr.toFixed(5) : null,
     ],
   };
 }

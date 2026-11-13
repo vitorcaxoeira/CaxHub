@@ -35,6 +35,9 @@ import { MetasPlanejamento } from "./pages/comercial/metas/MetasPlanejamento";
 import { MetasIndicadores } from "./pages/comercial/metas/MetasIndicadores";
 import { Atividades } from "./pages/projetos/Atividades";
 import { Jornadas } from "./pages/projetos/Jornadas";
+import { Calendario } from "./pages/projetos/Calendario";
+import { Ferias as FeriasConsultores } from "./pages/projetos/Ferias";
+import { RelatorioAvisoFerias } from "./pages/projetos/RelatorioAvisoFerias";
 import { Aprovacoes } from "./pages/projetos/Aprovacoes";
 import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
@@ -153,6 +156,16 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            {/* Aviso de férias do consultor (botão "Aviso" da tela Férias, 13/11/2026) — fora do AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o backend
+                (GET /ferias/gozos/:id/aviso) decide quem vê: gestor do departamento, admin ou o próprio consultor. */}
+            <Route
+              path="/projetos/ferias/aviso/:id"
+              element={
+                <ProtectedRoute>
+                  <RelatorioAvisoFerias />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/relatorio/produtividade"
               element={
@@ -216,6 +229,8 @@ export default function App() {
               <Route path="/projetos/meu-plano" element={<MeuPlano />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />
               <Route path="/projetos/jornadas" element={<Jornadas />} />
+              <Route path="/projetos/calendario" element={<Calendario />} />
+              <Route path="/projetos/ferias" element={<FeriasConsultores />} />
               <Route path="/projetos/aprovacoes" element={<Aprovacoes />} />
               <Route path="/projetos/auditoria" element={<Auditoria />} />
               {/* Gestão de Descontos: sem guarda de papel nas telas de leitura (o backend recorta: consultor vê os próprios, gestor o time,

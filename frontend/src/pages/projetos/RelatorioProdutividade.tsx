@@ -138,6 +138,12 @@ function Rodape({ mes }: { mes: Mes }) {
             {temValor && <span className="ml-2">R$ {reais(t.valorDeslocamento!)}</span>}
           </p>
         </div>
+        {temValor && (t.valorFerias ?? 0) > 0 && (
+          <div title="Férias remuneradas com o mês de pagamento nesta competência: somam ao valor da nota.">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Férias (pagas na competência)</p>
+            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">R$ {reais(t.valorFerias!)}</p>
+          </div>
+        )}
         {temValor && (
           <div className="ml-auto rounded-md bg-success/20 px-3 py-1.5 text-right">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Valor Nota de Serviços</p>

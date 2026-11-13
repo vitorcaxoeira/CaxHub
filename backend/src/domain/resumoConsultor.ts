@@ -2,6 +2,8 @@ import { prisma } from "../db/prisma";
 import { diaBrasilComoData, inicioDoDiaBrasil } from "./fusoBrasil";
 import { SITRAT_CANCELADO, filtroRatItemRealizado, sitratLabel } from "./ratDominio";
 import { TIPDES_DESLOCAMENTO_ROTA, tipdesLabel } from "./rdvDominio";
+import { type ContratoFixo, contratoFixoDe } from "./contratoFixo";
+import { type AusenciaDia, type ContextoDia, chaveDia, diasDoPeriodo, metaDoDia } from "./calendarioTrabalho";
 
 // Agregações do dashboard inicial do consultor (Home) — separadas da rota (routes/
 // dashboard.ts) porque a conta de "horas realizadas num período" é a mesma definição usada
@@ -23,22 +25,8 @@ export interface MinutosPorProjeto {
   minutos: number;
 }
 
-function chaveDia(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-// Enumera as datas (YYYY-MM-DD) de `de` a `ate`, inclusive nos dois extremos — usada tanto
-// pra zero-preencher o gráfico por dia quanto pra somar a meta dia a dia.
-export function diasDoPeriodo(de: Date, ate: Date): string[] {
-  const dias: string[] = [];
-  const atual = new Date(Date.UTC(de.getUTCFullYear(), de.getUTCMonth(), de.getUTCDate()));
-  const fim = new Date(Date.UTC(ate.getUTCFullYear(), ate.getUTCMonth(), ate.getUTCDate()));
-  while (atual.getTime() <= fim.getTime()) {
-    dias.push(chaveDia(atual));
-    atual.setUTCDate(atual.getUTCDate() + 1);
-  }
-  return dias;
-}
+// `chaveDia` e `diasDoPeriodo` moraram aqui; agora vêm de calendarioTrabalho.ts (funções puras do calendário) e `diasDoPeriodo` segue exportado daqui.
+export { diasDoPeriodo };
 
 // Horas realizadas de um consultor num período, já agrupadas por dia e por projeto (codpro).
 // `ate` é tratado como fim do dia (23:59:59.999) pra incluir o dia inteiro. Sessão ainda não confirmada: o dia é o de BRASÍLIA do início
@@ -104,48 +92,102 @@ export async function horasRealizadasNoPeriodo(
   return { porDia, porProjeto, totalMinutos };
 }
 
-// Meta de minutos de um dia da semana, a partir da jornada cadastrada (JornadaConsultor) —
-// manhã + tarde, cada uma só entra na conta se tiver início E fim preenchidos. Dia sem
-// jornada cadastrada (fora do time, ou dia de folga fixo) devolve 0 — não é erro, é "sem
-// meta pra hoje", e quem soma decide separado se isso conta como "sem meta cadastrada"
-// (ver metaDoPeriodo abaixo).
-function metaDoDiaSemana(jornada: { manhaInicio: number | null; manhaFim: number | null; tardeInicio: number | null; tardeFim: number | null } | undefined): number {
-  if (!jornada) return 0;
-  let minutos = 0;
-  if (jornada.manhaInicio != null && jornada.manhaFim != null) minutos += Math.max(0, jornada.manhaFim - jornada.manhaInicio);
-  if (jornada.tardeInicio != null && jornada.tardeFim != null) minutos += Math.max(0, jornada.tardeFim - jornada.tardeInicio);
-  return minutos;
-}
-
 export interface MetaPeriodo {
+  // Meta que vale: a da jornada menos o que as férias e as folgas do calendário abonam (13/11/2026).
   metaTotalMinutos: number;
-  // Média só dos dias que TÊM jornada cadastrada (>0) — é o "Xh/dia" que o card mostra.
-  // `null` quando NENHUM dia do período tem jornada (não faz sentido falar em meta/saldo).
+  // Média só dos dias que TÊM meta (>0) depois dos abonos — é o "Xh/dia" que o card mostra.
+  // `null` quando NENHUM dia do período tem jornada cadastrada (não faz sentido falar em meta/saldo).
   metaDiariaMinutos: number | null;
+  // Dias com jornada CADASTRADA (antes dos abonos): é o que decide "meta configurada ou não". Férias não tiram a jornada.
   diasComJornada: number;
+  // Dias que ainda têm meta depois dos abonos.
+  diasComMeta: number;
+  // Quanto da meta foi abonado: férias (gozos lançados pelo gestor) e folgas (lançadas pelo consultor no calendário).
+  abonadoFeriasMinutos: number;
+  abonadoFolgaMinutos: number;
 }
 
-// Soma a meta de cada dia de `de` até `ate` (inclusive), usando a jornada cadastrada do
-// consultor por dia da semana (0=domingo...6=sábado, mesma convenção de Date.getUTCDay()).
-export async function metaDoPeriodo(codemp: number, codfor: number, de: Date, ate: Date): Promise<MetaPeriodo> {
-  const jornadas = await prisma.jornadaConsultor.findMany({ where: { codemp, codfor } });
+// Férias e folgas do consultor num período, já por dia (calendário de trabalho, 13/11/2026). `feriasDias` = dias dentro de um gozo não cancelado;
+// `ausenciasPorDia` = folgas não excluídas (dia inteiro ou parcial).
+export interface AbonosDoPeriodo {
+  feriasDias: Set<string>;
+  ausenciasPorDia: Map<string, AusenciaDia[]>;
+}
+
+export const SEM_ABONOS: AbonosDoPeriodo = { feriasDias: new Set(), ausenciasPorDia: new Map() };
+
+export async function carregarAbonos(codemp: number, codfor: number, de: Date, ate: Date): Promise<AbonosDoPeriodo> {
+  const ini = new Date(Date.UTC(de.getUTCFullYear(), de.getUTCMonth(), de.getUTCDate()));
+  const fim = new Date(Date.UTC(ate.getUTCFullYear(), ate.getUTCMonth(), ate.getUTCDate()));
+  const [gozos, ausencias] = await Promise.all([
+    prisma.feriasGozo.findMany({
+      where: { situacao: { not: "cancelada" }, inicio: { lte: fim }, fim: { gte: ini }, aquisitivo: { codemp, codfor } },
+      select: { inicio: true, fim: true },
+    }),
+    prisma.calendarioAusencia.findMany({
+      where: { codemp, codfor, data: { gte: ini, lte: fim }, excluidaEm: null },
+      select: { data: true, diaInteiro: true, inicioMin: true, fimMin: true },
+    }),
+  ]);
+  const feriasDias = new Set<string>();
+  for (const g of gozos) {
+    for (const dia of diasDoPeriodo(g.inicio > ini ? g.inicio : ini, g.fim < fim ? g.fim : fim)) feriasDias.add(dia);
+  }
+  const ausenciasPorDia = new Map<string, AusenciaDia[]>();
+  for (const a of ausencias) {
+    const chave = chaveDia(a.data);
+    ausenciasPorDia.set(chave, [...(ausenciasPorDia.get(chave) ?? []), { diaInteiro: a.diaInteiro, inicioMin: a.inicioMin, fimMin: a.fimMin }]);
+  }
+  return { feriasDias, ausenciasPorDia };
+}
+
+/** O que abona o dia `dia` (YYYY-MM-DD), no formato da regra pura. */
+export const contextoDoDia = (abonos: AbonosDoPeriodo, dia: string): ContextoDia => ({
+  ferias: abonos.feriasDias.has(dia),
+  ausencias: abonos.ausenciasPorDia.get(dia) ?? [],
+});
+
+/** Dias INTEIROS abonados (férias ou folga de dia inteiro): não contam como dia útil na projeção de ganho. */
+export function diasInteirosAbonados(abonos: AbonosDoPeriodo): Set<string> {
+  const dias = new Set(abonos.feriasDias);
+  for (const [dia, lista] of abonos.ausenciasPorDia) if (lista.some((a) => a.diaInteiro)) dias.add(dia);
+  return dias;
+}
+
+// Soma a meta de cada dia de `de` até `ate` (inclusive), usando a jornada cadastrada do consultor por dia da semana (0=domingo...6=sábado, mesma
+// convenção de Date.getUTCDay()) e descontando férias e folgas (domain/calendarioTrabalho.ts). `abonos` pode vir pronto (um período maior que
+// cubra `de`..`ate`) para a rota não consultar duas vezes.
+export async function metaDoPeriodo(codemp: number, codfor: number, de: Date, ate: Date, abonos?: AbonosDoPeriodo): Promise<MetaPeriodo> {
+  const [jornadas, abonosDoPeriodo] = await Promise.all([
+    prisma.jornadaConsultor.findMany({ where: { codemp, codfor } }),
+    abonos ?? carregarAbonos(codemp, codfor, de, ate),
+  ]);
   const porDiaSemana = new Map(jornadas.map((j) => [j.diaSemana, j]));
 
   let metaTotalMinutos = 0;
   let diasComJornada = 0;
+  let diasComMeta = 0;
+  let abonadoFeriasMinutos = 0;
+  let abonadoFolgaMinutos = 0;
   for (const diaStr of diasDoPeriodo(de, ate)) {
     const data = new Date(`${diaStr}T00:00:00Z`);
-    const meta = metaDoDiaSemana(porDiaSemana.get(data.getUTCDay()));
-    if (meta > 0) {
-      metaTotalMinutos += meta;
-      diasComJornada += 1;
+    const meta = metaDoDia(porDiaSemana.get(data.getUTCDay()), contextoDoDia(abonosDoPeriodo, diaStr));
+    if (meta.baseMinutos > 0) diasComJornada += 1;
+    if (meta.metaMinutos > 0) {
+      metaTotalMinutos += meta.metaMinutos;
+      diasComMeta += 1;
     }
+    abonadoFeriasMinutos += meta.abonadoFeriasMinutos;
+    abonadoFolgaMinutos += meta.abonadoFolgaMinutos;
   }
 
   return {
     metaTotalMinutos,
-    metaDiariaMinutos: diasComJornada > 0 ? Math.round(metaTotalMinutos / diasComJornada) : null,
+    metaDiariaMinutos: diasComMeta > 0 ? Math.round(metaTotalMinutos / diasComMeta) : diasComJornada > 0 ? 0 : null,
     diasComJornada,
+    diasComMeta,
+    abonadoFeriasMinutos,
+    abonadoFolgaMinutos,
   };
 }
 
@@ -198,6 +240,8 @@ export async function deslocamentoNoPeriodo(
 export interface ValorHoraConsultor {
   vlrhor: number;
   numctr: number | null;
+  /** Contrato de VALOR FIXO (codmot 12 com qtdctr): a nota do mês é vlrhor × qtd. Null nos contratos por hora. Ver domain/contratoFixo.ts. */
+  fixo: ContratoFixo | null;
 }
 
 // Contrato de valor-hora vigente do consultor, se houver (ver ContratoConsultor —
@@ -213,7 +257,8 @@ export async function valorHoraVigente(codemp: number, codfor: number): Promise<
   });
   const contrato = contratos[0];
   if (!contrato || contrato.vlrhor == null) return null;
-  return { vlrhor: Number(contrato.vlrhor), numctr: contrato.numctr };
+  const vlrhor = Number(contrato.vlrhor);
+  return { vlrhor, numctr: contrato.numctr, fixo: contratoFixoDe({ codmot: contrato.codmot, vlrhor, qtdctr: contrato.qtdctr == null ? null : Number(contrato.qtdctr) }) };
 }
 
 // ---------- RDV do consultor (card "RDV · Despesas de viagem" da Home, 23/09/2026) ----------

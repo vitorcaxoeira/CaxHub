@@ -1,4 +1,5 @@
 import { prisma } from "../db/prisma";
+import { feriasPagasNasCompetencias } from "./feriasNota";
 import { SITRAT_CANCELADO, sitratLabel } from "./ratDominio";
 import { FATOR_HORA_DESLOCAMENTO, deslocamentoNoPeriodo } from "./resumoConsultor";
 
@@ -49,6 +50,8 @@ export interface TotaisProdutividade {
   valorHora: number | null;
   valorTrabalhadas: number | null;
   valorDeslocamento: number | null;
+  /** Férias remuneradas com mês de pagamento nesta competência (soma à nota); 0 quando não há. */
+  valorFerias: number;
   valorNota: number | null;
 }
 
@@ -111,7 +114,7 @@ export async function produtividadeDoMes(
   const de = new Date(Date.UTC(ano, mes - 1, 1));
   const ate = new Date(Date.UTC(ano, mes, 0));
 
-  const [ratItens, desloc] = await Promise.all([
+  const [ratItens, desloc, ferias] = await Promise.all([
     prisma.ratItem.findMany({
       where: {
         codemp,
@@ -132,6 +135,7 @@ export async function produtividadeDoMes(
       orderBy: [{ datati: "asc" }, { horini: "asc" }],
     }),
     deslocamentoNoPeriodo(codemp, codfor, de, ate),
+    feriasPagasNasCompetencias(codemp, codfor, [de]),
   ]);
 
   // Cliente e tipo de faturamento em lote (nunca um por linha). Propostas por `IN` de codpro (superset);
@@ -193,7 +197,8 @@ export async function produtividadeDoMes(
       valorHora,
       valorTrabalhadas,
       valorDeslocamento,
-      valorNota: valorTrabalhadas != null && valorDeslocamento != null ? centavos(valorTrabalhadas + valorDeslocamento) : null,
+      valorFerias: ferias.total,
+      valorNota: valorTrabalhadas != null && valorDeslocamento != null ? centavos(valorTrabalhadas + valorDeslocamento + ferias.total) : null,
     },
   };
 }

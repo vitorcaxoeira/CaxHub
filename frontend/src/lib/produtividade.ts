@@ -44,6 +44,8 @@ export interface MesProdutividade {
     valorHora: number | null;
     valorTrabalhadas: number | null;
     valorDeslocamento: number | null;
+    /** Férias remuneradas pagas nesta competência (já somadas em valorNota). */
+    valorFerias?: number;
     valorNota: number | null;
   };
 }
