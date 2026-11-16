@@ -821,7 +821,8 @@ export async function fecharRatViaSoap(payload: FecharRatPayload): Promise<Fecha
 
 // ---------------------------------------------------------------------------
 // Canal de ESCRITA — operação `ManterSituacaoProposta` (tela Gestão Propostas, 09/11/2026). Altera USU_SitPro de USU_TE077PRO (domínio USU_SitPro):
-// Finalizar leva a proposta para 8 (Executada); Em Execução, de 8 para 7.
+// Finalizar leva a proposta para 8 (Executada); Em Execução, de 8 ou 4 para 7; Rejeitar/Cancelar/Declinar, de 4 para 5/6/9, com o motivo em obsSit (campo conferido no
+// ?xsd real em 16/11/2026: codEmp, codPro, flowInstanceID, flowName, obsSit, sitPro).
 //
 // OPERAÇÃO PUBLICADA NO SENIOR (nome informado pelo Vitor em 09/11/2026) e CONFERIDA contra o `?wsdl`/`?xsd` reais no mesmo dia: mensagem de entrada
 // `ManterSituacaoProposta` (user, password, encryption, parameters = CaxHubManterSituacaoPropostaIn: codEmp, codPro, sitPro e, opcionais e não usados
@@ -834,8 +835,10 @@ export async function fecharRatViaSoap(payload: FecharRatPayload): Promise<Fecha
 export interface ManterSituacaoPropostaPayload {
   codEmp: number;
   codPro: number;
-  /** Situação nova, domínio USU_SitPro (7 = Em Execução, 8 = Executada). */
+  /** Situação nova, domínio USU_SitPro (5 = Rejeitada, 6 = Cancelada, 7 = Em Execução, 8 = Executada, 9 = Declinada). */
   sitPro: number;
+  /** Motivo da mudança (campo obsSit da operação, string no XSD). Só vai no XML quando preenchido. */
+  obsSit?: string | null;
 }
 
 // Sem `resultados[]`: a operação atua sobre a proposta inteira, como fecharRAT atua sobre a RAT.
@@ -848,7 +851,9 @@ export interface ManterSituacaoPropostaResposta {
 
 /** Monta o XML que seria enviado, sem enviar — mesmo uso dos irmãos acima. */
 export function montarEnvelopeManterSituacaoProposta(payload: ManterSituacaoPropostaPayload, user: string, password: string): string {
-  const parametersXml = `<codEmp>${payload.codEmp}</codEmp>` + `<codPro>${payload.codPro}</codPro>` + `<sitPro>${payload.sitPro}</sitPro>`;
+  const obsSit = payload.obsSit?.trim();
+  const parametersXml =
+    `<codEmp>${payload.codEmp}</codEmp>` + `<codPro>${payload.codPro}</codPro>` + `<sitPro>${payload.sitPro}</sitPro>` + (obsSit ? `<obsSit>${escapeXml(obsSit)}</obsSit>` : "");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AVISO_ESCRITA_DESLIGADA, ehAvisoDeEspera, envioDeSituacaoLigado } from "./outboxSeniorProposta";
+import { AVISO_ESCRITA_DESLIGADA, ehAvisoDeEspera, ehRecusaDeNegocio, envioDeSituacaoLigado, mensagemDeRecusaDaSituacao } from "./outboxSeniorProposta";
 
 test("ehAvisoDeEspera: vazio e o aviso de escrita desligada são espera; erro de verdade não é", () => {
   assert.equal(ehAvisoDeEspera(null), true);
@@ -35,4 +35,18 @@ test("envioDeSituacaoLigado: só depende da trava geral SENIOR_SOMENTE_LEITURA (
     if (porta === undefined) delete process.env.SENIOR_PORTA_SITPRO;
     else process.env.SENIOR_PORTA_SITPRO = porta;
   }
+});
+
+test("recusa de negócio do Senior (statusProcesso numérico diferente de 1) bloqueia na hora; resposta ilegível ou sucesso não", () => {
+  assert.equal(ehRecusaDeNegocio(0), true);
+  assert.equal(ehRecusaDeNegocio(2), true);
+  assert.equal(ehRecusaDeNegocio(1), false);
+  assert.equal(ehRecusaDeNegocio(null), false);
+});
+
+test("mensagemDeRecusaDaSituacao: mantém o texto do Senior e a tela não a trata como espera", () => {
+  const msg = mensagemDeRecusaDaSituacao({ statusProcesso: 0, mensagemProcesso: "Proposta aprovada, somente é permitido iniciar a execução.", erroExecucao: null });
+  assert.equal(msg, "Senior recusou a mudança de situação (statusProcesso=0): Proposta aprovada, somente é permitido iniciar a execução.");
+  assert.equal(ehAvisoDeEspera(msg), false);
+  assert.match(mensagemDeRecusaDaSituacao({ statusProcesso: 0, mensagemProcesso: null, erroExecucao: null }), /sem mensagem/);
 });

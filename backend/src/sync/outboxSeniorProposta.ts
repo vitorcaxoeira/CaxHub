@@ -27,6 +27,16 @@ const MAX_TENTATIVAS = 5;
 
 export const TIPO_FINALIZAR_PROPOSTA = "finalizar_proposta";
 export const TIPO_REABRIR_EXECUCAO_PROPOSTA = "reabrir_execucao_proposta";
+export const TIPO_REJEITAR_PROPOSTA = "rejeitar_proposta";
+export const TIPO_CANCELAR_PROPOSTA = "cancelar_proposta";
+export const TIPO_DECLINAR_PROPOSTA = "declinar_proposta";
+
+export type TipoPendenciaSituacao =
+  | typeof TIPO_FINALIZAR_PROPOSTA
+  | typeof TIPO_REABRIR_EXECUCAO_PROPOSTA
+  | typeof TIPO_REJEITAR_PROPOSTA
+  | typeof TIPO_CANCELAR_PROPOSTA
+  | typeof TIPO_DECLINAR_PROPOSTA;
 
 /**
  * A operação `ManterSituacaoProposta` está publicada no Senior e o contrato foi conferido no WSDL/XSD (soap/client.ts). Desde 10/11/2026 o envio NÃO tem
@@ -54,9 +64,11 @@ export function ehAvisoDeEspera(ultimoErro: string | null | undefined): boolean 
 export interface NovaPendenciaSituacao {
   codemp: number;
   codpro: number;
-  tipo: typeof TIPO_FINALIZAR_PROPOSTA | typeof TIPO_REABRIR_EXECUCAO_PROPOSTA;
+  tipo: TipoPendenciaSituacao;
   sitproDe: number | null;
   sitproPara: number;
+  /** Motivo da mudança, enviado ao Senior em obsSit (Rejeitar, Cancelar, Declinar, Em Execução). */
+  obsSit?: string | null;
   usuarioId?: number | null;
 }
 
@@ -69,7 +81,8 @@ export async function enfileirarSituacaoProposta(nova: NovaPendenciaSituacao): P
       tipo: nova.tipo,
       sitproDe: nova.sitproDe,
       sitproPara: nova.sitproPara,
-      payload: { codEmp: nova.codemp, codPro: nova.codpro, sitPro: nova.sitproPara },
+      payload: { codEmp: nova.codemp, codPro: nova.codpro, sitPro: nova.sitproPara, obsSit: nova.obsSit ?? null },
+      obsSit: nova.obsSit ?? null,
       usuarioId: nova.usuarioId ?? null,
     },
   });
@@ -88,12 +101,24 @@ export async function pendenciaDeSituacaoEmAndamento(codemp: number, codpro: num
 }
 
 /** O que seria enviado agora para esta pendência, relido do dado vivo (nunca do `payload` congelado). */
-function payloadDe(item: Pick<SincronizacaoPendenteProposta, "codemp" | "codpro" | "sitproPara">): ManterSituacaoPropostaPayload {
-  return { codEmp: item.codemp, codPro: item.codpro, sitPro: item.sitproPara };
+function payloadDe(item: Pick<SincronizacaoPendenteProposta, "codemp" | "codpro" | "sitproPara" | "obsSit">): ManterSituacaoPropostaPayload {
+  return { codEmp: item.codemp, codPro: item.codpro, sitPro: item.sitproPara, obsSit: item.obsSit };
 }
 
-/** Erro de pré-condição: repetir não adianta (a situação mudou por fora, ou apareceu RAT que impede finalizar). Bloqueia na hora. */
+/**
+ * Repetir não adianta: a situação mudou por fora, apareceu RAT que impede finalizar ou o Senior recusou por regra de negócio (statusProcesso diferente de 1).
+ * Bloqueia na hora, sem gastar as 5 tentativas; "Enviar para o Senior" na tela reprocessa depois de resolvido.
+ */
 class PreCondicaoDaSituacaoError extends Error {}
+
+/** A resposta do Senior é uma recusa de negócio (statusProcesso numérico diferente de 1)? Sem statusProcesso (resposta ilegível) segue como falha repetível. */
+export function ehRecusaDeNegocio(statusProcesso: number | null): boolean {
+  return statusProcesso != null && statusProcesso !== 1;
+}
+
+export function mensagemDeRecusaDaSituacao(resposta: { statusProcesso: number | null; mensagemProcesso: string | null; erroExecucao: string | null }): string {
+  return `Senior recusou a mudança de situação (statusProcesso=${resposta.statusProcesso}): ${resposta.mensagemProcesso ?? resposta.erroExecucao ?? "sem mensagem"}`;
+}
 
 const emFilaUnica = criarFilaUnica();
 
@@ -159,9 +184,9 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
         }
         const resposta = await manterSituacaoPropostaViaSoap(payloadDe(item));
         if (resposta.statusProcesso !== 1) {
-          throw new Error(
-            `Senior recusou a mudança de situação (statusProcesso=${resposta.statusProcesso}): ${resposta.mensagemProcesso ?? resposta.erroExecucao ?? "sem mensagem"}`,
-          );
+          const recusa = mensagemDeRecusaDaSituacao(resposta);
+          // Regra de negócio do Senior ("somente é permitido iniciar a execução"...): repetir devolve a mesma recusa, então bloqueia na hora.
+          throw ehRecusaDeNegocio(resposta.statusProcesso) ? new PreCondicaoDaSituacaoError(recusa) : new Error(recusa);
         }
       }
       const duracaoMs = Date.now() - inicioEnvio;
@@ -174,7 +199,8 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
           : [
               prisma.proposta.update({
                 where: { codemp_codpro: { codemp: item.codemp, codpro: item.codpro } },
-                data: { sitpro: item.sitproPara },
+                // O motivo também vai para a observação da situação (obssit), como o Senior passa a ter; o sync de entrada confirma depois.
+                data: { sitpro: item.sitproPara, ...(item.obsSit ? { obssit: item.obsSit } : {}) },
               }),
               // MESMO evento e MESMO formato de metadata do sync de entrada (sync/propostaSync.ts): a aba Auditoria da proposta mostra as
               // duas origens na mesma linha do tempo; o que as diferencia é `origem` ("job" aqui, "integracao_senior" lá).
@@ -192,6 +218,7 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
                   status_de: sitproLabel(item.sitproDe),
                   status_para: sitproLabel(item.sitproPara),
                   tipo: item.tipo,
+                  motivo: item.obsSit ?? null,
                   duracaoMs,
                 },
                 correlationId,
@@ -227,6 +254,7 @@ async function varrerFila(opcoes: { apenasId?: number; apenasIds?: number[] }): 
             tipo: item.tipo,
             de: sitproLabel(item.sitproDe),
             para: sitproLabel(item.sitproPara),
+            motivo: item.obsSit ?? null,
             sucesso: false,
             erro: message,
             duracaoMs,

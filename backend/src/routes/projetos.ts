@@ -141,18 +141,18 @@ projetosRouter.get("/propostas/kpis", async (req, res) => {
           AND (${datproFim}::date IS NULL OR p.datpro <= ${datproFim}::date)
       )
       SELECT
-        COUNT(*) FILTER (WHERE sitpro = ANY(ARRAY[1,2,3,9]))::int AS propostas_abertas,
-        COALESCE(SUM(valor) FILTER (WHERE sitpro = ANY(ARRAY[1,2,3,9])), 0)::float8 AS valor_pipeline,
+        COUNT(*) FILTER (WHERE sitpro = ANY(ARRAY[1,2,3]))::int AS propostas_abertas,
+        COALESCE(SUM(valor) FILTER (WHERE sitpro = ANY(ARRAY[1,2,3])), 0)::float8 AS valor_pipeline,
         COALESCE(SUM(valor) FILTER (WHERE valor > 0), 0)::float8 AS soma_valor_com_valor,
         COUNT(*) FILTER (WHERE valor > 0)::int AS qtd_com_valor,
         COUNT(*) FILTER (WHERE sitpro = ANY(ARRAY[4,7,8]))::int AS convertidas,
         COUNT(*)::int AS total,
         COALESCE(SUM(horas), 0)::float8 AS total_horas,
         COUNT(*) FILTER (
-          WHERE sitpro = ANY(ARRAY[1,2,3,9]) AND datval >= CURRENT_DATE AND datval < CURRENT_DATE + INTERVAL '7 days'
+          WHERE sitpro = ANY(ARRAY[1,2,3]) AND datval >= CURRENT_DATE AND datval < CURRENT_DATE + INTERVAL '7 days'
         )::int AS a_vencer_7d,
         COUNT(*) FILTER (
-          WHERE sitpro = ANY(ARRAY[1,2,3,9]) AND datval >= CURRENT_DATE AND datval < CURRENT_DATE + INTERVAL '30 days'
+          WHERE sitpro = ANY(ARRAY[1,2,3]) AND datval >= CURRENT_DATE AND datval < CURRENT_DATE + INTERVAL '30 days'
         )::int AS a_vencer_30d
       FROM filtradas
     `;

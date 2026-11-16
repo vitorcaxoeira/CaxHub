@@ -17,11 +17,16 @@ import {
 } from "../domain/gestaoPropostasSql";
 import {
   DEPEXE_LABELS,
+  lerMotivo,
   MODPRO_LABELS,
+  SITPRO_APROVADA,
+  SITPRO_CANCELADA,
+  SITPRO_DECLINADA,
   SITPRO_EM_EXECUCAO,
   SITPRO_EXECUTADA,
   SITPRO_FINALIZAVEL,
   SITPRO_ORDER,
+  SITPRO_REJEITADA,
   sitproLabel,
   sitproTone,
 } from "../domain/propostasDominio";
@@ -41,8 +46,12 @@ import {
   enfileirarSituacaoProposta,
   pendenciaDeSituacaoEmAndamento,
   envioDeSituacaoLigado,
+  TIPO_CANCELAR_PROPOSTA,
+  TIPO_DECLINAR_PROPOSTA,
   TIPO_FINALIZAR_PROPOSTA,
   TIPO_REABRIR_EXECUCAO_PROPOSTA,
+  TIPO_REJEITAR_PROPOSTA,
+  type TipoPendenciaSituacao,
 } from "../sync/outboxSeniorProposta";
 import { runPropostaItemSyncPorCodpro } from "../sync/propostaItemSync";
 import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
@@ -285,10 +294,22 @@ gestaoPropostasRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req,
   }
 });
 
-type AcaoSituacao = "finalizar" | "em-execucao";
+type AcaoSituacao = "finalizar" | "em-execucao" | "rejeitar" | "cancelar" | "declinar";
+
+/**
+ * As ações de situação da tela. `origens`: de que situação cada uma pode partir. `motivo`: pede o motivo (obsSit no Senior). Rejeitar, Cancelar e Declinar só partem de
+ * Aprovada; Em Execução parte de Aprovada (iniciar a execução) ou de Executada (reabrir); Finalizar parte de Em Execução e não leva motivo (16/11/2026).
+ */
+const ACOES_SITUACAO: Record<AcaoSituacao, { tipo: TipoPendenciaSituacao; destino: number; origens: number[]; motivo: boolean }> = {
+  finalizar: { tipo: TIPO_FINALIZAR_PROPOSTA, destino: SITPRO_EXECUTADA, origens: SITPRO_FINALIZAVEL, motivo: false },
+  "em-execucao": { tipo: TIPO_REABRIR_EXECUCAO_PROPOSTA, destino: SITPRO_EM_EXECUCAO, origens: [SITPRO_APROVADA, SITPRO_EXECUTADA], motivo: true },
+  rejeitar: { tipo: TIPO_REJEITAR_PROPOSTA, destino: SITPRO_REJEITADA, origens: [SITPRO_APROVADA], motivo: true },
+  cancelar: { tipo: TIPO_CANCELAR_PROPOSTA, destino: SITPRO_CANCELADA, origens: [SITPRO_APROVADA], motivo: true },
+  declinar: { tipo: TIPO_DECLINAR_PROPOSTA, destino: SITPRO_DECLINADA, origens: [SITPRO_APROVADA], motivo: true },
+};
 
 type ResultadoPreparo =
-  | { ok: true; proposta: { sitpro: number | null }; destino: number; tipo: typeof TIPO_FINALIZAR_PROPOSTA | typeof TIPO_REABRIR_EXECUCAO_PROPOSTA }
+  | { ok: true; proposta: { sitpro: number | null }; destino: number; tipo: TipoPendenciaSituacao; obsSit: string | null }
   | { ok: false; status: 400 | 404 | 409 | 502; motivo: string };
 
 /**
@@ -296,7 +317,7 @@ type ResultadoPreparo =
  * no Senior → situação de origem exata → nada em voo → regra de negócio (Finalizar: nenhuma RAT Digitada ou Fechada). Antes de validar, traz a
  * proposta (e, no Finalizar, as RATs) do Senior: a validação vale contra o dado de agora, não contra o espelho da madrugada.
  */
-async function prepararMudancaSituacao({ codemp, codpro }: ChaveProposta, acao: AcaoSituacao): Promise<ResultadoPreparo> {
+async function prepararMudancaSituacao({ codemp, codpro }: ChaveProposta, acao: AcaoSituacao, motivo: string | null): Promise<ResultadoPreparo> {
   try {
     await runPropostaSyncPorCodpro(codemp, codpro);
     if (acao === "finalizar") {
@@ -317,13 +338,12 @@ async function prepararMudancaSituacao({ codemp, codpro }: ChaveProposta, acao: 
     return { ok: false, status: 400, motivo: "Esta proposta foi excluída no Senior — não é possível alterar a situação" };
   }
 
+  const regra = ACOES_SITUACAO[acao];
   const atual = sitproLabel(proposta.sitpro);
-  if (acao === "finalizar") {
-    if (proposta.sitpro == null || !SITPRO_FINALIZAVEL.includes(proposta.sitpro)) {
-      return { ok: false, status: 400, motivo: `Só é possível finalizar uma proposta Em Execução (esta está ${atual})` };
-    }
-  } else if (proposta.sitpro !== SITPRO_EXECUTADA) {
-    return { ok: false, status: 400, motivo: `Somente uma proposta Executada pode voltar para Em Execução (esta está ${atual})` };
+  if (proposta.sitpro == null || !regra.origens.includes(proposta.sitpro)) {
+    const permitidas = regra.origens.map((o) => sitproLabel(o)).join(" ou ");
+    const oQue = acao === "finalizar" ? "finalizar" : `${acao === "em-execucao" ? "colocar Em Execução" : acao}`;
+    return { ok: false, status: 400, motivo: `Só é possível ${oQue} uma proposta ${permitidas} (esta está ${atual})` };
   }
 
   const emVoo = await pendenciaDeSituacaoEmAndamento(codemp, codpro);
@@ -333,13 +353,11 @@ async function prepararMudancaSituacao({ codemp, codpro }: ChaveProposta, acao: 
 
   if (acao === "finalizar") {
     // RATs Digitada/Fechada + sessões em curso + sessões pendentes de RAT: regra única em domain/impedimentosDeFinalizar.ts (a mesma do envio).
-    const motivo = mensagemDosImpedimentos(await buscarImpedimentosDeFinalizar(codemp, codpro));
-    if (motivo) return { ok: false, status: 409, motivo };
+    const impedimento = mensagemDosImpedimentos(await buscarImpedimentosDeFinalizar(codemp, codpro));
+    if (impedimento) return { ok: false, status: 409, motivo: impedimento };
   }
 
-  return acao === "finalizar"
-    ? { ok: true, proposta, destino: SITPRO_EXECUTADA, tipo: TIPO_FINALIZAR_PROPOSTA }
-    : { ok: true, proposta, destino: SITPRO_EM_EXECUCAO, tipo: TIPO_REABRIR_EXECUCAO_PROPOSTA };
+  return { ok: true, proposta, destino: regra.destino, tipo: regra.tipo, obsSit: motivo };
 }
 
 async function pedirMudancaSituacao(req: Request, res: Response, acao: AcaoSituacao) {
@@ -347,7 +365,12 @@ async function pedirMudancaSituacao(req: Request, res: Response, acao: AcaoSitua
     const chave = lerChave(req, res);
     if (!chave) return;
     const r = req as AuthenticatedRequest;
-    const preparo = await prepararMudancaSituacao(chave, acao);
+    const lido = lerMotivo((req.body as { motivo?: unknown } | undefined)?.motivo, ACOES_SITUACAO[acao].motivo);
+    if (!lido.ok) {
+      res.status(400).json({ error: lido.erro });
+      return;
+    }
+    const preparo = await prepararMudancaSituacao(chave, acao, lido.motivo);
     if (!preparo.ok) {
       res.status(preparo.status).json({ error: preparo.motivo });
       return;
@@ -360,6 +383,7 @@ async function pedirMudancaSituacao(req: Request, res: Response, acao: AcaoSitua
       tipo: preparo.tipo,
       sitproDe: preparo.proposta.sitpro,
       sitproPara: preparo.destino,
+      obsSit: preparo.obsSit,
       usuarioId: r.user!.userId,
     });
 
@@ -373,7 +397,7 @@ async function pedirMudancaSituacao(req: Request, res: Response, acao: AcaoSitua
       entidadeRotulo: `Proposta ${chave.codemp}/${chave.codpro}`,
       eventoTipo: EVENTOS_AUDITORIA.PROPOSTA_SITUACAO_SOLICITADA,
       alteracoes: null,
-      metadata: { tipo: preparo.tipo, de: sitproLabel(preparo.proposta.sitpro), para: sitproLabel(preparo.destino), pendenciaId },
+      metadata: { tipo: preparo.tipo, de: sitproLabel(preparo.proposta.sitpro), para: sitproLabel(preparo.destino), motivo: preparo.obsSit, pendenciaId },
       correlationId: r.correlationId!,
     });
 
@@ -392,10 +416,14 @@ async function pedirMudancaSituacao(req: Request, res: Response, acao: AcaoSitua
   }
 }
 
-// POST /propostas/:codemp/:codpro/finalizar — sitpro 7 -> 8 (nenhuma RAT Digitada ou Fechada).
+// POST /propostas/:codemp/:codpro/finalizar — sitpro 7 -> 8 (nenhuma RAT Digitada ou Fechada). Sem motivo.
 gestaoPropostasRouter.post("/propostas/:codemp/:codpro/finalizar", (req, res) => pedirMudancaSituacao(req, res, "finalizar"));
-// POST /propostas/:codemp/:codpro/em-execucao — sitpro 8 -> 7 (só Executada volta para execução).
+// As demais levam { motivo } no corpo (obrigatório, até 200 caracteres), enviado ao Senior em obsSit:
+// POST .../em-execucao — sitpro 4 ou 8 -> 7 | .../rejeitar — 4 -> 5 | .../cancelar — 4 -> 6 | .../declinar — 4 -> 9.
 gestaoPropostasRouter.post("/propostas/:codemp/:codpro/em-execucao", (req, res) => pedirMudancaSituacao(req, res, "em-execucao"));
+gestaoPropostasRouter.post("/propostas/:codemp/:codpro/rejeitar", (req, res) => pedirMudancaSituacao(req, res, "rejeitar"));
+gestaoPropostasRouter.post("/propostas/:codemp/:codpro/cancelar", (req, res) => pedirMudancaSituacao(req, res, "cancelar"));
+gestaoPropostasRouter.post("/propostas/:codemp/:codpro/declinar", (req, res) => pedirMudancaSituacao(req, res, "declinar"));
 
 // GET /propostas/:codemp/:codpro/situacao — a situação de agora e a última pendência de mudança, para a tela acompanhar (polling) depois da ação.
 gestaoPropostasRouter.get("/propostas/:codemp/:codpro/situacao", async (req, res) => {

@@ -239,8 +239,8 @@ const SITPED_ROTULO_SQL = rotuloSql(Prisma.sql`p.sitped`, SITPED_LABELS, "SituaÃ
 const SITPED_TOM_SQL = Prisma.sql`(CASE WHEN p.sitped = 5 THEN 'destructive' WHEN p.sitped = 4 THEN 'success'
   WHEN p.sitped IN (1, 2, 7, 9) THEN 'warning' ELSE 'neutral' END)`;
 const MODPRO_TOM_SQL = Prisma.sql`(CASE WHEN pr.modpro = 1 THEN 'warning' WHEN pr.modpro = 2 THEN 'success' ELSE 'neutral' END)`;
-const SITPRO_TOM_SQL = Prisma.sql`(CASE WHEN pr.sitpro IN (4, 7, 8) THEN 'success' WHEN pr.sitpro IN (5, 6) THEN 'destructive'
-  WHEN pr.sitpro IN (1, 2, 3, 9) THEN 'warning' ELSE 'neutral' END)`;
+const SITPRO_TOM_SQL = Prisma.sql`(CASE WHEN pr.sitpro IN (4, 7, 8) THEN 'success' WHEN pr.sitpro IN (5, 6, 9) THEN 'destructive'
+  WHEN pr.sitpro IN (1, 2, 3) THEN 'warning' ELSE 'neutral' END)`;
 /** Algum termo da lista (busca "a,b,c") aparece no texto: mesma regra de termosBusca + includes. */
 const algumTermo = (termos: string[], texto: Prisma.Sql) =>
   Prisma.sql`EXISTS (SELECT 1 FROM unnest(${termos}::text[]) AS termo WHERE position(termo IN ${texto}) > 0)`;

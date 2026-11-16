@@ -116,8 +116,8 @@ export const AGREGADOS_DE_FATURAMENTO = {
 
 /** Situação e tom do selo, em SQL (mesmas regras de `sitproLabel`/`sitproTone`, propostasDominio.ts). Esperam a proposta com alias `p`. */
 export const SITUACAO_PROPOSTA_SQL = rotuloSql(Prisma.sql`p.sitpro`, SITPRO_LABELS, "Situação", "Sem situação");
-export const TOM_PROPOSTA_SQL = Prisma.sql`(CASE WHEN p.sitpro IN (4, 7, 8) THEN 'success' WHEN p.sitpro IN (5, 6) THEN 'destructive'
-  WHEN p.sitpro IN (1, 2, 3, 9) THEN 'warning' ELSE 'neutral' END)`;
+export const TOM_PROPOSTA_SQL = Prisma.sql`(CASE WHEN p.sitpro IN (4, 7, 8) THEN 'success' WHEN p.sitpro IN (5, 6, 9) THEN 'destructive'
+  WHEN p.sitpro IN (1, 2, 3) THEN 'warning' ELSE 'neutral' END)`;
 
 // ---------- Consulta ----------
 

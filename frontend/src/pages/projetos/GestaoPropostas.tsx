@@ -21,7 +21,12 @@ import { formatMoeda } from "../../utils/moeda";
 // SITUAÇÃO da proposta (Finalizar: Em Execução -> Executada; Em Execução: Executada -> Em Execução). A mudança só vale quando o Senior confirma:
 // o clique grava um pedido na fila de saída e a situação da linha muda depois (backend: sync/outboxSeniorProposta.ts).
 
-type Acao = "finalizar" | "em-execucao";
+type Acao = "finalizar" | "em-execucao" | "rejeitar" | "cancelar" | "declinar";
+
+/** Situações (USU_SitPro) das quais cada ação parte; Rejeitar/Cancelar/Declinar só de Aprovada (4). Espelha ACOES_SITUACAO do backend. */
+const ORIGENS_ACAO: Record<Acao, number[]> = { finalizar: [7], "em-execucao": [4, 8], rejeitar: [4], cancelar: [4], declinar: [4] };
+/** O motivo vai ao Senior no campo obsSit (até 200 caracteres). */
+const MOTIVO_MAX = 200;
 
 interface PropostaRow {
   codemp: number;
@@ -117,7 +122,10 @@ function motivoDaAcao(row: PropostaRow, acao: Acao): string | null {
     if (row.ratsBloqueando > 0) return `${row.ratsBloqueando} RAT(s) Digitada(s) ou Fechada(s) nesta proposta impedem finalizar`;
     return null;
   }
-  return row.sitpro === 8 ? null : `Somente uma proposta Executada pode voltar para Em Execução (esta está ${row.sitproLabel})`;
+  if (row.sitpro != null && ORIGENS_ACAO[acao].includes(row.sitpro)) return null;
+  return acao === "em-execucao"
+    ? `Só uma proposta Aprovada ou Executada pode ir para Em Execução (esta está ${row.sitproLabel})`
+    : `Só uma proposta Aprovada pode ser ${acao === "rejeitar" ? "rejeitada" : acao === "cancelar" ? "cancelada" : "declinada"} (esta está ${row.sitproLabel})`;
 }
 
 function SeloPendencia({ row }: { row: PropostaRow }) {
@@ -372,6 +380,13 @@ const COLUNAS: DefColuna<PropostaRow, AcoesGestao>[] = [
               <DropdownMenu.Item onSelect={() => a.pedirAcao(row, "em-execucao")} disabled={motivoExecucao != null} title={motivoExecucao ?? undefined}>
                 Em Execução
               </DropdownMenu.Item>
+              {/* Decisões sobre uma proposta Aprovada: só aparecem para ela (cada uma pede o motivo num modal). */}
+              {row.sitpro === 4 &&
+                (["rejeitar", "cancelar", "declinar"] as const).map((acao) => (
+                  <DropdownMenu.Item key={acao} onSelect={() => a.pedirAcao(row, acao)} disabled={motivoDaAcao(row, acao) != null} title={motivoDaAcao(row, acao) ?? undefined}>
+                    {TEXTO_ACAO[acao].menu}
+                  </DropdownMenu.Item>
+                ))}
             </DropdownMenu.Content>
           </DropdownMenu>
         </span>
@@ -547,17 +562,60 @@ function RatsDaProposta({
 
 // ---------- Confirmação da ação ----------
 
-const TEXTO_ACAO: Record<Acao, { titulo: (r: PropostaRow) => string; destino: string; aviso: string }> = {
+interface TextoAcao {
+  /** Rótulo no menu da linha. */
+  menu: string;
+  titulo: (r: PropostaRow) => string;
+  destino: string;
+  aviso: string;
+  /** Texto do botão de confirmar. */
+  botao: string;
+  /** Pede o motivo (obsSit). */
+  motivo: boolean;
+}
+
+const AVISO_SENIOR = "A situação só muda quando o Senior confirmar.";
+
+const TEXTO_ACAO: Record<Acao, TextoAcao> = {
   finalizar: {
+    menu: "Finalizar",
     titulo: (r) => `Finalizar a proposta ${r.codpro}?`,
     destino: "Executada",
-    aviso:
-      "Antes de pedir, as RATs da proposta são conferidas com o Senior: nenhuma pode estar Digitada ou Fechada. A situação só muda quando o Senior confirmar.",
+    aviso: "Antes de pedir, as RATs da proposta são conferidas com o Senior: nenhuma pode estar Digitada ou Fechada. " + AVISO_SENIOR,
+    botao: "Finalizar",
+    motivo: false,
   },
   "em-execucao": {
-    titulo: (r) => `Voltar a proposta ${r.codpro} para Em Execução?`,
+    menu: "Em Execução",
+    titulo: (r) => (r.sitpro === 4 ? `Iniciar a execução da proposta ${r.codpro}?` : `Voltar a proposta ${r.codpro} para Em Execução?`),
     destino: "Em Execução",
-    aviso: "A situação só muda quando o Senior confirmar.",
+    aviso: "Informe o motivo: ele é enviado ao Senior junto com a mudança. " + AVISO_SENIOR,
+    botao: "Em Execução",
+    motivo: true,
+  },
+  rejeitar: {
+    menu: "Rejeitar",
+    titulo: (r) => `Rejeitar a proposta ${r.codpro}?`,
+    destino: "Rejeitada",
+    aviso: "Informe o motivo da rejeição: ele é enviado ao Senior junto com a mudança. " + AVISO_SENIOR,
+    botao: "Rejeitar",
+    motivo: true,
+  },
+  cancelar: {
+    menu: "Cancelar",
+    titulo: (r) => `Cancelar a proposta ${r.codpro}?`,
+    destino: "Cancelada",
+    aviso: "Informe o motivo do cancelamento: ele é enviado ao Senior junto com a mudança. " + AVISO_SENIOR,
+    botao: "Cancelar proposta",
+    motivo: true,
+  },
+  declinar: {
+    menu: "Declinar",
+    titulo: (r) => `Declinar a proposta ${r.codpro}?`,
+    destino: "Declinada",
+    aviso: "Informe o motivo: ele é enviado ao Senior junto com a mudança. " + AVISO_SENIOR,
+    botao: "Declinar",
+    motivo: true,
   },
 };
 
@@ -571,11 +629,14 @@ function ModalAcao({
   alvo: { row: PropostaRow; acao: Acao };
   enviando: boolean;
   erro: string | null;
-  onConfirmar: () => void;
+  onConfirmar: (motivo: string | null) => void;
   onFechar: () => void;
 }) {
   const { row, acao } = alvo;
   const texto = TEXTO_ACAO[acao];
+  const [motivo, setMotivo] = useState("");
+  const motivoAparado = motivo.trim();
+  const semMotivo = texto.motivo && motivoAparado === "";
   return (
     // Modal de decisão: não fecha ao clicar fora nem no Esc (preferência registrada); o ✕ e o Cancelar fecham.
     <Modal open onClose={onFechar} title={texto.titulo(row)} fecharPorFora={false} className="max-w-lg">
@@ -595,6 +656,26 @@ function ModalAcao({
           </dd>
         </dl>
         <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-muted">{texto.aviso}</p>
+        {texto.motivo && (
+          <label className="block">
+            <span className="mb-1 block text-[12.5px] font-medium text-foreground">
+              Motivo <span className="text-destructive">*</span>
+            </span>
+            <textarea
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value.slice(0, MOTIVO_MAX))}
+              maxLength={MOTIVO_MAX}
+              rows={3}
+              autoFocus
+              disabled={enviando}
+              placeholder="Descreva o motivo da mudança de situação"
+              className="w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <span className="mt-0.5 block text-right font-mono text-[11px] text-muted">
+              {motivo.length}/{MOTIVO_MAX}
+            </span>
+          </label>
+        )}
         {erro && (
           // O servidor barrou o pedido (RAT Digitada/Fechada, sessão em curso, sessão pendente de RAT...): o motivo fica À VISTA, com as quebras de linha.
           <div role="alert" className="whitespace-pre-line rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
@@ -603,10 +684,10 @@ function ModalAcao({
         )}
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onFechar} disabled={enviando} className={classeBotaoSecundario}>
-            Cancelar
+            Voltar
           </button>
-          <button type="button" onClick={onConfirmar} disabled={enviando} className={classeBotaoPrimario}>
-            {enviando ? "Enviando…" : acao === "finalizar" ? "Finalizar" : "Voltar para Em Execução"}
+          <button type="button" onClick={() => onConfirmar(texto.motivo ? motivoAparado : null)} disabled={enviando || semMotivo} className={classeBotaoPrimario}>
+            {enviando ? "Enviando…" : texto.botao}
           </button>
         </div>
       </div>
@@ -815,13 +896,13 @@ export function GestaoPropostas() {
   const [enviando, setEnviando] = useState(false);
   const [erroAcao, setErroAcao] = useState<string | null>(null);
 
-  async function confirmarAcao() {
+  async function confirmarAcao(motivo: string | null) {
     if (!alvo) return;
     const { row, acao } = alvo;
     setEnviando(true);
     setErroAcao(null);
     try {
-      const { data } = await axios.post(`/api/gestao-propostas/propostas/${row.codemp}/${row.codpro}/${acao}`);
+      const { data } = await axios.post(`/api/gestao-propostas/propostas/${row.codemp}/${row.codpro}/${acao}`, motivo != null ? { motivo } : {});
       setAlvo(null);
       carregar();
       if (data.envioLigado) {
