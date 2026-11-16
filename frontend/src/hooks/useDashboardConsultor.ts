@@ -25,6 +25,21 @@ export interface ResumoConsultor {
   abonadoPeriodo: { feriasMinutos: number; folgaMinutos: number };
   // Férias remuneradas cujo mês de pagamento cai no período: a tela soma ao LÍQUIDO da nota (não estão no ganho/projeção/valor fixo). `ateAgora` = só as de competência já iniciada.
   ferias: { total: number; ateAgora: number; itens: { gozoId: number; inicio: string; fim: string; competencia: string; valor: number; competenciaIniciada: boolean }[] };
+  // A conta do cartão Progresso da meta, do período inteiro (jornada − férias − folgas = meta) e o ritmo até hoje.
+  metaPeriodo: {
+    jornadaMinutos: number;
+    feriasMinutos: number;
+    folgaMinutos: number;
+    metaMinutos: number;
+    diasComJornada: number;
+    diasFerias: number;
+    diasFolgaInteira: number;
+    metaAteHojeMinutos: number;
+    realizadoAteHojeMinutos: number;
+    diasComMetaRestantes: number;
+    /** Horas trabalhadas em dia sem jornada (fim de semana): contam no realizado e não têm meta. */
+    semJornadaMinutos: number;
+  };
   // null = nenhum dia do período tem jornada cadastrada (sem meta pra falar de saldo).
   saldoMinutos: number | null;
   valorHora: number | null;
