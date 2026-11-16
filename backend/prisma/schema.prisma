@@ -583,7 +583,7 @@ model Proposta {
   usuger           Int?
   /// Domínio "USU_ForAte": P=Presencial, R=Remoto
   forate           String?   @db.VarChar(1)
-  /// Domínio "USU_SitPro": 1=Abertura, 2=Comercial, 3=Enviada p/ Cliente, 4=Aprovada, 5=Rejeitada, 6=Cancelada, 7=Em Execução, 8=Executada, 9=Levantamento Interno
+  /// Domínio "USU_SitPro": 1=Abertura, 2=Comercial, 3=Enviada p/ Cliente, 4=Aprovada, 5=Rejeitada, 6=Cancelada, 7=Em Execução, 8=Executada, 9=Declinada
   sitpro           Int?
   horpro           Int?
   /// Domínio "USU_TipPro": 1=Projeto Novo, 2=Mólulo Adicional, 3=Serviços, 4=Desenvolvimento, 5=Terceiros
@@ -2210,12 +2210,14 @@ model SincronizacaoPendenteProposta {
   codemp       Int
   codpro       Int
   proposta     Proposta  @relation(fields: [codemp, codpro], references: [codemp, codpro])
-  // finalizar_proposta (sitpro -> 8) | reabrir_execucao_proposta (sitpro 8 -> 7)
+  // finalizar_proposta (sitpro -> 8) | reabrir_execucao_proposta (sitpro 8 ou 4 -> 7) | rejeitar_proposta (4 -> 5) | cancelar_proposta (4 -> 6) | declinar_proposta (4 -> 9)
   tipo         String    @db.VarChar(40)
   /// sitpro ANTES do envio: a origem auditada e a guarda de idempotência.
   sitproDe     Int?
-  /// sitpro pedido (7 ou 8). O banco local só muda para ele DEPOIS que o Senior confirmar.
+  /// sitpro pedido (5, 6, 7, 8 ou 9). O banco local só muda para ele DEPOIS que o Senior confirmar.
   sitproPara   Int
+  /// Motivo da mudança (Rejeitar, Cancelar, Declinar, Em Execução), enviado ao Senior em obsSit. Vazio no Finalizar.
+  obsSit       String?   @db.VarChar(200) @map("obs_sit")
   payload      Json
   // pendente | enviando | enviado | bloqueado — mesmo significado das filas irmãs.
   status       String    @default("pendente") @db.VarChar(20)

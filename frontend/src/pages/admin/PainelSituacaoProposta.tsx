@@ -72,6 +72,9 @@ const KPI_COR = {
 const TIPO_LABEL: Record<string, string> = {
   finalizar_proposta: "Finalizar",
   reabrir_execucao_proposta: "Em Execução",
+  rejeitar_proposta: "Rejeitar",
+  cancelar_proposta: "Cancelar",
+  declinar_proposta: "Declinar",
 };
 
 const TIPO_OPCOES: MultiSelectOption<string>[] = Object.entries(TIPO_LABEL).map(([value, label]) => ({ value, label }));

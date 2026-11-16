@@ -22,3 +22,12 @@ test("o preview mascara as credenciais (é o que as telas de Sincronização mos
   assert.match(xml, /<user>\*\*\*<\/user>/);
   assert.match(xml, /<password>\*\*\*<\/password>/);
 });
+
+test("envelope de ManterSituacaoProposta: o motivo vai em obsSit (escapado) e só quando preenchido", () => {
+  const com = montarEnvelopeManterSituacaoProposta({ codEmp: 1, codPro: 8638, sitPro: 9, obsSit: "  Cliente <declinou> & saiu  " }, "u", "p");
+  assert.match(com, /<sitPro>9<\/sitPro><obsSit>Cliente &lt;declinou&gt; &amp; saiu<\/obsSit><\/parameters>/);
+  for (const vazio of [undefined, null, "", "   "]) {
+    const sem = montarEnvelopeManterSituacaoProposta({ codEmp: 1, codPro: 8638, sitPro: 8, obsSit: vazio }, "u", "p");
+    assert.doesNotMatch(sem, /obsSit/);
+  }
+});
