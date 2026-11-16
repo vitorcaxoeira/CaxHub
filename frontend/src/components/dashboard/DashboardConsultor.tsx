@@ -7,7 +7,7 @@ import { rotuloMesAno } from "../../lib/periodos";
 import { BlocoProdutividade, MesProdutividade } from "../../lib/produtividade";
 import { DonutChart, DonutItem } from "../ui/DonutChart";
 import { SerieTemporalBarra, SeriePonto } from "../ui/SerieTemporalBarra";
-import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
+import { CardProgressoMeta } from "./CardProgressoMeta";
 import { Skeleton } from "../ui/Skeleton";
 import { Spinner } from "../ui/Spinner";
 import { CardCalendario } from "./CardCalendario";
@@ -28,12 +28,6 @@ function formatarDiaCurto(iso: string): string {
 // Tom da barra de meta — inverso do `tomConsumo` usado no Cronograma/Lista de Atividades:
 // lá passar de 100% é estouro (ruim); aqui é a meta de produtividade batida (bom). Por isso
 // não reaproveita aquela função, mesmo parecendo a mesma conta.
-function tomMeta(avanco: number): string {
-  if (avanco >= 1) return "bg-success";
-  if (avanco >= 0.7) return "bg-primary";
-  return "bg-warning";
-}
-
 function Estatistica({
   label,
   valor,
@@ -234,19 +228,6 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
     return <p className="text-sm text-muted">Não foi possível montar o painel — cadastro de consultor não encontrado.</p>;
   }
 
-  const avancoMeta = resumo.metaTotalMinutos > 0 ? resumo.totalMinutos / resumo.metaTotalMinutos : null;
-  const abonadoMinutos = resumo.abonado.feriasMinutos + resumo.abonado.folgaMinutos;
-  // Horas marcadas (férias e folgas) no período inteiro, com os dias que ainda vão chegar: não entram na meta, mas o consultor vê quantas são.
-  const foraDaMeta = resumo.abonadoPeriodo.feriasMinutos + resumo.abonadoPeriodo.folgaMinutos;
-  const detalheForaDaMeta = (
-    <p className="mt-2 text-[11.5px] text-muted" title="Horas de férias e folgas marcadas no calendário no período. Não entram na meta do Progresso da meta.">
-      <span className="font-mono font-semibold text-foreground">{formatHorasCompacto(foraDaMeta)} h</span> marcadas fora da meta (
-      {[resumo.abonadoPeriodo.feriasMinutos > 0 && `férias ${formatHorasCompacto(resumo.abonadoPeriodo.feriasMinutos)} h`, resumo.abonadoPeriodo.folgaMinutos > 0 && `folgas ${formatHorasCompacto(resumo.abonadoPeriodo.folgaMinutos)} h`]
-        .filter(Boolean)
-        .join(" · ")}
-      )
-    </p>
-  );
 
   const totalProjeto = resumo.porProjeto.reduce((soma, p) => soma + p.valor, 0);
   const itensDonut: DonutItem[] = resumo.porProjeto
@@ -347,28 +328,7 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
           onVerDescontos={() => setVerDescontos(true)}
         />
 
-        <section className="rounded-lg border border-border bg-surface p-5">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Progresso da meta</p>
-          {avancoMeta == null ? (
-            <>
-              <p className="mt-3 text-sm text-muted">
-                {abonadoMinutos > 0 ? "Período todo em férias ou folga: sem meta para cumprir." : "Sem jornada cadastrada no período — meta não configurada."}
-              </p>
-              {foraDaMeta > 0 && detalheForaDaMeta}
-            </>
-          ) : (
-            <>
-              <p className="mt-2 font-mono text-2xl font-semibold text-foreground">{Math.round(avancoMeta * 100)}%</p>
-              <p className="font-mono text-[12px] text-muted">
-                {formatHorasCompacto(resumo.totalMinutos)} / {formatHorasCompacto(resumo.metaTotalMinutos)} h
-              </p>
-              <div className="mt-2">
-                <IndicadorProgresso avanco={avancoMeta} cor={tomMeta(avancoMeta)} alturaPx={6} />
-              </div>
-              {foraDaMeta > 0 && detalheForaDaMeta}
-            </>
-          )}
-        </section>
+        <CardProgressoMeta meta={resumo.metaPeriodo} totalMinutos={resumo.totalMinutos} rotuloPeriodo={rotuloPeriodo} />
       </div>
 
       <CardRdv filtro={{ anos, meses, codfor }} rotuloPeriodo={rotuloPeriodo} />

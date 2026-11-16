@@ -105,6 +105,12 @@ export interface MetaPeriodo {
   // Quanto da meta foi abonado: férias (gozos lançados pelo gestor) e folgas (lançadas pelo consultor no calendário).
   abonadoFeriasMinutos: number;
   abonadoFolgaMinutos: number;
+  // A conta da meta (cartão Progresso da meta): jornada sem abono, e quantos dias com jornada as férias e as folgas de dia inteiro zeraram.
+  jornadaMinutos: number;
+  diasFerias: number;
+  diasFolgaInteira: number;
+  // Dias do período SEM jornada (fim de semana, em geral): horas trabalhadas neles contam no realizado, mas não têm meta.
+  diasSemJornada: string[];
 }
 
 // Férias e folgas do consultor num período, já por dia (calendário de trabalho, 13/11/2026). `feriasDias` = dias dentro de um gozo não cancelado;
@@ -169,10 +175,21 @@ export async function metaDoPeriodo(codemp: number, codfor: number, de: Date, at
   let diasComMeta = 0;
   let abonadoFeriasMinutos = 0;
   let abonadoFolgaMinutos = 0;
+  let jornadaMinutos = 0;
+  let diasFerias = 0;
+  let diasFolgaInteira = 0;
+  const diasSemJornada: string[] = [];
   for (const diaStr of diasDoPeriodo(de, ate)) {
     const data = new Date(`${diaStr}T00:00:00Z`);
     const meta = metaDoDia(porDiaSemana.get(data.getUTCDay()), contextoDoDia(abonosDoPeriodo, diaStr));
-    if (meta.baseMinutos > 0) diasComJornada += 1;
+    jornadaMinutos += meta.baseMinutos;
+    if (meta.baseMinutos > 0) {
+      diasComJornada += 1;
+      if (meta.abonadoFeriasMinutos > 0) diasFerias += 1;
+      else if (meta.diaInteiroAbonado) diasFolgaInteira += 1;
+    } else {
+      diasSemJornada.push(diaStr);
+    }
     if (meta.metaMinutos > 0) {
       metaTotalMinutos += meta.metaMinutos;
       diasComMeta += 1;
@@ -188,6 +205,10 @@ export async function metaDoPeriodo(codemp: number, codfor: number, de: Date, at
     diasComMeta,
     abonadoFeriasMinutos,
     abonadoFolgaMinutos,
+    jornadaMinutos,
+    diasFerias,
+    diasFolgaInteira,
+    diasSemJornada,
   };
 }
 

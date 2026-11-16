@@ -335,6 +335,15 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
     let abonadoFolgaMinutos = 0;
     let abonadoPeriodoFeriasMinutos = 0;
     let abonadoPeriodoFolgaMinutos = 0;
+    // A conta do cartão Progresso da meta (período inteiro): jornada − férias − folgas = meta; mais o ritmo até hoje.
+    let jornadaPeriodoMinutos = 0;
+    let metaPeriodoMinutos = 0;
+    let diasFeriasPeriodo = 0;
+    let diasFolgaInteiraPeriodo = 0;
+    let diasComJornadaPeriodo = 0;
+    let diasComMetaPeriodo = 0;
+    let diasComMetaAteHoje = 0;
+    let semJornadaMinutos = 0;
     let diasComJornadaTotal = 0;
     let deslocamentoMinutosTotal = 0;
     let ganhoAteAgora: number | null = valorHora ? 0 : null;
@@ -350,6 +359,15 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       abonadoFolgaMinutos += combo.meta.abonadoFolgaMinutos;
       abonadoPeriodoFeriasMinutos += combo.metaDoMesInteiro.abonadoFeriasMinutos;
       abonadoPeriodoFolgaMinutos += combo.metaDoMesInteiro.abonadoFolgaMinutos;
+      jornadaPeriodoMinutos += combo.metaDoMesInteiro.jornadaMinutos;
+      metaPeriodoMinutos += combo.metaDoMesInteiro.metaTotalMinutos;
+      diasFeriasPeriodo += combo.metaDoMesInteiro.diasFerias;
+      diasFolgaInteiraPeriodo += combo.metaDoMesInteiro.diasFolgaInteira;
+      diasComJornadaPeriodo += combo.metaDoMesInteiro.diasComJornada;
+      diasComMetaPeriodo += combo.metaDoMesInteiro.diasComMeta;
+      diasComMetaAteHoje += combo.meta.diasComMeta;
+      // Horas trabalhadas em dia sem jornada (fim de semana): contam no realizado e não têm meta.
+      for (const dia of combo.metaDoMesInteiro.diasSemJornada) semJornadaMinutos += combo.porDia.get(dia) ?? 0;
       diasComJornadaTotal += combo.meta.diasComJornada;
       deslocamentoMinutosTotal += combo.deslocamentoMinutos;
 
@@ -412,6 +430,20 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
         total: feriasNota.total,
         ateAgora: somarReais(feriasNota.itens.filter((f) => f.competencia.slice(0, 7) <= mesDeHoje).map((f) => f.valor)),
         itens: feriasNota.itens.map((f) => ({ ...f, competenciaIniciada: f.competencia.slice(0, 7) <= mesDeHoje })),
+      },
+      // O cartão Progresso da meta: a conta da meta do período inteiro e o ritmo até hoje. `metaTotalMinutos` (acima) segue sendo a meta ATÉ HOJE.
+      metaPeriodo: {
+        jornadaMinutos: jornadaPeriodoMinutos,
+        feriasMinutos: abonadoPeriodoFeriasMinutos,
+        folgaMinutos: abonadoPeriodoFolgaMinutos,
+        metaMinutos: metaPeriodoMinutos,
+        diasComJornada: diasComJornadaPeriodo,
+        diasFerias: diasFeriasPeriodo,
+        diasFolgaInteira: diasFolgaInteiraPeriodo,
+        metaAteHojeMinutos: metaTotalMinutos,
+        realizadoAteHojeMinutos: realizadoAteHojeTotal,
+        diasComMetaRestantes: Math.max(0, diasComMetaPeriodo - diasComMetaAteHoje),
+        semJornadaMinutos,
       },
       saldoMinutos: diasComJornadaTotal > 0 ? realizadoAteHojeTotal - metaTotalMinutos : null,
       valorHora: valorHora?.vlrhor ?? null,
