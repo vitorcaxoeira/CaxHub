@@ -5,9 +5,7 @@ import { Modal } from "../../components/ui/Modal";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useToast } from "../../components/ui/Toast";
 import { MultiSelectColumnFilter, VALOR_VAZIO, normalizar } from "../../components/ui/MultiSelectColumnFilter";
-import { TabelaLocal } from "../../components/colunas/TabelaLocal";
-import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
-import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
+import { TabelaDadosImportados, type ColunaDados, type RespostaDadosBase } from "../../components/colunas/TabelaDadosImportados";
 
 // Consulta/edição dos dados JÁ SINCRONIZADOS de um job Kyria (Administração > Integração Kyria
 // > Sincronização > "Ver dados", 18/09/2026, pedido do Vitor). Diferente de tudo mais na
@@ -15,23 +13,27 @@ import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis
 // registrado marca como internos (nunca vindos da API). Sem entrada própria no Sidebar: só
 // alcançável pelo link "Ver dados" da tela de Sincronização (ação contextual, não destino de
 // menu).
+//
+// Desde 17/11/2026 (pedido do Vitor) a tabela é a mesma do "Ver dados" do ERP (TabelaDadosImportados):
+// busca, funil por coluna, ordem, rodapé de totais e paginação no SERVIDOR, com "Por página" e a
+// estrela de padrão. Antes carregava a tabela inteira ("índice") — não cabe em kyria_time_entries.
 
-interface ColunaDados {
-  nomeInterno: string;
+/** Coluna do Kyria: as do motor genérico + o que o mapeamento registrado diz sobre campo interno/relacionamento. */
+interface ColunaKyria extends ColunaDados {
   ehInterno: boolean;
   relacionamentoModelo: string | null;
   relacionamentoCampo: string | null;
   relacionamentoCampoDescricao: string | null;
 }
 
-interface ListaCompleta {
-  colunas: ColunaDados[];
-  itens: Record<string, unknown>[];
-  // Por coluna com campo de descrição registrado: "valor bruto" -> rótulo legível.
+interface RespostaKyria extends RespostaDadosBase {
+  jobName: string;
+  displayName: string;
+  tabelaLocal: string;
+  colunas: ColunaKyria[];
+  // Por coluna (nome do campo) com campo de descrição registrado: "valor bruto" -> rótulo legível, só das linhas da página.
   descricoes: Record<string, Record<string, string>>;
 }
-
-const PAGE_SIZE = 30;
 
 function formatarValor(valor: unknown): string {
   if (valor === null || valor === undefined) return "—";
@@ -264,42 +266,20 @@ function ModalEscolherRegistroRelacionado({
   );
 }
 
-/** O que as células dos campos internos podem fazer (vincular/trocar e remover o vínculo). */
-interface AcoesKyria {
-  descricoes: Record<string, Record<string, string>>;
-  removendo: string | null;
-  editar: (e: { linhaId: string; campo: string; modelo: string; campoAlvo: string }) => void;
-  remover: (linhaId: string, campo: string, rotulo: string) => void;
+interface EdicaoAberta {
+  linhaId: string;
+  campo: string;
+  modelo: string;
+  campoAlvo: string;
 }
 
 export function DadosKyria() {
   const { jobName } = useParams<{ jobName: string }>();
   const toast = useToast();
-  const [dados, setDados] = useState<ListaCompleta | null>(null);
-  const [carregando, setCarregando] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
-  const [edicaoAberta, setEdicaoAberta] = useState<{ linhaId: string; campo: string; modelo: string; campoAlvo: string } | null>(null);
-
-  function carregar() {
-    if (!jobName) return;
-    setCarregando(true);
-    // "Índice" (todas as linhas, sem paginação) — precisa de tudo carregado pra montar as
-    // opções de cada funil e filtrar direito. Tabelas Kyria de hoje são pequenas (dezenas a
-    // poucas centenas de linhas); mesmo espírito de routes/pedidos.ts:GET /por-cliente/indice.
-    axios
-      .get(`/api/sync-kyria/dados/${jobName}/indice`)
-      .then(({ data }) => {
-        setDados(data);
-        setErro(null);
-      })
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os dados"))
-      .finally(() => setCarregando(false));
-  }
-
-  useEffect(() => {
-    carregar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobName]);
+  const [resposta, setResposta] = useState<RespostaKyria | null>(null);
+  const [edicaoAberta, setEdicaoAberta] = useState<EdicaoAberta | null>(null);
+  // Soma 1 a cada alteração gravada: a tabela busca a página atual de novo (sem voltar à página 1).
+  const [recarregar, setRecarregar] = useState(0);
 
   // Desfaz o relacionamento: grava null no campo interno. O registro relacionado em si não é
   // tocado — só o vínculo desta linha. Dá pra vincular de novo depois.
@@ -313,7 +293,7 @@ export function DadosKyria() {
     try {
       await axios.patch(`/api/sync-kyria/dados/${jobName}/${linhaId}`, { campo, valor: null });
       toast.mostrar("Vínculo removido.", "success");
-      carregar();
+      setRecarregar((n) => n + 1);
     } catch (err: any) {
       toast.mostrar(err.response?.data?.error ?? "Falha ao remover o vínculo", "destructive");
     } finally {
@@ -327,82 +307,46 @@ export function DadosKyria() {
       await axios.patch(`/api/sync-kyria/dados/${jobName}/${edicaoAberta.linhaId}`, { campo: edicaoAberta.campo, valor });
       toast.mostrar("Valor atualizado.", "success");
       setEdicaoAberta(null);
-      carregar();
+      setRecarregar((n) => n + 1);
     } catch (err: any) {
       toast.mostrar(err.response?.data?.error ?? "Falha ao salvar", "destructive");
     }
   }
 
-  // Tabela com filtro e ordem por coluna, colunas configuráveis e resumo no rodapé (TabelaLocal, 03/11/2026): a lista já vem inteira
-  // (índice). O tipo de cada coluna sai dos próprios valores (as colunas vêm do mapeamento registrado, não do código).
-  const colunasLocais = useMemo<ColunaLocal[]>(
-    () =>
-      (dados?.colunas ?? []).map((c) => {
-        const valores = (dados?.itens ?? []).map((l) => l[c.nomeInterno]).filter((v) => v !== null && v !== undefined && v !== "");
-        const tipo =
-          valores.length > 0 && valores.every((v) => typeof v === "boolean")
-            ? "booleano"
-            : valores.length > 0 && valores.every((v) => typeof v === "number")
-              ? valores.every((v) => Number.isInteger(v))
-                ? "inteiro"
-                : "decimal"
-              : "texto";
-        return { nome: c.nomeInterno, tipo };
-      }),
-    [dados]
-  );
-  const defs = useMemo<DefColuna<Record<string, unknown>, AcoesKyria>[]>(
-    () =>
-      (dados?.colunas ?? []).map((c, i) => ({
-        nome: c.nomeInterno,
-        titulo: c.nomeInterno,
-        cabecalho: (
-          <>
-            {c.nomeInterno}
-            {c.ehInterno && (
-              <span className="ml-1 text-primary" title="Campo interno, editável">
-                ●
-              </span>
-            )}
-          </>
-        ),
-        fixa: i === 0,
-        largura: 160,
-        classe: "text-[12.5px] text-foreground",
-        texto: (l) => formatarValor(l[c.nomeInterno]),
-        formatarValor: (v) => formatarValor(v),
-        render: (linha, a) => {
-          if (!(c.ehInterno && c.relacionamentoModelo && c.relacionamentoCampo)) return formatarValor(linha[c.nomeInterno]);
-          const valorAtual = linha[c.nomeInterno];
-          const vinculado = valorAtual !== null && valorAtual !== undefined && valorAtual !== "";
-          const descricao = a.descricoes[c.nomeInterno]?.[String(valorAtual)];
-          const rotulo = `${formatarValor(valorAtual)}${descricao ? ` — ${descricao}` : ""}`;
-          const chaveRemocao = `${String(linha.id)}:${c.nomeInterno}`;
-          return (
-            <span className="inline-flex items-center gap-2">
-              <button
-                onClick={() => a.editar({ linhaId: String(linha.id), campo: c.nomeInterno, modelo: c.relacionamentoModelo!, campoAlvo: c.relacionamentoCampo! })}
-                className="text-primary hover:underline"
-              >
-                {rotulo}
-                {vinculado ? " · trocar" : " · vincular"}
-              </button>
-              {vinculado && (
-                <button
-                  onClick={() => a.remover(String(linha.id), c.nomeInterno, rotulo)}
-                  disabled={a.removendo === chaveRemocao}
-                  title="Remover o vínculo deste registro"
-                  className="text-destructive hover:underline disabled:opacity-50"
-                >
-                  {a.removendo === chaveRemocao ? "removendo…" : "remover"}
-                </button>
-              )}
-            </span>
-          );
-        },
-      })),
-    [dados]
-  );
+  // Célula de um campo INTERNO com relacionamento: mostra "valor — descrição" e deixa vincular/trocar/remover. Qualquer outra
+  // coluna devolve undefined e a tabela mostra o valor formatado de sempre. O PATCH usa o nome da COLUNA do Postgres (`rotulo`),
+  // que é o que o mapeamento registra; `nome` é o campo Prisma (chave de filtro/ordem).
+  function celulaDeVinculo(linha: Record<string, unknown>, c: ColunaKyria, r: RespostaKyria | null) {
+    if (!(c.ehInterno && c.relacionamentoModelo && c.relacionamentoCampo)) return undefined;
+    const rotuloColuna = c.rotulo ?? c.nome;
+    const valorAtual = linha[c.nome];
+    const vinculado = valorAtual !== null && valorAtual !== undefined && valorAtual !== "";
+    const descricao = r?.descricoes[c.nome]?.[String(valorAtual)];
+    const rotulo = `${formatarValor(valorAtual)}${descricao ? ` — ${descricao}` : ""}`;
+    const linhaId = String(linha.id);
+    const chaveRemocao = `${linhaId}:${rotuloColuna}`;
+    return (
+      <span className="inline-flex items-center gap-2">
+        <button
+          onClick={() => setEdicaoAberta({ linhaId, campo: rotuloColuna, modelo: c.relacionamentoModelo!, campoAlvo: c.relacionamentoCampo! })}
+          className="text-primary hover:underline"
+        >
+          {rotulo}
+          {vinculado ? " · trocar" : " · vincular"}
+        </button>
+        {vinculado && (
+          <button
+            onClick={() => removerVinculo(linhaId, rotuloColuna, rotulo)}
+            disabled={removendo === chaveRemocao}
+            title="Remover o vínculo deste registro"
+            className="text-destructive hover:underline disabled:opacity-50"
+          >
+            {removendo === chaveRemocao ? "removendo…" : "remover"}
+          </button>
+        )}
+      </span>
+    );
+  }
 
   return (
     <div>
@@ -414,9 +358,16 @@ export function DadosKyria() {
 
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-bold text-foreground">Dados sincronizados — {jobName}</h1>
+          <h1 className="font-display text-2xl font-bold text-foreground">Dados sincronizados — {resposta?.displayName ?? jobName}</h1>
           <p className="mt-1 text-sm text-muted">
-            Colunas internas (sem origem na API) podem ser editadas escolhendo um registro da tabela relacionada.
+            {resposta ? (
+              <>
+                Espelho local <span className="font-mono">{resposta.tabelaLocal}</span>. Colunas internas (sem origem na API) podem ser editadas
+                escolhendo um registro da tabela relacionada.
+              </>
+            ) : (
+              "Colunas internas (sem origem na API) podem ser editadas escolhendo um registro da tabela relacionada."
+            )}
           </p>
         </div>
         <Link
@@ -427,21 +378,22 @@ export function DadosKyria() {
         </Link>
       </div>
 
-      {erro && (
-        <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
-          {erro}
-        </p>
-      )}
-
-      <TabelaLocal<Record<string, unknown>, AcoesKyria>
-        chave={`admin.kyria.${(jobName ?? "").toLowerCase().replace(/[^a-z0-9._-]+/g, ".")}`.slice(0, 80)}
-        defs={defs}
-        colunas={colunasLocais}
-        linhas={dados?.itens ?? []}
-        chaveLinha={(l, i) => String(l.id ?? i)}
-        loading={carregando}
-        vazio="Nenhum registro sincronizado ainda."
-        ctx={{ descricoes: dados?.descricoes ?? {}, removendo, editar: setEdicaoAberta, remover: removerVinculo }}
+      {/* Busca, funil e ordem por coluna, colunas configuráveis, rodapé de totais e paginação: tudo no servidor (TabelaDadosImportados). */}
+      <TabelaDadosImportados<RespostaKyria>
+        endpoint={`/api/sync-kyria/dados/${jobName}`}
+        reinicia={`/api/sync-kyria/dados/${jobName}`}
+        mensagemVazio="Nenhum registro sincronizado ainda."
+        tituloControle="Controle do espelho"
+        onResposta={setResposta}
+        renderCelula={celulaDeVinculo}
+        decorarCabecalho={(c) =>
+          c.ehInterno ? (
+            <span className="ml-1 text-primary" title="Campo interno, editável">
+              ●
+            </span>
+          ) : null
+        }
+        recarregar={recarregar}
       />
 
       {edicaoAberta && (

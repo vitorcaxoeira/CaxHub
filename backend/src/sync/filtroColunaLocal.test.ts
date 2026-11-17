@@ -61,3 +61,30 @@ test("sem filtros: lista vazia e where indefinido", () => {
   assert.deepEqual(validarFiltrosColuna(COLUNAS, undefined), []);
   assert.equal(whereDosFiltros(COLUNAS, []), undefined);
 });
+
+// Enum do Prisma (só nos models do Kyria, 17/11/2026): igualdade e lista, sem "contém"/"começa com" nem `mode` (o Prisma recusa nos enums).
+const COLUNAS_ENUM: ColunaFiltravel[] = [
+  { nome: "origem", tipo: "texto", obrigatoria: true, prisma: "KyriaOrigemApontamento", enum: true, valoresEnum: ["automatic", "manual"] },
+  { nome: "prioridade", tipo: "texto", obrigatoria: false, prisma: "KyriaTicketPrioridade", enum: true, valoresEnum: ["low", "urgent"] },
+];
+
+test("enum: só =, ≠ e IN (mais vazio quando aceita nulo)", () => {
+  assert.deepEqual(operadoresDaColuna(COLUNAS_ENUM[0]), ["=", "≠", "IN"]);
+  assert.deepEqual(operadoresDaColuna(COLUNAS_ENUM[1]), ["=", "≠", "IN", "vazio", "não vazio"]);
+});
+
+test("enum: where sem `mode` e valor fora do enum é recusado", () => {
+  const f = validarFiltrosColuna(COLUNAS_ENUM, [
+    { coluna: "origem", operador: "=", valores: ["manual"] },
+    { coluna: "origem", operador: "≠", valores: ["automatic"] },
+    { coluna: "prioridade", operador: "IN", valores: ["low", "urgent"] },
+    { coluna: "prioridade", operador: "vazio", valores: [] },
+  ]);
+  const w = whereDosFiltros(COLUNAS_ENUM, f) as { AND: Record<string, unknown>[] };
+  assert.deepEqual(w.AND[0], { origem: "manual" });
+  assert.deepEqual(w.AND[1], { origem: { not: "automatic" } });
+  assert.deepEqual(w.AND[2], { prioridade: { in: ["low", "urgent"] } });
+  assert.deepEqual(w.AND[3], { prioridade: null });
+  assert.throws(() => validarFiltrosColuna(COLUNAS_ENUM, [{ coluna: "origem", operador: "contém", valores: ["man"] }]), /não vale/);
+  assert.throws(() => validarFiltrosColuna(COLUNAS_ENUM, [{ coluna: "origem", operador: "=", valores: ["inexistente"] }]), /inválido/);
+});

@@ -18,6 +18,8 @@ import { useResumoServidor } from "./useResumoServidor";
 export interface ColunaDados extends ColunaComFiltro {
   ehChave: boolean;
   ehControle: boolean;
+  /** Nome que a tela mostra no lugar de `nome` (ex.: a coluna do Postgres no Kyria); `nome` segue como chave de filtro/ordem. */
+  rotulo?: string;
 }
 
 export interface RespostaDadosBase {
@@ -71,6 +73,12 @@ interface Props<R extends RespostaDadosBase> {
   barraExtra?: (resposta: R | null) => ReactNode;
   /** A página mostra o título e a descrição com o que a resposta traz (nome da tabela, origem...). */
   onResposta?: (resposta: R | null) => void;
+  /** Célula própria de uma coluna (ex.: vínculo editável no Kyria); `undefined` = o valor formatado de sempre. */
+  renderCelula?: (linha: Record<string, unknown>, coluna: R["colunas"][number], resposta: R | null) => ReactNode | undefined;
+  /** Algo depois do nome da coluna no cabeçalho (ex.: marca de campo interno). */
+  decorarCabecalho?: (coluna: R["colunas"][number]) => ReactNode;
+  /** Muda quando a tela alterou algum dado e quer a página atual de novo (sem voltar à página 1). */
+  recarregar?: number;
 }
 
 type LinhaDados = Record<string, unknown>;
@@ -78,7 +86,18 @@ type LinhaDados = Record<string, unknown>;
 /** Chave da arrumação de colunas de uma tabela: as telas "Ver dados" têm uma tabela por job, cada uma com as suas colunas. */
 const chaveDaTabela = (reinicia: string) => `admin.dados.${reinicia.toLowerCase().replace(/[^a-z0-9._-]+/g, ".")}`.slice(0, 80);
 
-export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, paramsExtras, reinicia, mensagemVazio, tituloControle, barraExtra, onResposta }: Props<R>) {
+export function TabelaDadosImportados<R extends RespostaDadosBase>({
+  endpoint,
+  paramsExtras,
+  reinicia,
+  mensagemVazio,
+  tituloControle,
+  barraExtra,
+  onResposta,
+  renderCelula,
+  decorarCabecalho,
+  recarregar,
+}: Props<R>) {
   const colunasEstado = useFiltroOrdemNaUrl();
   const { filtros, ordem, filtrosParam, ordemParam, aplicarFiltro, limparFiltros, limparOrdem, limparTudo, chave } = colunasEstado;
   const [resposta, setResposta] = useState<R | null>(null);
@@ -129,9 +148,18 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
       cancelado = true;
       window.clearTimeout(timer);
     };
-  }, [endpoint, extras, busca, pagina, porPagina, pp.pronto, filtrosParam, ordemParam]);
+  }, [endpoint, extras, busca, pagina, porPagina, pp.pronto, filtrosParam, ordemParam, recarregar]);
 
   useEffect(() => onResposta?.(resposta), [resposta]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // As definições de coluna só são refeitas quando as colunas mudam (ver `esqueleto`); estes ganchos e a resposta atual vão por ref para a
+  // célula/cabeçalho sempre enxergarem a versão mais recente, sem refazer a arrumação de colunas a cada página.
+  const renderCelulaRef = useRef(renderCelula);
+  renderCelulaRef.current = renderCelula;
+  const decorarCabecalhoRef = useRef(decorarCabecalho);
+  decorarCabecalhoRef.current = decorarCabecalho;
+  const respostaRef = useRef(resposta);
+  respostaRef.current = resposta;
 
   const colunas = useMemo(() => resposta?.colunas ?? [], [resposta]);
   const itens = resposta?.itens ?? [];
@@ -151,11 +179,12 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
           const numerica = (c.tipo === "inteiro" || c.tipo === "decimal") && !c.dominio;
           return {
             nome: c.nome,
-            titulo: c.nome,
+            titulo: c.rotulo ?? c.nome,
             cabecalho: (
               <>
-                {c.nome}
+                {c.rotulo ?? c.nome}
                 {c.ehChave ? " ★" : ""}
+                {decorarCabecalhoRef.current?.(c as R["colunas"][number])}
               </>
             ),
             dica: c.ehChave ? "Chave" : c.ehControle ? tituloControle : undefined,
@@ -165,7 +194,7 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({ endpoint, p
             classe: `${c.ehControle ? "text-muted" : "text-foreground"} ${c.dominio ? "max-w-[220px] truncate" : numerica ? "font-sans tabular-nums" : ""}`,
             title: c.dominio ? (l) => formatarValorDado(l[c.nome], c) : undefined,
             texto: (l) => formatarValorDado(l[c.nome], c),
-            render: (l) => formatarValorDado(l[c.nome], c),
+            render: (l) => renderCelulaRef.current?.(l, c as R["colunas"][number], respostaRef.current) ?? formatarValorDado(l[c.nome], c),
             formatarValor: (v) => formatarValorDado(v, c),
             semOrdenar: c.tipo === "json",
             resumos: c.dominio ? RESUMOS_CODIGO : RESUMOS_DADOS,
