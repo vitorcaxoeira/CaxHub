@@ -2435,6 +2435,7 @@ model KyriaMember {
   // Lado inverso de KyriaTicket.responsavel — FK real (22/09/2026, pedido do Vitor: cruzar
   // kyria_tickets.responsible_user_id com kyria_members.id).
   ticketsComoResponsavel KyriaTicket[]
+  apontamentos           KyriaTimeEntry[]
 
   @@map("kyria_members")
 }
@@ -2568,9 +2569,65 @@ model KyriaTicket {
   revision          Int
   sincronizadoEm    DateTime              @updatedAt @map("sincronizado_em")
 
-  horas KyriaTicketHours?
+  horas        KyriaTicketHours?
+  apontamentos KyriaTimeEntry[]
 
   @@map("kyria_tickets")
+}
+
+// Origem do apontamento de hora no Kyria: `automatic` = cronômetro do próprio ticket (entra e sai
+// conforme o status/atribuição), `manual` = lançado à mão por uma pessoa. Domínio fechado do
+// OpenAPI (TimeEntryFeedSnapshot.source).
+enum KyriaOrigemApontamento {
+  automatic
+  manual
+}
+
+// Espelho local do Kyria — GET /time-entries (feed de mudanças do workspace; ver
+// src/kyria/timeEntriesSync.ts). 1 linha por apontamento de hora (automático ou manual) de um
+// ticket, com início/fim reais — é a fonte que permite somar horas por dia/usuário/ticket sem
+// depender da janela curta do /reports/hours. `GET /tickets/{id}/time-entries` NÃO serve: só
+// devolve os manuais (~1,4% das horas, conferido 17/11/2026).
+// Chave = id do apontamento. O feed manda VÁRIAS revisões da mesma entrada (75 mil mudanças pra
+// 42 mil entradas na carga inicial) — o job aplica as mudanças em ordem e fica com a última.
+// Entrada apagada no Kyria (`kind: deleted`) é apagada aqui também. `minutes` é nulo enquanto o
+// apontamento está aberto (`is_open`) — o cronômetro ainda está rodando.
+// FKs reais: ticket (obrigatória — apontamento de ticket ainda não sincronizado fica pendente até o
+// job sincronizar os tickets, ver timeEntriesSync.ts) e usuário (nulável — vira null se o membro
+// ainda não sincronizou).
+model KyriaTimeEntry {
+  id              String                 @id @db.VarChar(64)
+  ticketId        String                 @map("ticket_id") @db.VarChar(64)
+  ticket          KyriaTicket            @relation(fields: [ticketId], references: [id])
+  userId          String?                @map("user_id") @db.VarChar(64)
+  usuario         KyriaMember?           @relation(fields: [userId], references: [id])
+  teamId          String?                @map("team_id") @db.VarChar(64)
+  origem          KyriaOrigemApontamento
+  isOpen          Boolean                @map("is_open")
+  startedAt       DateTime               @map("started_at") @db.Timestamptz(3)
+  endedAt         DateTime?              @map("ended_at") @db.Timestamptz(3)
+  minutes         Decimal?               @db.Decimal(12, 2)
+  effectiveAt     DateTime               @map("effective_at") @db.Timestamptz(3)
+  reason          String?
+  criadoEmKyria   DateTime               @map("criado_em_kyria") @db.Timestamptz(3)
+  alteradoEmKyria DateTime               @map("alterado_em_kyria") @db.Timestamptz(3)
+  sincronizadoEm  DateTime               @updatedAt @map("sincronizado_em")
+
+  @@index([ticketId])
+  @@index([userId, startedAt])
+  @@index([startedAt])
+  @@map("kyria_time_entries")
+}
+
+// Posição (cursor) de jobs Kyria que leem um feed incremental — hoje só kyria-time-entries-sync.
+// O cursor é opaco (`tef_v1.<id>.<posição>`); guardá-lo depois de cada bloco gravado faz o job
+// retomar de onde parou, tanto após uma falha no meio da carga inicial quanto no dia seguinte.
+model KyriaSyncCursor {
+  jobName      String   @id @map("job_name") @db.VarChar(64)
+  cursor       String
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@map("kyria_sync_cursor")
 }
 
 // Espelho local do Kyria — GET /reports/hours?groupBy=ticket (recurso `/reports/hours`, ver

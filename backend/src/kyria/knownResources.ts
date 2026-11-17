@@ -25,6 +25,11 @@ export const KYRIA_KNOWN_RESOURCES: KyriaKnownResource[] = [
   // cada agrupamento tem o próprio mapa). O groupBy=ticket é o recurso já registrado como
   // "/reports/hours" puro, por isso não aparece aqui. Sem datas no path — o preview usa o mês
   // corrente completo (competencia.ts). Sem openApiSchemaName: `group` é polimórfico.
+  // Feed de mudanças dos apontamentos de hora (automáticos e manuais). Cada item é uma MUDANÇA
+  // `{ changeId, entryId, kind, syncRevision, changedAt, entry: {...} }` — o preview achata o
+  // `entry` em `entry.ticketId`, `entry.startedAt`, ... (um nível). Sem openApiSchemaName: o
+  // schema do item é um oneOf (upsert | deleted), sem `properties` no topo.
+  { path: "/time-entries", displayName: "Apontamentos de horas (feed)" },
   { path: "/reports/hours?groupBy=customer", displayName: "Horas por cliente (relatório)" },
   { path: "/reports/hours?groupBy=user", displayName: "Horas por usuário (relatório)" },
   { path: "/reports/hours?groupBy=project", displayName: "Horas por projeto (relatório)" },

@@ -36,6 +36,7 @@ import { scheduleKyriaTicketStatusesSync } from "./kyria/ticketStatusesSync";
 import { scheduleKyriaTicketsSync } from "./kyria/ticketsSync";
 import { scheduleKyriaTicketHoursSync } from "./kyria/ticketHoursSync";
 import { scheduleKyriaCustomerHoursSync } from "./kyria/customerHoursSync";
+import { scheduleKyriaTimeEntriesSync } from "./kyria/timeEntriesSync";
 import { alocacaoRouter } from "./routes/alocacao";
 import { eficienciaRouter } from "./routes/eficiencia";
 import { planoEvolucaoRouter } from "./routes/planoEvolucao";
@@ -327,6 +328,7 @@ async function iniciar() {
     scheduleKyriaTicketsSync();
     scheduleKyriaTicketHoursSync();
     scheduleKyriaCustomerHoursSync();
+    scheduleKyriaTimeEntriesSync();
   });
 }
 

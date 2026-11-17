@@ -392,17 +392,18 @@ export function MapeamentoKyria() {
 
       {campos && (
         <div className="mb-6 overflow-hidden rounded-lg border border-border bg-surface">
-          <div className="flex items-center justify-between border-b border-border px-5 py-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-foreground">{caminhoAtual()}</span>
+          <div className="flex items-center justify-between gap-4 border-b border-border px-5 py-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <span className="shrink-0 text-sm font-semibold text-foreground">{caminhoAtual()}</span>
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="Nome de exibição"
-                className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                title={displayName}
+                className="w-full max-w-md min-w-0 rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <button
                 onClick={adicionarCampoInterno}
                 className="rounded-md border border-border px-3 py-2 text-sm font-medium text-foreground transition hover:bg-surface-2"

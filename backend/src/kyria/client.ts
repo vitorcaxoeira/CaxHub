@@ -43,6 +43,7 @@ import axios from "axios";
 // ---------------------------------------------------------------------------
 
 const TENTATIVAS_RATE_LIMIT = 3;
+const TENTATIVAS_RATE_LIMIT_FEED = 6;
 
 function esperar(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -473,6 +474,87 @@ export async function getHoursReport(options: GetHoursReportOptions<"ticket" | "
         continue;
       }
       throw new Error(mensagemDeFalhaKyria(erro, "getHoursReport"));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET /time-entries — feed de mudanças dos apontamentos de hora do workspace inteiro
+// ---------------------------------------------------------------------------
+// NÃO é `GET /tickets/{id}/time-entries` (esse só devolve apontamentos MANUAIS, ~1,4% das horas —
+// conferido ao vivo em 17/11/2026: 644 de 45.919 min em 1–16/11). O feed traz os dois tipos
+// (`automatic` e `manual`), com início/fim reais, e funciona com o token atual (escopo
+// time_entries:read, o mesmo do /reports/hours).
+//
+// Cada item é uma MUDANÇA, não um apontamento: a mesma `entryId` aparece várias vezes (uma por
+// revisão — 75 mil mudanças pra 42 mil apontamentos na carga inicial) e uma exclusão chega como
+// `kind: "deleted"` com `tombstone`. Quem consome aplica as mudanças em ordem. Ordenação e
+// continuidade: `page.nextCursor` (opaco, `tef_v1.<id>.<posição>`) vale também quando
+// `hasMore` é false — guardá-lo e reenviá-lo depois devolve só o que mudou desde então.
+// Volume da carga inicial: ~460 páginas de 100 (limite de 60 req/min => ~8 minutos).
+
+export interface KyriaTimeEntrySnapshot {
+  ticketId: string;
+  teamId: string | null;
+  targetUserId: string | null;
+  source: "automatic" | "manual";
+  /** true = cronômetro ainda rodando; `endedAt`/`elapsedMinutes` vêm null. */
+  isOpen: boolean;
+  /** Epoch em milissegundos. */
+  startedAt: number;
+  endedAt: number | null;
+  elapsedMinutes: number | null;
+  effectiveAt: number;
+  reason: string | null;
+  createdByUserId: string | null;
+  updatedByUserId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type KyriaTimeEntryChange =
+  | { changeId: string; entryId: string; kind: "upsert"; syncRevision: number; changedAt: number; entry: KyriaTimeEntrySnapshot }
+  | {
+      changeId: string;
+      entryId: string;
+      kind: "deleted";
+      syncRevision: number;
+      changedAt: number;
+      tombstone: { ticketId: string; deletedAt: number };
+    };
+
+export interface ListTimeEntryChangesOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListTimeEntryChangesResult {
+  data: KyriaTimeEntryChange[];
+  page: KyriaPage;
+  requestId: string;
+}
+
+export async function listTimeEntryChanges(options: ListTimeEntryChangesOptions = {}): Promise<ListTimeEntryChangesResult> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/time-entries`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: options.limit, cursor: options.cursor },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      // Mais tentativas que nas outras listagens: a carga inicial passa do limite de 60 req/min
+      // várias vezes (cada 429 espera a janela virar — `Retry-After`, ~40 s).
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT_FEED) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 10;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "listTimeEntryChanges"));
     }
   }
 }
