@@ -81,7 +81,7 @@ function clampPagina(valor: unknown, min: number, max: number, padrao: number): 
  * backend (editarCampoInterno) e a tela só usa isto pra não oferecer "vincular" onde não vale.
  * Remover um vínculo já existente NUNCA é bloqueado (valor null).
  */
-const RESTRICOES_VINCULO: Record<string, { coluna: string; valor: string; motivo: string }> = {
+export const RESTRICOES_VINCULO: Record<string, { coluna: string; valor: string; motivo: string }> = {
   "kyria_members.codusu": {
     coluna: "role",
     valor: "attendant",

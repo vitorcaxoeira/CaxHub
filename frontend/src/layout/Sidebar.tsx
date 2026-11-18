@@ -38,6 +38,8 @@ import {
   Inbox,
   LayoutDashboard,
   ListChecks,
+  Coins,
+  UserCheck,
   ListTodo,
   type LucideIcon,
   MapPin,
@@ -319,6 +321,8 @@ const groups: NavGroup[] = [
       },
       { to: "/admin/departamento-grupo-contabil", label: "Departamento x Grupo Contábil" },
       { to: "/admin/indicadores-rentabilidade", label: "Indicadores de Rentabilidade" },
+      { to: "/admin/vinculo-consultores", label: "Vínculo de Consultores" },
+      { to: "/admin/custo-hora", label: "Custo-hora real" },
     ],
     roles: ["admin"],
   },
@@ -392,6 +396,8 @@ const ICONE_DA_ROTA: Record<string, LucideIcon> = {
   "/admin/departamento-grupo-contabil": Network,
   "/admin/departamento-time-kyria": Network,
   "/admin/indicadores-rentabilidade": ListChecks,
+  "/admin/vinculo-consultores": UserCheck,
+  "/admin/custo-hora": Coins,
 };
 const ICONE_DO_GRUPO: Record<string, LucideIcon> = {
   Comercial: Briefcase,

@@ -736,6 +736,8 @@ model Consultor {
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   usuariosCaxHub User[]
+  vinculo        ConsultorVinculo?
+  valoresHoraManuais ConsultorValorHoraManual[]
 
   @@id([codemp, codusu])
   @@index([codfor])
@@ -4040,6 +4042,8 @@ model HcmColaborador {
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
+  vinculoConsultor ConsultorVinculo?
+
   @@id([numemp, tipcol, numcad])
   @@map("hcm_colaboradores")
 }
@@ -4974,4 +4978,218 @@ model DescontoFechamento {
 
   @@id([competencia, codemp, codfor])
   @@map("descontos_fechamentos")
+}
+
+// Vínculo do consultor com o funcionário do HCM (custo-hora real, bloco C da Rentabilidade, 18/11/2026). Tabela NATIVA do CaxHub (nunca
+// sincronizada), uma linha por consultor que tenha vínculo. O outro lado do trio — o atendente do Kyria — continua em kyria_members.codusu (campo
+// interno que "Ver dados" e a tela Administração › Vínculo de Consultores gravam): uma só fonte, sem duas colunas que possam divergir. O HCM
+// guarda a folha (CLT = salário + encargos ÷ horas da escala); consultor PJ não tem funcionário e o custo vem do contrato (E460CTR/CCS/REA).
+// Um funcionário só pode estar ligado a um consultor (unique).
+model ConsultorVinculo {
+  codemp        Int
+  codusu        Int
+  hcmNumemp     Int?     @map("hcm_numemp")
+  hcmTipcol     Int?     @map("hcm_tipcol")
+  hcmNumcad     Int?     @map("hcm_numcad")
+  /// O preço do item do contrato PJ é um valor MENSAL (não por hora): o custo-hora é preço ÷ horas da escala. Alguns contratos do Senior guardam o mensal em `preuni` (unidade "UN"), sem marca que os distinga — por isso é uma escolha explícita.
+  contratoMensal Boolean @default(false) @map("contrato_mensal")
+  /// Quando `contratoMensal`, limita o período em que o preço é mensal (dia 1 do mês; nulo = sem limite daquele lado). Há contrato que mudou de por-hora para mensal (ou o contrário) no meio do histórico.
+  mensalDesde   DateTime? @map("mensal_desde") @db.Date
+  mensalAte     DateTime? @map("mensal_ate") @db.Date
+  observacao    String?  @db.VarChar(500)
+  criadoEm      DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+  atualizadoPor Int?     @map("atualizado_por")
+
+  consultor   Consultor       @relation(fields: [codemp, codusu], references: [codemp, codusu], onDelete: Cascade)
+  colaborador HcmColaborador? @relation(fields: [hcmNumemp, hcmTipcol, hcmNumcad], references: [numemp, tipcol, numcad], onDelete: SetNull)
+
+  @@id([codemp, codusu])
+  @@unique([hcmNumemp, hcmTipcol, hcmNumcad], map: "consultor_vinculos_hcm_key")
+  @@map("consultor_vinculos")
+}
+
+// Espelho local da tabela E460CTR do Senior ERP (Compras - Contratos - Dados Gerais). Rentabilidade, custo-hora real (18/11/2026): o contrato do
+// consultor PJ é um contrato de COMPRA com o fornecedor dele (consultores.codfor = codfor). Só o essencial: identificação, fornecedor, situação e
+// vigência. Datas "vazias" do Senior (1900-12-31) viram NULL na sync.
+model ContratoCompra {
+  codemp           Int
+  codfil           Int
+  numctr           Int
+  tipctr           Int
+  numofi           String?   @db.VarChar(20)
+  objctr           String?   @db.VarChar(250)
+  codfor           Int
+  datemi           DateTime? @db.Date
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitctr           String    @db.VarChar(1)
+  codmot           Int?
+  inivig           DateTime? @db.Date
+  fimvig           DateTime? @db.Date
+  /// Data do último reajuste processado do contrato.
+  ultrea           DateTime? @db.Date
+  /// Periodicidade de reajuste, em meses.
+  prdrea           Int?
+  /// Percentual do último reajuste.
+  perrea           Decimal?  @db.Decimal(5, 2)
+  /// Data em que será feito o primeiro reajuste.
+  inirea           DateTime? @db.Date
+  datcan           DateTime? @db.Date
+  /// Cliente para faturamento (campo de usuário USU_CliFat).
+  clifat           Int?
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codemp, codfil, numctr])
+  @@index([codfor])
+  @@map("contratos_compra")
+}
+
+// Espelho local da tabela E460CCS do Senior ERP (Compras - Contratos - Itens de Serviço): o item do contrato do consultor, onde mora o PREÇO
+// UNITÁRIO = valor-hora (`preuni`). Retenções (ISS, IRRF, INSS, PIS, CSLL, Cofins) só informativas: o custo do PJ é o valor bruto do contrato.
+// `datcpt` 1900-12-31 = item sem competência (o normal nos contratos de consultor) — fica como veio, é parte da chave.
+model ContratoCompraServico {
+  codemp           Int
+  codfil           Int
+  numctr           Int
+  datcpt           DateTime  @db.Date
+  seqccs           Int
+  codser           String?   @db.VarChar(14)
+  cplccs           String?   @db.VarChar(250)
+  qtdctr           Decimal?  @db.Decimal(14, 5)
+  qtdccs           Decimal   @db.Decimal(14, 5)
+  unimed           String?   @db.VarChar(3)
+  preuni           Decimal   @db.Decimal(21, 10)
+  usuPreuni        Decimal?  @map("usu_preuni") @db.Decimal(21, 10)
+  perdsc           Decimal?  @db.Decimal(4, 2)
+  vlrdsc           Decimal?  @db.Decimal(15, 2)
+  periss           Decimal?  @db.Decimal(6, 4)
+  perirf           Decimal?  @db.Decimal(4, 2)
+  perins           Decimal?  @db.Decimal(4, 2)
+  perpit           Decimal?  @db.Decimal(7, 4)
+  percsl           Decimal?  @db.Decimal(4, 2)
+  percrt           Decimal?  @db.Decimal(7, 4)
+  perour           Decimal?  @db.Decimal(4, 2)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitccs           String    @db.VarChar(1)
+  codmot           Int?
+  numprj           Int?
+  codccu           String?   @db.VarChar(9)
+  ctared           Int?
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codemp, codfil, numctr, datcpt, seqccs])
+  @@index([codemp, numctr])
+  @@map("contratos_compra_servicos")
+}
+
+// Espelho local da tabela E460REA do Senior ERP (Compras - Contratos - Históricos de reajuste): cada reajuste do preço do item (`vlratu` = valor
+// APÓS o reajuste, `vlrrea` = quanto subiu). É o histórico do valor-hora do consultor PJ: antes do 1º reajuste o valor era `vlratu - vlrrea`.
+// O histórico não é contínuo (há reajuste sem linha aqui); vale o último `vlratu` com `ultrea` até a data (domain/valorHoraConsultor.ts).
+model ContratoCompraReajuste {
+  codemp           Int
+  codfil           Int
+  numctr           Int
+  datcpt           DateTime  @db.Date
+  seqccs           Int
+  seqccp           Int
+  /// Data do reajuste (vigência do novo valor).
+  ultrea           DateTime  @db.Date
+  vlrrea           Decimal?  @db.Decimal(15, 2)
+  vlratu           Decimal?  @db.Decimal(15, 2)
+  codusu           Int
+  datrea           DateTime? @db.Date
+  perrea           Decimal?  @db.Decimal(7, 4)
+  reapre           Decimal?  @db.Decimal(7, 4)
+  desrea           String?   @db.VarChar(100)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codemp, codfil, numctr, datcpt, seqccs, seqccp, ultrea])
+  @@index([codemp, numctr])
+  @@map("contratos_compra_reajustes")
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Custo-hora real do consultor (bloco C da Rentabilidade, 18/11/2026). Tudo configurado por TELA, nada de valor de negócio no código (regra do Vitor):
+// as tabelas custo_* nascem VAZIAS e entram por "Importar JSON" ou pelas telas de Administração › Custo-hora real.
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+
+// Classificação dos eventos da folha (R046VER, por tabela+código do evento) para o custo do CLT. Evento sem linha aqui = ignorado.
+//   remuneracao   entra no custo E na base dos encargos percentuais (salário, horas extras, comissões, férias...)
+//   beneficio     entra no custo, fora da base (vale-refeição, plano de saúde...)
+//   encargo_folha encargo que a própria folha já calcula (ex.: FGTS, INSS patronal informativos): entra no custo, fora da base
+model CustoEventoClasse {
+  tabeve        Int
+  codeve        Int
+  classe        String   @db.VarChar(20)
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+  atualizadoPor Int?     @map("atualizado_por")
+
+  @@id([tabeve, codeve])
+  @@map("custo_evento_classes")
+}
+
+// Encargos em PERCENTUAL sobre a base (soma dos eventos "remuneracao" do mês): INSS patronal, RAT, terceiros, provisões de 13º e férias etc. Cada
+// linha vale a partir de `vigencia_inicio` até a próxima linha do MESMO `codigo`; o código é livre (quem configura escolhe).
+model CustoEncargo {
+  id             Int      @id @default(autoincrement())
+  codigo         String   @db.VarChar(40)
+  rotulo         String   @db.VarChar(120)
+  percentual     Decimal  @db.Decimal(9, 4)
+  vigenciaInicio DateTime @map("vigencia_inicio") @db.Date
+  criadoEm       DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm   DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  @@unique([codigo, vigenciaInicio], map: "custo_encargos_codigo_vigencia_key")
+  @@map("custo_encargos")
+}
+
+// Parâmetros do cálculo (chave/valor texto): `horas_mes` (horas da escala que dividem o custo mensal do CLT) e `tipos_calculo` (tipos de cálculo da
+// folha, R044CAL.TipCal, separados por vírgula, que entram no custo do mês). Sem eles o CLT não é calculado — o job avisa em vez de chutar.
+model CustoParametro {
+  chave        String   @id @db.VarChar(40)
+  valor        String   @db.VarChar(200)
+  atualizadoEm DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  @@map("custo_parametros")
+}
+
+// Valor-hora MANUAL com vigência, para quem não é CLT (sem funcionário no HCM com folha) nem tem contrato no Senior. Vale do mês de `vigencia_inicio`
+// em diante, até a próxima linha do mesmo consultor.
+model ConsultorValorHoraManual {
+  id             Int      @id @default(autoincrement())
+  codemp         Int
+  codusu         Int
+  vigenciaInicio DateTime @map("vigencia_inicio") @db.Date
+  valor          Decimal  @db.Decimal(15, 4)
+  observacao     String?  @db.VarChar(500)
+  criadoEm       DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoPor  Int?     @map("atualizado_por")
+
+  consultor Consultor @relation(fields: [codemp, codusu], references: [codemp, codusu], onDelete: Cascade)
+
+  @@unique([codemp, codusu, vigenciaInicio], map: "consultor_valor_hora_manual_key")
+  @@map("consultor_valor_hora_manual")
+}
+
+// RESULTADO do job: o custo-hora de cada consultor em cada competência (dia 1 do mês) e de onde veio (`clt_folha` | `pj_contrato` | `manual`).
+// `detalhe` guarda como chegou ao número (folha, benefícios, cada encargo, horas) — contém dado de remuneração: só leitura de admin. Derivada:
+// o job apaga e regrava, nunca é editada à mão.
+model ConsultorCustoHora {
+  codemp      Int
+  codusu      Int
+  competencia DateTime @db.Date
+  origem      String   @db.VarChar(12)
+  custoHora   Decimal  @map("custo_hora") @db.Decimal(15, 4)
+  detalhe     Json?
+  calculadoEm DateTime @default(now()) @map("calculado_em") @db.Timestamptz(6)
+
+  @@id([codemp, codusu, competencia])
+  @@index([competencia])
+  @@map("consultor_custo_hora")
 }

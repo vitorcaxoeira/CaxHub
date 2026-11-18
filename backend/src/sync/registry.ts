@@ -51,6 +51,9 @@ import { JOB_NAME as RATEIO_LANCAMENTO_JOB, CRON_EXPR as RATEIO_LANCAMENTO_CRON,
 import { JOB_NAME as HISTORICO_PADRAO_JOB, CRON_EXPR as HISTORICO_PADRAO_CRON, CAMPO_DATA as HISTORICO_PADRAO_DATA, QUERY as HISTORICO_PADRAO_QUERY, runHistoricoPadraoSync } from "./historicoPadraoSync";
 import { JOB_NAME as MODELO_PLANO_JOB, CRON_EXPR as MODELO_PLANO_CRON, CAMPO_DATA as MODELO_PLANO_DATA, QUERY as MODELO_PLANO_QUERY, runModeloPlanoSync } from "./modeloPlanoSync";
 import { JOB_NAME as PROJETO_JOB, CRON_EXPR as PROJETO_CRON, CAMPO_DATA as PROJETO_DATA, QUERY as PROJETO_QUERY, runProjetoSync } from "./projetoSync";
+import { JOB_NAME as CONTRATO_COMPRA_JOB, CRON_EXPR as CONTRATO_COMPRA_CRON, CAMPO_DATA as CONTRATO_COMPRA_DATA, QUERY as CONTRATO_COMPRA_QUERY, runContratoCompraSync } from "./contratoCompraSync";
+import { JOB_NAME as CONTRATO_COMPRA_SERVICO_JOB, CRON_EXPR as CONTRATO_COMPRA_SERVICO_CRON, CAMPO_DATA as CONTRATO_COMPRA_SERVICO_DATA, QUERY as CONTRATO_COMPRA_SERVICO_QUERY, runContratoCompraServicoSync } from "./contratoCompraServicoSync";
+import { JOB_NAME as CONTRATO_COMPRA_REAJUSTE_JOB, CRON_EXPR as CONTRATO_COMPRA_REAJUSTE_CRON, CAMPO_DATA as CONTRATO_COMPRA_REAJUSTE_DATA, QUERY as CONTRATO_COMPRA_REAJUSTE_QUERY, runContratoCompraReajusteSync } from "./contratoCompraReajusteSync";
 import { JOB_NAME as REPRESENTANTE_JOB, CRON_EXPR as REPRESENTANTE_CRON, CAMPO_DATA as REPRESENTANTE_DATA, BASE_QUERY as REPRESENTANTE_QUERY, runRepresentanteSync } from "./representanteSync";
 import { JOB_NAME as TIPO_TITULO_JOB, CRON_EXPR as TIPO_TITULO_CRON, CAMPO_DATA as TIPO_TITULO_DATA, QUERY as TIPO_TITULO_QUERY, runTipoTituloSync } from "./tipoTituloSync";
 import { JOB_NAME as TITULO_RECEBER_JOB, CRON_EXPR as TITULO_RECEBER_CRON, CAMPO_DATA as TITULO_RECEBER_DATA, BASE_QUERY as TITULO_RECEBER_QUERY, runTituloReceberSync } from "./tituloReceberSync";
@@ -109,6 +112,9 @@ const JOBS_COM_FILTRO = new Set([
   PLANO_CONTABIL_JOB,
   MODELO_PLANO_JOB,
   PROJETO_JOB,
+  CONTRATO_COMPRA_JOB,
+  CONTRATO_COMPRA_SERVICO_JOB,
+  CONTRATO_COMPRA_REAJUSTE_JOB,
   PORTADOR_JOB,
   PROPOSTA_ITEM_JOB,
   PROPOSTA_JOB,
@@ -440,6 +446,11 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   // consultoria). Independentes das demais.
   { jobName: MODELO_PLANO_JOB, displayName: "Modelos de Planos", cronExpr: MODELO_PLANO_CRON, suportaAlterados: MODELO_PLANO_DATA != null, campoData: MODELO_PLANO_DATA, ...catalogo(MODELO_PLANO_JOB, MODELO_PLANO_QUERY, "modelo_planos"), run: runModeloPlanoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.modeloPlano.count(), contarRemovidos: contarRemovidosGenerico("modelo_planos"), listarRemovidos: listarRemovidosGenerico("modelo_planos", "Conta/CC do Modelo de Plano") },
   { jobName: PROJETO_JOB, displayName: "Projetos", cronExpr: PROJETO_CRON, suportaAlterados: PROJETO_DATA != null, campoData: PROJETO_DATA, ...catalogo(PROJETO_JOB, PROJETO_QUERY, "projetos"), run: runProjetoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.projeto.count(), contarRemovidos: contarRemovidosGenerico("projetos"), listarRemovidos: listarRemovidosGenerico("projetos", "Projeto") },
+  // Custo-hora real do consultor PJ (18/11/2026): contratos de COMPRA do fornecedor do consultor (E460CTR/CCS/REA) — cabeçalho, itens (preço = valor-hora)
+  // e histórico de reajuste. Independentes das demais; itens e reajustes só fazem sentido depois do cabeçalho, mas não há FK.
+  { jobName: CONTRATO_COMPRA_JOB, displayName: "Contratos de Compra", cronExpr: CONTRATO_COMPRA_CRON, suportaAlterados: CONTRATO_COMPRA_DATA != null, campoData: CONTRATO_COMPRA_DATA, ...catalogo(CONTRATO_COMPRA_JOB, CONTRATO_COMPRA_QUERY, "contratos_compra"), run: runContratoCompraSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoCompra.count(), contarRemovidos: contarRemovidosGenerico("contratos_compra"), listarRemovidos: listarRemovidosGenerico("contratos_compra", "Contrato de Compra") },
+  { jobName: CONTRATO_COMPRA_SERVICO_JOB, displayName: "Itens dos Contratos de Compra", cronExpr: CONTRATO_COMPRA_SERVICO_CRON, suportaAlterados: CONTRATO_COMPRA_SERVICO_DATA != null, campoData: CONTRATO_COMPRA_SERVICO_DATA, ...catalogo(CONTRATO_COMPRA_SERVICO_JOB, CONTRATO_COMPRA_SERVICO_QUERY, "contratos_compra_servicos"), run: runContratoCompraServicoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoCompraServico.count(), contarRemovidos: contarRemovidosGenerico("contratos_compra_servicos"), listarRemovidos: listarRemovidosGenerico("contratos_compra_servicos", "Item de Contrato de Compra") },
+  { jobName: CONTRATO_COMPRA_REAJUSTE_JOB, displayName: "Reajustes dos Contratos de Compra", cronExpr: CONTRATO_COMPRA_REAJUSTE_CRON, suportaAlterados: CONTRATO_COMPRA_REAJUSTE_DATA != null, campoData: CONTRATO_COMPRA_REAJUSTE_DATA, ...catalogo(CONTRATO_COMPRA_REAJUSTE_JOB, CONTRATO_COMPRA_REAJUSTE_QUERY, "contratos_compra_reajustes"), run: runContratoCompraReajusteSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoCompraReajuste.count(), contarRemovidos: contarRemovidosGenerico("contratos_compra_reajustes"), listarRemovidos: listarRemovidosGenerico("contratos_compra_reajustes", "Reajuste de Contrato de Compra") },
   // Despesas de viagem lançadas em RAT (USU_TE777RDV) + catálogo de rotas/percursos,
   // identificadas a pedido do Vitor em 13/08/2026. Sem dependência das tabelas acima — RDV
   // referencia Rat só por valor (codemp+numrat), sem FK formal. Rota/Percurso rodam antes da

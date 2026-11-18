@@ -78,6 +78,8 @@ import { DadosKyria } from "./pages/admin/DadosKyria";
 import { DadosErp } from "./pages/admin/DadosErp";
 import { DepartamentoGrupoContabil } from "./pages/admin/DepartamentoGrupoContabil";
 import { DepartamentoTimeKyria } from "./pages/admin/DepartamentoTimeKyria";
+import { VinculoConsultores } from "./pages/admin/VinculoConsultores";
+import { CustoHora } from "./pages/admin/CustoHora";
 import { IndicadoresRentabilidade } from "./pages/admin/IndicadoresRentabilidade";
 import { RentabilidadePorCC } from "./pages/contabil/RentabilidadePorCC";
 import { Dashboard5S } from "./pages/gestao5s/Dashboard5S";
@@ -351,6 +353,8 @@ export default function App() {
                 <Route path="/admin/departamento-time-kyria" element={<DepartamentoTimeKyria />} />
                 <Route path="/admin/departamento-grupo-contabil" element={<DepartamentoGrupoContabil />} />
                 <Route path="/admin/indicadores-rentabilidade" element={<IndicadoresRentabilidade />} />
+                <Route path="/admin/vinculo-consultores" element={<VinculoConsultores />} />
+                <Route path="/admin/custo-hora" element={<CustoHora />} />
                 <Route path="/contabil/rentabilidade" element={<RentabilidadePorCC />} />
                 <Route path="/mercado/pedidos" element={<ListarPedidos />} />
                 <Route path="/mercado/pedido/:codemp/:codfil/:numped" element={<PedidoVisualizacao />} />

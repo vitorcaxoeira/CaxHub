@@ -1,5 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
+import { Pagination } from "../ui/Pagination";
+import { usePorPagina } from "../ui/padroesFiltros/usePorPagina";
 import { SkeletonLinhas } from "../ui/Skeleton";
 import type { ColunaLocal, LeitorDeValor } from "./aplicarLocal";
 import { type DefColuna, titulosDe } from "./useColunasConfiguraveis";
@@ -26,11 +28,28 @@ interface Props<T, C> {
   alturaMax?: string;
   classeLinha?: (linha: T) => string | undefined;
   onLinha?: (linha: T) => void;
+  /**
+   * Paginação NO NAVEGADOR (18/11/2026, Vínculo de Consultores): as linhas que passam nos filtros/ordem são divididas em páginas, com o seletor
+   * "Por página" (e a estrela de padrão, chave = `chave`). Sem isto a tabela mostra tudo, como sempre. O resumo do rodapé continua sobre TODAS as
+   * linhas filtradas, não só as da página.
+   */
+  paginacao?: { opcoes: number[]; inicial: number; rotulo?: string };
 }
 
-export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, chaveLinha, vazio, ler, ctx, loading = false, alturaMax, classeLinha, onLinha }: Props<T, C>) {
+export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, chaveLinha, vazio, ler, ctx, loading = false, alturaMax, classeLinha, onLinha, paginacao }: Props<T, C>) {
   const titulos = useMemo(() => titulosDe(defs), [defs]);
   const { t, tc } = useTabelaLocalConfiguravel(chave, defs, linhas, colunas, { ler, titulos });
+
+  const pp = usePorPagina({ tela: chave, inicial: paginacao?.inicial ?? 10, opcoes: paginacao?.opcoes, ativo: !!paginacao });
+  const [pagina, setPagina] = useState(1);
+  // Mudou o filtro, a ordem ou o tamanho da página: volta para a primeira (senão a pessoa fica numa página que já não existe).
+  const chaveConsulta = JSON.stringify([t.estado.filtros, t.estado.ordem, pp.porPagina]);
+  useEffect(() => setPagina(1), [chaveConsulta]);
+  const total = t.linhas.length;
+  const totalPaginas = Math.max(1, Math.ceil(total / pp.porPagina));
+  // Recarregar os dados (ex.: depois de salvar um vínculo) não tira a pessoa da página; só encolhe se a lista encolheu.
+  const paginaAtual = Math.min(pagina, totalPaginas);
+  const linhasDaPagina = useMemo(() => (paginacao ? t.linhas.slice((paginaAtual - 1) * pp.porPagina, paginaAtual * pp.porPagina) : t.linhas), [paginacao, t.linhas, paginaAtual, pp.porPagina]);
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface">
       {t.barra}
@@ -42,7 +61,7 @@ export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, ch
           <tbody>
             {loading && <SkeletonLinhas linhas={4} colunas={tc.nColunas} />}
             {!loading &&
-              t.linhas.map((l, i) => (
+              linhasDaPagina.map((l, i) => (
                 <tr key={chaveLinha(l, i)} className={cn("border-t border-border/60", tc.temCongelada && "bg-surface", onLinha && "cursor-pointer hover:bg-surface-2", classeLinha?.(l))} onClick={onLinha ? () => onLinha(l) : undefined}>
                   {tc.celulas(l, ctx as C)}
                 </tr>
@@ -58,6 +77,19 @@ export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, ch
           <tfoot className="sticky bottom-0 z-10">{!loading && tc.rodape({ colunas: t.colunas, resultado: t.resumir(tc.pedidosResumo) })}</tfoot>
         </table>
       </div>
+      {paginacao && (
+        <Pagination
+          page={paginaAtual}
+          pageSize={pp.porPagina}
+          total={total}
+          loading={loading}
+          onPageChange={setPagina}
+          label={paginacao.rotulo ?? "registros"}
+          opcoesPorPagina={pp.opcoes}
+          onPageSizeChange={pp.mudar}
+          acessorioPorPagina={pp.estrela}
+        />
+      )}
     </div>
   );
 }

@@ -140,6 +140,61 @@ async function horasRatPorCc(recorte: Recorte): Promise<Map<string, number>> {
   return new Map(linhas.map((l) => [l.codccu, l.horas]));
 }
 
+interface CustoPorCc {
+  custo: Map<string, number>;
+  /** Horas que ficaram de fora do custo: sem consultor vinculado ou sem custo-hora no mês da hora. */
+  horasSemCusto: number;
+}
+
+/**
+ * Custo real das horas do Kyria por CC (18/11/2026): cada apontamento vale minutos ÷ 60 × o custo-hora do consultor (kyria_members.codusu →
+ * consultor_custo_hora) NO MÊS do apontamento (dia de Brasília). Mesmos filtros de período e CC de `horasKyriaPorCc`.
+ */
+async function custoKyriaPorCc(recorte: Recorte): Promise<CustoPorCc> {
+  const linhas = await prisma.$queryRaw<{ codccu: string; custo: number; sem_custo: number }[]>`
+    SELECT cl.codccu AS codccu,
+           COALESCE(SUM((e.minutes / 60.0) * cch.custo_hora), 0)::float8 AS custo,
+           COALESCE(SUM(e.minutes / 60.0) FILTER (WHERE cch.custo_hora IS NULL), 0)::float8 AS sem_custo
+    FROM kyria_time_entries e
+    JOIN kyria_tickets t ON t.id = e.ticket_id
+    JOIN kyria_customers kc ON kc.id = t.customer_id
+    JOIN clientes cl ON cl.codcli = kc.codcli
+    LEFT JOIN kyria_members m ON m.id = e.user_id
+    LEFT JOIN consultor_custo_hora cch ON cch.codusu = m.codusu AND cch.competencia = date_trunc('month', e.started_at AT TIME ZONE 'America/Sao_Paulo')::date
+    WHERE e.started_at >= ${recorte.inicio}::date AND e.started_at < ${recorte.fim}::date AND cl.codccu IS NOT NULL
+    GROUP BY cl.codccu`;
+  return { custo: new Map(linhas.map((l) => [l.codccu, l.custo])), horasSemCusto: linhas.reduce((s, l) => s + l.sem_custo, 0) };
+}
+
+/**
+ * Custo real das horas de RAT por CC: horas do item × o custo-hora do consultor executor (rats.codfor → consultores) no mês da atividade. Quando o
+ * fornecedor tem dois cadastros de consultor, vale o de menor código que tenha custo no mês.
+ */
+async function custoRatPorCc(recorte: Recorte): Promise<CustoPorCc> {
+  const linhas = await prisma.$queryRaw<{ codccu: string; custo: number; sem_custo: number }[]>`
+    SELECT p.codccu AS codccu,
+           COALESCE(SUM(((i.horfim - i.horini) / 60.0) * cc.custo_hora), 0)::float8 AS custo,
+           COALESCE(SUM((i.horfim - i.horini) / 60.0) FILTER (WHERE cc.custo_hora IS NULL), 0)::float8 AS sem_custo
+    FROM rat_itens i
+    JOIN rats r ON r.id = i."ratId" AND r.sitrat IS DISTINCT FROM 5
+    JOIN projetos p ON p.codemp = r.codemp AND p.numprj = r.numprj
+    LEFT JOIN LATERAL (
+      SELECT cch.custo_hora FROM consultores co
+      JOIN consultor_custo_hora cch ON cch.codemp = co.codemp AND cch.codusu = co.codusu AND cch.competencia = date_trunc('month', i.datati)::date
+      WHERE co.codemp = r.codemp AND co.codfor = r.codfor ORDER BY co.codusu LIMIT 1
+    ) cc ON true
+    WHERE i.datati >= ${recorte.inicio}::date AND i.datati < ${recorte.fim}::date AND i.horfim > i.horini
+      AND i.removido_em_senior IS NULL AND p.codccu IS NOT NULL
+    GROUP BY p.codccu`;
+  return { custo: new Map(linhas.map((l) => [l.codccu, l.custo])), horasSemCusto: linhas.reduce((s, l) => s + l.sem_custo, 0) };
+}
+
+function somarMapas(a: Map<string, number>, b: Map<string, number>): Map<string, number> {
+  const saida = new Map(a);
+  for (const [cc, v] of b) saida.set(cc, (saida.get(cc) ?? 0) + v);
+  return saida;
+}
+
 function somarPorCc(movimento: MovimentoConta[], selecionadas: Set<string>, natureza: IndicadorConfigurado["natureza"]): Map<string, number> {
   const saida = new Map<string, number>();
   for (const m of movimento) {
@@ -171,13 +226,28 @@ export async function calcularRentabilidade(recorte: Recorte, indicadores?: Indi
   }
   const sistema = config.filter((i) => i.tipo === "sistema");
   if (sistema.length) {
-    const [kyria, rat] = await Promise.all([
-      sistema.some((i) => i.fonte === "HorasKyria") ? horasKyriaPorCc(recorte) : new Map<string, number>(),
-      sistema.some((i) => i.fonte === "HorasRat") ? horasRatPorCc(recorte) : new Map<string, number>(),
+    const usa = (...fontes: string[]) => sistema.some((i) => fontes.includes(i.fonte ?? ""));
+    const vazio: CustoPorCc = { custo: new Map<string, number>(), horasSemCusto: 0 };
+    const [kyria, rat, custoKyria, custoRat] = await Promise.all([
+      usa("HorasKyria") ? horasKyriaPorCc(recorte) : new Map<string, number>(),
+      usa("HorasRat") ? horasRatPorCc(recorte) : new Map<string, number>(),
+      usa("CustoKyria", "CustoReal") ? custoKyriaPorCc(recorte) : vazio,
+      usa("CustoRat", "CustoReal") ? custoRatPorCc(recorte) : vazio,
     ]);
+    const basePorFonte: Record<string, Map<string, number>> = {
+      HorasKyria: kyria,
+      HorasRat: rat,
+      CustoKyria: custoKyria.custo,
+      CustoRat: custoRat.custo,
+      CustoReal: somarMapas(custoKyria.custo, custoRat.custo),
+    };
     for (const i of sistema) {
-      const base = i.fonte === "HorasKyria" ? kyria : rat;
+      const base = basePorFonte[i.fonte ?? ""] ?? new Map<string, number>();
       bases.set(i.codigo, recorte.ccs?.length ? new Map([...base].filter(([cc]) => recorte.ccs!.includes(cc))) : base);
+    }
+    const semCusto = (usa("CustoKyria", "CustoReal") ? custoKyria.horasSemCusto : 0) + (usa("CustoRat", "CustoReal") ? custoRat.horasSemCusto : 0);
+    if (semCusto >= 0.05) {
+      avisos.push(`${semCusto.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} h do período ficaram fora do custo real: consultor sem vínculo (Kyria/RAT) ou sem custo-hora no mês (Administração › Custo-hora real).`);
     }
     if (recorte.setor) avisos.push("As horas do sistema (Kyria e RAT) ainda não filtram por setor: aparecem inteiras mesmo com um setor escolhido.");
   }

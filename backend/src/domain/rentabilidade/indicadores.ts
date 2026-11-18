@@ -17,6 +17,11 @@ export type FormatoIndicador = (typeof FORMATOS)[number];
 export const FONTES_SISTEMA = {
   HorasKyria: "Horas apontadas no Kyria, pelo CC do cliente do ticket",
   HorasRat: "Horas de RAT (consultoria), pelo CC do projeto",
+  // Custo REAL (18/11/2026): horas × o custo-hora do consultor no MÊS da hora (consultor_custo_hora, calculado pelo job de Custo-hora real:
+  // folha + encargos do CLT, contrato do PJ ou valor-hora manual). Hora sem consultor vinculado ou sem custo no mês não entra e vira aviso.
+  CustoKyria: "Custo real das horas do Kyria (horas × custo-hora do consultor no mês), pelo CC do cliente do ticket",
+  CustoRat: "Custo real das horas de RAT (horas × custo-hora do consultor no mês), pelo CC do projeto",
+  CustoReal: "Custo real total das horas (Kyria + RAT), pelo CC",
 } as const;
 export type FonteSistema = keyof typeof FONTES_SISTEMA;
 
@@ -96,7 +101,7 @@ export function validarIndicador(corpo: unknown, outrosCodigos: Set<string>): { 
     }
     texto = formulaTexto.trim();
   } else {
-    if (!naLista(Object.keys(FONTES_SISTEMA) as FonteSistema[], fonte)) return { ok: false, erro: "Escolha o campo do sistema (HorasKyria ou HorasRat)" };
+    if (!naLista(Object.keys(FONTES_SISTEMA) as FonteSistema[], fonte)) return { ok: false, erro: "Escolha o campo do sistema (horas ou custo real)" };
     fonteOk = fonte;
   }
 
