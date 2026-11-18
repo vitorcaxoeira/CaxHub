@@ -1,13 +1,16 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Lock } from "lucide-react";
+import { ChevronDown, ChevronRight, Lock } from "lucide-react";
 import { normalizar } from "../../lib/normalizarBusca";
 import { CAIXA_CONTROLE, CONTROLE, GATILHO_EMBUTIDO, ICONE_CONTROLE } from "./estilos";
 import { cn } from "../../lib/cn";
 import { IconeX } from "./IconeX";
+import { agruparOpcoes, grupoEstaAberto, marcadasDoGrupo, rotuloComGrupo } from "./agruparOpcoes";
 
 export interface MultiSelectOption<T extends string | number> {
   value: T;
   label: string;
+  /** Grupo da opção (só usado com `gruposRecolhiveis`): o cabeçalho sob o qual ela aparece. */
+  grupo?: string;
 }
 
 interface MultiSelectDropdownProps<T extends string | number> {
@@ -23,6 +26,12 @@ interface MultiSelectDropdownProps<T extends string | number> {
    * Acompanhamento de Compra). Sem ele, o componente fica exatamente como sempre foi.
    */
   acessorio?: ReactNode;
+  /**
+   * Opções agrupadas e EXPANSÍVEIS (18/11/2026, etiquetas de Departamento x Time, mesmo formato do campo Recurso do Mapeamento Kyria): cada abertura
+   * da lista começa com todos os grupos contraídos; o cabeçalho (seta, nome, marcadas/total) expande e contrai. Com texto na busca, os grupos que
+   * têm resultado ficam abertos. Só vale para opções com `grupo`. Desligado por padrão: as demais telas continuam com a lista simples.
+   */
+  gruposRecolhiveis?: boolean;
 }
 
 export function MultiSelectDropdown<T extends string | number>({
@@ -33,9 +42,12 @@ export function MultiSelectDropdown<T extends string | number>({
   labelSufixo,
   bloqueado,
   acessorio,
+  gruposRecolhiveis = false,
 }: MultiSelectDropdownProps<T>) {
   const [open, setOpen] = useState(false);
   const [busca, setBusca] = useState("");
+  // Grupos que a pessoa expandiu (só vale com `gruposRecolhiveis`); volta a vazio a cada abertura da lista.
+  const [abertos, setAbertos] = useState<Set<string>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
   const buscaRef = useRef<HTMLInputElement>(null);
 
@@ -54,6 +66,7 @@ export function MultiSelectDropdown<T extends string | number>({
   useEffect(() => {
     if (open) {
       setBusca("");
+      setAbertos(new Set());
       buscaRef.current?.focus({ preventScroll: true });
     }
   }, [open]);
@@ -69,14 +82,29 @@ export function MultiSelectDropdown<T extends string | number>({
   const opcoesFiltradas = useMemo(() => {
     const termo = normalizar(busca.trim());
     if (!termo) return opcoes;
-    return opcoes.filter((o) => normalizar(`${o.value} ${o.label}`).includes(termo));
+    return opcoes.filter((o) => normalizar(`${o.value} ${o.grupo ?? ""} ${o.label}`).includes(termo));
   }, [opcoes, busca]);
+
+  const agrupar = gruposRecolhiveis && opcoes.some((o) => o.grupo);
+  const rotuloCompleto = (o: MultiSelectOption<T> | undefined) => rotuloComGrupo(o, agrupar);
+
+  // Grupos na ordem de chegada, com só as opções que passam na busca.
+  const grupos = useMemo(() => (agrupar ? agruparOpcoes(opcoesFiltradas) : []), [agrupar, opcoesFiltradas]);
+
+  function alternarGrupo(grupo: string) {
+    setAbertos((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(grupo)) novo.delete(grupo);
+      else novo.add(grupo);
+      return novo;
+    });
+  }
 
   const label =
     selecionados.length === 0
       ? labelTodos
       : selecionados.length === 1
-        ? opcoes.find((o) => o.value === selecionados[0])?.label ?? String(selecionados[0])
+        ? rotuloCompleto(opcoes.find((o) => o.value === selecionados[0])) ?? String(selecionados[0])
         : `${selecionados.length} ${labelSufixo}`;
 
   const temFiltradaNaoSelecionada = opcoesFiltradas.some((o) => !selecionados.includes(o.value));
@@ -86,6 +114,17 @@ export function MultiSelectDropdown<T extends string | number>({
   function selecionarTodosFiltrados() {
     const novos = opcoesFiltradas.map((o) => o.value).filter((v) => !selecionados.includes(v));
     onChange([...selecionados, ...novos]);
+  }
+
+  function linhaDaOpcao(o: MultiSelectOption<T>) {
+    return (
+      <label key={String(o.value)} className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-surface-2">
+        <input type="checkbox" checked={selecionados.includes(o.value)} onChange={() => toggle(o.value)} className="shrink-0 accent-primary" />
+        <span className="min-w-0 flex-1 truncate" title={o.label}>
+          {o.label}
+        </span>
+      </label>
+    );
   }
 
   return (
@@ -165,22 +204,27 @@ export function MultiSelectDropdown<T extends string | number>({
             {buscaAtiva && opcoesFiltradas.length === 0 && (
               <p className="px-3 py-4 text-center text-[12.5px] text-muted">Nenhum resultado para "{busca}".</p>
             )}
-            {opcoesFiltradas.map((o) => (
-              <label
-                key={String(o.value)}
-                className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-surface-2"
-              >
-                <input
-                  type="checkbox"
-                  checked={selecionados.includes(o.value)}
-                  onChange={() => toggle(o.value)}
-                  className="shrink-0 accent-primary"
-                />
-                <span className="min-w-0 flex-1 truncate" title={o.label}>
-                  {o.label}
-                </span>
-              </label>
-            ))}
+            {agrupar
+              ? grupos.map(([grupo, itens]) => {
+                  const aberto = grupoEstaAberto(buscaAtiva, abertos, grupo);
+                  const marcadas = marcadasDoGrupo(opcoes, grupo, selecionados);
+                  return (
+                    <div key={grupo}>
+                      <button
+                        type="button"
+                        onClick={() => alternarGrupo(grupo)}
+                        aria-expanded={aberto}
+                        className="sticky top-0 z-10 flex w-full items-center gap-1.5 bg-surface-2 px-3 py-1 text-left font-mono text-[10px] uppercase tracking-wider text-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      >
+                        <ChevronRight {...ICONE_CONTROLE} size={10} strokeWidth={2.5} className={cn("shrink-0 transition-transform motion-reduce:transition-none", aberto && "rotate-90")} />
+                        <span className="min-w-0 flex-1 truncate">{grupo}</span>
+                        <span className="tabular-nums">{marcadas > 0 ? `${marcadas}/` : ""}{itens.length}</span>
+                      </button>
+                      {aberto && itens.map((o) => linhaDaOpcao(o))}
+                    </div>
+                  );
+                })
+              : opcoesFiltradas.map((o) => linhaDaOpcao(o))}
           </div>
         </div>
       )}

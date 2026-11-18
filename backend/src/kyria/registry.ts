@@ -10,6 +10,8 @@ import { JOB_NAME as KYRIA_TEAMS_JOB, CRON_EXPR as KYRIA_TEAMS_CRON, runKyriaTea
 import { JOB_NAME as KYRIA_MEMBERS_JOB, CRON_EXPR as KYRIA_MEMBERS_CRON, runKyriaMembersSync } from "./membersSync";
 import { JOB_NAME as KYRIA_CUSTOMERS_JOB, CRON_EXPR as KYRIA_CUSTOMERS_CRON, runKyriaCustomersSync } from "./customersSync";
 import { JOB_NAME as KYRIA_TICKET_STATUSES_JOB, CRON_EXPR as KYRIA_TICKET_STATUSES_CRON, runKyriaTicketStatusesSync } from "./ticketStatusesSync";
+import { JOB_NAME as KYRIA_LABEL_GROUPS_JOB, CRON_EXPR as KYRIA_LABEL_GROUPS_CRON, runKyriaLabelGroupsSync } from "./labelGroupsSync";
+import { JOB_NAME as KYRIA_LABELS_JOB, CRON_EXPR as KYRIA_LABELS_CRON, runKyriaLabelsSync } from "./labelsSync";
 import { JOB_NAME as KYRIA_TICKETS_JOB, CRON_EXPR as KYRIA_TICKETS_CRON, runKyriaTicketsSync } from "./ticketsSync";
 import {
   JOB_NAME as KYRIA_CUSTOMER_HOURS_JOB,
@@ -78,6 +80,26 @@ export const KYRIA_SYNC_JOBS: KyriaSyncJobDescriptor[] = [
     tabelaLocal: "kyria_ticket_statuses",
     run: runKyriaTicketStatusesSync,
     contarRegistros: () => prisma.kyriaTicketStatus.count(),
+  },
+  // Antes de Etiquetas (Etiqueta.groupId aponta pra cá): catálogo independente, sem FK — mapeamento #20, 18/11/2026.
+  {
+    jobName: KYRIA_LABEL_GROUPS_JOB,
+    displayName: "Grupos de Etiqueta",
+    cronExpr: KYRIA_LABEL_GROUPS_CRON,
+    path: "/label-groups",
+    tabelaLocal: "kyria_label_groups",
+    run: runKyriaLabelGroupsSync,
+    contarRegistros: () => prisma.kyriaLabelGroup.count(),
+  },
+  // Catálogo independente (sem FK) — mapeamento #16, 18/11/2026.
+  {
+    jobName: KYRIA_LABELS_JOB,
+    displayName: "Etiquetas",
+    cronExpr: KYRIA_LABELS_CRON,
+    path: "/labels",
+    tabelaLocal: "kyria_labels",
+    run: runKyriaLabelsSync,
+    contarRegistros: () => prisma.kyriaLabel.count(),
   },
   {
     jobName: KYRIA_TICKETS_JOB,

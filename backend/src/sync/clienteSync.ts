@@ -7,6 +7,7 @@ import { filtroDoJob } from "./filtrosAtivos";
 import { executarVarreduraDoJob } from "./varrerRemovidos";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { tamanhoLoteConfigurado } from "./politicaLote";
+import { sincronizarCentroCustoDosClientes } from "./clienteCentroCusto";
 
 export const JOB_NAME = "cliente-sync";
 export const CRON_EXPR = "20 3 * * *";
@@ -120,6 +121,12 @@ export async function runClienteSync(desde?: Date): Promise<void> {
     });
     const msEscrita = Date.now() - inicioEscrita;
 
+    // Centro de custo do cliente (E085RAT, maior codccu) — fora do upsert acima porque não é
+    // coluna de E085CLI. Roda sempre completo (query de ~150 linhas), mesmo no modo "alterados".
+    // Dentro do try de propósito: se falhar, o job aparece com erro na tela de administração em
+    // vez de deixar o codccu desatualizado em silêncio (o upsert dos clientes já foi gravado).
+    const resumoCentroCusto = await sincronizarCentroCustoDosClientes();
+
     // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
     // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
     // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
@@ -140,7 +147,7 @@ export async function runClienteSync(desde?: Date): Promise<void> {
         status: "success",
         message:
           `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
-          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes) — ${resumoCentroCusto}` +
           (varredura ? ` — ${varredura.resumo}` : ""),
         varreduraModo: varredura?.modo ?? null,
         varreduraDetectados: varredura?.candidatos ?? null,

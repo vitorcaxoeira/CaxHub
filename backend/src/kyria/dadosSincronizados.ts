@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { pkFieldsDoModel } from "../sync/recorteRetroativo";
+import { converterValorInterno, ErroValorInterno } from "./valorCampoInterno";
 import { colunasDoJob, listarDadosDoJob, type ColunaDados as ColunaMotor, type ResultadoDados } from "../sync/dadosSincronizados";
 import type { FiltroColuna } from "../sync/filtroColunaLocal";
 import type { OrdemColuna } from "../sync/ordemColuna";
@@ -73,6 +74,28 @@ function clampPagina(valor: unknown, min: number, max: number, padrao: number): 
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
+/**
+ * Condição pra uma linha poder RECEBER vínculo num campo interno (rentabilidade, ajuste 03 de
+ * 17/11/2026): só membro com papel `attendant` é relacionado a um consultor — solicitante, gestor
+ * etc. não apontam hora e não entram no custo. Chaveada por `tabelaLocal.coluna`; a validação é do
+ * backend (editarCampoInterno) e a tela só usa isto pra não oferecer "vincular" onde não vale.
+ * Remover um vínculo já existente NUNCA é bloqueado (valor null).
+ */
+const RESTRICOES_VINCULO: Record<string, { coluna: string; valor: string; motivo: string }> = {
+  "kyria_members.codusu": {
+    coluna: "role",
+    valor: "attendant",
+    motivo: "Só membro com papel \"attendant\" (atendente) é vinculado a consultor.",
+  },
+};
+
+export interface RestricaoVinculo {
+  /** Campo Prisma da linha que precisa ter `valor` (a tela lê `linha[campo]`). */
+  campo: string;
+  valor: string;
+  motivo: string;
+}
+
 export interface ColunaDados {
   nomeInterno: string;
   ehInterno: boolean;
@@ -90,6 +113,7 @@ export interface ColunaDados {
 export interface ColunaKyria extends ColunaMotor {
   rotulo: string;
   ehInterno: boolean;
+  vinculoRestrito: RestricaoVinculo | null;
   relacionamentoModelo: string | null;
   relacionamentoCampo: string | null;
   relacionamentoCampoDescricao: string | null;
@@ -117,10 +141,13 @@ async function resolverColunas(job: KyriaSyncJobDescriptor, model: Model): Promi
   return colunasDoJob(job).map((coluna) => {
     const rotulo = model.fields.find((f) => f.name === coluna.nome)?.dbName ?? coluna.nome;
     const mapeado = mapeadoPorColuna.get(rotulo);
+    const restricao = RESTRICOES_VINCULO[`${job.tabelaLocal}.${rotulo}`];
+    const campoCondicao = restricao ? campoPrismaPorColuna(model, restricao.coluna) : null;
     return {
       ...coluna,
       rotulo,
       ehInterno: mapeado ? mapeado.nomeOrigem === null : false,
+      vinculoRestrito: restricao && campoCondicao ? { campo: campoCondicao, valor: restricao.valor, motivo: restricao.motivo } : null,
       relacionamentoModelo: mapeado?.relacionamentoModelo ?? null,
       relacionamentoCampo: mapeado?.relacionamentoCampo ?? null,
       relacionamentoCampoDescricao: mapeado?.relacionamentoCampoDescricao ?? null,
@@ -199,12 +226,9 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
   if (campoMapeado.nomeOrigem !== null) throw new ErroValidacao(`Campo "${campo}" vem da API — só campo interno pode ser editado aqui.`);
   if (!campoMapeado.manter) throw new ErroValidacao(`Campo "${campo}" está marcado como "não manter" no mapeamento.`);
 
-  // `valor === null` = REMOVER o vínculo (25/09/2026): não há registro relacionado pra conferir —
-  // o campo simplesmente volta a ficar vazio. Só vale pra campo que é de fato um relacionamento
-  // (senão a tela nem oferece a ação) e, mais abaixo, só se a coluna aceitar nulo.
-  if (valor === null && !(campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo)) {
-    throw new ErroValidacao(`Campo "${campo}" não é um relacionamento — não há vínculo a remover.`);
-  }
+  // `valor === null` = REMOVER o vínculo (25/09/2026) ou LIMPAR o campo (18/11/2026, campo interno que não é vínculo, ex.: um Boolean): não há
+  // registro relacionado pra conferir — o campo simplesmente volta a ficar vazio, e só se a coluna aceitar nulo (conferido mais abaixo).
+  const ehRelacionamento = !!(campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo);
   if (valor !== null && campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo) {
     const modeloRelacionado = resolverModel(campoMapeado.relacionamentoModelo, false);
     if (!modeloRelacionado) throw new ErroValidacao(`Model relacionado "${campoMapeado.relacionamentoModelo}" não existe mais no schema.`);
@@ -229,7 +253,28 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
   const pk = pkFieldsDoModel(job.tabelaLocal);
   if (pk.length !== 1) throw new Error(`"Ver dados" só suporta tabela com PK simples — "${job.tabelaLocal}" tem PK composta (${pk.join(", ")}).`);
   const delegate = resolverDelegate(model);
-  const linhaAtualizada = await delegate.update({ where: { [pk[0]]: id }, data: { [campoPrisma]: valor } });
+
+  const restricao = valor === null ? undefined : RESTRICOES_VINCULO[`${job.tabelaLocal}.${campo}`];
+  if (restricao) {
+    const campoCondicao = campoPrismaPorColuna(model, restricao.coluna);
+    const atual = campoCondicao ? await delegate.findUnique({ where: { [pk[0]]: id }, select: { [campoCondicao]: true } }) : null;
+    if (!atual) throw new ErroValidacao(`Registro "${id}" não encontrado em "${job.tabelaLocal}".`);
+    if (String(atual[campoCondicao as string]) !== restricao.valor) throw new ErroValidacao(restricao.motivo);
+  }
+
+  // Campo interno que NÃO é vínculo (18/11/2026): o valor é conferido pelo TIPO da coluna (Boolean, texto, inteiro, número) — um valor de tipo
+  // errado nunca chega ao Prisma. Vínculo continua sendo conferido contra a tabela relacionada, lá em cima.
+  let valorFinal: unknown = valor;
+  if (!ehRelacionamento) {
+    try {
+      valorFinal = converterValorInterno(model.fields.find((f) => f.name === campoPrisma)?.type ?? "", valor);
+    } catch (erro) {
+      if (erro instanceof ErroValorInterno) throw new ErroValidacao(`Campo "${campo}": ${erro.message}`);
+      throw erro;
+    }
+  }
+
+  const linhaAtualizada = await delegate.update({ where: { [pk[0]]: id }, data: { [campoPrisma]: valorFinal } });
 
   // Remapeado pra chave nomeInterno (coluna do Postgres, não campo Prisma
   // cru) — o frontend hoje descarta esse retorno (DadosKyria.tsx só recarrega a página

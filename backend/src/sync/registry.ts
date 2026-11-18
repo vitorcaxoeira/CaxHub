@@ -49,6 +49,8 @@ import { JOB_NAME as RAT_JOB, CRON_EXPR as RAT_CRON, CAMPO_DATA as RAT_DATA, BAS
 import { JOB_NAME as RAT_ITEM_JOB, CRON_EXPR as RAT_ITEM_CRON, CAMPO_DATA as RAT_ITEM_DATA, BASE_QUERY as RAT_ITEM_QUERY, runRatItemSync } from "./ratItemSync";
 import { JOB_NAME as RATEIO_LANCAMENTO_JOB, CRON_EXPR as RATEIO_LANCAMENTO_CRON, CAMPO_DATA as RATEIO_LANCAMENTO_DATA, QUERY as RATEIO_LANCAMENTO_QUERY, runRateioLancamentoSync } from "./rateioLancamentoSync";
 import { JOB_NAME as HISTORICO_PADRAO_JOB, CRON_EXPR as HISTORICO_PADRAO_CRON, CAMPO_DATA as HISTORICO_PADRAO_DATA, QUERY as HISTORICO_PADRAO_QUERY, runHistoricoPadraoSync } from "./historicoPadraoSync";
+import { JOB_NAME as MODELO_PLANO_JOB, CRON_EXPR as MODELO_PLANO_CRON, CAMPO_DATA as MODELO_PLANO_DATA, QUERY as MODELO_PLANO_QUERY, runModeloPlanoSync } from "./modeloPlanoSync";
+import { JOB_NAME as PROJETO_JOB, CRON_EXPR as PROJETO_CRON, CAMPO_DATA as PROJETO_DATA, QUERY as PROJETO_QUERY, runProjetoSync } from "./projetoSync";
 import { JOB_NAME as REPRESENTANTE_JOB, CRON_EXPR as REPRESENTANTE_CRON, CAMPO_DATA as REPRESENTANTE_DATA, BASE_QUERY as REPRESENTANTE_QUERY, runRepresentanteSync } from "./representanteSync";
 import { JOB_NAME as TIPO_TITULO_JOB, CRON_EXPR as TIPO_TITULO_CRON, CAMPO_DATA as TIPO_TITULO_DATA, QUERY as TIPO_TITULO_QUERY, runTipoTituloSync } from "./tipoTituloSync";
 import { JOB_NAME as TITULO_RECEBER_JOB, CRON_EXPR as TITULO_RECEBER_CRON, CAMPO_DATA as TITULO_RECEBER_DATA, BASE_QUERY as TITULO_RECEBER_QUERY, runTituloReceberSync } from "./tituloReceberSync";
@@ -105,6 +107,8 @@ const JOBS_COM_FILTRO = new Set([
   PERCURSO_VIAGEM_JOB,
   ROTA_PERCURSO_JOB,
   PLANO_CONTABIL_JOB,
+  MODELO_PLANO_JOB,
+  PROJETO_JOB,
   PORTADOR_JOB,
   PROPOSTA_ITEM_JOB,
   PROPOSTA_JOB,
@@ -361,8 +365,8 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   // Tabelas de Contábil/Orçamento (e045pla/e640lct/e640rat/e650rto), identificadas a partir de
   // uma SQL de BI (11/08/2026). Sem dependência das tabelas acima — PlanoContabil não depende
   // de nada novo; RateioLancamento depende de LancamentoContabil já carregado; OrcamentoContabil
-  // é independente das demais. (e043pcm/PlanoContabilParalelo foi avaliada e removida em
-  // 12/08/2026 — não era necessária.)
+  // é independente das demais. (e043pcm foi removida em 12/08/2026 por falta de consumidor e
+  // reimportada em 17/11/2026 como ModeloPlano (modelo_planos) pra Rentabilidade — ver abaixo.)
   { jobName: PLANO_CONTABIL_JOB, displayName: "Plano Contábil", cronExpr: PLANO_CONTABIL_CRON, suportaAlterados: PLANO_CONTABIL_DATA != null, campoData: PLANO_CONTABIL_DATA, ...catalogo(PLANO_CONTABIL_JOB, PLANO_CONTABIL_QUERY, "plano_contabil"), run: runPlanoContabilSync, usaUpsertEmLote: true, contarRegistros: () => prisma.planoContabil.count(), contarRemovidos: contarRemovidosGenerico("plano_contabil"), listarRemovidos: listarRemovidosGenerico("plano_contabil", "Conta do Plano Contábil") },
   // Detecção de exclusão física ligada em 20/08/2026 a pedido do Vitor (rateio/lançamento
   // tem manutenção pesada no Senior, ver lancamentoContabilSync.ts) — rodando em "simular"
@@ -431,6 +435,11 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
   // — sem dependência das tabelas acima. Até 10/09/2026 ficava sem varredura de propósito
   // (catálogo global, raramente muda) — revertido: ver comentário em schema.prisma.
   { jobName: HISTORICO_PADRAO_JOB, displayName: "Históricos Padrão", cronExpr: HISTORICO_PADRAO_CRON, suportaAlterados: HISTORICO_PADRAO_DATA != null, campoData: HISTORICO_PADRAO_DATA, ...catalogo(HISTORICO_PADRAO_JOB, HISTORICO_PADRAO_QUERY, "historicos_padrao"), run: runHistoricoPadraoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.historicoPadrao.count(), contarRemovidos: contarRemovidosGenerico("historicos_padrao"), listarRemovidos: listarRemovidosGenerico("historicos_padrao", "Histórico Padrão") },
+  // Rentabilidade (17/11/2026), a pedido do Vitor: E043PCM (modelos de planos: descrição "paralela" de
+  // conta/CC — Setor/CC Paralelo do BI) e E615PRJ (projeto → CC da hora de
+  // consultoria). Independentes das demais.
+  { jobName: MODELO_PLANO_JOB, displayName: "Modelos de Planos", cronExpr: MODELO_PLANO_CRON, suportaAlterados: MODELO_PLANO_DATA != null, campoData: MODELO_PLANO_DATA, ...catalogo(MODELO_PLANO_JOB, MODELO_PLANO_QUERY, "modelo_planos"), run: runModeloPlanoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.modeloPlano.count(), contarRemovidos: contarRemovidosGenerico("modelo_planos"), listarRemovidos: listarRemovidosGenerico("modelo_planos", "Conta/CC do Modelo de Plano") },
+  { jobName: PROJETO_JOB, displayName: "Projetos", cronExpr: PROJETO_CRON, suportaAlterados: PROJETO_DATA != null, campoData: PROJETO_DATA, ...catalogo(PROJETO_JOB, PROJETO_QUERY, "projetos"), run: runProjetoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.projeto.count(), contarRemovidos: contarRemovidosGenerico("projetos"), listarRemovidos: listarRemovidosGenerico("projetos", "Projeto") },
   // Despesas de viagem lançadas em RAT (USU_TE777RDV) + catálogo de rotas/percursos,
   // identificadas a pedido do Vitor em 13/08/2026. Sem dependência das tabelas acima — RDV
   // referencia Rat só por valor (codemp+numrat), sem FK formal. Rota/Percurso rodam antes da

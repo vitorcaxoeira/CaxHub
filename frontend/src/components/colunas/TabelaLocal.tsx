@@ -43,7 +43,7 @@ export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, ch
             {loading && <SkeletonLinhas linhas={4} colunas={tc.nColunas} />}
             {!loading &&
               t.linhas.map((l, i) => (
-                <tr key={chaveLinha(l, i)} className={cn("border-t border-border/60", onLinha && "cursor-pointer hover:bg-surface-2", classeLinha?.(l))} onClick={onLinha ? () => onLinha(l) : undefined}>
+                <tr key={chaveLinha(l, i)} className={cn("border-t border-border/60", tc.temCongelada && "bg-surface", onLinha && "cursor-pointer hover:bg-surface-2", classeLinha?.(l))} onClick={onLinha ? () => onLinha(l) : undefined}>
                   {tc.celulas(l, ctx as C)}
                 </tr>
               ))}

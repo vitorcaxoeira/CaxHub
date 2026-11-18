@@ -60,6 +60,16 @@ function kyriaConfig(): { baseUrl: string; token: string } {
   return { baseUrl: baseUrl.replace(/\/$/, ""), token };
 }
 
+/** Base da API (inclui /api/v1). Diferente de kyriaConfig(), nao lanca se a variavel faltar: serve pra montar URL informativa pra tela. */
+export function kyriaBaseUrl(): string {
+  return (process.env.KYRIA_BASE_URL ?? "").replace(/\/$/, "");
+}
+
+/** URL completa de um caminho do Kyria (base + caminho), exatamente a que getKyriaSample e os jobs chamam. */
+export function kyriaFullUrl(path: string): string {
+  return `${kyriaBaseUrl()}${path}`;
+}
+
 export interface KyriaErrorBody {
   error: { code: string; message: string };
   requestId: string;
@@ -412,6 +422,131 @@ export async function listAllTicketStatuses(options: Omit<ListTicketStatusesOpti
   }
 
   return statuses;
+}
+
+// ---------------------------------------------------------------------------
+// GET /label-groups
+// ---------------------------------------------------------------------------
+
+export interface KyriaLabelGroup {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  status: "active" | "inactive";
+}
+
+export interface ListLabelGroupsOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListLabelGroupsResult {
+  data: KyriaLabelGroup[];
+  page: KyriaPage;
+  requestId: string;
+}
+
+export async function listLabelGroups(options: ListLabelGroupsOptions = {}): Promise<ListLabelGroupsResult> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/label-groups`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: options.limit, cursor: options.cursor },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "listLabelGroups"));
+    }
+  }
+}
+
+/** Pagina automaticamente todas as páginas de /label-groups, seguindo `page.nextCursor`. */
+export async function listAllLabelGroups(options: Omit<ListLabelGroupsOptions, "cursor"> = {}): Promise<KyriaLabelGroup[]> {
+  const grupos: KyriaLabelGroup[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const pagina = await listLabelGroups({ ...options, cursor });
+    grupos.push(...pagina.data);
+    if (!pagina.page.hasMore || !pagina.page.nextCursor) break;
+    cursor = pagina.page.nextCursor;
+  }
+
+  return grupos;
+}
+
+// ---------------------------------------------------------------------------
+// GET /labels
+// ---------------------------------------------------------------------------
+
+export interface KyriaLabel {
+  id: string;
+  groupId: string | null;
+  teamId: string | null;
+  key: string;
+  name: string;
+  color: string | null;
+  status: "active" | "inactive";
+  sortOrder: number | null;
+}
+
+export interface ListLabelsOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListLabelsResult {
+  data: KyriaLabel[];
+  page: KyriaPage;
+  requestId: string;
+}
+
+export async function listLabels(options: ListLabelsOptions = {}): Promise<ListLabelsResult> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/labels`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: options.limit, cursor: options.cursor },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "listLabels"));
+    }
+  }
+}
+
+/** Pagina automaticamente todas as páginas de /labels, seguindo `page.nextCursor`. */
+export async function listAllLabels(options: Omit<ListLabelsOptions, "cursor"> = {}): Promise<KyriaLabel[]> {
+  const labels: KyriaLabel[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const pagina = await listLabels({ ...options, cursor });
+    labels.push(...pagina.data);
+    if (!pagina.page.hasMore || !pagina.page.nextCursor) break;
+    cursor = pagina.page.nextCursor;
+  }
+
+  return labels;
 }
 
 // ---------------------------------------------------------------------------

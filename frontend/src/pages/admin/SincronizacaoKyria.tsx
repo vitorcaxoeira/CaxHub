@@ -2,6 +2,9 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Modal } from "../../components/ui/Modal";
+import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { formatarDuracao } from "../../utils/duracao";
 
@@ -52,11 +55,6 @@ interface ListaSyncKyria {
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 const numberFormatter = new Intl.NumberFormat("pt-BR");
 
-const statusTone: Record<string, string> = {
-  success: "bg-success/15 text-success",
-  error: "bg-destructive/15 text-destructive",
-};
-
 function formatTempoAtras(iso: string | null): string {
   if (!iso) return "nunca sincronizada";
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -68,6 +66,132 @@ function formatTempoAtras(iso: string | null): string {
   const diffDias = Math.floor(diffH / 24);
   return `há ${diffDias} dia${diffDias === 1 ? "" : "s"}`;
 }
+
+type StatusJob = "rodando" | "ok" | "erro" | "sem execução";
+
+// Status como a tela mostra (a mesma regra do selo da coluna): é o valor que o funil e a ordem da coluna "Status" enxergam.
+function statusDoJob(j: JobKyria): StatusJob {
+  if (j.emAndamento) return "rodando";
+  if (j.ultimoStatus === "success") return "ok";
+  if (j.ultimoStatus) return "erro";
+  return "sem execução";
+}
+
+// Colunas que o funil (Condição e Valores) e a ordem enxergam (18/11/2026, "filtro de colunas" pedido pelo Vitor): a lista é pequena e já vem
+// inteira do servidor, então o filtro roda na tela (TabelaLocal), com a mesma regra das demais listas do CaxHub. "Ações" não filtra.
+const COLUNAS_LOCAIS: ColunaLocal[] = [
+  { nome: "ordemExecucao", tipo: "inteiro", obrigatoria: true },
+  { nome: "displayName", tipo: "texto", obrigatoria: true },
+  { nome: "ativo", tipo: "booleano", obrigatoria: true },
+  { nome: "urlCompleta", tipo: "texto", obrigatoria: true },
+  { nome: "totalRegistros", tipo: "inteiro", obrigatoria: true },
+  { nome: "ultimaSincronizacao", tipo: "data" },
+  { nome: "ultimaDuracaoMs", tipo: "inteiro" },
+  { nome: "proximaExecucao", tipo: "data", obrigatoria: true },
+  { nome: "status", tipo: "texto", obrigatoria: true },
+];
+
+// "status" não é campo do job: é calculado (statusDoJob). O resto lê o campo de mesmo nome.
+const lerJob = (j: JobKyria, coluna: string): unknown => (coluna === "status" ? statusDoJob(j) : (j as unknown as Record<string, unknown>)[coluna]);
+
+interface AcoesJob {
+  alternarAtivo: (job: JobKyria) => void;
+  disparar: (job: JobKyria) => void;
+  disparando: string | null;
+  sincronizandoTodos: boolean;
+}
+
+const TOM_STATUS_JOB: Record<StatusJob, string> = {
+  rodando: "bg-warning/15 text-warning",
+  ok: "bg-success/15 text-success",
+  erro: "bg-destructive/15 text-destructive",
+  "sem execução": "bg-muted/15 text-muted",
+};
+const ROTULO_STATUS_JOB: Record<StatusJob, string> = { rodando: "rodando...", ok: "ok", erro: "erro", "sem execução": "—" };
+
+const COLUNAS_JOBS: DefColuna<JobKyria, AcoesJob>[] = [
+  { nome: "ordemExecucao", titulo: "Ordem", direita: true, largura: 70, classe: "font-mono text-sm tabular-nums text-muted", render: (j) => j.ordemExecucao },
+  { nome: "displayName", titulo: "Tabela", fixa: true, largura: 200, classe: "text-sm font-semibold text-foreground", texto: (j) => j.displayName, render: (j) => j.displayName },
+  {
+    nome: "ativo",
+    titulo: "Ativa",
+    largura: 80,
+    formatarValor: (v) => (v === true || v === "true" ? "Sim" : "Não"),
+    render: (j, a) => (
+      <button
+        type="button"
+        role="switch"
+        aria-checked={j.ativo}
+        aria-label={`${j.ativo ? "Desativar" : "Ativar"} ${j.displayName}`}
+        onClick={() => a.alternarAtivo(j)}
+        className={`relative h-5 w-9 rounded-full transition ${j.ativo ? "bg-success" : "bg-muted/40"}`}
+      >
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${j.ativo ? "left-[18px]" : "left-0.5"}`} />
+      </button>
+    ),
+  },
+  { nome: "urlCompleta", titulo: "URL", largura: 200, classe: "max-w-[130px] truncate font-mono text-[12px] text-muted", title: (j) => j.urlCompleta, texto: (j) => j.urlCompleta, render: (j) => j.urlCompleta },
+  { nome: "totalRegistros", titulo: "Registros", direita: true, largura: 100, classe: "font-mono text-sm tabular-nums text-muted", render: (j) => numberFormatter.format(j.totalRegistros) },
+  {
+    nome: "ultimaSincronizacao",
+    titulo: "Última sincronização",
+    largura: 260,
+    classe: "text-[12.5px] text-muted",
+    render: (j) => (
+      <>
+        {j.ultimaSincronizacao ? dateTimeFormatter.format(new Date(j.ultimaSincronizacao)) : "Nunca"}
+        {j.ultimaMensagem && (
+          <p className={`mt-0.5 max-w-[190px] truncate text-[11px] ${j.ultimoStatus === "error" ? "text-destructive" : "text-muted"}`} title={j.ultimaMensagem}>
+            {j.ultimaMensagem}
+          </p>
+        )}
+      </>
+    ),
+  },
+  {
+    nome: "ultimaDuracaoMs",
+    titulo: "Duração",
+    direita: true,
+    largura: 100,
+    classe: "font-mono text-[12.5px] tabular-nums text-muted",
+    formatarValor: (v) => formatarDuracao(Number(v)),
+    render: (j) => (j.ultimaDuracaoMs != null ? formatarDuracao(j.ultimaDuracaoMs) : "—"),
+  },
+  { nome: "proximaExecucao", titulo: "Próxima execução", largura: 150, classe: "text-[12.5px] text-muted", render: (j) => dateTimeFormatter.format(new Date(j.proximaExecucao)) },
+  {
+    nome: "status",
+    titulo: "Status",
+    direita: true,
+    largura: 110,
+    render: (j) => {
+      const st = statusDoJob(j);
+      return <span className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${TOM_STATUS_JOB[st]}`}>{ROTULO_STATUS_JOB[st]}</span>;
+    },
+  },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    direita: true,
+    semOrdenar: true,
+    largura: 210,
+    // Coluna "à direita" herda a fonte de número (mono); os links de ação ficam na fonte normal.
+    classe: "font-sans",
+    render: (j, a) => (
+      <div className="flex justify-end gap-3">
+        <Link to={`/admin/sincronizacao-kyria/dados/${j.jobName}`} className="text-sm text-primary hover:underline">
+          Ver dados
+        </Link>
+        <button
+          onClick={() => a.disparar(j)}
+          disabled={!j.ativo || j.emAndamento || a.disparando !== null || a.sincronizandoTodos}
+          className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {a.disparando === j.jobName ? "Iniciando..." : "Sincronizar agora"}
+        </button>
+      </div>
+    ),
+  },
+];
 
 export function SincronizacaoKyria() {
   const [jobs, setJobs] = useState<JobKyria[]>([]);
@@ -269,164 +393,17 @@ export function SincronizacaoKyria() {
         </p>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Ordem
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Tabela
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Ativa
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  URL
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Registros
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Última sincronização
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Duração
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Próxima execução
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Status
-                </th>
-                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Ações
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading &&
-                Array.from({ length: 2 }).map((_, i) => (
-                  <tr key={i} className="border-t border-border/60">
-                    <td className="px-2.5 py-3.5 text-right">
-                      <Skeleton className="ml-auto h-4 w-6" />
-                    </td>
-                    <td className="px-2.5 py-3.5">
-                      <Skeleton className="h-4 w-32" />
-                    </td>
-                    <td className="px-2.5 py-3.5">
-                      <Skeleton className="h-5 w-9 rounded-full" />
-                    </td>
-                    <td className="px-2.5 py-3.5">
-                      <Skeleton className="h-4 w-48" />
-                    </td>
-                    <td className="px-2.5 py-3.5 text-right">
-                      <Skeleton className="ml-auto h-4 w-16" />
-                    </td>
-                    <td className="px-2.5 py-3.5">
-                      <Skeleton className="h-4 w-28" />
-                    </td>
-                    <td className="px-2.5 py-3.5 text-right">
-                      <Skeleton className="ml-auto h-4 w-12" />
-                    </td>
-                    <td className="px-2.5 py-3.5">
-                      <Skeleton className="h-4 w-28" />
-                    </td>
-                    <td className="px-2.5 py-3.5 text-right">
-                      <Skeleton className="ml-auto h-5 w-12 rounded" />
-                    </td>
-                    <td className="px-2.5 py-3.5 text-right">
-                      <Skeleton className="ml-auto h-4 w-24" />
-                    </td>
-                  </tr>
-                ))}
-              {!loading &&
-                jobs.map((job) => (
-                  <tr key={job.jobName} className="border-t border-border/60">
-                    <td className="px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
-                      {job.ordemExecucao}
-                    </td>
-                    <td className="px-2.5 py-3.5 text-sm font-semibold text-foreground">{job.displayName}</td>
-                    <td className="px-2.5 py-3.5">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={job.ativo}
-                        aria-label={`${job.ativo ? "Desativar" : "Ativar"} ${job.displayName}`}
-                        onClick={() => alternarAtivo(job)}
-                        className={`relative h-5 w-9 rounded-full transition ${job.ativo ? "bg-success" : "bg-muted/40"}`}
-                      >
-                        <span
-                          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${job.ativo ? "left-[18px]" : "left-0.5"}`}
-                        />
-                      </button>
-                    </td>
-                    <td className="max-w-[220px] truncate px-2.5 py-3.5 font-mono text-[12px] text-muted" title={job.urlCompleta}>
-                      {job.urlCompleta}
-                    </td>
-                    <td className="px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
-                      {numberFormatter.format(job.totalRegistros)}
-                    </td>
-                    <td className="px-2.5 py-3.5 text-[12.5px] text-muted">
-                      {job.ultimaSincronizacao ? dateTimeFormatter.format(new Date(job.ultimaSincronizacao)) : "Nunca"}
-                      {job.ultimaMensagem && (
-                        <p
-                          className={`mt-0.5 max-w-[280px] truncate text-[11px] ${
-                            job.ultimoStatus === "error" ? "text-destructive" : "text-muted"
-                          }`}
-                          title={job.ultimaMensagem}
-                        >
-                          {job.ultimaMensagem}
-                        </p>
-                      )}
-                    </td>
-                    <td className="px-2.5 py-3.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
-                      {job.ultimaDuracaoMs != null ? formatarDuracao(job.ultimaDuracaoMs) : "—"}
-                    </td>
-                    <td className="px-2.5 py-3.5 text-[12.5px] text-muted">
-                      {dateTimeFormatter.format(new Date(job.proximaExecucao))}
-                    </td>
-                    <td className="px-2.5 py-3.5 text-right">
-                      {job.emAndamento ? (
-                        <span className="inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide bg-warning/15 text-warning">
-                          rodando...
-                        </span>
-                      ) : job.ultimoStatus ? (
-                        <span
-                          className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
-                            statusTone[job.ultimoStatus] ?? statusTone.success
-                          }`}
-                        >
-                          {job.ultimoStatus === "success" ? "ok" : "erro"}
-                        </span>
-                      ) : (
-                        <span className="inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide bg-muted/15 text-muted">
-                          —
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-2.5 py-3.5 text-right">
-                      <div className="flex justify-end gap-3">
-                        <Link to={`/admin/sincronizacao-kyria/dados/${job.jobName}`} className="text-sm text-primary hover:underline">
-                          Ver dados
-                        </Link>
-                        <button
-                          onClick={() => disparar(job)}
-                          disabled={!job.ativo || job.emAndamento || disparando !== null || sincronizandoTodos}
-                          className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          {disparando === job.jobName ? "Iniciando..." : "Sincronizar agora"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <TabelaLocal<JobKyria, AcoesJob>
+        chave="admin.sincronizacao-kyria"
+        defs={COLUNAS_JOBS}
+        colunas={COLUNAS_LOCAIS}
+        linhas={jobs}
+        ler={lerJob}
+        chaveLinha={(j) => j.jobName}
+        loading={loading}
+        vazio="Nenhuma tabela cadastrada."
+        ctx={{ alternarAtivo, disparar, disparando, sincronizandoTodos }}
+      />
 
       <Modal
         open={filtrosAberto}

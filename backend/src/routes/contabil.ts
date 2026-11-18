@@ -4,7 +4,7 @@ import { casoSql, col, registrarListaConsultavel } from "./listaConsultavel";
 import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { SITRAT_CONTABILIZADO, DEBCRE_LABELS, ORILCT_LABELS, defgruBucket, debcreLabel, orilctLabel, sitlotLabel } from "../domain/contabilDominio";
+import { FORMULA_VALOR_REALIZADO, SITRAT_CONTABILIZADO, DEBCRE_LABELS, ORILCT_LABELS, defgruBucket, debcreLabel, orilctLabel, sitlotLabel } from "../domain/contabilDominio";
 import { formatarHistorico } from "../domain/historicoPadrao";
 import { resolverContextoConsultor, gestorNomePorDepartamento, type ContextoConsultor } from "../domain/contextoProjeto";
 import { depexeLabel } from "../domain/propostasDominio";
@@ -46,24 +46,6 @@ function parseBoolParam(value: unknown): boolean {
 function parseCriterioOrdenacao(value: unknown): "clacta" | "ctared" {
   return value === "ctared" ? "ctared" : "clacta";
 }
-
-// Sinal do realizado — tradução da medida DAX "Valor_Contabil" (Power BI) fornecida pelo Vitor
-// em 27/08/2026. Regra geral: crédito soma, débito subtrai — EXCETO contas de despesa (defgru=D)
-// com natureza Credora (natcta=C, ex. "Ganho Tributário Faturamento Senior" 762/763/776), que
-// sempre somam (é um ganho/redução de despesa, independente do lado do lançamento no Senior).
-// `Grupo`/`Natureza` na DAX são da CONTA-FOLHA que recebeu o lançamento (confirmado no SQL base
-// do BI: `Conta_Contabil.Grupo/Natureza` casam por `a.ctared = Fato.Conta` com `a.anasin='A'`),
-// nunca de um ancestral — por isso não precisa do nível sintético Receitas/Despesas removido em
-// 26/08/2026, `pc.defgru`/`pc.natcta` da própria conta já bastam. Validado célula a célula: só
-// essas 3 contas divergem da fórmula antiga (só debcre); nenhuma outra combinação muda de sinal.
-// Usada como template literal em toda query que soma `rateios_lancamento.vlrrat` (join com
-// `plano_contabil pc` obrigatório).
-const FORMULA_VALOR_REALIZADO = `CASE
-    WHEN pc.defgru = 'R' AND r.debcre = 'D' THEN -r.vlrrat
-    WHEN pc.defgru = 'D' AND pc.natcta = 'C' AND r.debcre = 'C' THEN r.vlrrat
-    WHEN pc.defgru = 'D' AND pc.natcta = 'D' AND r.debcre = 'D' THEN -r.vlrrat
-    ELSE r.vlrrat
-  END`;
 
 function handleError(res: import("express").Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);

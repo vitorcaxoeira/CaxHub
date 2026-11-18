@@ -262,7 +262,11 @@ const groups: NavGroup[] = [
     // DepartamentoGrupoContabil, administrada em Administração > Departamento x Grupo
     // Contábil) — o gestor vê a tela com o filtro de grupos já restrito ao(s)
     // departamento(s) dele; o admin continua vendo tudo.
-    items: [{ to: "/contabil/resultado-analitico", label: "Resultado Analítico", gestorOuAdmin: true }],
+    items: [
+      { to: "/contabil/resultado-analitico", label: "Resultado Analítico", gestorOuAdmin: true },
+      // Só admin (17/11/2026): a configuração dos indicadores e o resultado por CC usam o salário/custo da empresa; rota no bloco de admin do App.tsx.
+      { to: "/contabil/rentabilidade", label: "Rentabilidade por CC", roles: ["admin"] },
+    ],
     roles: "*",
   },
   {
@@ -310,9 +314,11 @@ const groups: NavGroup[] = [
         children: [
           { to: "/admin/sincronizacao-kyria", label: "Sincronização" },
           { to: "/admin/mapeamento-kyria", label: "Mapeamento de Campos" },
+          { to: "/admin/departamento-time-kyria", label: "Departamento x Time" },
         ],
       },
       { to: "/admin/departamento-grupo-contabil", label: "Departamento x Grupo Contábil" },
+      { to: "/admin/indicadores-rentabilidade", label: "Indicadores de Rentabilidade" },
     ],
     roles: ["admin"],
   },
@@ -360,6 +366,7 @@ const ICONE_DA_ROTA: Record<string, LucideIcon> = {
   "/financeiro/historico": History,
   "/financeiro/contas-a-pagar": ReceiptText,
   "/contabil/resultado-analitico": ChartColumn,
+  "/contabil/rentabilidade": ChartColumn,
   "/projetos/descontos": ReceiptText,
   "/projetos/descontos/parcelas": ListChecks,
   "/projetos/descontos/fechamentos": CalendarCheck,
@@ -383,6 +390,8 @@ const ICONE_DA_ROTA: Record<string, LucideIcon> = {
   "/admin/sincronizacao-kyria": RefreshCw,
   "/admin/mapeamento-kyria": Waypoints,
   "/admin/departamento-grupo-contabil": Network,
+  "/admin/departamento-time-kyria": Network,
+  "/admin/indicadores-rentabilidade": ListChecks,
 };
 const ICONE_DO_GRUPO: Record<string, LucideIcon> = {
   Comercial: Briefcase,

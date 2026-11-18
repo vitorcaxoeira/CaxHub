@@ -255,7 +255,7 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({
               )}
               {/* Enquanto uma nova resposta não chega, as linhas anteriores ficam na tela, esmaecidas (sem piscar o esqueleto). */}
               {itens.map((linha, i) => (
-                <tr key={i} className={`border-t border-border/60 transition-opacity ${carregando ? "opacity-60" : ""}`}>
+                <tr key={i} className={`border-t border-border/60 transition-opacity ${tc.temCongelada ? "bg-surface" : ""} ${carregando ? "opacity-60" : ""}`}>
                   {tc.celulas(linha, undefined)}
                 </tr>
               ))}

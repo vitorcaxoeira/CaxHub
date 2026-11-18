@@ -20,10 +20,14 @@ import { TabelaDadosImportados, type ColunaDados, type RespostaDadosBase } from 
 
 /** Coluna do Kyria: as do motor genérico + o que o mapeamento registrado diz sobre campo interno/relacionamento. */
 interface ColunaKyria extends ColunaDados {
+  // A coluna não aceita nulo: o controle de edição não oferece "limpar" (o servidor já manda este campo, ver ColunaDados no backend).
+  obrigatoria?: boolean;
   ehInterno: boolean;
   relacionamentoModelo: string | null;
   relacionamentoCampo: string | null;
   relacionamentoCampoDescricao: string | null;
+  // Só linhas cujo `campo` vale `valor` podem receber vínculo neste campo (ex.: kyria_members.codusu só pra role "attendant").
+  vinculoRestrito: { campo: string; valor: string; motivo: string } | null;
 }
 
 interface RespostaKyria extends RespostaDadosBase {
@@ -266,6 +270,73 @@ function ModalEscolherRegistroRelacionado({
   );
 }
 
+const CONTROLE_CELULA =
+  "rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60";
+
+/**
+ * Célula de um campo INTERNO que não é vínculo com outra tabela (18/11/2026, pedido do Vitor: informar o valor de kyria_label_groups.fitro_dep_time):
+ * edita direto na célula, pelo tipo da coluna. Boolean = lista Sim / Não (e "—" para limpar, quando a coluna aceita vazio); texto, inteiro e número =
+ * caixa que grava ao sair do campo ou no Enter (Esc desiste; vazio limpa, quando a coluna aceita). `salvar` devolve false se o servidor recusar.
+ */
+function CelulaCampoInternoEditavel({ coluna, valor, salvar }: { coluna: ColunaKyria; valor: unknown; salvar: (campo: string, valor: unknown) => Promise<boolean> }) {
+  const [gravando, setGravando] = useState(false);
+  const [rascunho, setRascunho] = useState<string | null>(null);
+  const campo = coluna.rotulo ?? coluna.nome;
+
+  async function gravar(novo: unknown) {
+    setGravando(true);
+    await salvar(campo, novo);
+    setGravando(false);
+    setRascunho(null);
+  }
+
+  if (coluna.tipo === "booleano") {
+    const atual = valor === true ? "sim" : valor === false ? "nao" : "";
+    return (
+      <select
+        aria-label={`Editar ${campo}`}
+        value={atual}
+        disabled={gravando}
+        onChange={(e) => gravar(e.target.value === "sim" ? true : e.target.value === "nao" ? false : null)}
+        className={`${CONTROLE_CELULA} w-24`}
+      >
+        {!coluna.obrigatoria && <option value="">—</option>}
+        <option value="sim">Sim</option>
+        <option value="nao">Não</option>
+      </select>
+    );
+  }
+
+  const original = valor === null || valor === undefined ? "" : String(valor);
+  const texto = rascunho ?? original;
+  function confirmar() {
+    if (rascunho === null || rascunho === original) {
+      setRascunho(null);
+      return;
+    }
+    const limpo = rascunho.trim();
+    if (limpo === "") return void gravar(null);
+    if (coluna.tipo === "inteiro" || coluna.tipo === "decimal") return void gravar(Number(limpo.replace(",", ".")));
+    return void gravar(limpo);
+  }
+  return (
+    <input
+      aria-label={`Editar ${campo}`}
+      value={texto}
+      disabled={gravando}
+      inputMode={coluna.tipo === "inteiro" ? "numeric" : coluna.tipo === "decimal" ? "decimal" : undefined}
+      placeholder="—"
+      onChange={(e) => setRascunho(e.target.value)}
+      onBlur={confirmar}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") setRascunho(null);
+      }}
+      className={`${CONTROLE_CELULA} w-40`}
+    />
+  );
+}
+
 interface EdicaoAberta {
   linhaId: string;
   campo: string;
@@ -313,6 +384,28 @@ export function DadosKyria() {
     }
   }
 
+  // Grava o valor de um campo interno que não é vínculo (Boolean, texto, número). Devolve false se o servidor recusar (a mensagem vai no toast).
+  async function salvarValorInterno(linhaId: string, campo: string, valor: unknown): Promise<boolean> {
+    if (!jobName) return false;
+    try {
+      await axios.patch(`/api/sync-kyria/dados/${jobName}/${linhaId}`, { campo, valor });
+      toast.mostrar("Valor atualizado.", "success");
+      setRecarregar((n) => n + 1);
+      return true;
+    } catch (err: any) {
+      toast.mostrar(err.response?.data?.error ?? "Falha ao salvar", "destructive");
+      return false;
+    }
+  }
+
+  // Campo interno SEM relacionamento e de um tipo que a tela edita: controle direto na célula. Qualquer outra coluna devolve undefined.
+  function celulaDeValor(linha: Record<string, unknown>, c: ColunaKyria) {
+    if (!c.ehInterno || c.relacionamentoModelo || c.relacionamentoCampo) return undefined;
+    if (!["booleano", "texto", "inteiro", "decimal"].includes(c.tipo)) return undefined;
+    const linhaId = String(linha.id);
+    return <CelulaCampoInternoEditavel key={`${linhaId}:${c.nome}`} coluna={c} valor={linha[c.nome]} salvar={(campo, valor) => salvarValorInterno(linhaId, campo, valor)} />;
+  }
+
   // Célula de um campo INTERNO com relacionamento: mostra "valor — descrição" e deixa vincular/trocar/remover. Qualquer outra
   // coluna devolve undefined e a tabela mostra o valor formatado de sempre. O PATCH usa o nome da COLUNA do Postgres (`rotulo`),
   // que é o que o mapeamento registra; `nome` é o campo Prisma (chave de filtro/ordem).
@@ -325,15 +418,29 @@ export function DadosKyria() {
     const rotulo = `${formatarValor(valorAtual)}${descricao ? ` — ${descricao}` : ""}`;
     const linhaId = String(linha.id);
     const chaveRemocao = `${linhaId}:${rotuloColuna}`;
+    // Linha que não cumpre a regra do campo (ex.: membro que não é atendente) não oferece "vincular"/"trocar". Se já tem vínculo
+    // antigo, ele continua visível e removível.
+    const podeVincular = !c.vinculoRestrito || String(linha[c.vinculoRestrito.campo]) === c.vinculoRestrito.valor;
+    if (!podeVincular && !vinculado) {
+      return (
+        <span className="text-muted" title={c.vinculoRestrito?.motivo}>
+          —
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-2">
-        <button
-          onClick={() => setEdicaoAberta({ linhaId, campo: rotuloColuna, modelo: c.relacionamentoModelo!, campoAlvo: c.relacionamentoCampo! })}
-          className="text-primary hover:underline"
-        >
-          {rotulo}
-          {vinculado ? " · trocar" : " · vincular"}
-        </button>
+        {podeVincular ? (
+          <button
+            onClick={() => setEdicaoAberta({ linhaId, campo: rotuloColuna, modelo: c.relacionamentoModelo!, campoAlvo: c.relacionamentoCampo! })}
+            className="text-primary hover:underline"
+          >
+            {rotulo}
+            {vinculado ? " · trocar" : " · vincular"}
+          </button>
+        ) : (
+          <span title={c.vinculoRestrito?.motivo}>{rotulo}</span>
+        )}
         {vinculado && (
           <button
             onClick={() => removerVinculo(linhaId, rotuloColuna, rotulo)}
@@ -362,11 +469,11 @@ export function DadosKyria() {
           <p className="mt-1 text-sm text-muted">
             {resposta ? (
               <>
-                Espelho local <span className="font-mono">{resposta.tabelaLocal}</span>. Colunas internas (sem origem na API) podem ser editadas
-                escolhendo um registro da tabela relacionada.
+                Espelho local <span className="font-mono">{resposta.tabelaLocal}</span>. Colunas internas (marcadas com ●, sem origem na API) são
+                editáveis: as ligadas a outra tabela, escolhendo um registro; as demais, direto na célula.
               </>
             ) : (
-              "Colunas internas (sem origem na API) podem ser editadas escolhendo um registro da tabela relacionada."
+              "Colunas internas (marcadas com ●, sem origem na API) são editáveis: as ligadas a outra tabela, escolhendo um registro; as demais, direto na célula."
             )}
           </p>
         </div>
@@ -385,7 +492,7 @@ export function DadosKyria() {
         mensagemVazio="Nenhum registro sincronizado ainda."
         tituloControle="Controle do espelho"
         onResposta={setResposta}
-        renderCelula={celulaDeVinculo}
+        renderCelula={(linha, c, r) => celulaDeVinculo(linha, c, r) ?? celulaDeValor(linha, c)}
         decorarCabecalho={(c) =>
           c.ehInterno ? (
             <span className="ml-1 text-primary" title="Campo interno, editável">

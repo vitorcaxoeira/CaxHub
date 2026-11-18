@@ -1,8 +1,9 @@
 import axios from "axios";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useToast } from "../../components/ui/Toast";
 import { SelectBuscavel, OpcaoBuscavel } from "../../components/ui/SelectBuscavel";
+import { faltaPreencher, montarCaminho, queryDaPessoa, urlCompleta, type RecursoDoc } from "../../lib/kyriaCaminho";
 
 // Workflow de mapeamento/tipagem de campos (Administração > Integração Kyria > Mapeamento de
 // Campos, 18/09/2026, pedido do Vitor). Antes de qualquer endpoint Kyria virar model Prisma +
@@ -30,12 +31,14 @@ function paraSnakeCase(nome: string): string {
     .replace(/^_|_$/g, "");
 }
 
-interface RecursoConhecido {
-  path: string;
-  displayName: string;
-  openApiSchemaName?: string;
-  registrado: boolean;
-  resourceId: number | null;
+// Resposta de GET /api/sync-kyria/mapping/openapi-resources: os GETs da DOCUMENTAÇÃO da API do Kyria (openapi.json lido ao vivo), cada um com os
+// mapeamentos já registrados que casam com ele.
+interface DocKyria {
+  baseUrl: string;
+  docsUrl: string;
+  versaoDoc: string | null;
+  recursos: RecursoDoc[];
+  registradosForaDaDoc: { resourceId: number; resourcePath: string; displayName: string }[];
 }
 
 interface CampoInternoModelo {
@@ -63,6 +66,8 @@ interface CampoPreview {
 
 interface ResourcePreview {
   path: string;
+  /** URL completa exatamente como o servidor chamou (com limit=1 e as datas do mês corrente quando o sistema preenche). */
+  urlChamada: string;
   amostraBruta: unknown;
   campos: CampoPreview[];
 }
@@ -144,15 +149,20 @@ const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short",
 
 export function MapeamentoKyria() {
   const toast = useToast();
-  const [conhecidos, setConhecidos] = useState<RecursoConhecido[]>([]);
+  const [doc, setDoc] = useState<DocKyria | null>(null);
   const [registrados, setRegistrados] = useState<RecursoRegistrado[]>([]);
   const [modelosInternos, setModelosInternos] = useState<ModeloInterno[]>([]);
   const [carregandoListas, setCarregandoListas] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
-  const [pathEscolhido, setPathEscolhido] = useState("");
-  const [caminhoCustomizado, setCaminhoCustomizado] = useState(false);
-  const [caminhoTexto, setCaminhoTexto] = useState("");
+  // Recurso escolhido na lista da documentação (pelo caminho com {parametros}) e os valores dos parâmetros dele. O caminho que vai pro preview sai
+  // daqui (montarCaminho); `caminhoForaDaDoc` só existe ao editar um mapeamento cuja rota a documentação não tem mais.
+  const [caminhoRecurso, setCaminhoRecurso] = useState("");
+  const [valoresCaminho, setValoresCaminho] = useState<Record<string, string>>({});
+  const [valoresQuery, setValoresQuery] = useState<Record<string, string>>({});
+  const [avancado, setAvancado] = useState(false);
+  const [caminhoForaDaDoc, setCaminhoForaDaDoc] = useState<string | null>(null);
+  const [urlChamada, setUrlChamada] = useState<string | null>(null);
 
   const [displayName, setDisplayName] = useState("");
   const [amostraBruta, setAmostraBruta] = useState<unknown>(null);
@@ -163,15 +173,19 @@ export function MapeamentoKyria() {
   function carregarListas() {
     setCarregandoListas(true);
     Promise.all([
-      axios.get<{ recursos: RecursoConhecido[] }>("/api/sync-kyria/mapping/known-resources"),
+      // Doc fora do ar (502) não derruba o resto da tela: o erro aparece e as outras listas carregam.
+      axios.get<DocKyria>("/api/sync-kyria/mapping/openapi-resources").catch((err) => {
+        setErro(err.response?.data?.error ?? "Falha ao ler a documentação da API do Kyria");
+        return null;
+      }),
       axios.get<{ recursos: RecursoRegistrado[] }>("/api/sync-kyria/mapping"),
       axios.get<{ modelos: ModeloInterno[] }>("/api/sync-kyria/mapping/internal-models"),
     ])
-      .then(([conhecidosResp, registradosResp, modelosResp]) => {
-        setConhecidos(conhecidosResp.data.recursos);
+      .then(([docResp, registradosResp, modelosResp]) => {
+        setDoc(docResp?.data ?? null);
         setRegistrados(registradosResp.data.recursos);
         setModelosInternos(modelosResp.data.modelos);
-        setErro(null);
+        if (docResp) setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar recursos"))
       .finally(() => setCarregandoListas(false));
@@ -181,14 +195,38 @@ export function MapeamentoKyria() {
     carregarListas();
   }, []);
 
+  const recursoAtual = useMemo(() => doc?.recursos.find((r) => r.caminho === caminhoRecurso) ?? null, [doc, caminhoRecurso]);
+
   function caminhoAtual(): string {
-    return caminhoCustomizado ? caminhoTexto.trim() : pathEscolhido;
+    if (recursoAtual) return montarCaminho(recursoAtual, valoresCaminho, valoresQuery);
+    return caminhoForaDaDoc ?? "";
+  }
+
+  const faltando = recursoAtual ? faltaPreencher(recursoAtual, valoresCaminho, valoresQuery) : [];
+
+  function escolherRecurso(caminho: string) {
+    setCaminhoRecurso(caminho);
+    setValoresCaminho({});
+    setValoresQuery({});
+    setCaminhoForaDaDoc(null);
+    setUrlChamada(null);
+  }
+
+  function copiarUrl(url: string) {
+    navigator.clipboard?.writeText(url).then(
+      () => toast.mostrar("URL copiada.", "success"),
+      () => toast.mostrar("Não consegui copiar: selecione o texto e copie.", "warning")
+    );
   }
 
   async function prever() {
     const path = caminhoAtual();
     if (!path) {
-      setErro("Escolha um recurso ou informe um caminho customizado");
+      setErro("Escolha um recurso da lista");
+      return;
+    }
+    if (faltando.length > 0) {
+      setErro(`Preencha: ${faltando.join(", ")}`);
       return;
     }
     setPrevendo(true);
@@ -197,9 +235,11 @@ export function MapeamentoKyria() {
     try {
       const { data } = await axios.post<ResourcePreview>("/api/sync-kyria/mapping/preview", { path });
       setAmostraBruta(data.amostraBruta);
+      setUrlChamada(data.urlChamada);
       setCampos(data.campos.map(campoPreviewParaEditavel));
-      const conhecido = conhecidos.find((r) => r.path === path);
-      setDisplayName(conhecido?.displayName ?? path);
+      // Nome de exibição: o do mapeamento já registrado desse recurso, senão o resumo da documentação.
+      const jaRegistrado = recursoAtual?.registrados.find((r) => r.resourcePath === path);
+      setDisplayName(jaRegistrado?.displayName ?? recursoAtual?.resumo ?? path);
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao pré-visualizar o recurso");
     } finally {
@@ -258,6 +298,15 @@ export function MapeamentoKyria() {
     rotulo: m.tabela ? `${m.nome} (${m.tabela})` : m.nome,
   }));
 
+  // Lista de recursos: um grupo por primeiro segmento do caminho (tickets, reports...), rótulo "GET /caminho — resumo da documentação".
+  const opcoesRecurso: OpcaoBuscavel<string>[] = (doc?.recursos ?? []).map((r) => ({
+    value: r.caminho,
+    grupo: r.grupo,
+    rotulo: `GET ${r.caminho} — ${r.resumo}${r.registrados.length ? " (registrado)" : ""}`,
+  }));
+
+  const urlMostrada = caminhoAtual() && doc ? urlCompleta(doc.baseUrl, caminhoAtual()) : null;
+
   async function registrar() {
     if (!campos || campos.length === 0) return;
     setRegistrando(true);
@@ -282,9 +331,23 @@ export function MapeamentoKyria() {
     setErro(null);
     try {
       const { data } = await axios.get<RecursoDetalhe>(`/api/sync-kyria/mapping/${resourceId}`);
-      setCaminhoCustomizado(true);
-      setCaminhoTexto(data.resourcePath);
-      setPathEscolhido("");
+      // Seleciona o recurso na lista da documentação (com os valores dos parâmetros desse registro); se a rota não está mais na documentação, mostra
+      // o caminho salvo e avisa, sem impedir a edição dos campos.
+      const casado = doc?.recursos.find((r) => r.registrados.some((x) => x.resourceId === resourceId));
+      const registro = casado?.registrados.find((x) => x.resourceId === resourceId);
+      setUrlChamada(null);
+      if (casado && registro) {
+        setCaminhoRecurso(casado.caminho);
+        setValoresCaminho(registro.valoresCaminho);
+        setValoresQuery(registro.valoresQuery);
+        setCaminhoForaDaDoc(null);
+        setAvancado(queryDaPessoa(casado).some((p) => !p.obrigatorio && (registro.valoresQuery[p.nome] ?? "") !== ""));
+      } else {
+        setCaminhoRecurso("");
+        setValoresCaminho({});
+        setValoresQuery({});
+        setCaminhoForaDaDoc(data.resourcePath);
+      }
       setDisplayName(data.displayName);
       setAmostraBruta(null);
       setCampos(
@@ -336,57 +399,126 @@ export function MapeamentoKyria() {
 
       <div className="mb-6 rounded-lg border border-border bg-surface p-5">
         <div className="mb-4 flex flex-wrap items-end gap-3">
-          {!caminhoCustomizado && (
-            <div>
-              <label className="mb-1 block text-[11px] font-medium text-muted">Recurso</label>
-              <select
-                value={pathEscolhido}
-                onChange={(e) => setPathEscolhido(e.target.value)}
-                className="w-72 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="">Selecione...</option>
-                {conhecidos.map((r) => (
-                  <option key={r.path} value={r.path}>
-                    {r.displayName} — {r.path} {r.registrado ? "(registrado)" : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          {caminhoCustomizado && (
-            <div>
-              <label className="mb-1 block text-[11px] font-medium text-muted">Caminho customizado</label>
-              <input
-                value={caminhoTexto}
-                onChange={(e) => setCaminhoTexto(e.target.value)}
-                placeholder="/tickets/abc123/time-entries"
-                className="w-72 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </div>
-          )}
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-muted">Recurso (documentação da API)</label>
+            <SelectBuscavel
+              opcoes={opcoesRecurso}
+              valor={caminhoRecurso || null}
+              onChange={escolherRecurso}
+              placeholder={carregandoListas ? "Lendo a documentação..." : "Selecione..."}
+              textoVazio="A documentação do Kyria não pôde ser lida"
+              placeholderBusca="Buscar por caminho ou resumo..."
+              desabilitado={!doc}
+              gruposRecolhiveis
+              className="w-[26rem] max-w-full"
+            />
+          </div>
           <button
-            onClick={() => {
-              setCaminhoCustomizado((v) => !v);
-              setPathEscolhido("");
-              setCaminhoTexto("");
-            }}
-            className="rounded-md border border-border px-3 py-1.5 text-sm text-muted transition hover:bg-surface-2 hover:text-foreground"
+            onClick={() => setAvancado((v) => !v)}
+            aria-pressed={avancado}
+            disabled={!recursoAtual}
+            title="Mostra também os parâmetros opcionais do recurso"
+            className={`rounded-md border px-3 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${avancado ? "border-primary bg-primary/10 text-primary" : "border-border text-muted hover:bg-surface-2 hover:text-foreground"}`}
           >
-            {caminhoCustomizado ? "Usar lista de recursos conhecidos" : "Avançado: caminho customizado"}
+            Avançado
           </button>
           <button
             onClick={prever}
-            disabled={prevendo || !caminhoAtual()}
+            disabled={prevendo || !caminhoAtual() || faltando.length > 0}
             className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {prevendo ? "Pré-visualizando..." : "Pré-visualizar"}
           </button>
         </div>
-        {caminhoCustomizado && (
-          <p className="text-[11px] text-muted">
-            Caminho fora da lista oficial (10 GETs documentados) — pode voltar 403 por escopo da chave. Sem risco: é
-            só leitura, nada é gravado até você clicar em "Registrar mapeamento".
+
+        {doc && (
+          <p className="mb-3 text-[11px] text-muted">
+            Lista lida da documentação do Kyria (versão {doc.versaoDoc ?? "?"}, {doc.recursos.length} endpoints GET) ·{" "}
+            <a href={doc.docsUrl} target="_blank" rel="noreferrer" className="text-primary underline-offset-2 hover:underline">
+              abrir a documentação
+            </a>
           </p>
+        )}
+
+        {recursoAtual && (
+          <div className="mb-3 flex flex-wrap gap-3">
+            {recursoAtual.parametrosCaminho.map((p) => (
+              <label key={p.nome} className="block text-[11px] font-medium text-muted" title={p.descricao ?? undefined}>
+                {p.nome} <span className="text-destructive">*</span>
+                <input
+                  value={valoresCaminho[p.nome] ?? ""}
+                  onChange={(e) => setValoresCaminho((v) => ({ ...v, [p.nome]: e.target.value }))}
+                  placeholder="id do registro"
+                  className="mt-1 block w-64 rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-normal text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </label>
+            ))}
+            {queryDaPessoa(recursoAtual)
+              .filter((p) => p.obrigatorio || avancado)
+              .map((p) => (
+                <label key={p.nome} className="block text-[11px] font-medium text-muted" title={p.descricao ?? undefined}>
+                  {p.nome} {p.obrigatorio && <span className="text-destructive">*</span>}
+                  {p.enumValores ? (
+                    <select
+                      value={valoresQuery[p.nome] ?? ""}
+                      onChange={(e) => setValoresQuery((v) => ({ ...v, [p.nome]: e.target.value }))}
+                      className="mt-1 block w-48 rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-normal text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <option value="">{p.obrigatorio ? "Selecione..." : "(não enviar)"}</option>
+                      {p.enumValores.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={valoresQuery[p.nome] ?? ""}
+                      onChange={(e) => setValoresQuery((v) => ({ ...v, [p.nome]: e.target.value }))}
+                      className="mt-1 block w-48 rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-normal text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  )}
+                </label>
+              ))}
+          </div>
+        )}
+        {recursoAtual?.parametrosQuery.some((p) => p.preenchidoPeloSistema) && (
+          <p className="mb-3 text-[11px] text-muted">
+            {recursoAtual.parametrosQuery
+              .filter((p) => p.preenchidoPeloSistema)
+              .map((p) => p.nome)
+              .join(" e ")}
+            : o sistema usa o mês corrente na amostra e não grava as datas no recurso.
+          </p>
+        )}
+        {caminhoForaDaDoc && (
+          <p className="mb-3 rounded-md border border-border bg-surface-2 px-3 py-2 text-[12px] text-muted">
+            O caminho salvo <span className="font-mono">{caminhoForaDaDoc}</span> não está mais na documentação do Kyria. Dá para editar os campos, mas não pré-visualizar de novo.
+          </p>
+        )}
+
+        {urlMostrada && (
+          <div className="rounded-md border border-border bg-surface-2/60 px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium text-muted">URL completa da API</p>
+                <p className="break-all font-mono text-[12.5px] text-foreground" data-testid="url-completa">
+                  {urlMostrada}
+                </p>
+                {urlChamada && urlChamada !== urlMostrada && (
+                  <p className="mt-1 break-all text-[11px] text-muted">
+                    Chamada de amostra: <span className="font-mono">{urlChamada}</span>
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => copiarUrl(urlChamada ?? urlMostrada)}
+                className="shrink-0 rounded-md border border-border px-2.5 py-1 text-xs text-muted transition hover:bg-surface hover:text-foreground"
+              >
+                Copiar
+              </button>
+            </div>
+          </div>
         )}
       </div>
 
