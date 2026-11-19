@@ -3,49 +3,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TabelaLocal } from "../../components/colunas/TabelaLocal";
 import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
 import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
+import { SeletorContas } from "../../components/rentabilidade/SeletorContas";
 import { Modal } from "../../components/ui/Modal";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { cn } from "../../lib/cn";
-import {
-  AJUDA_CLASSE,
-  descreverDetalhe,
-  formatarPercentual,
-  mesAnterior,
-  resumirResultado,
-  ROTULO_CLASSE,
-  ROTULO_ORIGEM,
-  ROTULO_TIPO_EVENTO,
-  rotuloCompetencia,
-  rotuloTipoEvento,
-  type ClasseEvento,
-} from "../../lib/custoHora";
-import { formatarDia, formatarReais } from "../../lib/vinculoConsultores";
-
-interface Encargo {
-  id: number;
-  codigo: string;
-  rotulo: string;
-  percentual: number;
-  vigenciaInicio: string;
-}
+import { descreverDetalhe, mesAnterior, resumirResultado, ROTULO_ORIGEM, rotuloCompetencia } from "../../lib/custoHora";
+import type { ContaDoPlano, RegraConta } from "../../lib/rentabilidade";
+import { formatarReais } from "../../lib/vinculoConsultores";
 
 interface Config {
   parametros: Record<string, string>;
   definicoesParametros: Record<string, string>;
-  encargos: Encargo[];
-  eventosClassificados: number;
+  contasFolha: { codemp: number; ctared: number; acao: string }[];
+  contabilizacaoFolha: { linhas: number; ate: string | null };
   ultimaExecucao: { status: string; message: string | null; runAt: string } | null;
-}
-
-interface Evento {
-  tabeve: number;
-  codeve: number;
-  descricao: string | null;
-  tipeve: number | null;
-  classe: ClasseEvento | null;
-  linhas: number;
-  colaboradores: number;
-  valor: number;
 }
 
 interface LinhaResultado {
@@ -66,7 +37,7 @@ interface ResumoRecalculo {
   avisos: string[];
 }
 
-type Aba = "resultado" | "encargos" | "eventos" | "parametros";
+type Aba = "resultado" | "contas" | "parametros";
 
 const BOTAO = "rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground transition hover:border-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 const BOTAO_PRIMARIO = "rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -113,8 +84,8 @@ export function CustoHora() {
     setErro(null);
     try {
       const corpo = JSON.parse(importando.texto) as Record<string, unknown>;
-      const { data } = await axios.post<{ parametros: number; encargos: number; eventos: number }>("/api/custo-hora/importar", { ...corpo, substituir: importando.substituir });
-      setAviso(`Importado: ${data.parametros} parâmetro(s), ${data.encargos} encargo(s), ${data.eventos} evento(s) classificado(s).`);
+      const { data } = await axios.post<{ parametros: number; contasFolha: number }>("/api/custo-hora/importar", { ...corpo, substituir: importando.substituir });
+      setAviso(`Importado: ${data.parametros} parâmetro(s) e ${data.contasFolha} regra(s) de conta da folha.`);
       setImportando(null);
       await carregarConfig();
     } catch (err) {
@@ -124,8 +95,7 @@ export function CustoHora() {
 
   const ABAS: { id: Aba; rotulo: string }[] = [
     { id: "resultado", rotulo: "Resultado por mês" },
-    { id: "encargos", rotulo: "Encargos" },
-    { id: "eventos", rotulo: "Eventos da folha" },
+    { id: "contas", rotulo: "Contas da folha" },
     { id: "parametros", rotulo: "Parâmetros" },
   ];
 
@@ -156,10 +126,10 @@ export function CustoHora() {
       </div>
 
       <p className="mb-4 max-w-3xl text-sm text-muted">
-        Quanto custa a hora de cada consultor em cada mês. <b>CLT</b>: (remuneração + benefícios + encargos da folha + encargos em % sobre a remuneração) ÷ horas da escala.{" "}
-        <b>PJ</b>: valor-hora do contrato no mês (histórico de reajustes do Senior). Quem não é CLT nem tem contrato usa o <b>valor-hora manual</b> (em Vínculo de Consultores).
-        Os percentuais, a classificação dos eventos e as horas da escala são configurados aqui — nada vem pronto. O resultado alimenta os campos{" "}
-        <span className="font-mono">CustoKyria</span>, <span className="font-mono">CustoRat</span> e <span className="font-mono">CustoReal</span> dos indicadores de rentabilidade.
+        Quanto custa a hora de cada consultor em cada mês. <b>CLT</b>: o que a folha <b>contabiliza</b> para o colaborador (salários, INSS patronal, FGTS, provisões de 13º e férias...)
+        nas contas que você escolher ÷ horas da escala. <b>PJ</b>: valor-hora do contrato no mês (histórico de reajustes do Senior; contrato de valor fixo usa o valor-hora, como na Home).
+        Quem não é CLT nem tem contrato usa o <b>valor-hora manual</b> (em Vínculo de Consultores). As contas e as horas da escala são configuradas aqui — nada vem pronto. O resultado alimenta os
+        campos <span className="font-mono">CustoKyria</span>, <span className="font-mono">CustoRat</span> e <span className="font-mono">CustoReal</span> dos indicadores de rentabilidade.
       </p>
 
       {erro && <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">{erro}</p>}
@@ -185,20 +155,19 @@ export function CustoHora() {
       ) : (
         <>
           {aba === "resultado" && <AbaResultado config={config} aoRecalcular={carregarConfig} />}
-          {aba === "encargos" && <AbaEncargos encargos={config.encargos} recarregar={carregarConfig} setErro={setErro} />}
-          {aba === "eventos" && <AbaEventos setErro={setErro} aoMudar={carregarConfig} />}
+          {aba === "contas" && <AbaContas config={config} recarregar={carregarConfig} setErro={setErro} setAviso={setAviso} />}
           {aba === "parametros" && <AbaParametros config={config} recarregar={carregarConfig} setErro={setErro} setAviso={setAviso} />}
         </>
       )}
 
-      <Modal open={importando !== null} onClose={() => setImportando(null)} title="Importar configuração" subtitulo="Parâmetros, encargos e classificação dos eventos">
+      <Modal open={importando !== null} onClose={() => setImportando(null)} title="Importar configuração" subtitulo="Parâmetros e contas da folha">
         <div className="space-y-4 text-sm">
           <p className="text-muted">
             O arquivo é validado por inteiro antes de gravar: se algo estiver errado, nada é alterado. Sem a opção abaixo, o que está no arquivo entra por cima do que já existe e o resto fica como está.
           </p>
           <label className="flex items-center gap-2 text-foreground">
             <input type="checkbox" checked={importando?.substituir ?? false} onChange={(e) => setImportando((i) => (i ? { ...i, substituir: e.target.checked } : i))} />
-            Substituir: apagar os encargos e a classificação atuais antes de importar
+            Substituir: apagar as contas da folha atuais antes de importar
           </label>
           <div className="flex justify-end gap-2">
             <button type="button" className={BOTAO} onClick={() => setImportando(null)}>
@@ -354,285 +323,173 @@ function AbaResultado({ config, aoRecalcular }: { config: Config; aoRecalcular: 
   );
 }
 
-// ---------- Encargos ----------
+// ---------- Contas da folha (R048CTB) ----------
 
-interface RascunhoEncargo {
-  id: number | null;
-  codigo: string;
-  rotulo: string;
-  percentual: string;
-  vigenciaInicio: string;
+interface MovimentoConta {
+  codemp: number;
+  ctared: number;
+  clacta: string | null;
+  descta: string | null;
+  debito: number;
+  credito: number;
+  liquido: number;
+  colaboradores: number;
+  selecionada: boolean;
 }
 
-const RASCUNHO_VAZIO: RascunhoEncargo = { id: null, codigo: "", rotulo: "", percentual: "", vigenciaInicio: "" };
-
-function AbaEncargos({ encargos, recarregar, setErro }: { encargos: Encargo[]; recarregar: () => Promise<void>; setErro: (e: string | null) => void }) {
-  const [rascunho, setRascunho] = useState<RascunhoEncargo | null>(null);
-  const [erroForm, setErroForm] = useState<string | null>(null);
-
-  async function salvar() {
-    if (!rascunho) return;
-    setErroForm(null);
-    const corpo = { codigo: rascunho.codigo, rotulo: rascunho.rotulo, percentual: rascunho.percentual, vigenciaInicio: rascunho.vigenciaInicio };
-    try {
-      if (rascunho.id == null) await axios.post("/api/custo-hora/encargos", corpo);
-      else await axios.put(`/api/custo-hora/encargos/${rascunho.id}`, corpo);
-      setRascunho(null);
-      await recarregar();
-    } catch (err) {
-      setErroForm(mensagemDe(err, "Falha ao salvar o encargo"));
-    }
-  }
-
-  async function excluir(e: Encargo) {
-    if (!window.confirm(`Excluir "${e.rotulo}" (${formatarPercentual(e.percentual)} desde ${formatarDia(e.vigenciaInicio)})?`)) return;
-    try {
-      await axios.delete(`/api/custo-hora/encargos/${e.id}`);
-      await recarregar();
-    } catch (err) {
-      setErro(mensagemDe(err, "Falha ao excluir"));
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-3xl text-sm text-muted">
-          Encargos em <b>percentual sobre a remuneração do mês</b> (a soma dos eventos classificados como remuneração): INSS patronal, RAT, terceiros, provisões de 13º e de férias etc. Cada linha vale a partir da vigência
-          até a próxima do mesmo código; para mudar um percentual, acrescente uma nova vigência.
-        </p>
-        <button type="button" className={BOTAO_PRIMARIO} onClick={() => setRascunho({ ...RASCUNHO_VAZIO })}>
-          Novo encargo
-        </button>
-      </div>
-
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="bg-surface-2 text-left font-mono text-[10px] uppercase tracking-wider text-muted">
-              <th className="px-4 py-2.5 font-medium">Código</th>
-              <th className="px-4 py-2.5 font-medium">Encargo</th>
-              <th className="px-4 py-2.5 text-right font-medium">Percentual</th>
-              <th className="px-4 py-2.5 font-medium">Vigente desde</th>
-              <th className="px-4 py-2.5" />
-            </tr>
-          </thead>
-          <tbody>
-            {encargos.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-muted">
-                  Nenhum encargo configurado: o custo do CLT será só a folha (remuneração + benefícios + encargos da folha). Cadastre aqui ou use Importar JSON.
-                </td>
-              </tr>
-            )}
-            {encargos.map((e) => (
-              <tr key={e.id} className="border-t border-border/60">
-                <td className="px-4 py-2 font-mono text-[12.5px] text-muted">{e.codigo}</td>
-                <td className="px-4 py-2 text-foreground">{e.rotulo}</td>
-                <td className="px-4 py-2 text-right font-mono tabular-nums">{formatarPercentual(e.percentual)}</td>
-                <td className="px-4 py-2 text-muted">{formatarDia(e.vigenciaInicio)}</td>
-                <td className="px-4 py-2 text-right">
-                  <button type="button" className="mr-3 text-primary underline-offset-2 hover:underline" onClick={() => setRascunho({ id: e.id, codigo: e.codigo, rotulo: e.rotulo, percentual: String(e.percentual).replace(".", ","), vigenciaInicio: e.vigenciaInicio })}>
-                    Editar
-                  </button>
-                  <button type="button" className="text-destructive underline-offset-2 hover:underline" onClick={() => void excluir(e)}>
-                    Excluir
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <Modal open={rascunho !== null} onClose={() => setRascunho(null)} title={rascunho?.id == null ? "Novo encargo" : "Editar encargo"}>
-        {rascunho && (
-          <div className="space-y-3 text-sm">
-            <label className="block">
-              <span className="mb-1 block text-muted">Código (minúsculas, números e _)</span>
-              <input className={cn(CAMPO, "w-full font-mono")} value={rascunho.codigo} onChange={(e) => setRascunho({ ...rascunho, codigo: e.target.value })} placeholder="ex.: inss_patronal" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-muted">Nome</span>
-              <input className={cn(CAMPO, "w-full")} value={rascunho.rotulo} onChange={(e) => setRascunho({ ...rascunho, rotulo: e.target.value })} />
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="mb-1 block text-muted">Percentual (%)</span>
-                <input className={cn(CAMPO, "w-full")} inputMode="decimal" value={rascunho.percentual} onChange={(e) => setRascunho({ ...rascunho, percentual: e.target.value })} />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-muted">Vigente desde</span>
-                <input type="date" className={cn(CAMPO, "w-full")} value={rascunho.vigenciaInicio} onChange={(e) => setRascunho({ ...rascunho, vigenciaInicio: e.target.value })} />
-              </label>
-            </div>
-            {erroForm && <p className="text-destructive">{erroForm}</p>}
-            <div className="flex justify-end gap-2">
-              <button type="button" className={BOTAO} onClick={() => setRascunho(null)}>
-                Cancelar
-              </button>
-              <button type="button" className={BOTAO_PRIMARIO} onClick={() => void salvar()}>
-                Salvar
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
-    </div>
-  );
+interface Movimento {
+  competencia: string | null;
+  contas: MovimentoConta[];
+  totais: { debito: number; credito: number; liquido: number; liquidoSelecionado: number };
 }
 
-// ---------- Eventos da folha ----------
-
-const COLUNAS_EVENTO_LOCAIS: ColunaLocal[] = [
-  { nome: "tabeve", tipo: "inteiro", obrigatoria: true },
-  { nome: "codeve", tipo: "inteiro", obrigatoria: true },
-  { nome: "descricao", tipo: "texto" },
-  { nome: "tipo", tipo: "texto", obrigatoria: true },
-  { nome: "classe", tipo: "texto", obrigatoria: true },
+const COLUNAS_MOVIMENTO_LOCAIS: ColunaLocal[] = [
+  { nome: "conta", tipo: "texto", obrigatoria: true },
+  { nome: "debito", tipo: "decimal", obrigatoria: true },
+  { nome: "credito", tipo: "decimal", obrigatoria: true },
+  { nome: "liquido", tipo: "decimal", obrigatoria: true },
   { nome: "colaboradores", tipo: "inteiro", obrigatoria: true },
-  { nome: "valor", tipo: "decimal", obrigatoria: true },
+  { nome: "selecionada", tipo: "booleano", obrigatoria: true },
 ];
 
-const lerEvento = (e: Evento, coluna: string): unknown => {
-  if (coluna === "tipo") return rotuloTipoEvento(e.tipeve);
-  if (coluna === "classe") return e.classe ? ROTULO_CLASSE[e.classe] : "Ignorado";
-  return (e as unknown as Record<string, unknown>)[coluna];
-};
+const lerMovimento = (c: MovimentoConta, coluna: string): unknown => (coluna === "conta" ? `${c.clacta ?? ""} ${c.descta ?? "(fora do plano)"} ${c.ctared}` : (c as unknown as Record<string, unknown>)[coluna]);
 
-interface AcoesEvento {
-  classificar: (e: Evento, classe: ClasseEvento | null) => void;
-}
-
-const COLUNAS_EVENTO: DefColuna<Evento, AcoesEvento>[] = [
-  { nome: "tabeve", titulo: "Tabela", largura: 80, direita: true, classe: "font-mono text-sm tabular-nums text-muted", render: (e) => e.tabeve },
-  { nome: "codeve", titulo: "Código", largura: 80, direita: true, classe: "font-mono text-sm tabular-nums text-muted", render: (e) => e.codeve },
-  { nome: "descricao", titulo: "Evento", fixa: true, largura: 240, classe: "text-sm text-foreground", render: (e) => e.descricao ?? "(sem cadastro)" },
-  { nome: "tipo", titulo: "Tipo no Senior", largura: 170, classe: "text-sm text-muted", render: (e) => rotuloTipoEvento(e.tipeve) },
-  { nome: "colaboradores", titulo: "Colaboradores", direita: true, largura: 120, classe: "font-mono text-sm tabular-nums text-muted", render: (e) => e.colaboradores.toLocaleString("pt-BR") },
-  { nome: "valor", titulo: "Valor total", direita: true, largura: 150, classe: "font-mono text-sm tabular-nums text-muted", render: (e) => formatarReais(e.valor) },
+const COLUNAS_MOVIMENTO: DefColuna<MovimentoConta>[] = [
   {
-    nome: "classe",
-    titulo: "Conta no custo como",
-    largura: 220,
-    render: (e, a) => (
-      <select
-        className={cn(CAMPO, "py-1")}
-        value={e.classe ?? ""}
-        aria-label={`Classe do evento ${e.descricao ?? e.codeve}`}
-        onChange={(ev) => a.classificar(e, ev.target.value === "" ? null : (ev.target.value as ClasseEvento))}
-      >
-        <option value="">Ignorar</option>
-        {(Object.keys(ROTULO_CLASSE) as ClasseEvento[]).map((c) => (
-          <option key={c} value={c}>
-            {ROTULO_CLASSE[c]}
-          </option>
-        ))}
-      </select>
+    nome: "conta",
+    titulo: "Conta contabilizada pela folha",
+    fixa: true,
+    largura: 380,
+    render: (c) => (
+      <span className="text-sm text-foreground" title={`${c.clacta ?? ""} · ${c.descta ?? ""}`}>
+        <span className="font-mono text-xs text-muted">{c.clacta ?? "—"}</span> {c.descta ?? "(fora do plano)"} <span className="text-xs text-muted">({c.ctared})</span>
+      </span>
     ),
+  },
+  { nome: "debito", titulo: "Débito", direita: true, largura: 130, classe: "font-mono text-sm tabular-nums text-muted", render: (c) => formatarReais(c.debito) },
+  { nome: "credito", titulo: "Crédito", direita: true, largura: 130, classe: "font-mono text-sm tabular-nums text-muted", render: (c) => formatarReais(c.credito) },
+  { nome: "liquido", titulo: "Líquido (D − C)", direita: true, largura: 140, classe: "font-mono text-sm tabular-nums text-foreground", render: (c) => formatarReais(c.liquido) },
+  { nome: "colaboradores", titulo: "Colaboradores", direita: true, largura: 120, classe: "font-mono text-sm tabular-nums text-muted", render: (c) => c.colaboradores.toLocaleString("pt-BR") },
+  {
+    nome: "selecionada",
+    titulo: "Entra no custo",
+    largura: 120,
+    formatarValor: (v) => (v === true || v === "true" ? "Sim" : "Não"),
+    render: (c) =>
+      c.selecionada ? <span className="rounded bg-success/15 px-2 py-0.5 text-[11.5px] font-medium text-success">Sim</span> : <span className="rounded bg-muted/15 px-2 py-0.5 text-[11.5px] font-medium text-muted">Não</span>,
   },
 ];
 
-function AbaEventos({ setErro, aoMudar }: { setErro: (e: string | null) => void; aoMudar: () => Promise<void> }) {
-  const [eventos, setEventos] = useState<Evento[]>([]);
+function AbaContas({ config, recarregar, setErro, setAviso }: { config: Config; recarregar: () => Promise<void>; setErro: (e: string | null) => void; setAviso: (a: string | null) => void }) {
+  const [plano, setPlano] = useState<ContaDoPlano[] | null>(null);
+  const salvas = useMemo<RegraConta[]>(() => config.contasFolha.map((c) => ({ codemp: c.codemp, ctared: c.ctared, acao: c.acao as "incluir" | "excluir" })), [config.contasFolha]);
+  const [regras, setRegras] = useState<RegraConta[]>(salvas);
+  const [competencia, setCompetencia] = useState(mesAnterior());
+  const [movimento, setMovimento] = useState<Movimento | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tipoLote, setTipoLote] = useState("1");
-  const [classeLote, setClasseLote] = useState<ClasseEvento>("remuneracao");
-  const [sobrescrever, setSobrescrever] = useState(false);
+  const [salvando, setSalvando] = useState(false);
 
-  const carregar = useCallback(() => {
-    return axios
-      .get<{ eventos: Evento[] }>("/api/custo-hora/eventos")
-      .then(({ data }) => setEventos(data.eventos))
-      .catch((err) => setErro(mensagemDe(err, "Falha ao carregar os eventos")))
-      .finally(() => setLoading(false));
-  }, [setErro]);
+  useEffect(() => setRegras(salvas), [salvas]);
 
   useEffect(() => {
-    void carregar();
-  }, [carregar]);
+    axios
+      .get<{ contas: ContaDoPlano[] }>("/api/rentabilidade/plano")
+      .then(({ data }) => setPlano(data.contas))
+      .catch((err) => setErro(mensagemDe(err, "Falha ao carregar o plano de contas")));
+  }, [setErro]);
 
-  async function classificar(e: Evento, classe: ClasseEvento | null) {
+  const carregarMovimento = useCallback(() => {
+    setLoading(true);
+    return axios
+      .get<Movimento>("/api/custo-hora/contas-folha/movimento", { params: { competencia } })
+      .then(({ data }) => setMovimento(data))
+      .catch((err) => setErro(mensagemDe(err, "Falha ao carregar o movimento da folha")))
+      .finally(() => setLoading(false));
+  }, [competencia, setErro]);
+
+  useEffect(() => {
+    void carregarMovimento();
+  }, [carregarMovimento, config.contasFolha]);
+
+  const mudou = JSON.stringify([...regras].sort((a, b) => a.ctared - b.ctared)) !== JSON.stringify([...salvas].sort((a, b) => a.ctared - b.ctared));
+
+  async function salvar() {
+    setSalvando(true);
     setErro(null);
+    setAviso(null);
     try {
-      await axios.put(`/api/custo-hora/eventos/${e.tabeve}/${e.codeve}`, { classe });
-      await Promise.all([carregar(), aoMudar()]);
+      await axios.put("/api/custo-hora/contas-folha", { regras });
+      setAviso(`${regras.length} regra(s) salva(s). Use "Recalcular período" na aba Resultado para refazer os meses.`);
+      await recarregar();
     } catch (err) {
-      setErro(mensagemDe(err, "Falha ao classificar o evento"));
+      setErro(mensagemDe(err, "Falha ao salvar as contas"));
+    } finally {
+      setSalvando(false);
     }
   }
 
-  async function classificarLote() {
-    const tipo = Number(tipoLote);
-    const quantos = eventos.filter((e) => e.tipeve === tipo && (sobrescrever || e.classe == null)).length;
-    if (!window.confirm(`Marcar ${quantos} evento(s) do tipo "${rotuloTipoEvento(tipo)}" como "${ROTULO_CLASSE[classeLote]}"?`)) return;
-    setErro(null);
-    try {
-      await axios.post("/api/custo-hora/eventos/lote", { tipeve: tipo, classe: classeLote, somenteSemClasse: !sobrescrever });
-      await Promise.all([carregar(), aoMudar()]);
-    } catch (err) {
-      setErro(mensagemDe(err, "Falha ao classificar em lote"));
-    }
-  }
-
-  const acoes = useMemo<AcoesEvento>(() => ({ classificar: (e, c) => void classificar(e, c) }), []); // eslint-disable-line react-hooks/exhaustive-deps
-  const classificados = eventos.filter((e) => e.classe).length;
+  const importada = config.contabilizacaoFolha;
+  const linhas = movimento?.contas ?? [];
 
   return (
-    <div className="space-y-4">
-      <div className="max-w-3xl space-y-1 text-sm text-muted">
+    <div className="space-y-5">
+      <div className="max-w-3xl space-y-2 text-sm text-muted">
         <p>
-          Os eventos que aparecem na folha importada do HCM. Evento sem classe é <b>ignorado</b> no custo. Defina como cada um conta:
+          Escolha as <b>contas do plano contábil</b> que compõem o custo do CLT: o custo do mês é o que a folha contabiliza nelas para o colaborador (débito − crédito), dividido pelas horas da escala.
+          Como nos indicadores, uma conta sintética vale por todas as analíticas abaixo dela e <b>excluir</b> tira a conta e o que está abaixo.
         </p>
-        <ul className="list-disc pl-5">
-          {(Object.keys(ROTULO_CLASSE) as ClasseEvento[]).map((c) => (
-            <li key={c}>
-              <b className="text-foreground">{ROTULO_CLASSE[c]}</b> — {AJUDA_CLASSE[c]}
-            </li>
-          ))}
-        </ul>
+        <p>
+          Na lista ao lado aparece o que a folha contabilizou no mês, para decidir. Atenção às contas de <b>Assistência Médica</b>: a folha só traz o <i>desconto</i> do colaborador (crédito), porque a fatura do plano entra no
+          ERP pela empresa, sem colaborador — incluir essas contas faz o custo <i>cair</i> pelo desconto.
+        </p>
+        <p className="text-[12px]">
+          {importada.linhas > 0
+            ? `Contabilização da folha importada do HCM: ${importada.linhas.toLocaleString("pt-BR")} lançamentos, até ${importada.ate ? rotuloCompetencia(importada.ate) : "—"}.`
+            : 'A contabilização da folha ainda não foi importada: sincronize "Contabilização da Folha (HCM)" em Importados do HCM.'}
+        </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
-        <span className="text-muted">Marcar de uma vez os eventos do tipo</span>
-        <select className={CAMPO} value={tipoLote} onChange={(e) => setTipoLote(e.target.value)} aria-label="Tipo do evento no Senior">
-          {Object.entries(ROTULO_TIPO_EVENTO).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v}
-            </option>
-          ))}
-        </select>
-        <span className="text-muted">como</span>
-        <select className={CAMPO} value={classeLote} onChange={(e) => setClasseLote(e.target.value as ClasseEvento)} aria-label="Classe">
-          {(Object.keys(ROTULO_CLASSE) as ClasseEvento[]).map((c) => (
-            <option key={c} value={c}>
-              {ROTULO_CLASSE[c]}
-            </option>
-          ))}
-        </select>
-        <label className="flex items-center gap-1.5 text-muted">
-          <input type="checkbox" checked={sobrescrever} onChange={(e) => setSobrescrever(e.target.checked)} />
-          também os já classificados
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <SeletorContas plano={plano} regras={regras} onChange={setRegras} rotuloBusca="Contas do plano (qualquer nível)" />
+        <div className="mt-3 flex items-center justify-end gap-3">
+          {mudou && <span className="text-[12px] text-warning">Regras alteradas e ainda não salvas.</span>}
+          <button type="button" className={BOTAO} disabled={!mudou || salvando} onClick={() => setRegras(salvas)}>
+            Desfazer
+          </button>
+          <button type="button" className={BOTAO_PRIMARIO} disabled={!mudou || salvando} onClick={() => void salvar()}>
+            {salvando ? "Salvando..." : "Salvar regras"}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted">
+        <label>
+          Movimento de
+          <input type="month" className={cn(CAMPO, "ml-2")} value={competencia} onChange={(e) => e.target.value && setCompetencia(e.target.value)} />
         </label>
-        <button type="button" className={BOTAO} onClick={() => void classificarLote()}>
-          Aplicar
-        </button>
-        <span className="ml-auto text-muted">
-          {classificados} de {eventos.length} classificados
-        </span>
+        {movimento && movimento.competencia && (
+          <>
+            <span>
+              Líquido contabilizado: <b className="text-foreground">{formatarReais(movimento.totais.liquido)}</b>
+            </span>
+            <span>
+              Nas contas que entram no custo: <b className="text-foreground">{formatarReais(movimento.totais.liquidoSelecionado)}</b>
+            </span>
+          </>
+        )}
+        <span className="text-[12px]">A coluna "Entra no custo" reflete as regras já salvas.</span>
       </div>
 
-      <TabelaLocal<Evento, AcoesEvento>
-        chave="admin.custo-hora.eventos"
-        defs={COLUNAS_EVENTO}
-        colunas={COLUNAS_EVENTO_LOCAIS}
-        linhas={eventos}
-        ler={lerEvento}
-        chaveLinha={(e) => `${e.tabeve}-${e.codeve}`}
+      <TabelaLocal<MovimentoConta>
+        chave="admin.custo-hora.contas-folha"
+        defs={COLUNAS_MOVIMENTO}
+        colunas={COLUNAS_MOVIMENTO_LOCAIS}
+        linhas={linhas}
+        ler={lerMovimento}
+        chaveLinha={(c) => `${c.codemp}-${c.ctared}`}
         loading={loading}
-        vazio="Nenhum evento de folha importado do HCM."
-        ctx={acoes}
-        paginacao={{ ...POR_PAGINA, rotulo: "eventos" }}
+        vazio="A folha não contabilizou nada neste mês (ou a contabilização ainda não foi importada)."
+        paginacao={{ ...POR_PAGINA, rotulo: "contas" }}
       />
     </div>
   );
@@ -658,13 +515,12 @@ function AbaParametros({ config, recarregar, setErro, setAviso }: { config: Conf
   }
 
   const DICAS: Record<string, string> = {
-    horas_mes: "Ex.: as horas da escala do mês. Divide o custo mensal do CLT (e o preço mensal de contrato PJ marcado como mensal).",
-    tipos_calculo: "Ex.: 11, 12, 13. Veja os tipos nos cálculos da folha em Importados do HCM › Cálculos de Folha (R044CAL, coluna TipCal).",
+    horas_mes: "As horas da escala do mês. Divide o custo mensal contabilizado do CLT (e o preço mensal de contrato PJ marcado como mensal).",
   };
 
   return (
     <div className="max-w-2xl space-y-5">
-      <p className="text-sm text-muted">Sem estes dois parâmetros o custo do CLT não é calculado (o PJ e o valor manual não dependem do segundo).</p>
+      <p className="text-sm text-muted">Sem as horas da escala o custo do CLT não é calculado (o PJ por hora e o valor manual não dependem delas).</p>
       {Object.entries(config.definicoesParametros).map(([chave, descricao]) => (
         <div key={chave} className="rounded-lg border border-border bg-surface p-4">
           <label className="block text-sm font-medium text-foreground" htmlFor={`param-${chave}`}>

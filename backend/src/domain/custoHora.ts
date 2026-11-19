@@ -1,23 +1,13 @@
-// Custo-hora real do consultor (bloco C da Rentabilidade, 18/11/2026) — a parte PURA: validação da configuração, escolha do encargo vigente, conta do
-// CLT e qual fonte de custo vale em cada mês. Nenhum percentual, evento, código de cálculo ou horas da escala mora aqui: tudo vem das tabelas custo_*
-// (preenchidas por tela ou "Importar JSON"). O banco e o job estão em services/custoHoraJob.ts.
+// Custo-hora real do consultor (bloco C da Rentabilidade, 18-19/11/2026) — a parte PURA: validação da configuração, conta do CLT e qual fonte de custo vale
+// em cada mês. Nenhuma conta, percentual ou horas da escala mora aqui: tudo vem das tabelas custo_* (preenchidas por tela ou "Importar JSON"). O banco e o job
+// estão em domain/custoHoraJob.ts.
 //
-// Regra de decisão do Vitor (17/11/2026):
-//   CLT = (folha + benefícios + encargos da folha + Σ% × base) ÷ horas da escala · PJ = valor bruto do contrato (retenções só informativas) ·
-//   quem não é CLT nem tem contrato = valor-hora manual com vigência.
-
-export const CLASSES_EVENTO = {
-  remuneracao: "Remuneração — entra no custo e na base dos encargos percentuais",
-  beneficio: "Benefício — entra no custo, fora da base dos encargos",
-  encargo_folha: "Encargo já calculado pela folha — entra no custo, fora da base",
-} as const;
-export type ClasseEvento = keyof typeof CLASSES_EVENTO;
-
-export const CLASSES_VALIDAS = Object.keys(CLASSES_EVENTO) as ClasseEvento[];
-export const ehClasseEvento = (v: unknown): v is ClasseEvento => typeof v === "string" && (CLASSES_VALIDAS as string[]).includes(v);
+// Regra de decisão do Vitor:
+//   CLT = custo CONTABILIZADO pela folha (R048CTB) nas contas escolhidas por tela ÷ horas da escala (19/11/2026; antes era a classificação dos eventos da
+//   folha + encargos em %) · PJ = valor bruto do contrato (retenções só informativas) · quem não é CLT nem tem contrato = valor-hora manual com vigência.
 
 export const ORIGENS_CUSTO = {
-  clt_folha: "CLT — folha + encargos ÷ horas da escala",
+  clt_folha: "CLT — contabilização da folha ÷ horas da escala",
   pj_contrato: "PJ — valor-hora do contrato",
   manual: "Valor-hora manual",
 } as const;
@@ -25,19 +15,11 @@ export type OrigemCusto = keyof typeof ORIGENS_CUSTO;
 
 export const PARAMETROS_CUSTO = {
   horas_mes: "Horas da escala por mês (divisor do custo mensal do CLT)",
-  tipos_calculo: "Tipos de cálculo da folha que entram no custo do mês (R044CAL.TipCal, separados por vírgula)",
 } as const;
 export type ChaveParametro = keyof typeof PARAMETROS_CUSTO;
 export const ehChaveParametro = (v: unknown): v is ChaveParametro => typeof v === "string" && v in PARAMETROS_CUSTO;
 
 export type Validacao<T> = { ok: true; valor: T } | { ok: false; erro: string };
-
-/** Lista de tipos de cálculo "11,12, 13" → [11, 12, 13] (sem repetir, ordenada). `null` se o texto não for uma lista de inteiros positivos. */
-export function lerTiposCalculo(texto: string): number[] | null {
-  const partes = texto.split(",").map((p) => p.trim()).filter((p) => p !== "");
-  if (partes.length === 0 || partes.some((p) => !/^\d{1,4}$/.test(p) || Number(p) <= 0)) return null;
-  return [...new Set(partes.map(Number))].sort((a, b) => a - b);
-}
 
 /** Valida e normaliza o valor de um parâmetro (sempre devolve o texto que fica gravado). */
 export function validarParametro(chave: ChaveParametro, bruto: unknown): Validacao<string> {
@@ -47,24 +29,7 @@ export function validarParametro(chave: ChaveParametro, bruto: unknown): Validac
     if (!texto || !Number.isFinite(n) || n <= 0 || n > 744) return { ok: false, erro: "Horas da escala deve ser um número maior que 0 e até 744 (horas de um mês de 31 dias)" };
     return { ok: true, valor: String(n) };
   }
-  const tipos = lerTiposCalculo(texto);
-  if (!tipos) return { ok: false, erro: "Informe os tipos de cálculo como números separados por vírgula (ex.: os que a folha mensal usa)" };
-  return { ok: true, valor: tipos.join(",") };
-}
-
-export interface EncargoLinha {
-  codigo: string;
-  rotulo: string;
-  percentual: number;
-  /** AAAA-MM-DD (dia em que o percentual passa a valer). */
-  vigenciaInicio: string;
-}
-
-export interface EncargoEntrada {
-  codigo: string;
-  rotulo: string;
-  percentual: number;
-  vigenciaInicio: string;
+  return { ok: false, erro: "Parâmetro desconhecido" };
 }
 
 const DATA_ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -75,64 +40,91 @@ function dataIsoValida(texto: string): boolean {
 }
 export { dataIsoValida };
 
-export function validarEncargo(corpo: unknown): Validacao<EncargoEntrada> {
-  const c = (corpo ?? {}) as Record<string, unknown>;
-  const codigo = typeof c.codigo === "string" ? c.codigo.trim() : "";
-  if (!/^[a-z][a-z0-9_]{1,39}$/.test(codigo)) return { ok: false, erro: "Código inválido: use letras minúsculas, números e _, começando por letra (2 a 40 caracteres)" };
-  const rotulo = typeof c.rotulo === "string" ? c.rotulo.trim() : "";
-  if (!rotulo || rotulo.length > 120) return { ok: false, erro: "Informe o nome do encargo (até 120 caracteres)" };
-  const percentual = typeof c.percentual === "number" ? c.percentual : Number(String(c.percentual ?? "").replace(",", "."));
-  if (!Number.isFinite(percentual) || percentual < 0 || percentual > 1000) return { ok: false, erro: "Percentual deve estar entre 0 e 1000" };
-  const vigenciaInicio = typeof c.vigenciaInicio === "string" ? c.vigenciaInicio.slice(0, 10) : "";
-  if (!dataIsoValida(vigenciaInicio)) return { ok: false, erro: "Vigência inválida (use AAAA-MM-DD)" };
-  return { ok: true, valor: { codigo, rotulo, percentual: Math.round(percentual * 10000) / 10000, vigenciaInicio } };
+const centavos = (v: number) => Math.round(v * 100) / 100;
+const quatroCasas = (v: number) => Math.round(v * 10000) / 10000;
+
+/** Um lançamento da contabilização da folha, já somado por conta/opção no mês (débito positivo, crédito negativo). */
+export interface LancamentoFolha {
+  /** `codemp:ctared` da conta do plano (ver `chaveConta`). */
+  conta: string;
+  /** Opção da contabilização na R048CTB: 1 = folha (cálculo), 3 = provisões. */
+  opcctb: number | null;
+  /** Débito − crédito. */
+  valor: number;
 }
 
-/**
- * O percentual de cada encargo que vale na competência (dia 1 do mês): para cada `codigo`, a linha de maior vigência que não passa do mês.
- * Encargo que só começa depois da competência não entra (ainda não existia). Ordem estável por código.
- */
-export function encargosVigentes(linhas: EncargoLinha[], competencia: string): { codigo: string; rotulo: string; percentual: number }[] {
-  const escolhida = new Map<string, EncargoLinha>();
-  for (const l of linhas) {
-    if (l.vigenciaInicio > competencia) continue;
-    const atual = escolhida.get(l.codigo);
-    if (!atual || l.vigenciaInicio > atual.vigenciaInicio) escolhida.set(l.codigo, l);
-  }
-  return [...escolhida.values()].sort((a, b) => a.codigo.localeCompare(b.codigo)).map((l) => ({ codigo: l.codigo, rotulo: l.rotulo, percentual: l.percentual }));
-}
+export const chaveConta = (codemp: number, ctared: number): string => `${codemp}:${ctared}`;
 
 export interface EntradaClt {
-  /** Soma dos eventos classificados como remuneração. */
-  remuneracao: number;
-  beneficios: number;
-  encargosFolha: number;
-  encargos: { codigo: string; rotulo: string; percentual: number }[];
+  lancamentos: LancamentoFolha[];
+  /** Contas escolhidas por tela para compor o custo (chaves `codemp:ctared`, só analíticas — ver rentabilidade/indicadores.contasSelecionadas). */
+  contas: Set<string>;
   horasMes: number;
 }
 
 export interface DetalheClt {
-  remuneracao: number;
-  beneficios: number;
-  encargosFolha: number;
-  encargos: { codigo: string; rotulo: string; percentual: number; valor: number }[];
+  /** Custo do mês nas contas escolhidas (débito − crédito). */
   custoMensal: number;
+  /** Parte que vem da folha propriamente dita (opção 1) e das provisões de 13º/férias (opção 3). */
+  folha: number;
+  provisoes: number;
   horasMes: number;
+  /** As contas que compuseram o custo, com o valor de cada uma (maiores primeiro). */
+  porConta: { conta: string; valor: number }[];
 }
 
-const centavos = (v: number) => Math.round(v * 100) / 100;
-const quatroCasas = (v: number) => Math.round(v * 10000) / 10000;
-
-/** CLT: (remuneração + benefícios + encargos da folha + Σ percentual × remuneração) ÷ horas da escala. `null` se não há o que dividir. */
+/**
+ * CLT: (Σ débito − crédito das contas escolhidas, na contabilização da folha do mês) ÷ horas da escala. `null` se não há o que dividir (sem horas, sem
+ * lançamento nas contas escolhidas, ou líquido zero/negativo — ex.: mês só com estorno).
+ */
 export function calcularCustoClt(e: EntradaClt): { custoHora: number; detalhe: DetalheClt } | null {
   if (!(e.horasMes > 0)) return null;
-  const encargos = e.encargos.map((x) => ({ ...x, valor: centavos((e.remuneracao * x.percentual) / 100) }));
-  const custoMensal = centavos(e.remuneracao + e.beneficios + e.encargosFolha + encargos.reduce((s, x) => s + x.valor, 0));
+  const porConta = new Map<string, number>();
+  let folha = 0;
+  let provisoes = 0;
+  for (const l of e.lancamentos) {
+    if (!e.contas.has(l.conta)) continue;
+    porConta.set(l.conta, (porConta.get(l.conta) ?? 0) + l.valor);
+    if (l.opcctb === 3) provisoes += l.valor;
+    else folha += l.valor;
+  }
+  const custoMensal = centavos(folha + provisoes);
   if (custoMensal <= 0) return null;
   return {
     custoHora: quatroCasas(custoMensal / e.horasMes),
-    detalhe: { remuneracao: centavos(e.remuneracao), beneficios: centavos(e.beneficios), encargosFolha: centavos(e.encargosFolha), encargos, custoMensal, horasMes: e.horasMes },
+    detalhe: {
+      custoMensal,
+      folha: centavos(folha),
+      provisoes: centavos(provisoes),
+      horasMes: e.horasMes,
+      porConta: [...porConta.entries()].map(([conta, valor]) => ({ conta, valor: centavos(valor) })).sort((a, b) => b.valor - a.valor),
+    },
   };
+}
+
+/** Uma regra de conta da tela (incluir/excluir), como a dos indicadores de rentabilidade. */
+export interface RegraContaFolha {
+  codemp: number;
+  ctared: number;
+  acao: "incluir" | "excluir";
+}
+
+/** Valida a lista de regras do corpo do PUT: inteiros, ação válida, sem conta repetida. */
+export function validarRegrasContasFolha(bruto: unknown): Validacao<RegraContaFolha[]> {
+  if (!Array.isArray(bruto)) return { ok: false, erro: "regras deve ser uma lista" };
+  const vistas = new Set<string>();
+  const saida: RegraContaFolha[] = [];
+  for (const r of bruto as Record<string, unknown>[]) {
+    const codemp = Number(r?.codemp);
+    const ctared = Number(r?.ctared);
+    if (!Number.isInteger(codemp) || !Number.isInteger(ctared) || ctared <= 0 || codemp <= 0) return { ok: false, erro: "Regra inválida: informe codemp e ctared" };
+    if (r.acao !== "incluir" && r.acao !== "excluir") return { ok: false, erro: `Regra da conta ${ctared}: ação deve ser "incluir" ou "excluir"` };
+    const k = chaveConta(codemp, ctared);
+    if (vistas.has(k)) return { ok: false, erro: `A conta ${ctared} aparece duas vezes` };
+    vistas.add(k);
+    saida.push({ codemp, ctared, acao: r.acao });
+  }
+  return { ok: true, valor: saida };
 }
 
 export interface FontesDeCusto {

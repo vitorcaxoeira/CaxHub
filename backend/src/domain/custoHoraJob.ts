@@ -3,22 +3,23 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import {
   calcularCustoClt,
+  chaveConta,
   competenciaDia1,
-  encargosVigentes,
   escolherCusto,
-  lerTiposCalculo,
   mesSeguinte,
   precoEhMensal,
   valorManualEm,
-  type ClasseEvento,
-  type EncargoLinha,
+  type LancamentoFolha,
   type OrigemCusto,
   type PeriodoMensal,
+  type RegraContaFolha,
 } from "./custoHora";
+import { carregarPlano } from "./rentabilidade/calculo";
+import { contasSelecionadas } from "./rentabilidade/indicadores";
 import { contratoFixoDe, type ContratoFixo } from "./contratoFixo";
 import { linhaDoTempoDoContrato, valorHoraEm, type VigenciaValorHora } from "./valorHoraConsultor";
 
-// Job do CUSTO-HORA REAL por consultor e mês (bloco C da Rentabilidade, 18/11/2026). Lê só o que já está espelhado no CaxHub (folha do HCM, contratos
+// Job do CUSTO-HORA REAL por consultor e mês (bloco C da Rentabilidade, 18/11/2026). Lê só o que já está espelhado no CaxHub (contabilização da folha do HCM, contratos
 // de compra do Senior, vínculos, valor manual e a configuração custo_*) e grava o resultado em consultor_custo_hora. Não escreve em nenhum sistema
 // externo. A regra de qual fonte vale e a conta do CLT estão em custoHora.ts (puro, testado); aqui só o banco.
 
@@ -56,51 +57,42 @@ export function ultimasCompetencias(quantos: number, hoje = new Date()): string[
 
 interface ConfigCusto {
   horasMes: number | null;
-  tiposCalculo: number[] | null;
-  encargos: EncargoLinha[];
-  temClassificacao: boolean;
+  /** Regras de quais contas do plano compõem o custo do CLT (custo_contas_folha). */
+  regras: RegraContaFolha[];
 }
 
 export async function carregarConfigCusto(): Promise<ConfigCusto> {
-  const [parametros, encargos, classes] = await Promise.all([
-    prisma.custoParametro.findMany(),
-    prisma.custoEncargo.findMany({ orderBy: [{ codigo: "asc" }, { vigenciaInicio: "asc" }] }),
-    prisma.custoEventoClasse.count(),
-  ]);
+  const [parametros, contas] = await Promise.all([prisma.custoParametro.findMany(), prisma.custoContaFolha.findMany()]);
   const p = new Map(parametros.map((x) => [x.chave, x.valor]));
   const horas = Number(p.get("horas_mes"));
   return {
     horasMes: p.has("horas_mes") && Number.isFinite(horas) && horas > 0 ? horas : null,
-    tiposCalculo: p.has("tipos_calculo") ? lerTiposCalculo(p.get("tipos_calculo") as string) : null,
-    encargos: encargos.map((e) => ({ codigo: e.codigo, rotulo: e.rotulo, percentual: Number(e.percentual), vigenciaInicio: ISO(e.vigenciaInicio) })),
-    temClassificacao: classes > 0,
+    regras: contas.map((c) => ({ codemp: c.codemp, ctared: c.ctared, acao: c.acao as "incluir" | "excluir" })),
   };
 }
 
-interface SomaFolha {
+interface LancamentosDoMes {
   competencia: string;
   codemp: number;
   codusu: number;
-  classe: string;
-  valor: number;
+  lancamento: LancamentoFolha;
 }
 
-/** Folha por consultor VINCULADO ao HCM, mês e classe do evento — só cálculos dos tipos configurados e só eventos classificados. */
-async function somasDaFolha(competencias: string[], tipos: number[]): Promise<SomaFolha[]> {
+/**
+ * Contabilização da folha por consultor VINCULADO ao HCM e mês: débito − crédito por conta e opção (folha/provisões). A empresa da conta é a do HCM
+ * (`numemp`), que na Soeltech é a mesma do plano do ERP. Só a linha original (perrat = 0) está no espelho.
+ */
+async function lancamentosDaFolha(competencias: string[]): Promise<LancamentosDoMes[]> {
   const min = competencias[0];
   const max = mesSeguinte(competencias[competencias.length - 1]);
-  const linhas = await prisma.$queryRaw<{ competencia: Date; codemp: number; codusu: number; classe: string; valor: number }[]>`
-    SELECT date_trunc('month', cal.perref)::date AS competencia, cv.codemp, cv.codusu, k.classe, SUM(v.valeve)::float8 AS valor
-    FROM hcm_verbas_folha v
-    JOIN hcm_calculos_folha cal ON cal.numemp = v.numemp AND cal.codcal = v.codcal
-    JOIN custo_evento_classes k ON k.tabeve = v.tabeve AND k.codeve = v.codeve
-    JOIN consultor_vinculos cv ON cv.hcm_numemp = v.numemp AND cv.hcm_tipcol = v.tipcol AND cv.hcm_numcad = v.numcad
-    WHERE v.removido_em_senior IS NULL AND cal.removido_em_senior IS NULL
-      AND cal.sitcal IN ('T', 'P')
-      AND cal.tipcal = ANY(${tipos}::int[])
-      AND cal.perref >= ${min}::date AND cal.perref < ${max}::date
-    GROUP BY 1, 2, 3, 4`;
-  return linhas.map((l) => ({ ...l, competencia: ISO(l.competencia) }));
+  const linhas = await prisma.$queryRaw<{ competencia: Date; codemp: number; codusu: number; numemp: number; ctared: number; opcctb: number | null; valor: number }[]>`
+    SELECT date_trunc('month', c.datlan)::date AS competencia, cv.codemp, cv.codusu, c.numemp, c.ctared, c.opcctb,
+           SUM(CASE WHEN c.debcre = 'D' THEN c.vallan ELSE -c.vallan END)::float8 AS valor
+    FROM hcm_contabilizacao_folha c
+    JOIN consultor_vinculos cv ON cv.hcm_numemp = c.numemp AND cv.hcm_tipcol = c.tipcol AND cv.hcm_numcad = c.numcad
+    WHERE c.ctared IS NOT NULL AND c.datlan >= ${min}::date AND c.datlan < ${max}::date
+    GROUP BY 1, 2, 3, 4, 5, 6`;
+  return linhas.map((l) => ({ competencia: ISO(l.competencia), codemp: l.codemp, codusu: l.codusu, lancamento: { conta: chaveConta(l.numemp, l.ctared), opcctb: l.opcctb, valor: l.valor } }));
 }
 
 interface ContratoPj {
@@ -164,15 +156,18 @@ export async function recalcularCustoHora(competenciasBrutas: string[]): Promise
   if (competencias.length === 0) return { competencias, gravados: 0, porOrigem, semCusto: 0, avisos: ["Nenhuma competência válida informada."] };
 
   const config = await carregarConfigCusto();
-  const folhaConfigurada = config.horasMes != null && config.tiposCalculo != null && config.temClassificacao;
+  const contasEscolhidas = config.regras.length > 0 ? contasSelecionadas(config.regras, await carregarPlano()) : new Set<string>();
+  const folhaConfigurada = config.horasMes != null && contasEscolhidas.size > 0;
   if (!folhaConfigurada) {
-    const faltas = [config.horasMes == null ? "horas da escala" : null, config.tiposCalculo == null ? "tipos de cálculo da folha" : null, !config.temClassificacao ? "classificação dos eventos" : null].filter(Boolean);
-    avisos.push(`O custo do CLT (folha) não foi calculado: falta configurar ${faltas.join(", ")} em Administração › Custo-hora real.`);
+    const faltas = [config.horasMes == null ? "horas da escala" : null, config.regras.length === 0 ? "contas da folha" : contasEscolhidas.size === 0 ? "contas da folha (nenhuma conta analítica selecionada)" : null].filter(Boolean);
+    avisos.push(`O custo do CLT (contabilização da folha) não foi calculado: falta configurar ${faltas.join(" e ")} em Administração › Custo-hora real.`);
+  } else if ((await prisma.hcmContabilizacaoFolha.count()) === 0) {
+    avisos.push("A contabilização da folha (R048CTB) ainda não foi importada do HCM: sincronize \"Contabilização da Folha (HCM)\" em Importados do HCM.");
   }
 
   const [consultores, folha, pj, manuais] = await Promise.all([
     prisma.consultor.findMany({ where: { removidoEmSenior: null }, select: { codemp: true, codusu: true, sitfor: true, vinculo: { select: { hcmNumcad: true, contratoMensal: true } } } }),
-    folhaConfigurada ? somasDaFolha(competencias, config.tiposCalculo as number[]) : Promise.resolve([] as SomaFolha[]),
+    folhaConfigurada ? lancamentosDaFolha(competencias) : Promise.resolve([] as LancamentosDoMes[]),
     prisma.consultorVinculo
       .findMany({ where: { contratoMensal: true }, select: { codemp: true, codusu: true, mensalDesde: true, mensalAte: true } })
       .then((v) => contratosPj(new Map(v.map((x) => [`${x.codemp}-${x.codusu}`, { mensal: true, desde: x.mensalDesde ? ISO(x.mensalDesde) : null, ate: x.mensalAte ? ISO(x.mensalAte) : null }])))),
@@ -182,12 +177,10 @@ export async function recalcularCustoHora(competenciasBrutas: string[]): Promise
     avisos.push("Há contrato PJ marcado como MENSAL, mas faltam as horas da escala: o custo-hora desses consultores não foi calculado.");
   }
 
-  const folhaPor = new Map<string, Map<string, number>>();
+  const folhaPor = new Map<string, LancamentoFolha[]>();
   for (const f of folha) {
     const chave = `${f.competencia}|${f.codemp}-${f.codusu}`;
-    const m = folhaPor.get(chave) ?? new Map<string, number>();
-    m.set(f.classe, (m.get(f.classe) ?? 0) + f.valor);
-    folhaPor.set(chave, m);
+    folhaPor.set(chave, [...(folhaPor.get(chave) ?? []), f.lancamento]);
   }
   const manualPor = new Map<string, { vigenciaInicio: string; valor: number }[]>();
   for (const m of manuais) {
@@ -202,16 +195,9 @@ export async function recalcularCustoHora(competenciasBrutas: string[]): Promise
     for (const competencia of competencias) {
       let clt: number | null = null;
       let detalheClt: object | null = null;
-      const soma = folhaPor.get(`${competencia}|${chave}`);
-      if (folhaConfigurada && soma) {
-        const classe = (k: ClasseEvento) => soma.get(k) ?? 0;
-        const r = calcularCustoClt({
-          remuneracao: classe("remuneracao"),
-          beneficios: classe("beneficio"),
-          encargosFolha: classe("encargo_folha"),
-          encargos: encargosVigentes(config.encargos, competencia),
-          horasMes: config.horasMes as number,
-        });
+      const doMes = folhaPor.get(`${competencia}|${chave}`);
+      if (folhaConfigurada && doMes) {
+        const r = calcularCustoClt({ lancamentos: doMes, contas: contasEscolhidas, horasMes: config.horasMes as number });
         if (r) {
           clt = r.custoHora;
           detalheClt = r.detalhe;

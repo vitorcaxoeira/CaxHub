@@ -2,23 +2,25 @@ import { Router, Response } from "express";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import {
-  CLASSES_EVENTO,
   competenciaDia1,
   competenciasDoPeriodo,
   ehChaveParametro,
-  ehClasseEvento,
+  mesSeguinte,
   ORIGENS_CUSTO,
   PARAMETROS_CUSTO,
-  validarEncargo,
   validarParametro,
+  validarRegrasContasFolha,
   validarValorManual,
   type ChaveParametro,
+  type RegraContaFolha,
 } from "../domain/custoHora";
 import { executarJobCustoHora, JOB_NAME as JOB_CUSTO_HORA } from "../domain/custoHoraJob";
+import { carregarPlano } from "../domain/rentabilidade/calculo";
+import { contasSelecionadas } from "../domain/rentabilidade/indicadores";
 
-// Administração > Custo-hora real (18/11/2026): a configuração do cálculo (parâmetros, encargos percentuais com vigência, classificação dos eventos
-// da folha), o valor-hora manual por consultor e o resultado mensal do job. Só administrador: o resultado do CLT deriva da folha (remuneração
-// individual). Montado em server.ts como "/custo-hora". A conta em si é de domain/custoHora.ts; o job, de domain/custoHoraJob.ts.
+// Administração > Custo-hora real (18-19/11/2026): a configuração do cálculo (horas da escala e as CONTAS do plano que compõem o custo do CLT na
+// contabilização da folha, R048CTB), o valor-hora manual por consultor e o resultado mensal do job. Só administrador: o resultado do CLT deriva da folha
+// (remuneração individual). Montado em server.ts como "/custo-hora". A conta em si é de domain/custoHora.ts; o job, de domain/custoHoraJob.ts.
 export const custoHoraRouter = Router();
 custoHoraRouter.use(requireAuth, requireRole("admin"));
 
@@ -36,19 +38,18 @@ const numero = (v: unknown): number | null => (v == null ? null : Number(v));
 // ---------- configuração ----------
 
 async function lerConfig() {
-  const [parametros, encargos, classes, ultimaExecucao] = await Promise.all([
+  const [parametros, contas, folhaImportada, ultimaExecucao] = await Promise.all([
     prisma.custoParametro.findMany(),
-    prisma.custoEncargo.findMany({ orderBy: [{ codigo: "asc" }, { vigenciaInicio: "asc" }] }),
-    prisma.custoEventoClasse.count(),
+    prisma.custoContaFolha.findMany({ orderBy: [{ codemp: "asc" }, { ctared: "asc" }] }),
+    prisma.$queryRaw<{ linhas: number; ate: Date | null }[]>`SELECT count(*)::int AS linhas, max(datlan) AS ate FROM hcm_contabilizacao_folha`,
     prisma.syncLog.findFirst({ where: { jobName: JOB_CUSTO_HORA }, orderBy: { id: "desc" }, select: { status: true, message: true, runAt: true } }),
   ]);
   return {
     parametros: Object.fromEntries(parametros.map((p) => [p.chave, p.valor])),
     definicoesParametros: PARAMETROS_CUSTO,
-    classesEvento: CLASSES_EVENTO,
     origens: ORIGENS_CUSTO,
-    encargos: encargos.map((e) => ({ id: e.id, codigo: e.codigo, rotulo: e.rotulo, percentual: Number(e.percentual), vigenciaInicio: ISO(e.vigenciaInicio) })),
-    eventosClassificados: classes,
+    contasFolha: contas.map((c) => ({ codemp: c.codemp, ctared: c.ctared, acao: c.acao })),
+    contabilizacaoFolha: { linhas: folhaImportada[0]?.linhas ?? 0, ate: folhaImportada[0]?.ate ? ISO(folhaImportada[0].ate) : null },
     ultimaExecucao,
   };
 }
@@ -85,141 +86,94 @@ custoHoraRouter.put("/parametros/:chave", async (req, res) => {
   }
 });
 
-// ---------- encargos ----------
+// ---------- contas da folha (R048CTB) ----------
 
-custoHoraRouter.post("/encargos", async (req, res) => {
+/** Confere que cada conta das regras existe no plano do ERP; devolve as que não existem. */
+async function contasForaDoPlano(regras: RegraContaFolha[]): Promise<number[]> {
+  if (regras.length === 0) return [];
+  const plano = await carregarPlano();
+  const existentes = new Set(plano.map((c) => `${c.codemp}:${c.ctared}`));
+  return regras.filter((r) => !existentes.has(`${r.codemp}:${r.ctared}`)).map((r) => r.ctared);
+}
+
+// Grava (substitui) as regras de quais contas compõem o custo do CLT. O seletor de contas da tela é o mesmo dos indicadores de rentabilidade.
+custoHoraRouter.put("/contas-folha", async (req, res) => {
   try {
-    const v = validarEncargo(req.body);
+    const v = validarRegrasContasFolha(req.body?.regras);
     if (!v.ok) {
       res.status(400).json({ error: v.erro });
       return;
     }
-    const igual = await prisma.custoEncargo.findUnique({ where: { codigo_vigenciaInicio: { codigo: v.valor.codigo, vigenciaInicio: dataUtc(v.valor.vigenciaInicio) } } });
-    if (igual) {
-      res.status(409).json({ error: `Já existe o encargo "${v.valor.codigo}" com vigência em ${v.valor.vigenciaInicio}. Edite o existente.` });
+    const fora = await contasForaDoPlano(v.valor);
+    if (fora.length > 0) {
+      res.status(400).json({ error: `Conta(s) fora do plano contábil: ${fora.slice(0, 10).join(", ")}` });
       return;
     }
-    const criado = await prisma.custoEncargo.create({ data: { ...v.valor, vigenciaInicio: dataUtc(v.valor.vigenciaInicio) } });
-    res.status(201).json({ id: criado.id });
+    await prisma.$transaction([prisma.custoContaFolha.deleteMany({}), prisma.custoContaFolha.createMany({ data: v.valor })]);
+    res.json({ ok: true, regras: v.valor.length });
   } catch (error) {
-    handleError(res, error, "post-encargo");
+    handleError(res, error, "put-contas-folha");
   }
 });
 
-custoHoraRouter.put("/encargos/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const v = validarEncargo(req.body);
-    if (!Number.isInteger(id) || !v.ok) {
-      res.status(400).json({ error: v.ok ? "id inválido" : v.erro });
-      return;
-    }
-    const outro = await prisma.custoEncargo.findFirst({ where: { codigo: v.valor.codigo, vigenciaInicio: dataUtc(v.valor.vigenciaInicio), NOT: { id } } });
-    if (outro) {
-      res.status(409).json({ error: `Já existe o encargo "${v.valor.codigo}" com vigência em ${v.valor.vigenciaInicio}.` });
-      return;
-    }
-    const r = await prisma.custoEncargo.updateMany({ where: { id }, data: { ...v.valor, vigenciaInicio: dataUtc(v.valor.vigenciaInicio) } });
-    if (r.count === 0) {
-      res.status(404).json({ error: "Encargo não encontrado" });
-      return;
-    }
-    res.json({ ok: true });
-  } catch (error) {
-    handleError(res, error, "put-encargo");
-  }
-});
-
-custoHoraRouter.delete("/encargos/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id)) {
-      res.status(400).json({ error: "id inválido" });
-      return;
-    }
-    const r = await prisma.custoEncargo.deleteMany({ where: { id } });
-    if (r.count === 0) {
-      res.status(404).json({ error: "Encargo não encontrado" });
-      return;
-    }
-    res.json({ ok: true });
-  } catch (error) {
-    handleError(res, error, "delete-encargo");
-  }
-});
-
-// ---------- eventos da folha ----------
-
-interface EventoLinha {
-  tabeve: number;
-  codeve: number;
-  descricao: string | null;
-  tipeve: number | null;
-  classe: string | null;
-  linhas: number;
+interface MovimentoConta {
+  numemp: number;
+  ctared: number;
+  clacta: string | null;
+  descta: string | null;
+  anasin: string | null;
+  debito: number;
+  credito: number;
   colaboradores: number;
-  valor: number;
 }
 
-/** Os eventos que aparecem na folha importada (R046VER), com o tipo do Senior, a classe escolhida e o quanto pesam — o que a pessoa precisa para decidir. */
-function eventosDaFolha(): Promise<EventoLinha[]> {
-  return prisma.$queryRaw<EventoLinha[]>`
-    SELECT v.tabeve, v.codeve, btrim(e.deseve) AS descricao, e.tipeve, k.classe,
-           count(*)::int AS linhas, count(DISTINCT (v.numemp, v.tipcol, v.numcad))::int AS colaboradores, COALESCE(SUM(v.valeve), 0)::float8 AS valor
-    FROM hcm_verbas_folha v
-    LEFT JOIN hcm_eventos e ON e.codtab = v.tabeve AND e.codeve = v.codeve
-    LEFT JOIN custo_evento_classes k ON k.tabeve = v.tabeve AND k.codeve = v.codeve
-    WHERE v.removido_em_senior IS NULL
-    GROUP BY v.tabeve, v.codeve, e.deseve, e.tipeve, k.classe
-    ORDER BY e.tipeve NULLS LAST, v.tabeve, v.codeve`;
-}
-
-custoHoraRouter.get("/eventos", async (_req, res) => {
+// O que a folha contabilizou no mês, por conta do plano (débito, crédito e quantos colaboradores): é o que a pessoa olha para decidir quais contas entram
+// no custo — e vê, na hora, o efeito das regras já gravadas (`selecionada`).
+custoHoraRouter.get("/contas-folha/movimento", async (req, res) => {
   try {
-    res.json({ eventos: await eventosDaFolha() });
-  } catch (error) {
-    handleError(res, error, "eventos");
-  }
-});
-
-custoHoraRouter.put("/eventos/:tabeve/:codeve", async (req, res) => {
-  try {
-    const tabeve = Number(req.params.tabeve);
-    const codeve = Number(req.params.codeve);
-    const classe: unknown = req.body?.classe;
-    if (!Number.isInteger(tabeve) || !Number.isInteger(codeve) || (classe !== null && !ehClasseEvento(classe))) {
-      res.status(400).json({ error: "tabeve, codeve e classe (remuneracao, beneficio, encargo_folha ou null para ignorar) são obrigatórios" });
+    let competencia = competenciaDia1(String(req.query.competencia ?? ""));
+    if (!competencia) {
+      const ultimo = await prisma.$queryRaw<{ m: Date | null }[]>`SELECT date_trunc('month', max(datlan))::date AS m FROM hcm_contabilizacao_folha`;
+      competencia = ultimo[0]?.m ? ISO(ultimo[0].m) : null;
+    }
+    if (!competencia) {
+      res.json({ competencia: null, contas: [], totais: { debito: 0, credito: 0, liquido: 0, liquidoSelecionado: 0 } });
       return;
     }
-    if (classe === null) await prisma.custoEventoClasse.deleteMany({ where: { tabeve, codeve } });
-    else await prisma.custoEventoClasse.upsert({ where: { tabeve_codeve: { tabeve, codeve } }, create: { tabeve, codeve, classe, atualizadoPor: usuarioDe(req) }, update: { classe, atualizadoPor: usuarioDe(req) } });
-    res.json({ ok: true });
+    const [linhas, regras, plano] = await Promise.all([
+      prisma.$queryRaw<MovimentoConta[]>`
+        SELECT c.numemp, c.ctared, btrim(pc.clacta) AS clacta, btrim(pc.descta) AS descta, pc.anasin,
+               SUM(CASE WHEN c.debcre = 'D' THEN c.vallan ELSE 0 END)::float8 AS debito,
+               SUM(CASE WHEN c.debcre = 'C' THEN c.vallan ELSE 0 END)::float8 AS credito,
+               count(DISTINCT (c.tipcol, c.numcad))::int AS colaboradores
+        FROM hcm_contabilizacao_folha c
+        LEFT JOIN plano_contabil pc ON pc.codemp = c.numemp AND pc.ctared = c.ctared
+        WHERE c.ctared IS NOT NULL AND c.datlan >= ${competencia}::date AND c.datlan < ${mesSeguinte(competencia)}::date
+        GROUP BY c.numemp, c.ctared, pc.clacta, pc.descta, pc.anasin
+        ORDER BY pc.clacta NULLS LAST, c.ctared`,
+      prisma.custoContaFolha.findMany(),
+      carregarPlano(),
+    ]);
+    const selecionadas = contasSelecionadas(regras.map((r) => ({ codemp: r.codemp, ctared: r.ctared, acao: r.acao as "incluir" | "excluir" })), plano);
+    const contas = linhas.map((l) => ({
+      codemp: l.numemp,
+      ctared: l.ctared,
+      clacta: l.clacta,
+      descta: l.descta,
+      debito: l.debito,
+      credito: l.credito,
+      liquido: Math.round((l.debito - l.credito) * 100) / 100,
+      colaboradores: l.colaboradores,
+      selecionada: selecionadas.has(`${l.numemp}:${l.ctared}`),
+    }));
+    const soma = (f: (c: (typeof contas)[number]) => number) => Math.round(contas.reduce((s, c) => s + f(c), 0) * 100) / 100;
+    res.json({
+      competencia,
+      contas,
+      totais: { debito: soma((c) => c.debito), credito: soma((c) => c.credito), liquido: soma((c) => c.liquido), liquidoSelecionado: soma((c) => (c.selecionada ? c.liquido : 0)) },
+    });
   } catch (error) {
-    handleError(res, error, "put-evento");
-  }
-});
-
-// Classifica de uma vez os eventos de um tipo do Senior (Provento, Vantagem, Desconto...) — a pessoa decide a classe; o código não presume nenhuma.
-custoHoraRouter.post("/eventos/lote", async (req, res) => {
-  try {
-    const tipeve = Number(req.body?.tipeve);
-    const classe: unknown = req.body?.classe;
-    const somenteSemClasse = req.body?.somenteSemClasse !== false;
-    if (!Number.isInteger(tipeve) || (classe !== null && !ehClasseEvento(classe))) {
-      res.status(400).json({ error: "tipeve e classe (ou null para ignorar) são obrigatórios" });
-      return;
-    }
-    const alvo = (await eventosDaFolha()).filter((e) => e.tipeve === tipeve && (!somenteSemClasse || e.classe == null));
-    await prisma.$transaction(
-      alvo.map((e) =>
-        classe === null
-          ? prisma.custoEventoClasse.deleteMany({ where: { tabeve: e.tabeve, codeve: e.codeve } })
-          : prisma.custoEventoClasse.upsert({ where: { tabeve_codeve: { tabeve: e.tabeve, codeve: e.codeve } }, create: { tabeve: e.tabeve, codeve: e.codeve, classe, atualizadoPor: usuarioDe(req) }, update: { classe, atualizadoPor: usuarioDe(req) } })
-      )
-    );
-    res.json({ ok: true, alterados: alvo.length });
-  } catch (error) {
-    handleError(res, error, "eventos-lote");
+    handleError(res, error, "contas-folha-movimento");
   }
 });
 
@@ -227,19 +181,15 @@ custoHoraRouter.post("/eventos/lote", async (req, res) => {
 
 custoHoraRouter.get("/exportar", async (_req, res) => {
   try {
-    const [config, eventos] = await Promise.all([lerConfig(), prisma.custoEventoClasse.findMany({ orderBy: [{ tabeve: "asc" }, { codeve: "asc" }] })]);
-    res.json({
-      parametros: config.parametros,
-      encargos: config.encargos.map(({ codigo, rotulo, percentual, vigenciaInicio }) => ({ codigo, rotulo, percentual, vigenciaInicio })),
-      eventos: eventos.map((e) => ({ tabeve: e.tabeve, codeve: e.codeve, classe: e.classe })),
-    });
+    const config = await lerConfig();
+    res.json({ parametros: config.parametros, contasFolha: config.contasFolha });
   } catch (error) {
     handleError(res, error, "exportar");
   }
 });
 
-// Importa a configuração inteira (a mesma forma do /exportar). Valida TUDO antes de gravar; `substituir: true` apaga encargos e classificações atuais
-// antes (parâmetros presentes no arquivo sempre sobrescrevem). Sem `substituir`, mescla: o que o arquivo traz entra por cima do que já existe.
+// Importa a configuração inteira (a mesma forma do /exportar). Valida TUDO antes de gravar; `substituir: true` apaga as regras de contas atuais antes
+// (parâmetros presentes no arquivo sempre sobrescrevem). Sem `substituir`, mescla: o que o arquivo traz entra por cima do que já existe.
 custoHoraRouter.post("/importar", async (req, res) => {
   try {
     const corpo = (req.body ?? {}) as Record<string, unknown>;
@@ -254,21 +204,14 @@ custoHoraRouter.post("/importar", async (req, res) => {
       if (v.ok) parametros.push([chave, v.valor]);
       else erros.push(`${chave}: ${v.erro}`);
     }
-    const encargos: ReturnType<typeof validarEncargo>[] = Array.isArray(corpo.encargos) ? corpo.encargos.map((e) => validarEncargo(e)) : [];
-    encargos.forEach((e, i) => !e.ok && erros.push(`Encargo ${i + 1}: ${e.erro}`));
-    const vistos = new Set<string>();
-    for (const e of encargos) {
-      if (!e.ok) continue;
-      const k = `${e.valor.codigo}|${e.valor.vigenciaInicio}`;
-      if (vistos.has(k)) erros.push(`Encargo repetido: ${e.valor.codigo} com vigência ${e.valor.vigenciaInicio}`);
-      vistos.add(k);
-    }
-    const eventos: { tabeve: number; codeve: number; classe: string }[] = [];
-    if (Array.isArray(corpo.eventos)) {
-      corpo.eventos.forEach((e: any, i: number) => {
-        if (Number.isInteger(e?.tabeve) && Number.isInteger(e?.codeve) && ehClasseEvento(e?.classe)) eventos.push({ tabeve: e.tabeve, codeve: e.codeve, classe: e.classe });
-        else erros.push(`Evento ${i + 1}: informe tabeve, codeve e classe válida`);
-      });
+    let regras: RegraContaFolha[] = [];
+    if (corpo.contasFolha !== undefined) {
+      const v = validarRegrasContasFolha(corpo.contasFolha);
+      if (v.ok) {
+        regras = v.valor;
+        const fora = await contasForaDoPlano(regras);
+        if (fora.length > 0) erros.push(`Conta(s) fora do plano contábil: ${fora.slice(0, 10).join(", ")}`);
+      } else erros.push(v.erro);
     }
     if (erros.length > 0) {
       res.status(400).json({ error: erros.slice(0, 10).join(" · "), erros });
@@ -276,24 +219,12 @@ custoHoraRouter.post("/importar", async (req, res) => {
     }
 
     const substituir = corpo.substituir === true;
-    const quem = usuarioDe(req);
     await prisma.$transaction([
-      ...(substituir ? [prisma.custoEncargo.deleteMany({}), prisma.custoEventoClasse.deleteMany({})] : []),
+      ...(substituir ? [prisma.custoContaFolha.deleteMany({})] : []),
       ...parametros.map(([chave, valor]) => prisma.custoParametro.upsert({ where: { chave }, create: { chave, valor }, update: { valor } })),
-      ...encargos.flatMap((e) =>
-        e.ok
-          ? [
-              prisma.custoEncargo.upsert({
-                where: { codigo_vigenciaInicio: { codigo: e.valor.codigo, vigenciaInicio: dataUtc(e.valor.vigenciaInicio) } },
-                create: { ...e.valor, vigenciaInicio: dataUtc(e.valor.vigenciaInicio) },
-                update: { rotulo: e.valor.rotulo, percentual: e.valor.percentual },
-              }),
-            ]
-          : []
-      ),
-      ...eventos.map((e) => prisma.custoEventoClasse.upsert({ where: { tabeve_codeve: { tabeve: e.tabeve, codeve: e.codeve } }, create: { ...e, atualizadoPor: quem }, update: { classe: e.classe, atualizadoPor: quem } })),
+      ...regras.map((r) => prisma.custoContaFolha.upsert({ where: { codemp_ctared: { codemp: r.codemp, ctared: r.ctared } }, create: r, update: { acao: r.acao } })),
     ]);
-    res.json({ ok: true, parametros: parametros.length, encargos: encargos.length, eventos: eventos.length });
+    res.json({ ok: true, parametros: parametros.length, contasFolha: regras.length });
   } catch (error) {
     handleError(res, error, "importar");
   }

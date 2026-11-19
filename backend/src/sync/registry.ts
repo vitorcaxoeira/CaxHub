@@ -66,6 +66,7 @@ import { prisma } from "../db/prisma";
 import type { SistemaSenior } from "../config/sistemaSenior";
 import { TABELAS_HCM } from "./hcm/tabelasHcm";
 import { definirTodosSyncsHcm } from "./hcm/definirSyncHcm";
+import { JOB_NAME as CONTABILIZACAO_FOLHA_JOB, DISPLAY_NAME as CONTABILIZACAO_FOLHA_NOME, TABELA_LOCAL as CONTABILIZACAO_FOLHA_TABELA, QUERY as CONTABILIZACAO_FOLHA_QUERY, runContabilizacaoFolhaSync } from "./hcm/contabilizacaoFolhaSync";
 import { extrairTabela, extrairColunas, ColunaQuery } from "./consultaSenior";
 import { delegatePorTabelaLocal, pkFieldsDoModel } from "./recorteRetroativo";
 
@@ -496,7 +497,8 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
 // exibição. SYNC_JOBS continua sendo SÓ o ERP (a tela e as rotas de antes do RH não mudam); o HCM tem a
 // sua lista e a tela "Importados do HCM" lê dela.
 export const CRON_HCM = "0 4 * * *";
-export const SYNC_JOBS_HCM: SyncJobDescriptor[] = definirTodosSyncsHcm(TABELAS_HCM).map(({ tabela, sync }) => ({
+export const SYNC_JOBS_HCM: SyncJobDescriptor[] = [
+  ...definirTodosSyncsHcm(TABELAS_HCM).map(({ tabela, sync }) => ({
   jobName: tabela.jobName,
   displayName: tabela.displayName,
   cronExpr: CRON_HCM,
@@ -508,7 +510,21 @@ export const SYNC_JOBS_HCM: SyncJobDescriptor[] = definirTodosSyncsHcm(TABELAS_H
   contarRegistros: () => delegatePorTabelaLocal(tabela.tabelaLocal).count({ where: {} }),
   contarRemovidos: contarRemovidosGenerico(tabela.tabelaLocal),
   listarRemovidos: listarRemovidosGenerico(tabela.tabelaLocal, tabela.displayName.replace(/ \(HCM\)$/, "")),
-}));
+})),
+  // Contabilização da folha (R048CTB, 19/11/2026): base do custo do CLT. Escrita à mão (a tabela não tem chave primária) e SEM varredura de removidos: a sync
+  // regrava o mês inteiro, então o que sumiu no Senior some aqui sozinho.
+  {
+    jobName: CONTABILIZACAO_FOLHA_JOB,
+    displayName: CONTABILIZACAO_FOLHA_NOME,
+    cronExpr: CRON_HCM,
+    suportaAlterados: false,
+    campoData: null,
+    ...catalogo(CONTABILIZACAO_FOLHA_JOB, CONTABILIZACAO_FOLHA_QUERY, CONTABILIZACAO_FOLHA_TABELA, "hcm"),
+    run: runContabilizacaoFolhaSync,
+    usaUpsertEmLote: false,
+    contarRegistros: () => prisma.hcmContabilizacaoFolha.count(),
+  },
+];
 
 // União dos dois sistemas. `carregarFiltrosAtivos` SUBSTITUI o snapshot inteiro e descarta o filtro de
 // qualquer job que não esteja na lista que recebe: com só a lista de um sistema, salvar um filtro no

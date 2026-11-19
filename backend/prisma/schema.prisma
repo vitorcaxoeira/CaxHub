@@ -5116,41 +5116,12 @@ model ContratoCompraReajuste {
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 // Custo-hora real do consultor (bloco C da Rentabilidade, 18/11/2026). Tudo configurado por TELA, nada de valor de negócio no código (regra do Vitor):
-// as tabelas custo_* nascem VAZIAS e entram por "Importar JSON" ou pelas telas de Administração › Custo-hora real.
+// as tabelas custo_* nascem VAZIAS e entram por "Importar JSON" ou pelas telas de Administração › Custo-hora real. (O CLT deixou de usar a classificação
+// de eventos e os encargos em % em 19/11/2026: ver custo_contas_folha, mais abaixo.)
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 
-// Classificação dos eventos da folha (R046VER, por tabela+código do evento) para o custo do CLT. Evento sem linha aqui = ignorado.
-//   remuneracao   entra no custo E na base dos encargos percentuais (salário, horas extras, comissões, férias...)
-//   beneficio     entra no custo, fora da base (vale-refeição, plano de saúde...)
-//   encargo_folha encargo que a própria folha já calcula (ex.: FGTS, INSS patronal informativos): entra no custo, fora da base
-model CustoEventoClasse {
-  tabeve        Int
-  codeve        Int
-  classe        String   @db.VarChar(20)
-  atualizadoEm  DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
-  atualizadoPor Int?     @map("atualizado_por")
-
-  @@id([tabeve, codeve])
-  @@map("custo_evento_classes")
-}
-
-// Encargos em PERCENTUAL sobre a base (soma dos eventos "remuneracao" do mês): INSS patronal, RAT, terceiros, provisões de 13º e férias etc. Cada
-// linha vale a partir de `vigencia_inicio` até a próxima linha do MESMO `codigo`; o código é livre (quem configura escolhe).
-model CustoEncargo {
-  id             Int      @id @default(autoincrement())
-  codigo         String   @db.VarChar(40)
-  rotulo         String   @db.VarChar(120)
-  percentual     Decimal  @db.Decimal(9, 4)
-  vigenciaInicio DateTime @map("vigencia_inicio") @db.Date
-  criadoEm       DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
-  atualizadoEm   DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
-
-  @@unique([codigo, vigenciaInicio], map: "custo_encargos_codigo_vigencia_key")
-  @@map("custo_encargos")
-}
-
-// Parâmetros do cálculo (chave/valor texto): `horas_mes` (horas da escala que dividem o custo mensal do CLT) e `tipos_calculo` (tipos de cálculo da
-// folha, R044CAL.TipCal, separados por vírgula, que entram no custo do mês). Sem eles o CLT não é calculado — o job avisa em vez de chutar.
+// Parâmetros do cálculo (chave/valor texto): hoje só `horas_mes` (horas da escala que dividem o custo mensal do CLT contabilizado). Sem ele o CLT não é
+// calculado — o job avisa em vez de chutar. (O parâmetro `tipos_calculo` saiu em 19/11/2026, com a troca da folha pela contabilização R048CTB.)
 model CustoParametro {
   chave        String   @id @db.VarChar(40)
   valor        String   @db.VarChar(200)
@@ -5192,4 +5163,58 @@ model ConsultorCustoHora {
   @@id([codemp, codusu, competencia])
   @@index([competencia])
   @@map("consultor_custo_hora")
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Custo do CLT pela CONTABILIZAÇÃO DA FOLHA (R048CTB, 19/11/2026). Substitui a classificação dos eventos (R046VER) + encargos em %: a R048CTB já traz,
+// por colaborador, o que a folha contabiliza — salários, INSS patronal/RAT/terceiros (GPS), FGTS, provisões de 13º e férias (com INSS e FGTS), indenização,
+// horas extras... — nas contas do plano do ERP. Conferido contra o razão do ERP em jul/2026: 45 das 51 contas de resultado batem ao centavo (as 6 de
+// Assistência Médica diferem porque a folha só traz o desconto do colaborador; a fatura do plano entra no ERP pela empresa).
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+
+// Espelho da R048CTB (HCM: "Contabilização - Nova"), SÓ as linhas originais (`perrat = 0`): a tabela repete cada lançamento numa cópia do rateio por CC
+// (`perrat = 100`; nunca há rateio parcial no dado real) e uma cópia isolada falta em alguns lançamentos, então a original é a completa. Sem chave
+// primária na origem: por isso um `id` próprio, e a sync apaga e regrava o mês inteiro (domínio sync/hcm/contabilizacaoFolhaSync.ts).
+model HcmContabilizacaoFolha {
+  id             Int      @id @default(autoincrement())
+  numemp         Int
+  tipcol         Int
+  numcad         Int
+  codcal         Int?
+  codlot         Int?
+  /// Data do lançamento (último dia do mês da folha).
+  datlan         DateTime @db.Date
+  /// Opção da contabilização (LOpcCtn): 1 = folha (cálculo), 3 = provisões.
+  opcctb         Int?
+  orictb         String?  @db.VarChar(1)
+  /// Código do lançamento contábil (define o histórico e as contas no cadastro do HCM).
+  codclc         Int?
+  cplhis         String?  @db.VarChar(100)
+  /// "D" = débito, "C" = crédito.
+  debcre         String   @db.VarChar(1)
+  reddeb         Int?
+  redcre         Int?
+  /// Conta reduzida do plano do ERP que recebe o lançamento: `reddeb` no débito, `redcre` no crédito.
+  ctared         Int?
+  codccu         String?  @db.VarChar(18)
+  codfil         Int?
+  vallan         Decimal  @db.Decimal(14, 2)
+  sincronizadoEm DateTime @default(now()) @map("sincronizado_em") @db.Timestamptz(6)
+
+  @@index([numemp, tipcol, numcad, datlan])
+  @@index([datlan])
+  @@map("hcm_contabilizacao_folha")
+}
+
+// Quais contas do plano compõem o custo do CLT (regras incluir/excluir, em QUALQUER nível: a sintética vale por todas as analíticas abaixo — a mesma
+// semântica de rentabilidade_indicador_contas). `codemp` é a empresa do plano no ERP; a R048CTB casa pela empresa do HCM (numemp), que na Soeltech é a mesma.
+// Nasce vazia: nenhuma conta no código.
+model CustoContaFolha {
+  codemp Int
+  ctared Int
+  /// "incluir" | "excluir" (exclusão vence).
+  acao   String @db.VarChar(10)
+
+  @@id([codemp, ctared])
+  @@map("custo_contas_folha")
 }

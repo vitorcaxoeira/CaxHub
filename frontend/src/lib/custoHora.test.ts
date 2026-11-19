@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { descreverDetalhe, formatarPercentual, mesAnterior, resumirResultado, rotuloCompetencia, rotuloTipoEvento } from "./custoHora";
+import { descreverDetalhe, mesAnterior, resumirResultado, rotuloCompetencia } from "./custoHora";
 
 describe("competência", () => {
   it("rótulo MM/AAAA", () => {
@@ -9,19 +9,6 @@ describe("competência", () => {
   it("mês anterior, inclusive na virada do ano", () => {
     expect(mesAnterior(new Date(2026, 10, 18))).toBe("2026-10");
     expect(mesAnterior(new Date(2026, 0, 5))).toBe("2025-12");
-  });
-});
-
-describe("rótulos", () => {
-  it("tipo do evento", () => {
-    expect(rotuloTipoEvento(1)).toBe("Provento");
-    expect(rotuloTipoEvento(null)).toBe("Sem cadastro");
-    expect(rotuloTipoEvento(99)).toBe("Tipo 99");
-  });
-  it("percentual sem zeros sobrando", () => {
-    expect(formatarPercentual(20)).toBe("20%");
-    expect(formatarPercentual(8.33)).toBe("8,33%");
-    expect(formatarPercentual(null)).toBe("—");
   });
 });
 
@@ -41,8 +28,9 @@ describe("resumirResultado", () => {
 
 describe("descreverDetalhe", () => {
   const brl = (s: string) => s.replace(/\s/g, " ");
-  it("CLT: custo mensal ÷ horas", () => {
-    expect(brl(descreverDetalhe("clt_folha", { custoMensal: 7616.5, horasMes: 200 }))).toBe("R$ 7.616,50 no mês ÷ 200 h");
+  it("CLT: custo contabilizado no mês ÷ horas, com folha e provisões quando há", () => {
+    expect(brl(descreverDetalhe("clt_folha", { custoMensal: 7616.5, folha: 7616.5, provisoes: 0, horasMes: 200 }))).toBe("R$ 7.616,50 contabilizado no mês ÷ 200 h");
+    expect(brl(descreverDetalhe("clt_folha", { custoMensal: 7616.5, folha: 6800, provisoes: 816.5, horasMes: 200 }))).toBe("R$ 7.616,50 contabilizado no mês (folha R$ 6.800,00 + provisões R$ 816,50) ÷ 200 h");
   });
   it("PJ mensal e PJ por hora", () => {
     expect(brl(descreverDetalhe("pj_contrato", { mensal: true, precoContrato: 12360, horasMes: 200 }))).toBe("R$ 12.360,00 (preço mensal) ÷ 200 h");

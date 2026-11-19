@@ -2,28 +2,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   calcularCustoClt,
+  chaveConta,
   competenciaDia1,
   competenciasDoPeriodo,
-  encargosVigentes,
   escolherCusto,
-  lerTiposCalculo,
   mesSeguinte,
   precoEhMensal,
-  validarEncargo,
   validarParametro,
   validarPeriodoMensal,
+  validarRegrasContasFolha,
   validarValorManual,
   valorManualEm,
 } from "./custoHora";
 
 // Os números abaixo são de TESTE (não são regra de negócio): servem só para conferir a conta.
-
-test("tipos de cálculo: lê lista, ordena e tira repetidos; recusa lixo", () => {
-  assert.deepEqual(lerTiposCalculo("13, 11,12,11"), [11, 12, 13]);
-  assert.equal(lerTiposCalculo(""), null);
-  assert.equal(lerTiposCalculo("11,abc"), null);
-  assert.equal(lerTiposCalculo("0"), null);
-});
 
 test("parâmetro horas_mes: aceita vírgula decimal, recusa zero e absurdo", () => {
   assert.deepEqual(validarParametro("horas_mes", "180,5"), { ok: true, valor: "180.5" });
@@ -31,60 +23,6 @@ test("parâmetro horas_mes: aceita vírgula decimal, recusa zero e absurdo", () 
   assert.equal(validarParametro("horas_mes", "0").ok, false);
   assert.equal(validarParametro("horas_mes", "800").ok, false);
   assert.equal(validarParametro("horas_mes", "").ok, false);
-});
-
-test("parâmetro tipos_calculo normaliza a lista", () => {
-  assert.deepEqual(validarParametro("tipos_calculo", "12, 11"), { ok: true, valor: "11,12" });
-  assert.equal(validarParametro("tipos_calculo", "x").ok, false);
-});
-
-test("encargo: valida código, nome, percentual e vigência", () => {
-  const ok = validarEncargo({ codigo: "inss_patronal", rotulo: "INSS patronal", percentual: "20,5", vigenciaInicio: "2026-01-01" });
-  assert.deepEqual(ok, { ok: true, valor: { codigo: "inss_patronal", rotulo: "INSS patronal", percentual: 20.5, vigenciaInicio: "2026-01-01" } });
-  assert.equal(validarEncargo({ codigo: "INSS", rotulo: "x", percentual: 1, vigenciaInicio: "2026-01-01" }).ok, false);
-  assert.equal(validarEncargo({ codigo: "rat", rotulo: "", percentual: 1, vigenciaInicio: "2026-01-01" }).ok, false);
-  assert.equal(validarEncargo({ codigo: "rat", rotulo: "RAT", percentual: -1, vigenciaInicio: "2026-01-01" }).ok, false);
-  assert.equal(validarEncargo({ codigo: "rat", rotulo: "RAT", percentual: 2000, vigenciaInicio: "2026-01-01" }).ok, false);
-  assert.equal(validarEncargo({ codigo: "rat", rotulo: "RAT", percentual: 1, vigenciaInicio: "2026-02-30" }).ok, false);
-});
-
-test("encargo vigente: a última vigência que não passa do mês, por código", () => {
-  const linhas = [
-    { codigo: "rat", rotulo: "RAT", percentual: 1, vigenciaInicio: "2025-01-01" },
-    { codigo: "rat", rotulo: "RAT", percentual: 2, vigenciaInicio: "2026-03-01" },
-    { codigo: "terceiros", rotulo: "Terceiros", percentual: 5.8, vigenciaInicio: "2026-06-01" },
-  ];
-  assert.deepEqual(encargosVigentes(linhas, "2026-02-01").map((e) => [e.codigo, e.percentual]), [["rat", 1]]);
-  assert.deepEqual(encargosVigentes(linhas, "2026-03-01").map((e) => [e.codigo, e.percentual]), [["rat", 2]]);
-  assert.deepEqual(encargosVigentes(linhas, "2026-07-01").map((e) => [e.codigo, e.percentual]), [["rat", 2], ["terceiros", 5.8]]);
-  assert.deepEqual(encargosVigentes(linhas, "2024-12-01"), []);
-});
-
-test("CLT: soma remuneração, benefícios, encargos da folha e os percentuais sobre a remuneração, e divide pelas horas", () => {
-  const r = calcularCustoClt({
-    remuneracao: 5000,
-    beneficios: 800,
-    encargosFolha: 400,
-    encargos: [
-      { codigo: "a", rotulo: "A", percentual: 20 },
-      { codigo: "b", rotulo: "B", percentual: 8.33 },
-    ],
-    horasMes: 200,
-  })!;
-  // 5000 + 800 + 400 + 1000 + 416.50 = 7616.50 ; ÷ 200 = 38.0825
-  assert.equal(r.detalhe.custoMensal, 7616.5);
-  assert.equal(r.custoHora, 38.0825);
-  assert.deepEqual(r.detalhe.encargos.map((e) => e.valor), [1000, 416.5]);
-});
-
-test("CLT: sem horas da escala ou sem custo não há custo-hora", () => {
-  assert.equal(calcularCustoClt({ remuneracao: 5000, beneficios: 0, encargosFolha: 0, encargos: [], horasMes: 0 }), null);
-  assert.equal(calcularCustoClt({ remuneracao: 0, beneficios: 0, encargosFolha: 0, encargos: [], horasMes: 200 }), null);
-});
-
-test("CLT: os percentuais incidem só na remuneração, não nos benefícios", () => {
-  const r = calcularCustoClt({ remuneracao: 1000, beneficios: 1000, encargosFolha: 0, encargos: [{ codigo: "a", rotulo: "A", percentual: 10 }], horasMes: 100 })!;
-  assert.equal(r.detalhe.custoMensal, 2100);
 });
 
 test("fonte de custo: folha vale mais que contrato, que vale mais que manual", () => {
@@ -142,4 +80,63 @@ test("período mensal: valida e descarta o período quando não é mensal", () =
   assert.equal(validarPeriodoMensal({ mensal: true, desde: "2026-09", ate: "2026-01" }).ok, false);
   assert.equal(validarPeriodoMensal({ mensal: true, desde: "xx" }).ok, false);
   assert.equal(validarPeriodoMensal({}).ok, false);
+});
+
+// ---------- CLT pela contabilização da folha (R048CTB) ----------
+// Os valores abaixo são de TESTE (não são regra de negócio): servem só para conferir a conta.
+
+const C = (ctared: number) => chaveConta(1, ctared);
+
+test("CLT: débito − crédito só nas contas escolhidas, dividido pelas horas da escala", () => {
+  const r = calcularCustoClt({
+    lancamentos: [
+      { conta: C(224), opcctb: 1, valor: 5000 }, // salários (débito)
+      { conta: C(226), opcctb: 1, valor: 1200 }, // INSS (débito)
+      { conta: C(120), opcctb: 3, valor: 600 }, // provisão de 13º
+      { conta: C(235), opcctb: 1, valor: -300 }, // desconto do plano (crédito) — conta que o teste NÃO escolhe
+    ],
+    contas: new Set([C(224), C(226), C(120)]),
+    horasMes: 200,
+  })!;
+  assert.equal(r.detalhe.custoMensal, 6800);
+  assert.equal(r.detalhe.folha, 6200);
+  assert.equal(r.detalhe.provisoes, 600);
+  assert.equal(r.custoHora, 34);
+  assert.deepEqual(r.detalhe.porConta.map((c) => c.conta), [C(224), C(226), C(120)]);
+});
+
+test("CLT: o crédito de uma conta escolhida subtrai (ex.: estorno ou desconto)", () => {
+  const r = calcularCustoClt({ lancamentos: [{ conta: C(224), opcctb: 1, valor: 1000 }, { conta: C(224), opcctb: 1, valor: -250 }], contas: new Set([C(224)]), horasMes: 100 })!;
+  assert.equal(r.detalhe.custoMensal, 750);
+  assert.equal(r.custoHora, 7.5);
+});
+
+test("CLT: sem horas, sem lançamento nas contas escolhidas ou líquido não positivo = sem custo", () => {
+  const um = [{ conta: C(224), opcctb: 1, valor: 1000 }];
+  assert.equal(calcularCustoClt({ lancamentos: um, contas: new Set([C(224)]), horasMes: 0 }), null);
+  assert.equal(calcularCustoClt({ lancamentos: um, contas: new Set([C(999)]), horasMes: 200 }), null);
+  assert.equal(calcularCustoClt({ lancamentos: [], contas: new Set([C(224)]), horasMes: 200 }), null);
+  assert.equal(calcularCustoClt({ lancamentos: [{ conta: C(224), opcctb: 1, valor: -50 }], contas: new Set([C(224)]), horasMes: 200 }), null);
+});
+
+test("CLT: arredonda o custo mensal a centavos e o custo-hora a 4 casas", () => {
+  const r = calcularCustoClt({ lancamentos: [{ conta: C(1), opcctb: 1, valor: 1000.005 }], contas: new Set([C(1)]), horasMes: 220 })!;
+  assert.equal(r.detalhe.custoMensal, 1000.01);
+  assert.equal(r.custoHora, 4.5455);
+});
+
+test("regras de contas da folha: valida lista, ação e repetição", () => {
+  assert.deepEqual(validarRegrasContasFolha([{ codemp: 1, ctared: 224, acao: "incluir" }, { codemp: 1, ctared: 235, acao: "excluir" }]), {
+    ok: true,
+    valor: [{ codemp: 1, ctared: 224, acao: "incluir" }, { codemp: 1, ctared: 235, acao: "excluir" }],
+  });
+  assert.equal(validarRegrasContasFolha([]).ok, true);
+  assert.equal(validarRegrasContasFolha("x").ok, false);
+  assert.equal(validarRegrasContasFolha([{ codemp: 1, ctared: 224, acao: "somar" }]).ok, false);
+  assert.equal(validarRegrasContasFolha([{ codemp: 1, ctared: 0, acao: "incluir" }]).ok, false);
+  assert.equal(validarRegrasContasFolha([{ codemp: 1, ctared: 224, acao: "incluir" }, { codemp: 1, ctared: 224, acao: "excluir" }]).ok, false);
+});
+
+test("parâmetros: só horas_mes existe (tipos de cálculo saiu com a R048CTB)", () => {
+  assert.equal(validarParametro("tipos_calculo" as never, "11").ok, false);
 });

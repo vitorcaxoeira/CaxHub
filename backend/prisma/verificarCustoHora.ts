@@ -1,5 +1,5 @@
-// Verificação do custo-hora real (bloco C da Rentabilidade, 18/11/2026) contra o banco local e os dados reais já espelhados: configuração por rota,
-// job (CLT pela folha, PJ pelo contrato, valor manual, precedência), indicador CustoReal. Os VALORES de configuração usados aqui (horas, percentual,
+// Verificação do custo-hora real (bloco C da Rentabilidade, 18-19/11/2026) contra o banco local e os dados reais já espelhados: configuração por rota,
+// job (CLT pela contabilização da folha — R048CTB —, PJ pelo contrato, valor manual, precedência), indicador CustoReal. Os VALORES de configuração usados aqui (horas, percentual,
 // classes) são de TESTE — o produto não traz nenhum. Convenção do repo: verificar*.ts, ts-node --transpile-only; Express mínimo (nunca o server.ts).
 // Tudo que o teste grava (custo_*, vínculos HCM, custo-hora calculado) é restaurado no `finally`.
 //
@@ -24,7 +24,6 @@ const perto = (a: number, b: number, tol = 0.0001) => Math.abs(a - b) <= tol;
 const ISO = (d: Date) => d.toISOString().slice(0, 10);
 
 const HORAS_TESTE = 200;
-const PERCENTUAL_TESTE = 10;
 const MESES = ["2026-05-01", "2026-07-01", "2026-10-01"];
 
 async function main() {
@@ -47,8 +46,7 @@ async function main() {
   // Estado de partida (restaurado no fim).
   const antes = {
     parametros: await prisma.custoParametro.findMany(),
-    encargos: await prisma.custoEncargo.findMany(),
-    classes: await prisma.custoEventoClasse.findMany(),
+    contasFolha: await prisma.custoContaFolha.findMany(),
     manuais: await prisma.consultorValorHoraManual.findMany(),
     vinculos: await prisma.consultorVinculo.findMany(),
     custos: await prisma.consultorCustoHora.findMany(),
@@ -57,8 +55,7 @@ async function main() {
   // O teste parte do zero: a configuração e o resultado que já existirem no banco são guardados acima e voltam no `finally`.
   await prisma.consultorCustoHora.deleteMany({});
   await prisma.consultorValorHoraManual.deleteMany({});
-  await prisma.custoEncargo.deleteMany({});
-  await prisma.custoEventoClasse.deleteMany({});
+  await prisma.custoContaFolha.deleteMany({});
   await prisma.custoParametro.deleteMany({});
 
   try {
@@ -67,55 +64,56 @@ async function main() {
 
     console.log("\n== configuração nasce vazia ==");
     const cfg0 = await chamar("GET", "/custo-hora/config", tokenAdmin);
-    ok("sem parâmetros, encargos nem classificação (nada vem do código)", cfg0.status === 200 && Object.keys(cfg0.json.parametros).length === 0 && cfg0.json.encargos.length === 0 && cfg0.json.eventosClassificados === 0, JSON.stringify(cfg0.json.parametros));
+    ok("sem parâmetros nem contas da folha (nada vem do código)", cfg0.status === 200 && Object.keys(cfg0.json.parametros).length === 0 && cfg0.json.contasFolha.length === 0, JSON.stringify(cfg0.json.parametros));
+    ok("a contabilização da folha (R048CTB) está importada", cfg0.json.contabilizacaoFolha.linhas > 0, `${cfg0.json.contabilizacaoFolha.linhas} linhas até ${cfg0.json.contabilizacaoFolha.ate}`);
 
     console.log("\n== sem configuração, o CLT não é calculado e avisa ==");
     const semConfig = await chamar("POST", "/custo-hora/recalcular", tokenAdmin, { de: "2026-10", ate: "2026-10" });
-    ok("recalcular responde e avisa o que falta", semConfig.status === 200 && semConfig.json.avisos.some((a: string) => a.includes("horas da escala") && a.includes("tipos de cálculo") && a.includes("classificação")), semConfig.json?.avisos?.[0]);
+    ok("recalcular responde e avisa o que falta", semConfig.status === 200 && semConfig.json.avisos.some((a: string) => a.includes("horas da escala") && a.includes("contas da folha")), semConfig.json?.avisos?.[0]);
     ok("e nenhum CLT foi gravado", semConfig.json.porOrigem.clt_folha === 0);
 
     console.log("\n== parâmetros ==");
     ok("horas da escala inválida = 400", (await chamar("PUT", "/custo-hora/parametros/horas_mes", tokenAdmin, { valor: "0" })).status === 400);
-    ok("tipos de cálculo inválido = 400", (await chamar("PUT", "/custo-hora/parametros/tipos_calculo", tokenAdmin, { valor: "abc" })).status === 400);
+    ok("tipos de cálculo não existe mais (a folha vem da contabilização) = 404", (await chamar("PUT", "/custo-hora/parametros/tipos_calculo", tokenAdmin, { valor: "11" })).status === 404);
     ok("parâmetro desconhecido = 404", (await chamar("PUT", "/custo-hora/parametros/xyz", tokenAdmin, { valor: "1" })).status === 404);
     ok("grava horas da escala", (await chamar("PUT", "/custo-hora/parametros/horas_mes", tokenAdmin, { valor: String(HORAS_TESTE) })).status === 200);
-    ok("grava tipos de cálculo (normaliza)", (await chamar("PUT", "/custo-hora/parametros/tipos_calculo", tokenAdmin, { valor: "11" })).json?.valor === "11");
 
-    console.log("\n== encargos ==");
-    ok("encargo com código inválido = 400", (await chamar("POST", "/custo-hora/encargos", tokenAdmin, { codigo: "A B", rotulo: "x", percentual: 1, vigenciaInicio: "2026-01-01" })).status === 400);
-    const e1 = await chamar("POST", "/custo-hora/encargos", tokenAdmin, { codigo: "encargo_teste", rotulo: "Encargo de teste", percentual: PERCENTUAL_TESTE, vigenciaInicio: "2026-01-01" });
-    ok("cria encargo", e1.status === 201);
-    ok("mesma vigência = 409", (await chamar("POST", "/custo-hora/encargos", tokenAdmin, { codigo: "encargo_teste", rotulo: "x", percentual: 1, vigenciaInicio: "2026-01-01" })).status === 409);
-    const e2 = await chamar("POST", "/custo-hora/encargos", tokenAdmin, { codigo: "encargo_teste", rotulo: "Encargo de teste", percentual: 99, vigenciaInicio: "2027-01-01" });
-    ok("vigência futura não altera o cálculo de 2026 (conferido adiante)", e2.status === 201);
-
-    console.log("\n== eventos da folha ==");
-    const evs = await chamar("GET", "/custo-hora/eventos", tokenAdmin);
-    ok("lista os eventos da folha com tipo do Senior e peso", evs.status === 200 && evs.json.eventos.length > 50 && evs.json.eventos.every((e: any) => "tipeve" in e && "valor" in e), `${evs.json?.eventos?.length} eventos`);
-    ok("nenhum nasce classificado", evs.json.eventos.every((e: any) => e.classe === null));
-    ok("classe inválida = 400", (await chamar("PUT", "/custo-hora/eventos/1/1", tokenAdmin, { classe: "xis" })).status === 400);
-    // Classificação de TESTE: tipo 1 e 2 = remuneração, tipo 4 = encargo da folha.
-    const l1 = await chamar("POST", "/custo-hora/eventos/lote", tokenAdmin, { tipeve: 1, classe: "remuneracao" });
-    const l2 = await chamar("POST", "/custo-hora/eventos/lote", tokenAdmin, { tipeve: 2, classe: "remuneracao" });
-    const l4 = await chamar("POST", "/custo-hora/eventos/lote", tokenAdmin, { tipeve: 4, classe: "encargo_folha" });
-    ok("classifica em lote por tipo do Senior", l1.status === 200 && l1.json.alterados > 0 && l2.status === 200 && l4.json.alterados > 0, `${l1.json.alterados}+${l2.json.alterados}+${l4.json.alterados}`);
-    const um = evs.json.eventos.find((e: any) => e.tipeve === 3);
-    ok("evento individual: classifica e volta a ignorar", (await chamar("PUT", `/custo-hora/eventos/${um.tabeve}/${um.codeve}`, tokenAdmin, { classe: "beneficio" })).status === 200 && (await chamar("PUT", `/custo-hora/eventos/${um.tabeve}/${um.codeve}`, tokenAdmin, { classe: null })).status === 200);
-    ok("lote sem sobrescrever o que já tem classe", (await chamar("POST", "/custo-hora/eventos/lote", tokenAdmin, { tipeve: 1, classe: "beneficio" })).json.alterados === 0);
+    console.log("\n== contas da folha ==");
+    const mov0 = await chamar("GET", "/custo-hora/contas-folha/movimento?competencia=2026-07", tokenAdmin);
+    const contasMov: { codemp: number; ctared: number; clacta: string | null; descta: string | null; liquido: number; selecionada: boolean; colaboradores: number }[] = mov0.json.contas;
+    ok("movimento do mês: contas contabilizadas pela folha, com débito, crédito e colaboradores", mov0.status === 200 && contasMov.length > 20 && contasMov.every((c) => c.colaboradores > 0), `${contasMov.length} contas`);
+    ok("sem regras, nenhuma conta aparece como selecionada", contasMov.every((c) => !c.selecionada) && mov0.json.totais.liquidoSelecionado === 0);
+    ok("movimento de competência sem dado volta vazio", (await chamar("GET", "/custo-hora/contas-folha/movimento?competencia=2019-01", tokenAdmin)).json.contas.length === 0);
+    ok("regra com ação inválida = 400", (await chamar("PUT", "/custo-hora/contas-folha", tokenAdmin, { regras: [{ codemp: 1, ctared: 224, acao: "somar" }] })).status === 400);
+    ok("conta fora do plano = 400", (await chamar("PUT", "/custo-hora/contas-folha", tokenAdmin, { regras: [{ codemp: 1, ctared: 9999999, acao: "incluir" }] })).status === 400);
+    // Regras de TESTE: todas as contas de resultado (classificação 4...) que a folha tocou em jul/2026, menos as de Assistência Médica.
+    const resultado4 = contasMov.filter((c) => (c.clacta ?? "").startsWith("4"));
+    const assistencia = resultado4.filter((c) => /as+istencia/i.test(c.descta ?? ""));
+    const regrasSemExclusao = resultado4.map((c) => ({ codemp: c.codemp, ctared: c.ctared, acao: "incluir" }));
+    ok("há contas de resultado e de Assistência Médica para testar", resultado4.length > 30 && assistencia.length >= 3, `${resultado4.length} contas, ${assistencia.length} de assistência`);
+    // incluir e excluir a MESMA conta é regra repetida: o teste usa uma só regra por conta (a exclusão ganha trocando a ação).
+    const regras = resultado4.map((c) => ({ codemp: c.codemp, ctared: c.ctared, acao: assistencia.some((a) => a.ctared === c.ctared) ? "excluir" : "incluir" }));
+    const put = await chamar("PUT", "/custo-hora/contas-folha", tokenAdmin, { regras });
+    ok("grava as regras de contas da folha", put.status === 200 && put.json.regras === regras.length);
+    const mov1 = await chamar("GET", "/custo-hora/contas-folha/movimento?competencia=2026-07", tokenAdmin);
+    const selecionadas = new Set<number>(mov1.json.contas.filter((c: any) => c.selecionada).map((c: any) => c.ctared));
+    ok("o movimento passa a marcar as selecionadas (as de Assistência Médica ficam de fora)", selecionadas.size === resultado4.length - assistencia.length && assistencia.every((a) => !selecionadas.has(a.ctared)), `${selecionadas.size} selecionadas`);
+    const somaSel = mov1.json.contas.filter((c: any) => c.selecionada).reduce((s: number, c: any) => s + c.liquido, 0);
+    ok("o líquido selecionado do mês = soma das contas marcadas", perto(somaSel, mov1.json.totais.liquidoSelecionado, 0.02) && mov1.json.totais.liquidoSelecionado > 0, `R$ ${mov1.json.totais.liquidoSelecionado}`);
 
     console.log("\n== exportar / importar ==");
     const exp = await chamar("GET", "/custo-hora/exportar", tokenAdmin);
-    ok("exporta parâmetros, encargos e eventos", exp.status === 200 && exp.json.parametros.horas_mes === String(HORAS_TESTE) && exp.json.encargos.length === 2 && exp.json.eventos.length > 10);
-    ok("importar recusa arquivo inválido sem gravar nada", (await chamar("POST", "/custo-hora/importar", tokenAdmin, { parametros: { horas_mes: "-1" }, encargos: [{ codigo: "X" }] })).status === 400);
+    ok("exporta parâmetros e contas da folha", exp.status === 200 && exp.json.parametros.horas_mes === String(HORAS_TESTE) && exp.json.contasFolha.length === regras.length);
+    ok("importar recusa arquivo inválido sem gravar nada", (await chamar("POST", "/custo-hora/importar", tokenAdmin, { parametros: { horas_mes: "-1" }, contasFolha: [{ codemp: 1 }] })).status === 400 && (await prisma.custoContaFolha.count()) === regras.length);
     const imp = await chamar("POST", "/custo-hora/importar", tokenAdmin, { ...exp.json, substituir: true });
-    ok("importar o próprio export (substituindo) devolve o mesmo estado", imp.status === 200 && imp.json.encargos === 2 && (await prisma.custoEncargo.count()) === 2 && (await prisma.custoEventoClasse.count()) === exp.json.eventos.length);
+    ok("importar o próprio export (substituindo) devolve o mesmo estado", imp.status === 200 && imp.json.contasFolha === regras.length && (await prisma.custoContaFolha.count()) === regras.length);
 
-    console.log("\n== job: CLT pela folha ==");
-    // Funcionário com folha de tipo 11 nos meses de teste e consultor sem contrato para receber o vínculo.
+    console.log("\n== job: CLT pela contabilização da folha ==");
+    // Funcionário com lançamentos nas contas escolhidas em TODOS os meses de teste, e consultor sem contrato para receber o vínculo.
     const comFolha = await prisma.$queryRaw<{ numemp: number; tipcol: number; numcad: number; competencia: Date }[]>`
-      SELECT DISTINCT v.numemp, v.tipcol, v.numcad, date_trunc('month', cal.perref)::date AS competencia
-      FROM hcm_verbas_folha v JOIN hcm_calculos_folha cal ON cal.numemp = v.numemp AND cal.codcal = v.codcal
-      WHERE cal.tipcal = 11 AND cal.sitcal IN ('T','P') AND cal.perref >= '2026-05-01' AND cal.perref < '2026-11-01' AND v.removido_em_senior IS NULL`;
+      SELECT DISTINCT c.numemp, c.tipcol, c.numcad, date_trunc('month', c.datlan)::date AS competencia
+      FROM hcm_contabilizacao_folha c
+      WHERE c.datlan >= '2026-05-01' AND c.datlan < '2026-11-01' AND c.ctared = ANY(${[...selecionadas]}::int[])`;
     const porFunc = new Map<string, Set<string>>();
     for (const l of comFolha) {
       const k = `${l.numemp}-${l.tipcol}-${l.numcad}`;
@@ -131,32 +129,42 @@ async function main() {
     await prisma.consultorVinculo.deleteMany({});
     await prisma.consultorVinculo.create({ data: { codemp: consClt.codemp, codusu: consClt.codusu, hcmNumemp: fe, hcmTipcol: ft, hcmNumcad: fc } });
 
-    const esperadoClt = async (numemp: number, tipcol: number, numcad: number, mes: string) => {
-      const r = await prisma.$queryRaw<{ classe: string; valor: number }[]>`
-        SELECT k.classe, SUM(v.valeve)::float8 AS valor FROM hcm_verbas_folha v
-        JOIN hcm_calculos_folha cal ON cal.numemp = v.numemp AND cal.codcal = v.codcal
-        JOIN custo_evento_classes k ON k.tabeve = v.tabeve AND k.codeve = v.codeve
-        WHERE v.numemp = ${numemp} AND v.tipcol = ${tipcol} AND v.numcad = ${numcad} AND cal.tipcal = 11 AND cal.sitcal IN ('T','P')
-          AND date_trunc('month', cal.perref)::date = ${mes}::date AND v.removido_em_senior IS NULL GROUP BY k.classe`;
-      const v = (c: string) => r.find((x) => x.classe === c)?.valor ?? 0;
-      const rem = v("remuneracao");
-      return (rem + v("beneficio") + v("encargo_folha") + Math.round(((rem * PERCENTUAL_TESTE) / 100) * 100) / 100) / HORAS_TESTE;
+    // Conta feita de outro jeito: débito − crédito das contas escolhidas direto na tabela, dividido pelas horas.
+    const esperadoClt = async (numemp: number, tipcol: number, numcad: number, mes: string, contas: number[]) => {
+      const r = await prisma.$queryRaw<{ v: number }[]>`
+        SELECT COALESCE(SUM(CASE WHEN debcre = 'D' THEN vallan ELSE -vallan END), 0)::float8 AS v FROM hcm_contabilizacao_folha
+        WHERE numemp = ${numemp} AND tipcol = ${tipcol} AND numcad = ${numcad} AND date_trunc('month', datlan)::date = ${mes}::date AND ctared = ANY(${contas}::int[])`;
+      return Math.round(r[0].v * 100) / 100 / HORAS_TESTE;
     };
 
     const rec = await chamar("POST", "/custo-hora/recalcular", tokenAdmin, { de: "2026-05", ate: "2026-10" });
     ok("recalcular o período responde", rec.status === 200 && rec.json.competencias.length === 6, `${rec.json?.gravados} custos`);
     for (const mes of MESES) {
       const linha = await prisma.consultorCustoHora.findUnique({ where: { codemp_codusu_competencia: { codemp: consClt.codemp, codusu: consClt.codusu, competencia: new Date(`${mes}T00:00:00Z`) } } });
-      const esperado = await esperadoClt(fe, ft, fc, mes);
-      ok(`CLT ${mes}: (remuneração + encargo da folha + ${PERCENTUAL_TESTE}% da remuneração) ÷ ${HORAS_TESTE}`, !!linha && linha.origem === "clt_folha" && perto(Number(linha.custoHora), esperado, 0.0002), `${linha ? Number(linha.custoHora) : "—"} x ${esperado.toFixed(4)}`);
+      const esperado = await esperadoClt(fe, ft, fc, mes, [...selecionadas]);
+      ok(`CLT ${mes}: débito − crédito das contas escolhidas ÷ ${HORAS_TESTE}`, !!linha && linha.origem === "clt_folha" && perto(Number(linha.custoHora), esperado, 0.0002), `${linha ? Number(linha.custoHora) : "—"} x ${esperado.toFixed(4)}`);
     }
     const lc = await prisma.consultorCustoHora.findUnique({ where: { codemp_codusu_competencia: { codemp: consClt.codemp, codusu: consClt.codusu, competencia: new Date("2026-10-01T00:00:00Z") } } });
     const det: any = lc?.detalhe;
-    ok("o detalhe guarda como chegou ao número (remuneração, encargos, horas)", !!det && det.horasMes === HORAS_TESTE && det.encargos.length === 1 && det.encargos[0].percentual === PERCENTUAL_TESTE && det.custoMensal > 0, JSON.stringify(det?.encargos));
-    ok("o encargo de 2027 (99%) não entrou em 2026", det?.encargos?.[0]?.percentual === PERCENTUAL_TESTE);
+    ok("o detalhe guarda como chegou ao número (folha, provisões, horas, contas)", !!det && det.horasMes === HORAS_TESTE && det.custoMensal > 0 && perto(det.folha + det.provisoes, det.custoMensal, 0.02) && det.porConta.length > 3, JSON.stringify(det?.porConta?.slice(0, 2)));
+    ok("nenhuma conta de Assistência Médica entrou no custo", (det?.porConta ?? []).every((c: any) => !assistencia.some((a) => `${a.codemp}:${a.ctared}` === c.conta)));
     const resultado = await chamar("GET", "/custo-hora/resultado?competencia=2026-10", tokenAdmin);
     ok("GET resultado lista o consultor com origem e custo", resultado.status === 200 && resultado.json.linhas.some((l: any) => l.codusu === consClt.codusu && l.origem === "clt_folha" && l.custoHora > 0));
     ok("resultado de competência inválida = 400", (await chamar("GET", "/custo-hora/resultado?competencia=xx", tokenAdmin)).status === 400);
+
+    // Mudar as regras muda o custo: incluindo também as contas de Assistência Médica (o crédito do desconto subtrai), o custo-hora cai.
+    await chamar("PUT", "/custo-hora/contas-folha", tokenAdmin, { regras: regrasSemExclusao });
+    await chamar("POST", "/custo-hora/recalcular", tokenAdmin, { de: "2026-10", ate: "2026-10" });
+    const semExcluir = await prisma.consultorCustoHora.findUnique({ where: { codemp_codusu_competencia: { codemp: consClt.codemp, codusu: consClt.codusu, competencia: new Date("2026-10-01T00:00:00Z") } } });
+    const todasContas = [...selecionadas, ...assistencia.map((a) => a.ctared)];
+    const esperadoTodas = await esperadoClt(fe, ft, fc, "2026-10-01", todasContas);
+    ok("com as contas de Assistência Médica incluídas o custo muda conforme a conta", !!semExcluir && perto(Number(semExcluir.custoHora), esperadoTodas, 0.0002) && Number(semExcluir.custoHora) !== Number(lc?.custoHora), `${semExcluir ? Number(semExcluir.custoHora) : "—"} x ${esperadoTodas.toFixed(4)}`);
+    await chamar("PUT", "/custo-hora/contas-folha", tokenAdmin, { regras });
+
+    // Mês ainda sem contabilização (o corrente): sem CLT, o consultor fica sem custo naquele mês.
+    const corrente = await chamar("POST", "/custo-hora/recalcular", tokenAdmin, { de: "2026-11", ate: "2026-11" });
+    ok("mês sem contabilização da folha não gera CLT", corrente.status === 200 && (await prisma.consultorCustoHora.count({ where: { codusu: consClt.codusu, competencia: new Date("2026-11-01T00:00:00Z") } })) === 0);
+    await chamar("POST", "/custo-hora/recalcular", tokenAdmin, { de: "2026-05", ate: "2026-10" });
 
     console.log("\n== job: PJ pelo contrato ==");
     const pj = await (async () => {
@@ -295,10 +303,8 @@ async function main() {
     if (antes.custos.length) await prisma.consultorCustoHora.createMany({ data: antes.custos.map((c) => ({ ...c, detalhe: (c.detalhe ?? undefined) as any })) });
     await prisma.consultorValorHoraManual.deleteMany({});
     for (const m of antes.manuais) await prisma.consultorValorHoraManual.create({ data: m });
-    await prisma.custoEncargo.deleteMany({});
-    for (const e of antes.encargos) await prisma.custoEncargo.create({ data: e });
-    await prisma.custoEventoClasse.deleteMany({});
-    for (const c of antes.classes) await prisma.custoEventoClasse.create({ data: c });
+    await prisma.custoContaFolha.deleteMany({});
+    if (antes.contasFolha.length) await prisma.custoContaFolha.createMany({ data: antes.contasFolha });
     await prisma.custoParametro.deleteMany({});
     for (const p of antes.parametros) await prisma.custoParametro.create({ data: p });
     await prisma.consultorVinculo.deleteMany({});
