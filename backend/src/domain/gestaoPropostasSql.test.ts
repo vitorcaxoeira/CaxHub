@@ -172,3 +172,12 @@ test("campos extras: sem eles a consulta é a de sempre; com eles entram no SELE
   // Também no modo conjunto e sem valores (quem não vê R$ continua podendo ligar campos).
   assert.match(sql({}, { extras, conjunto: true, comValores: false }).text, /b\."proposta__tippro"/);
 });
+
+test("escopoDepartamentos: sem escopo não recorta; com escopo filtra pelo departamento da proposta ou de algum item; lista vazia não traz nada", () => {
+  assert.doesNotMatch(textoDe(sql({ escopoDepartamentos: null })), /propostas_itens x/);
+  const comEscopo = sql({ escopoDepartamentos: [3, 8] });
+  assert.match(comEscopo.text, /p\.depexe = ANY/);
+  assert.match(comEscopo.text, /x\.depexe = ANY/);
+  assert.ok(comEscopo.values.some((v) => Array.isArray(v) && v.join() === "3,8"));
+  assert.match(textoDe(sql({ escopoDepartamentos: [] })), /FALSE/);
+});

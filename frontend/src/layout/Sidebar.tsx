@@ -90,6 +90,8 @@ interface NavLeaf {
   // `viajante` do /meu-perfil). Combina em OU com `gestorOuAdmin`, como `souConsultor`. Só
   // "Minhas Solicitações" usa — o viajante só consulta a própria viagem.
   souViajante?: boolean;
+  // Papéis (Role) que também veem o item, em OU com `gestorOuAdmin`. Hoje só a Gestão Propostas (papel comercial, que não é líder).
+  ouPapeis?: readonly string[];
   // Aparece pra admin e pra quem é gestor do departamento 11 (DHO) — dinâmico, via DepartamentoGestor. Só
   // o menu Pessoas usa. Em sincronia com o RequireGestorOuAdmin (depexe) em App.tsx e com o
   // exigirAdminOuGestorDho de routes/rh/index.ts.
@@ -176,9 +178,9 @@ const groups: NavGroup[] = [
       // pra decidir os do time. O recorte de quem vê o quê é do servidor.
       { to: "/projetos/aprovacoes", label: "Aprovações" },
       { to: "/projetos/alocacao", label: "Alocação", gestorOuAdmin: true },
-      // Gestão das propostas (horas × RAT, faturável, Finalizar / Em Execução). Mesmo recorte do menu Propostas: admin e comercial. Em sincronia com
-      // o RequireRole de App.tsx e o requireRole de routes/gestaoPropostas.ts. Ao mudar quem entra, ampliar as três camadas.
-      { to: "/projetos/gestao-propostas", label: "Gestão Propostas", roles: ["admin", "comercial"] },
+      // Gestão das propostas (horas × RAT, faturável, ações de situação só do admin). Admin, papel comercial e qualquer líder de departamento (que
+      // vê só os departamentos dele). Em sincronia com o RequireGestorOuAdmin de App.tsx e o exigirAcessoGestaoPropostas de routes/gestaoPropostas.ts.
+      { to: "/projetos/gestao-propostas", label: "Gestão Propostas", gestorOuAdmin: true, ouPapeis: ["comercial"] },
       { to: "/projetos/eficiencia", label: "Eficiência", gestorOuAdmin: true },
       // Gestão do Plano de Evolução dos consultores PJ (ciclos, participantes, prévia, apuração). Antes era um botão dentro da Eficiência.
       { to: "/projetos/plano-evolucao", label: "Plano de Evolução PJ", gestorConsultoria: true },
@@ -584,6 +586,7 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
     if (item.gestorDho) return ehGestorDho;
     if (item.gestorComercial) return ehGestorComercial;
     if (item.gestorConsultoria) return ehGestorConsultoria;
+    if (item.ouPapeis && user && item.ouPapeis.includes(user.role)) return true;
     return (
       (!item.gestorOuAdmin && !item.souConsultor && !item.souViajante) ||
       !!(item.gestorOuAdmin && ehGestorOuAdmin) ||

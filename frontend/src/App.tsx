@@ -309,6 +309,11 @@ export default function App() {
               </Route>
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
+              </Route>
+              {/* Gestão de Projetos › Gestão Propostas (19/11/2026): admin, papel comercial ou qualquer líder de departamento (o líder vê só os
+                  departamentos que gerencia; só o admin tem as ações de situação — ver routes/gestaoPropostas.ts). Em sincronia com o item do menu
+                  (Sidebar, `gestorOuAdmin` + `ouPapeis`) e o exigirAcessoGestaoPropostas do backend. Ao mudar quem entra, ampliar as três camadas. */}
+              <Route element={<RequireGestorOuAdmin papeis={["comercial"]} />}>
                 <Route path="/projetos/gestao-propostas" element={<GestaoPropostas />} />
               </Route>
               {/* Comercial › Gestão de Metas: admin ou gestor do departamento 2 (Comercial). Gestor não é Role (vem de
