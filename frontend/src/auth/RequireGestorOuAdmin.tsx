@@ -9,18 +9,28 @@ import { useAuth } from "./AuthContext";
 // `permitirViajante`: também deixa entrar quem viaja numa solicitação reservada/finalizada (o
 // backend devolve `viajante` no mesmo /meu-perfil) — usado só nas telas de leitura da própria viagem.
 // `depexe`: em vez de qualquer líder, só quem gerencia ESTE departamento (ou um DESTES, numa lista) — admin continua entrando.
-// Usado em Pessoas (DHO), Gestão de Metas (Comercial) e Plano de Evolução PJ (Consultoria ERP e HCM).
-export function RequireGestorOuAdmin({ permitirViajante = false, depexe }: { permitirViajante?: boolean; depexe?: number | readonly number[] }) {
+// `papeis`: papéis (Role) que entram direto, sem ser líder — admin já entra sempre. Usado na Gestão Propostas (papel comercial).
+// Usado em Pessoas (DHO), Gestão de Metas (Comercial), Plano de Evolução PJ (Consultoria ERP e HCM) e Gestão Propostas (qualquer líder).
+export function RequireGestorOuAdmin({
+  permitirViajante = false,
+  depexe,
+  papeis,
+}: {
+  permitirViajante?: boolean;
+  depexe?: number | readonly number[];
+  papeis?: readonly string[];
+}) {
   const { user, loading } = useAuth();
   // O resultado vale só para a regra (e o usuário) em que foi calculado. Duas guardas desta na mesma posição da árvore de rotas (ex.: o
   // redirecionamento do endereço antigo do Plano, sob a guarda "qualquer gestor", levando à guarda "só Consultoria") são a MESMA instância
   // para o React: sem a chave, o "é gestor" da regra anterior deixava a tela nova renderizar uma vez antes de o efeito recalcular.
-  const chave = `${user?.id ?? ""}|${permitirViajante}|${depexe === undefined ? "" : String(depexe)}`;
+  const chave = `${user?.id ?? ""}|${permitirViajante}|${depexe === undefined ? "" : String(depexe)}|${papeis?.join(",") ?? ""}`;
+  const entraPeloPapel = !!user && (user.role === "admin" || (papeis?.includes(user.role) ?? false));
   const [resultado, setResultado] = useState<{ chave: string; ehGestor: boolean } | null>(null);
   const ehGestor = resultado?.chave === chave ? resultado.ehGestor : undefined;
 
   useEffect(() => {
-    if (!user || user.role === "admin") return;
+    if (!user || user.role === "admin" || (papeis?.includes(user.role) ?? false)) return;
     let cancelado = false;
     axios
       .get("/api/dashboard/meu-perfil")
@@ -41,7 +51,7 @@ export function RequireGestorOuAdmin({ permitirViajante = false, depexe }: { per
   }, [chave]);
 
   if (loading || !user) return loading ? null : <Navigate to="/" replace />;
-  if (user.role === "admin") return <Outlet />;
+  if (entraPeloPapel) return <Outlet />;
   if (ehGestor === undefined) return null;
   return ehGestor ? <Outlet /> : <Navigate to="/" replace />;
 }

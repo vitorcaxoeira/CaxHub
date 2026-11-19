@@ -32,7 +32,7 @@ export interface EscopoEficiencia {
   departamentos: number[] | null;
 }
 
-const ITENS_DOS_DEPARTAMENTOS = (deps: number[]) => Prisma.sql`(
+export const ITENS_DOS_DEPARTAMENTOS = (deps: number[]) => Prisma.sql`(
   p.depexe = ANY(${deps}::int[])
   OR EXISTS (
     SELECT 1 FROM propostas_itens x

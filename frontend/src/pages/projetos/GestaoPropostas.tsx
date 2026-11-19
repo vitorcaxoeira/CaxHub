@@ -87,6 +87,8 @@ interface RatRow {
 }
 
 interface OpcoesFiltro {
+  /** Só o admin altera a situação da proposta; os demais (comercial, líderes) só sincronizam com o ERP. */
+  podeMudarSituacao: boolean;
   situacoes: { sitpro: number; label: string }[];
   departamentos: { depexe: number; label: string }[];
   modalidades: { modpro: number; label: string }[];
@@ -96,6 +98,7 @@ interface AcoesGestao {
   navegar: (rota: string) => void;
   sincronizar: (row: PropostaRow) => void;
   estaSincronizando: (chave: string) => boolean;
+  podeMudarSituacao: boolean;
   pedirAcao: (row: PropostaRow, acao: Acao) => void;
 }
 
@@ -373,15 +376,21 @@ const COLUNAS: DefColuna<PropostaRow, AcoesGestao>[] = [
               <DropdownMenu.Item onSelect={() => a.sincronizar(row)} disabled={a.estaSincronizando(chave)}>
                 {a.estaSincronizando(chave) ? "Sincronizando..." : "Sinc. ERP"}
               </DropdownMenu.Item>
-              <DropdownMenu.Item onSelect={() => a.pedirAcao(row, "finalizar")} disabled={motivoFinalizar != null} title={motivoFinalizar ?? undefined}>
-                {/* "(Rat Pendente)": avisa que há RAT Digitada/Fechada impedindo finalizar (Finalizar = passar para Executada); o motivo completo está no title. */}
-                {row.sitpro === 7 && row.ratsBloqueando > 0 ? "Finalizar (Rat Pendente)" : "Finalizar"}
-              </DropdownMenu.Item>
-              <DropdownMenu.Item onSelect={() => a.pedirAcao(row, "em-execucao")} disabled={motivoExecucao != null} title={motivoExecucao ?? undefined}>
-                Em Execução
-              </DropdownMenu.Item>
+              {/* Ações de situação: só o admin (o backend recusa os demais com 403). Líder e papel comercial ficam só com o Sinc. ERP. */}
+              {a.podeMudarSituacao && (
+                <DropdownMenu.Item onSelect={() => a.pedirAcao(row, "finalizar")} disabled={motivoFinalizar != null} title={motivoFinalizar ?? undefined}>
+                  {/* "(Rat Pendente)": avisa que há RAT Digitada/Fechada impedindo finalizar (Finalizar = passar para Executada); o motivo completo está no title. */}
+                  {row.sitpro === 7 && row.ratsBloqueando > 0 ? "Finalizar (Rat Pendente)" : "Finalizar"}
+                </DropdownMenu.Item>
+              )}
+              {a.podeMudarSituacao && (
+                <DropdownMenu.Item onSelect={() => a.pedirAcao(row, "em-execucao")} disabled={motivoExecucao != null} title={motivoExecucao ?? undefined}>
+                  Em Execução
+                </DropdownMenu.Item>
+              )}
               {/* Decisões sobre uma proposta Aprovada: só aparecem para ela (cada uma pede o motivo num modal). */}
-              {row.sitpro === 4 &&
+              {a.podeMudarSituacao &&
+                row.sitpro === 4 &&
                 (["rejeitar", "cancelar", "declinar"] as const).map((acao) => (
                   <DropdownMenu.Item key={acao} onSelect={() => a.pedirAcao(row, acao)} disabled={motivoDaAcao(row, acao) != null} title={motivoDaAcao(row, acao) ?? undefined}>
                     {TEXTO_ACAO[acao].menu}
@@ -1036,6 +1045,8 @@ export function GestaoPropostas() {
           ctx={{
             navegar: navigate,
             estaSincronizando,
+            // Enquanto as opções não chegaram, sem ações de situação (o padrão seguro).
+            podeMudarSituacao: opcoes?.podeMudarSituacao ?? false,
             sincronizar: sincronizarLinha,
             pedirAcao: (row, acao) => {
               setErroAcao(null);

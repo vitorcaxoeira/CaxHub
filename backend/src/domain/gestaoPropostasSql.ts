@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { ExtrasDaConsulta, FonteCampos } from "../consultas/camposRelacionados";
 import { rotuloSql } from "../consultas/rotuloSql";
-import { RAT_ITEM_VALIDO } from "./eficienciaDados";
+import { ITENS_DOS_DEPARTAMENTOS, RAT_ITEM_VALIDO } from "./eficienciaDados";
 import { FATSER_FATURAVEL } from "./eficienciaPropostas";
 import { CODCLI_EMPRESA_PROPRIA, DEPEXE_LABELS, FORFAT_LABELS, MODPRO_LABELS, SITPRO_LABELS } from "./propostasDominio";
 
@@ -36,6 +36,11 @@ export interface FiltrosGestaoPropostas {
   situacoes: number[] | null;
   depexes: number[] | null;
   modpros: number[] | null;
+  /**
+   * Recorte de acesso (não é filtro da tela): departamentos que a pessoa enxerga, pela proposta OU por algum item (mesma regra da Eficiência).
+   * `null`/ausente = todos; lista vazia = nenhuma proposta.
+   */
+  escopoDepartamentos?: number[] | null;
   /** Cliente, número da proposta, do projeto ou trecho da descrição. */
   busca: string;
 }
@@ -138,6 +143,9 @@ export function consultaGestaoPropostas(filtros: FiltrosGestaoPropostas, opcoes:
   if (filtros.situacoes) condicoes.push(Prisma.sql`p.sitpro = ANY(${filtros.situacoes}::int[])`);
   if (filtros.depexes) condicoes.push(Prisma.sql`p.depexe = ANY(${filtros.depexes}::int[])`);
   if (filtros.modpros) condicoes.push(Prisma.sql`p.modpro = ANY(${filtros.modpros}::int[])`);
+  if (filtros.escopoDepartamentos != null) {
+    condicoes.push(filtros.escopoDepartamentos.length > 0 ? ITENS_DOS_DEPARTAMENTOS(filtros.escopoDepartamentos) : Prisma.sql`FALSE`);
+  }
   const busca = filtros.busca.trim().toLowerCase();
   if (busca) {
     const like = termoLike(busca);

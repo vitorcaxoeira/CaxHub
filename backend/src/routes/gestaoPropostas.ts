@@ -1,6 +1,6 @@
 import { buscarImpedimentosDeFinalizar, mensagemDosImpedimentos } from "../domain/impedimentosDeFinalizar";
-import { Router, type Request, type Response } from "express";
-import { AuthenticatedRequest, requireAuth, requireRole } from "../auth/middleware";
+import { Router, type NextFunction, type Request, type Response } from "express";
+import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { extrasDaConsulta } from "../consultas/camposRelacionados";
 import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { prisma } from "../db/prisma";
@@ -8,6 +8,8 @@ import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { entidadeIdProposta } from "../audit/identidadeEntidade";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
+import { ITENS_DOS_DEPARTAMENTOS } from "../domain/eficienciaDados";
+import { resolverAcessoGestaoPropostas, type AcessoGestaoPropostas } from "../domain/gestaoPropostasAcesso";
 import {
   consultaGestaoPropostas,
   FONTES_GESTAO_PROPOSTAS,
@@ -60,10 +62,38 @@ import { runRatSyncPorCodpro } from "../sync/ratSync";
 import { col, registrarListaConsultavel, type ListaConsultavel } from "./listaConsultavel";
 
 // Tela Gestão Propostas (09/11/2026): gestão das propostas — horas vendidas × executadas em RAT, o que é faturável e as ações que mudam a
-// SITUAÇÃO da proposta (Finalizar, Em Execução). Mesmo recorte do menu Propostas (/projetos/propostas): admin e comercial. A visibilidade por
-// departamento NÃO se aplica aqui: quem gere propostas gere todas.
+// SITUAÇÃO da proposta (Finalizar, Em Execução...). Acesso (19/11/2026, domain/gestaoPropostasAcesso.ts): admin (tudo), papel comercial e líder do
+// Comercial (todos os departamentos, só Sinc. ERP) e os demais líderes de departamento (só os departamentos que gerenciam, só Sinc. ERP).
 export const gestaoPropostasRouter = Router();
-gestaoPropostasRouter.use(requireAuth, requireRole("admin", "comercial"));
+
+async function exigirAcessoGestaoPropostas(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const r = req as AuthenticatedRequest;
+    const acesso = await resolverAcessoGestaoPropostas(r.user!.userId, r.user!.role as string);
+    if (!acesso) {
+      res.status(403).json({ error: "Sem permissão para acessar este recurso" });
+      return;
+    }
+    res.locals.acessoGestaoPropostas = acesso;
+    next();
+  } catch (erro) {
+    erroInterno(res, erro, "acesso");
+  }
+}
+gestaoPropostasRouter.use(requireAuth, exigirAcessoGestaoPropostas);
+
+const acessoDe = (res: Response) => res.locals.acessoGestaoPropostas as AcessoGestaoPropostas;
+
+/** A proposta está dentro do recorte de departamentos da pessoa? (`null` = todos). Usada em tudo que recebe codemp/codpro: fora do recorte é 404, nunca 403. */
+async function propostaNoEscopo(codemp: number, codpro: number, departamentos: number[] | null): Promise<boolean> {
+  if (departamentos == null) return true;
+  if (departamentos.length === 0) return false;
+  const linhas = await prisma.$queryRaw<{ ok: number }[]>`
+    SELECT 1 AS ok FROM propostas p
+    WHERE p.codemp = ${codemp} AND p.codpro = ${codpro} AND p.removido_em_senior IS NULL AND ${ITENS_DOS_DEPARTAMENTOS(departamentos)}
+    LIMIT 1`;
+  return linhas.length > 0;
+}
 
 /** "7,8" -> [7, 8]; vazio ou sem número válido -> null (sem recorte). O 0 é um valor válido. */
 function lerIds(valor: unknown): number[] | null {
@@ -108,7 +138,7 @@ registrarListaConsultavel(
     const comValores = await podeVerValores(req);
     // Campos de proposta/cliente que a pessoa ligou no painel de colunas (?campos=cliente__cidcli,...): só entram na consulta os pedidos.
     const extras = extrasDaConsulta(FONTES_GESTAO_PROPOSTAS, req.query as Record<string, unknown>);
-    const { com, interna } = consultaGestaoPropostas(lerFiltrosTopo(req), {
+    const { com, interna } = consultaGestaoPropostas({ ...lerFiltrosTopo(req), escopoDepartamentos: acessoDe(req.res!).departamentos }, {
       conjunto: precisaCalcularConjunto(req.query as Record<string, unknown>),
       comValores,
       extras,
@@ -186,6 +216,7 @@ registrarListaConsultavel(
     const codemp = Number(req.query.codemp);
     const codpro = Number(req.query.codpro);
     if (!Number.isInteger(codemp) || !Number.isInteger(codpro)) throw new ErroEntradaConsulta("Informe codemp e codpro da proposta.");
+    if (!(await propostaNoEscopo(codemp, codpro, acessoDe(req.res!).departamentos))) throw new ErroEntradaConsulta("Proposta não encontrada", 404);
     const comValores = await podeVerValores(req);
     const filtros: FiltrosTopoRats = {
       codfors: [],
@@ -235,9 +266,15 @@ registrarListaConsultavel(
 
 // GET /opcoes-filtro — situações, departamentos e modalidades que os filtros do topo oferecem, sempre do domínio do backend (nunca lista fixa na tela).
 gestaoPropostasRouter.get("/opcoes-filtro", (_req, res) => {
+  const acesso = acessoDe(res);
   res.json({
+    // Quem não pode mudar situação não vê as ações na tela (o backend recusa de qualquer forma, em pedirMudancaSituacao).
+    podeMudarSituacao: acesso.podeMudarSituacao,
     situacoes: SITPRO_ORDER.map((sitpro) => ({ sitpro, label: sitproLabel(sitpro) })),
-    departamentos: Object.entries(DEPEXE_LABELS).map(([depexe, label]) => ({ depexe: Number(depexe), label })),
+    // Líder: só os departamentos que gerencia.
+    departamentos: Object.entries(DEPEXE_LABELS)
+      .filter(([depexe]) => acesso.departamentos == null || acesso.departamentos.includes(Number(depexe)))
+      .map(([depexe, label]) => ({ depexe: Number(depexe), label })),
     modalidades: Object.entries(MODPRO_LABELS).map(([modpro, label]) => ({ modpro: Number(modpro), label })),
   });
 });
@@ -283,8 +320,21 @@ gestaoPropostasRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req,
   try {
     const chave = lerChave(req, res);
     if (!chave) return;
+    const { departamentos } = acessoDe(res);
+    // Já conhecida e fora do recorte: 404 antes de qualquer chamada ao Senior.
+    const jaExiste = (await prisma.proposta.count({ where: { codemp: chave.codemp, codpro: chave.codpro } })) > 0;
+    if (jaExiste && !(await propostaNoEscopo(chave.codemp, chave.codpro, departamentos))) {
+      res.status(404).json({ error: "Proposta não encontrada" });
+      return;
+    }
     try {
-      res.json({ ok: true, ...(await sincronizarProposta(chave, { comAtividades: true })) });
+      const resultado = await sincronizarProposta(chave, { comAtividades: true });
+      // Número que o CaxHub nunca tinha visto (Sinc. avulso): só devolve se, depois de trazida, ela está no recorte da pessoa.
+      if (!jaExiste && resultado.encontrada && !(await propostaNoEscopo(chave.codemp, chave.codpro, departamentos))) {
+        res.status(404).json({ error: "Proposta não encontrada" });
+        return;
+      }
+      res.json({ ok: true, ...resultado });
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : String(syncError);
       res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
@@ -362,6 +412,10 @@ async function prepararMudancaSituacao({ codemp, codpro }: ChaveProposta, acao: 
 
 async function pedirMudancaSituacao(req: Request, res: Response, acao: AcaoSituacao) {
   try {
+    if (!acessoDe(res).podeMudarSituacao) {
+      res.status(403).json({ error: "Somente o administrador altera a situação da proposta" });
+      return;
+    }
     const chave = lerChave(req, res);
     if (!chave) return;
     const r = req as AuthenticatedRequest;
@@ -431,7 +485,7 @@ gestaoPropostasRouter.get("/propostas/:codemp/:codpro/situacao", async (req, res
     const chave = lerChave(req, res);
     if (!chave) return;
     const proposta = await prisma.proposta.findUnique({ where: { codemp_codpro: chave }, select: { sitpro: true } });
-    if (!proposta) {
+    if (!proposta || !(await propostaNoEscopo(chave.codemp, chave.codpro, acessoDe(res).departamentos))) {
       res.status(404).json({ error: "Proposta não encontrada" });
       return;
     }
