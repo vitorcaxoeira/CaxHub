@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type KyriaMemberRole } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { pkFieldsDoModel } from "../sync/recorteRetroativo";
 import { converterValorInterno, ErroValorInterno } from "./valorCampoInterno";
@@ -77,22 +77,26 @@ function clampPagina(valor: unknown, min: number, max: number, padrao: number): 
 /**
  * Condição pra uma linha poder RECEBER vínculo num campo interno (rentabilidade, ajuste 03 de
  * 17/11/2026): só membro com papel `attendant` é relacionado a um consultor — solicitante, gestor
- * etc. não apontam hora e não entram no custo. Chaveada por `tabelaLocal.coluna`; a validação é do
+ * etc. não apontam hora e não entram no custo. Em 19/11/2026 entraram também `admin` e `manager` (quem
+ * atende além do papel de atendente). Chaveada por `tabelaLocal.coluna`; a validação é do
  * backend (editarCampoInterno) e a tela só usa isto pra não oferecer "vincular" onde não vale.
  * Remover um vínculo já existente NUNCA é bloqueado (valor null).
  */
-export const RESTRICOES_VINCULO: Record<string, { coluna: string; valor: string; motivo: string }> = {
+/** Papéis do Kyria que podem ser ligados a um consultor (`kyria_members.codusu`). Uma só lista: o vínculo, a tela de Vínculo de Consultores e "Ver dados" leem daqui. */
+export const ROLES_VINCULAVEIS_KYRIA: readonly KyriaMemberRole[] = ["attendant", "admin", "manager"];
+
+export const RESTRICOES_VINCULO: Record<string, { coluna: string; valores: readonly string[]; motivo: string }> = {
   "kyria_members.codusu": {
     coluna: "role",
-    valor: "attendant",
-    motivo: "Só membro com papel \"attendant\" (atendente) é vinculado a consultor.",
+    valores: ROLES_VINCULAVEIS_KYRIA,
+    motivo: "Só membro com papel \"attendant\", \"admin\" ou \"manager\" é vinculado a consultor.",
   },
 };
 
 export interface RestricaoVinculo {
-  /** Campo Prisma da linha que precisa ter `valor` (a tela lê `linha[campo]`). */
+  /** Campo Prisma da linha que precisa ter um destes `valores` (a tela lê `linha[campo]`). */
   campo: string;
-  valor: string;
+  valores: string[];
   motivo: string;
 }
 
@@ -147,7 +151,7 @@ async function resolverColunas(job: KyriaSyncJobDescriptor, model: Model): Promi
       ...coluna,
       rotulo,
       ehInterno: mapeado ? mapeado.nomeOrigem === null : false,
-      vinculoRestrito: restricao && campoCondicao ? { campo: campoCondicao, valor: restricao.valor, motivo: restricao.motivo } : null,
+      vinculoRestrito: restricao && campoCondicao ? { campo: campoCondicao, valores: [...restricao.valores], motivo: restricao.motivo } : null,
       relacionamentoModelo: mapeado?.relacionamentoModelo ?? null,
       relacionamentoCampo: mapeado?.relacionamentoCampo ?? null,
       relacionamentoCampoDescricao: mapeado?.relacionamentoCampoDescricao ?? null,
@@ -259,7 +263,7 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
     const campoCondicao = campoPrismaPorColuna(model, restricao.coluna);
     const atual = campoCondicao ? await delegate.findUnique({ where: { [pk[0]]: id }, select: { [campoCondicao]: true } }) : null;
     if (!atual) throw new ErroValidacao(`Registro "${id}" não encontrado em "${job.tabelaLocal}".`);
-    if (String(atual[campoCondicao as string]) !== restricao.valor) throw new ErroValidacao(restricao.motivo);
+    if (!restricao.valores.includes(String(atual[campoCondicao as string]))) throw new ErroValidacao(restricao.motivo);
   }
 
   // Campo interno que NÃO é vínculo (18/11/2026): o valor é conferido pelo TIPO da coluna (Boolean, texto, inteiro, número) — um valor de tipo

@@ -90,14 +90,14 @@ async function main() {
     console.log("\n== Ajuste 03 — vínculo só para role attendant ==");
     const consultor = await prisma.consultor.findFirst({ select: { codusu: true } });
     assert(consultor, "precisa de um consultor");
-    const naoAtendente = await prisma.kyriaMember.findFirst({ where: { role: { not: "attendant" }, codusu: null }, select: { id: true, role: true } });
+    const naoAtendente = await prisma.kyriaMember.findFirst({ where: { role: { notIn: ["attendant", "admin", "manager"] }, codusu: null }, select: { id: true, role: true } });
     const atendente = await prisma.kyriaMember.findFirst({ where: { role: "attendant", codusu: null }, select: { id: true } });
     assert(naoAtendente && atendente, "precisa de um membro não-atendente e um atendente sem vínculo");
     membroRestaurar = { id: atendente.id };
 
     const colunas = await chamar("GET", `/sync-kyria/dados/${MEMBERS_JOB}?page=1&pageSize=5`, tokenAdmin);
     const colCodusu = colunas.json?.colunas?.find((c: any) => c.rotulo === "codusu");
-    ok("coluna codusu informa a restrição (role = attendant)", colCodusu?.vinculoRestrito?.campo === "role" && colCodusu.vinculoRestrito.valor === "attendant", JSON.stringify(colCodusu?.vinculoRestrito));
+    ok("coluna codusu informa a restrição (role = attendant, admin ou manager)", colCodusu?.vinculoRestrito?.campo === "role" && JSON.stringify(colCodusu.vinculoRestrito.valores) === JSON.stringify(["attendant", "admin", "manager"]), JSON.stringify(colCodusu?.vinculoRestrito));
     ok("outras colunas não têm restrição", colunas.json.colunas.filter((c: any) => c.rotulo !== "codusu").every((c: any) => c.vinculoRestrito === null));
 
     const barrado = await chamar("PATCH", `/sync-kyria/dados/${MEMBERS_JOB}/${naoAtendente.id}`, tokenAdmin, { campo: "codusu", valor: consultor.codusu });

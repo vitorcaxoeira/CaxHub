@@ -43,13 +43,13 @@ export { dataIsoValida };
 const centavos = (v: number) => Math.round(v * 100) / 100;
 const quatroCasas = (v: number) => Math.round(v * 10000) / 10000;
 
-/** Um lançamento da contabilização da folha, já somado por conta/opção no mês (débito positivo, crédito negativo). */
+/** Um lançamento da contabilização da folha, já somado por conta/opção no mês. Só entra o que foi contabilizado a DÉBITO: o crédito não compõe o custo. */
 export interface LancamentoFolha {
   /** `codemp:ctared` da conta do plano (ver `chaveConta`). */
   conta: string;
   /** Opção da contabilização na R048CTB: 1 = folha (cálculo), 3 = provisões. */
   opcctb: number | null;
-  /** Débito − crédito. */
+  /** Valor a débito. */
   valor: number;
 }
 
@@ -63,7 +63,7 @@ export interface EntradaClt {
 }
 
 export interface DetalheClt {
-  /** Custo do mês nas contas escolhidas (débito − crédito). */
+  /** Custo do mês nas contas escolhidas (só débito). */
   custoMensal: number;
   /** Parte que vem da folha propriamente dita (opção 1) e das provisões de 13º/férias (opção 3). */
   folha: number;
@@ -74,8 +74,8 @@ export interface DetalheClt {
 }
 
 /**
- * CLT: (Σ débito − crédito das contas escolhidas, na contabilização da folha do mês) ÷ horas da escala. `null` se não há o que dividir (sem horas, sem
- * lançamento nas contas escolhidas, ou líquido zero/negativo — ex.: mês só com estorno).
+ * CLT: (Σ do que foi contabilizado a DÉBITO nas contas escolhidas, na folha do mês) ÷ horas da escala. `null` se não há o que dividir (sem horas, sem
+ * lançamento nas contas escolhidas ou total zero).
  */
 export function calcularCustoClt(e: EntradaClt): { custoHora: number; detalhe: DetalheClt } | null {
   if (!(e.horasMes > 0)) return null;
@@ -178,11 +178,16 @@ export interface ValorManual {
   valor: number;
 }
 
+/** A vigência do valor-hora manual que vale na competência: a de maior início que não passa dela. */
+export function vigenciaManualEm<T extends ValorManual>(valores: T[], competencia: string): T | null {
+  let achado: T | null = null;
+  for (const v of valores) if (v.vigenciaInicio <= competencia && (!achado || v.vigenciaInicio > achado.vigenciaInicio)) achado = v;
+  return achado;
+}
+
 /** Valor-hora manual vigente na competência: o da última vigência que começou até ela. */
 export function valorManualEm(valores: ValorManual[], competencia: string): number | null {
-  let achado: ValorManual | null = null;
-  for (const v of valores) if (v.vigenciaInicio <= competencia && (!achado || v.vigenciaInicio > achado.vigenciaInicio)) achado = v;
-  return achado ? achado.valor : null;
+  return vigenciaManualEm(valores, competencia)?.valor ?? null;
 }
 
 export function validarValorManual(corpo: unknown): Validacao<{ vigenciaInicio: string; valor: number; observacao: string | null }> {

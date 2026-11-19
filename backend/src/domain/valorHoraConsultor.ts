@@ -66,13 +66,18 @@ export function montarLinhaDoTempo(reajustes: ReajusteContrato[], precoAtual: nu
   return { vigencias, divergencia };
 }
 
-/** Valor-hora vigente numa data (AAAA-MM-DD): o da última vigência que começou até ela. `null` se não há linha do tempo. */
-export function valorHoraEm(vigencias: VigenciaValorHora[], data: string): number | null {
+/** A vigência que vale numa data (AAAA-MM-DD): a última que começou até ela. `null` se não há linha do tempo. */
+export function vigenciaEm(vigencias: VigenciaValorHora[], data: string): VigenciaValorHora | null {
   let achado: VigenciaValorHora | null = null;
   for (const v of vigencias) {
     if (v.desde === null || v.desde <= data) achado = v;
   }
-  return achado ? achado.valor : null;
+  return achado;
+}
+
+/** Valor-hora vigente numa data (AAAA-MM-DD): o da última vigência que começou até ela. `null` se não há linha do tempo. */
+export function valorHoraEm(vigencias: VigenciaValorHora[], data: string): number | null {
+  return vigenciaEm(vigencias, data)?.valor ?? null;
 }
 
 export interface EntradaLinhaDoContrato {

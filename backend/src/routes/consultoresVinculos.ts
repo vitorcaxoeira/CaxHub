@@ -6,11 +6,11 @@ import { validarPeriodoMensal, valorManualEm } from "../domain/custoHora";
 import { linhaDoTempoDoContrato, type LinhaDoTempoValorHora } from "../domain/valorHoraConsultor";
 import { contratoFixoDe } from "../domain/contratoFixo";
 import { sugerirAtendenteKyria, sugerirColaboradorHcm, type Confianca } from "../domain/vinculoConsultor";
-import { RESTRICOES_VINCULO } from "../kyria/dadosSincronizados";
+import { RESTRICOES_VINCULO, ROLES_VINCULAVEIS_KYRIA } from "../kyria/dadosSincronizados";
 
 // Administração > Vínculo de Consultores (custo-hora real, bloco C da Rentabilidade, 18/11/2026). Liga cada CONSULTOR (Senior) ao atendente do Kyria
 // (de onde vêm as horas dos tickets) e ao funcionário do HCM (de onde vem a folha do CLT). Os dois lados moram em lugares diferentes de propósito:
-//   - Kyria: `kyria_members.codusu` — o campo interno que "Ver dados" já grava e que os cálculos de horas já leem (uma só fonte; só `attendant`).
+//   - Kyria: `kyria_members.codusu` — o campo interno que "Ver dados" já grava e que os cálculos de horas já leem (uma só fonte; só `attendant`, `admin` e `manager`).
 //   - HCM: `consultor_vinculos` (tabela nativa), um funcionário por consultor (unique).
 // O consultor PJ não tem funcionário: o custo dele vem do contrato de compra (E460CTR/CCS/REA), mostrado aqui como valor-hora atual + reajustes.
 // Só administrador. Montado em server.ts como "/consultores-vinculos".
@@ -167,7 +167,7 @@ async function montarPainel(incluirInativos: boolean) {
 
   const [atendentes, funcionarios, dadosContratos, espelhos] = await Promise.all([
     prisma.kyriaMember.findMany({
-      where: { OR: [{ role: "attendant" }, { codusu: { not: null } }] },
+      where: { OR: [{ role: { in: [...ROLES_VINCULAVEIS_KYRIA] } }, { codusu: { not: null } }] },
       select: { id: true, name: true, email: true, status: true, role: true, codusu: true },
       orderBy: { name: "asc" },
     }),
@@ -190,7 +190,7 @@ async function montarPainel(incluirInativos: boolean) {
 
   // Quem ainda pode receber sugestão: atendente sem consultor e funcionário sem consultor — DEMITIDOS incluídos (18/11/2026, pedido do Vitor: dado
   // histórico). Um nome que existe como demitido E como ativo (recontratação) fica ambíguo e não é sugerido.
-  const atendentesLivres = atendentes.filter((m) => m.role === "attendant" && m.codusu == null);
+  const atendentesLivres = atendentes.filter((m) => ROLES_VINCULAVEIS_KYRIA.includes(m.role) && m.codusu == null);
   const funcionariosLivres = funcionarios.filter((f) => !consultorDoFuncionario.has(chaveHcm(f.numemp, f.tipcol, f.numcad)));
 
   const linhas = consultores.map((c) => {
@@ -297,7 +297,7 @@ consultoresVinculosRouter.put("/:codemp/:codusu/kyria", async (req, res) => {
         res.status(404).json({ error: "Membro do Kyria não encontrado" });
         return;
       }
-      if (membro.role !== "attendant") {
+      if (!ROLES_VINCULAVEIS_KYRIA.includes(membro.role)) {
         res.status(400).json({ error: MOTIVO_ATENDENTE });
         return;
       }
@@ -452,6 +452,46 @@ consultoresVinculosRouter.post("/aplicar-sugestoes", async (req, res) => {
 // ---------- Valor-hora (E460) ----------
 
 // Linha do tempo do valor-hora do consultor PJ: o contrato que a view de contratos do Senior aponta pra ele, o item ativo e cada reajuste.
+/**
+ * Linha do tempo do valor-hora do consultor PJ: o contrato que a view do Senior aponta pra ele, o item ativo, as vigências (valor por mês) e os reajustes.
+ * Usada pela tela de Vínculo de Consultores e pela origem do custo-hora (Custo-hora real). Contrato de valor fixo: ver `linhaDoTempoDoContrato`.
+ */
+export async function historicoValorHoraDoConsultor(chave: { codemp: number; codusu: number }) {
+  const contrato = await prisma.contratoConsultor.findUnique({ where: { codemp_codusu: chave } });
+  if (!contrato || contrato.numctr == null) return { contrato: null, item: null, vigencias: [], divergencia: null, reajustes: [] };
+  const dados = await carregarContratos([chave.codemp]);
+  const { linha, item } = resumoDoValorHora(chave.codemp, contrato.numctr, { ...dados, contratos: [contrato] });
+  const itemCompleto = item ? dados.itens.find((i) => i.codemp === chave.codemp && i.numctr === contrato.numctr && i.seqccs === item.seqccs) : null;
+  const cabecalho = await prisma.contratoCompra.findFirst({ where: { codemp: chave.codemp, numctr: contrato.numctr }, select: { numofi: true, sitctr: true, inivig: true, fimvig: true, ultrea: true, prdrea: true } });
+  return {
+    contrato: {
+      numctr: contrato.numctr,
+      codmot: contrato.codmot,
+      vlrhor: numero(contrato.vlrhor),
+      qtdctr: numero(contrato.qtdctr),
+      fixo: fixoDoContrato(contrato),
+      situacao: cabecalho?.sitctr ?? null,
+      periodicidadeReajusteMeses: cabecalho?.prdrea ?? null,
+      ultimoReajuste: dia(cabecalho?.ultrea),
+    },
+    item: itemCompleto
+      ? {
+          seqccs: itemCompleto.seqccs,
+          servico: itemCompleto.codser,
+          precoUnitario: Number(itemCompleto.preuni),
+          quantidade: numero(itemCompleto.qtdccs),
+          // Retenções só informativas: o custo do PJ é o valor bruto do contrato.
+          retencoes: { iss: numero(itemCompleto.periss), irrf: numero(itemCompleto.perirf), inss: numero(itemCompleto.perins), pis: numero(itemCompleto.perpit), csll: numero(itemCompleto.percsl), cofins: numero(itemCompleto.percrt), outras: numero(itemCompleto.perour) },
+        }
+      : null,
+    vigencias: linha.vigencias,
+    divergencia: linha.divergencia,
+    reajustes: dados.reajustes
+      .filter((r) => r.numctr === contrato.numctr && r.seqccs === (item?.seqccs ?? -1))
+      .map((r) => ({ data: dia(r.ultrea), valorAnterior: numero(r.vlratu) != null && numero(r.vlrrea) != null ? Number(r.vlratu) - Number(r.vlrrea) : null, valorNovo: numero(r.vlratu), aumento: numero(r.vlrrea), percentual: numero(r.perrea), descricao: r.desrea })),
+  };
+}
+
 consultoresVinculosRouter.get("/:codemp/:codusu/valor-hora", async (req, res) => {
   try {
     const chave = lerChaveConsultor(req);
@@ -459,42 +499,7 @@ consultoresVinculosRouter.get("/:codemp/:codusu/valor-hora", async (req, res) =>
       res.status(400).json({ error: "codemp e codusu são obrigatórios" });
       return;
     }
-    const contrato = await prisma.contratoConsultor.findUnique({ where: { codemp_codusu: chave } });
-    if (!contrato || contrato.numctr == null) {
-      res.json({ contrato: null, item: null, vigencias: [], divergencia: null, reajustes: [] });
-      return;
-    }
-    const dados = await carregarContratos([chave.codemp]);
-    const { linha, item } = resumoDoValorHora(chave.codemp, contrato.numctr, { ...dados, contratos: [contrato] });
-    const itemCompleto = item ? dados.itens.find((i) => i.codemp === chave.codemp && i.numctr === contrato.numctr && i.seqccs === item.seqccs) : null;
-    const cabecalho = await prisma.contratoCompra.findFirst({ where: { codemp: chave.codemp, numctr: contrato.numctr }, select: { numofi: true, sitctr: true, inivig: true, fimvig: true, ultrea: true, prdrea: true } });
-    res.json({
-      contrato: {
-        numctr: contrato.numctr,
-        codmot: contrato.codmot,
-        vlrhor: numero(contrato.vlrhor),
-        qtdctr: numero(contrato.qtdctr),
-        fixo: fixoDoContrato(contrato),
-        situacao: cabecalho?.sitctr ?? null,
-        periodicidadeReajusteMeses: cabecalho?.prdrea ?? null,
-        ultimoReajuste: dia(cabecalho?.ultrea),
-      },
-      item: itemCompleto
-        ? {
-            seqccs: itemCompleto.seqccs,
-            servico: itemCompleto.codser,
-            precoUnitario: Number(itemCompleto.preuni),
-            quantidade: numero(itemCompleto.qtdccs),
-            // Retenções só informativas: o custo do PJ é o valor bruto do contrato.
-            retencoes: { iss: numero(itemCompleto.periss), irrf: numero(itemCompleto.perirf), inss: numero(itemCompleto.perins), pis: numero(itemCompleto.perpit), csll: numero(itemCompleto.percsl), cofins: numero(itemCompleto.percrt), outras: numero(itemCompleto.perour) },
-          }
-        : null,
-      vigencias: linha.vigencias,
-      divergencia: linha.divergencia,
-      reajustes: dados.reajustes
-        .filter((r) => r.numctr === contrato.numctr && r.seqccs === (item?.seqccs ?? -1))
-        .map((r) => ({ data: dia(r.ultrea), valorAnterior: numero(r.vlratu) != null && numero(r.vlrrea) != null ? Number(r.vlratu) - Number(r.vlrrea) : null, valorNovo: numero(r.vlratu), aumento: numero(r.vlrrea), percentual: numero(r.perrea), descricao: r.desrea })),
-    });
+    res.json(await historicoValorHoraDoConsultor(chave));
   } catch (error) {
     handleError(res, error, "valor-hora");
   }

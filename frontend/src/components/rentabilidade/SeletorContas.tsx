@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
 import { normalizar } from "../../lib/normalizarBusca";
-import type { ContaDoPlano, RegraConta } from "../../lib/rentabilidade";
+import { alternarRegra, type ContaDoPlano, type RegraConta } from "../../lib/rentabilidade";
 
 // Seletor de contas do plano contábil por REGRAS (incluir / excluir, em qualquer nível): uma conta sintética vale por todas as analíticas abaixo dela, e excluir
 // tira a conta e tudo abaixo do que foi incluído. Usado nos Indicadores de Rentabilidade e nas Contas da folha do Custo-hora real (extraído em 19/11/2026,
@@ -19,9 +19,11 @@ interface Props {
   onChange: (r: RegraConta[]) => void;
   /** Rótulo do campo de busca. */
   rotuloBusca?: string;
+  /** Esconde o texto de ajuda do rodapé (telas que preferem só mensagens do que foi feito). */
+  semAjuda?: boolean;
 }
 
-export function SeletorContas({ plano, regras, onChange, rotuloBusca = "Contas do plano (qualquer nível)" }: Props) {
+export function SeletorContas({ plano, regras, onChange, rotuloBusca = "Contas do plano (qualquer nível)", semAjuda = false }: Props) {
   const [busca, setBusca] = useState("");
   const acaoDe = useMemo(() => new Map(regras.map((r) => [r.ctared, r.acao])), [regras]);
   const porCtared = useMemo(() => new Map((plano ?? []).map((c) => [c.ctared, c])), [plano]);
@@ -33,11 +35,7 @@ export function SeletorContas({ plano, regras, onChange, rotuloBusca = "Contas d
     return base.slice(0, 120);
   }, [plano, busca]);
 
-  const alternar = (c: ContaDoPlano, acao: "incluir" | "excluir") => {
-    const atual = acaoDe.get(c.ctared);
-    const resto = regras.filter((r) => r.ctared !== c.ctared);
-    onChange(atual === acao ? resto : [...resto, { codemp: c.codemp || CODEMP, ctared: c.ctared, acao }]);
-  };
+  const alternar = (c: ContaDoPlano, acao: "incluir" | "excluir") => onChange(alternarRegra(regras, { codemp: c.codemp || CODEMP, ctared: c.ctared }, acao));
 
   return (
     <div className="flex flex-col gap-2">
@@ -89,7 +87,7 @@ export function SeletorContas({ plano, regras, onChange, rotuloBusca = "Contas d
           })}
         </div>
       )}
-      <p className="text-[11px] text-muted">Incluir uma conta sintética soma todas as analíticas abaixo dela. Excluir tira a conta e tudo abaixo dela do que foi incluído.</p>
+      {!semAjuda && <p className="text-[11px] text-muted">Incluir uma conta sintética soma todas as analíticas abaixo dela. Excluir tira a conta e tudo abaixo dela do que foi incluído.</p>}
     </div>
   );
 }

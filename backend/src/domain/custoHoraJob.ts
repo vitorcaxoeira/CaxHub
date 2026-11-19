@@ -79,7 +79,8 @@ interface LancamentosDoMes {
 }
 
 /**
- * Contabilização da folha por consultor VINCULADO ao HCM e mês: débito − crédito por conta e opção (folha/provisões). A empresa da conta é a do HCM
+ * Contabilização da folha por consultor VINCULADO ao HCM e mês: só o que foi contabilizado a DÉBITO (decisão da diretoria, 19/11/2026), por conta e opção
+ * (folha/provisões). Os créditos não entram no custo. A empresa da conta é a do HCM
  * (`numemp`), que na Soeltech é a mesma do plano do ERP. Só a linha original (perrat = 0) está no espelho.
  */
 async function lancamentosDaFolha(competencias: string[]): Promise<LancamentosDoMes[]> {
@@ -87,10 +88,10 @@ async function lancamentosDaFolha(competencias: string[]): Promise<LancamentosDo
   const max = mesSeguinte(competencias[competencias.length - 1]);
   const linhas = await prisma.$queryRaw<{ competencia: Date; codemp: number; codusu: number; numemp: number; ctared: number; opcctb: number | null; valor: number }[]>`
     SELECT date_trunc('month', c.datlan)::date AS competencia, cv.codemp, cv.codusu, c.numemp, c.ctared, c.opcctb,
-           SUM(CASE WHEN c.debcre = 'D' THEN c.vallan ELSE -c.vallan END)::float8 AS valor
+           SUM(c.vallan)::float8 AS valor
     FROM hcm_contabilizacao_folha c
     JOIN consultor_vinculos cv ON cv.hcm_numemp = c.numemp AND cv.hcm_tipcol = c.tipcol AND cv.hcm_numcad = c.numcad
-    WHERE c.ctared IS NOT NULL AND c.datlan >= ${min}::date AND c.datlan < ${max}::date
+    WHERE c.debcre = 'D' AND c.ctared IS NOT NULL AND c.datlan >= ${min}::date AND c.datlan < ${max}::date
     GROUP BY 1, 2, 3, 4, 5, 6`;
   return linhas.map((l) => ({ competencia: ISO(l.competencia), codemp: l.codemp, codusu: l.codusu, lancamento: { conta: chaveConta(l.numemp, l.ctared), opcctb: l.opcctb, valor: l.valor } }));
 }

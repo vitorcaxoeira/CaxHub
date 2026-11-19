@@ -26,8 +26,8 @@ interface ColunaKyria extends ColunaDados {
   relacionamentoModelo: string | null;
   relacionamentoCampo: string | null;
   relacionamentoCampoDescricao: string | null;
-  // Só linhas cujo `campo` vale `valor` podem receber vínculo neste campo (ex.: kyria_members.codusu só pra role "attendant").
-  vinculoRestrito: { campo: string; valor: string; motivo: string } | null;
+  // Só linhas cujo `campo` vale um dos `valores` podem receber vínculo neste campo (ex.: kyria_members.codusu só pra role attendant, admin ou manager).
+  vinculoRestrito: { campo: string; valores: string[]; motivo: string } | null;
 }
 
 interface RespostaKyria extends RespostaDadosBase {
@@ -420,7 +420,7 @@ export function DadosKyria() {
     const chaveRemocao = `${linhaId}:${rotuloColuna}`;
     // Linha que não cumpre a regra do campo (ex.: membro que não é atendente) não oferece "vincular"/"trocar". Se já tem vínculo
     // antigo, ele continua visível e removível.
-    const podeVincular = !c.vinculoRestrito || String(linha[c.vinculoRestrito.campo]) === c.vinculoRestrito.valor;
+    const podeVincular = !c.vinculoRestrito || c.vinculoRestrito.valores.includes(String(linha[c.vinculoRestrito.campo]));
     if (!podeVincular && !vinculado) {
       return (
         <span className="text-muted" title={c.vinculoRestrito?.motivo}>

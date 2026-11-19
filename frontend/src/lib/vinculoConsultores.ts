@@ -1,5 +1,5 @@
 // Regras de apresentação da tela Administração › Vínculo de Consultores (custo-hora real, bloco C da Rentabilidade, 18/11/2026). Funções PURAS (com
-// teste): a tela só chama. O que é regra de negócio (sugestão, unicidade, "só attendant") mora no servidor — aqui só o que se vê.
+// teste): a tela só chama. O que é regra de negócio (sugestão, unicidade, "só attendant, admin e manager") mora no servidor — aqui só o que se vê.
 
 export type Regime = "pj" | "folha" | "ambos" | "indefinido";
 export type Confianca = "alta" | "media";

@@ -11,11 +11,14 @@ import {
   validarParametro,
   validarRegrasContasFolha,
   validarValorManual,
+  vigenciaManualEm,
   type ChaveParametro,
   type RegraContaFolha,
 } from "../domain/custoHora";
 import { executarJobCustoHora, JOB_NAME as JOB_CUSTO_HORA } from "../domain/custoHoraJob";
 import { carregarPlano } from "../domain/rentabilidade/calculo";
+import { vigenciaEm } from "../domain/valorHoraConsultor";
+import { historicoValorHoraDoConsultor } from "./consultoresVinculos";
 import { contasSelecionadas } from "../domain/rentabilidade/indicadores";
 
 // Administração > Custo-hora real (18-19/11/2026): a configuração do cálculo (horas da escala e as CONTAS do plano que compõem o custo do CLT na
@@ -128,7 +131,7 @@ interface MovimentoConta {
 }
 
 // O que a folha contabilizou no mês, por conta do plano (débito, crédito e quantos colaboradores): é o que a pessoa olha para decidir quais contas entram
-// no custo — e vê, na hora, o efeito das regras já gravadas (`selecionada`).
+// no custo — e vê, na hora, o efeito das regras já gravadas (`selecionada`). O custo usa só o DÉBITO (decisão da diretoria, 19/11/2026); o crédito é informativo.
 custoHoraRouter.get("/contas-folha/movimento", async (req, res) => {
   try {
     let competencia = competenciaDia1(String(req.query.competencia ?? ""));
@@ -137,7 +140,7 @@ custoHoraRouter.get("/contas-folha/movimento", async (req, res) => {
       competencia = ultimo[0]?.m ? ISO(ultimo[0].m) : null;
     }
     if (!competencia) {
-      res.json({ competencia: null, contas: [], totais: { debito: 0, credito: 0, liquido: 0, liquidoSelecionado: 0 } });
+      res.json({ competencia: null, contas: [], totais: { debito: 0, credito: 0, debitoSelecionado: 0 } });
       return;
     }
     const [linhas, regras, plano] = await Promise.all([
@@ -162,7 +165,6 @@ custoHoraRouter.get("/contas-folha/movimento", async (req, res) => {
       descta: l.descta,
       debito: l.debito,
       credito: l.credito,
-      liquido: Math.round((l.debito - l.credito) * 100) / 100,
       colaboradores: l.colaboradores,
       selecionada: selecionadas.has(`${l.numemp}:${l.ctared}`),
     }));
@@ -170,7 +172,7 @@ custoHoraRouter.get("/contas-folha/movimento", async (req, res) => {
     res.json({
       competencia,
       contas,
-      totais: { debito: soma((c) => c.debito), credito: soma((c) => c.credito), liquido: soma((c) => c.liquido), liquidoSelecionado: soma((c) => (c.selecionada ? c.liquido : 0)) },
+      totais: { debito: soma((c) => c.debito), credito: soma((c) => c.credito), debitoSelecionado: soma((c) => (c.selecionada ? c.debito : 0)) },
     });
   } catch (error) {
     handleError(res, error, "contas-folha-movimento");
@@ -322,6 +324,84 @@ custoHoraRouter.get("/resultado", async (req, res) => {
     });
   } catch (error) {
     handleError(res, error, "resultado");
+  }
+});
+
+interface LancamentoOrigem {
+  ctared: number;
+  clacta: string | null;
+  descta: string | null;
+  opcctb: number | null;
+  codclc: number | null;
+  historico: string | null;
+  debcre: string;
+  valor: number;
+}
+
+// De onde veio o custo-hora de UM consultor em UM mês (o link no valor da aba Resultado): os dados de origem, conforme a fonte que o job usou.
+//   clt_folha    todos os lançamentos da contabilização da folha do colaborador no mês, marcando os que entraram na conta (as contas que o JOB gravou em
+//                `detalhe.porConta` — não as regras de hoje, para o total bater com o valor mostrado mesmo que as regras tenham mudado depois);
+//   pj_contrato  o histórico do valor-hora do contrato (o mesmo da tela de Vínculo) e qual vigência valeu no mês;
+//   manual       as vigências do valor-hora manual e qual valeu no mês.
+// O colaborador do HCM e as vigências são os de HOJE; o valor e o detalhe são os gravados no cálculo.
+custoHoraRouter.get("/origem/:codemp/:codusu", async (req, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codusu = Number(req.params.codusu);
+    const competencia = competenciaDia1(String(req.query.competencia ?? ""));
+    if (!Number.isInteger(codemp) || !Number.isInteger(codusu) || !competencia) {
+      res.status(400).json({ error: "codemp, codusu e competencia (AAAA-MM) são obrigatórios" });
+      return;
+    }
+    const linha = await prisma.consultorCustoHora.findUnique({ where: { codemp_codusu_competencia: { codemp, codusu, competencia: dataUtc(competencia) } } });
+    if (!linha) {
+      res.status(404).json({ error: "Este consultor não tem custo-hora calculado nesta competência" });
+      return;
+    }
+    const consultor = await prisma.consultor.findUnique({ where: { codemp_codusu: { codemp, codusu } }, select: { nomcom: true, nomfor: true } });
+    const nome = (consultor?.nomcom ?? "").trim() || (consultor?.nomfor ?? "").trim() || `Consultor ${codusu}`;
+    const base = { consultor: { codemp, codusu, nome }, competencia, origem: linha.origem, custoHora: Number(linha.custoHora), detalhe: linha.detalhe };
+
+    if (linha.origem === "clt_folha") {
+      const vinculo = await prisma.consultorVinculo.findUnique({ where: { codemp_codusu: { codemp, codusu } }, include: { colaborador: { select: { nomfun: true, numcad: true } } } });
+      const h = vinculo && vinculo.hcmNumemp != null && vinculo.hcmTipcol != null && vinculo.hcmNumcad != null ? { numemp: vinculo.hcmNumemp, tipcol: vinculo.hcmTipcol, numcad: vinculo.hcmNumcad } : null;
+      const doCalculo = new Set<string>(((linha.detalhe as { porConta?: { conta: string }[] } | null)?.porConta ?? []).map((c) => c.conta));
+      const lancamentos = h
+        ? await prisma.$queryRaw<LancamentoOrigem[]>`
+            SELECT c.ctared, btrim(pc.clacta) AS clacta, btrim(pc.descta) AS descta, c.opcctb, c.codclc, btrim(c.cplhis) AS historico, c.debcre, c.vallan::float8 AS valor
+            FROM hcm_contabilizacao_folha c
+            LEFT JOIN plano_contabil pc ON pc.codemp = c.numemp AND pc.ctared = c.ctared
+            WHERE c.numemp = ${h.numemp} AND c.tipcol = ${h.tipcol} AND c.numcad = ${h.numcad}
+              AND c.datlan >= ${competencia}::date AND c.datlan < ${mesSeguinte(competencia)}::date AND c.ctared IS NOT NULL
+            ORDER BY pc.clacta NULLS LAST, c.codclc, c.debcre`
+        : [];
+      // Só o débito compõe o custo: o crédito aparece na lista, mas nunca é "considerado" nem entra nos totais.
+      const itens = lancamentos.map((l) => ({
+        ...l,
+        considerado: !!h && l.debcre === "D" && doCalculo.has(`${h.numemp}:${l.ctared}`),
+      }));
+      const soma = (f: (i: (typeof itens)[number]) => boolean) => Math.round(itens.filter((i) => i.debcre === "D" && f(i)).reduce((s, i) => s + i.valor, 0) * 100) / 100;
+      res.json({
+        ...base,
+        clt: {
+          colaborador: vinculo?.colaborador ? { nome: vinculo.colaborador.nomfun, matricula: vinculo.colaborador.numcad } : null,
+          lancamentos: itens,
+          totais: { considerado: soma((i) => i.considerado), fora: soma((i) => !i.considerado) },
+        },
+      });
+      return;
+    }
+
+    if (linha.origem === "pj_contrato") {
+      const historico = await historicoValorHoraDoConsultor({ codemp, codusu });
+      res.json({ ...base, pj: { historico, vigenciaAplicada: vigenciaEm(historico.vigencias, competencia) } });
+      return;
+    }
+
+    const valores = (await prisma.consultorValorHoraManual.findMany({ where: { codemp, codusu }, orderBy: { vigenciaInicio: "desc" } })).map((v) => ({ id: v.id, vigenciaInicio: ISO(v.vigenciaInicio), valor: Number(v.valor), observacao: v.observacao }));
+    res.json({ ...base, manual: { valores, vigenciaAplicada: vigenciaManualEm(valores, competencia) } });
+  } catch (error) {
+    handleError(res, error, "origem");
   }
 });
 

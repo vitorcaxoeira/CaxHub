@@ -13,6 +13,7 @@ import {
   validarRegrasContasFolha,
   validarValorManual,
   valorManualEm,
+  vigenciaManualEm,
 } from "./custoHora";
 
 // Os números abaixo são de TESTE (não são regra de negócio): servem só para conferir a conta.
@@ -87,13 +88,13 @@ test("período mensal: valida e descarta o período quando não é mensal", () =
 
 const C = (ctared: number) => chaveConta(1, ctared);
 
-test("CLT: débito − crédito só nas contas escolhidas, dividido pelas horas da escala", () => {
+test("CLT: o débito só das contas escolhidas, dividido pelas horas da escala", () => {
   const r = calcularCustoClt({
     lancamentos: [
       { conta: C(224), opcctb: 1, valor: 5000 }, // salários (débito)
       { conta: C(226), opcctb: 1, valor: 1200 }, // INSS (débito)
       { conta: C(120), opcctb: 3, valor: 600 }, // provisão de 13º
-      { conta: C(235), opcctb: 1, valor: -300 }, // desconto do plano (crédito) — conta que o teste NÃO escolhe
+      { conta: C(235), opcctb: 1, valor: 300 }, // desconto do plano — conta que o teste NÃO escolhe
     ],
     contas: new Set([C(224), C(226), C(120)]),
     horasMes: 200,
@@ -105,18 +106,19 @@ test("CLT: débito − crédito só nas contas escolhidas, dividido pelas horas 
   assert.deepEqual(r.detalhe.porConta.map((c) => c.conta), [C(224), C(226), C(120)]);
 });
 
-test("CLT: o crédito de uma conta escolhida subtrai (ex.: estorno ou desconto)", () => {
-  const r = calcularCustoClt({ lancamentos: [{ conta: C(224), opcctb: 1, valor: 1000 }, { conta: C(224), opcctb: 1, valor: -250 }], contas: new Set([C(224)]), horasMes: 100 })!;
-  assert.equal(r.detalhe.custoMensal, 750);
-  assert.equal(r.custoHora, 7.5);
+test("CLT: lançamentos da mesma conta (folha e provisão) somam", () => {
+  const r = calcularCustoClt({ lancamentos: [{ conta: C(224), opcctb: 1, valor: 1000 }, { conta: C(224), opcctb: 3, valor: 250 }], contas: new Set([C(224)]), horasMes: 100 })!;
+  assert.equal(r.detalhe.custoMensal, 1250);
+  assert.equal(r.detalhe.provisoes, 250);
+  assert.equal(r.custoHora, 12.5);
 });
 
-test("CLT: sem horas, sem lançamento nas contas escolhidas ou líquido não positivo = sem custo", () => {
+test("CLT: sem horas, sem lançamento nas contas escolhidas ou total zero = sem custo", () => {
   const um = [{ conta: C(224), opcctb: 1, valor: 1000 }];
   assert.equal(calcularCustoClt({ lancamentos: um, contas: new Set([C(224)]), horasMes: 0 }), null);
   assert.equal(calcularCustoClt({ lancamentos: um, contas: new Set([C(999)]), horasMes: 200 }), null);
   assert.equal(calcularCustoClt({ lancamentos: [], contas: new Set([C(224)]), horasMes: 200 }), null);
-  assert.equal(calcularCustoClt({ lancamentos: [{ conta: C(224), opcctb: 1, valor: -50 }], contas: new Set([C(224)]), horasMes: 200 }), null);
+  assert.equal(calcularCustoClt({ lancamentos: [{ conta: C(224), opcctb: 1, valor: 0 }], contas: new Set([C(224)]), horasMes: 200 }), null);
 });
 
 test("CLT: arredonda o custo mensal a centavos e o custo-hora a 4 casas", () => {
@@ -139,4 +141,13 @@ test("regras de contas da folha: valida lista, ação e repetição", () => {
 
 test("parâmetros: só horas_mes existe (tipos de cálculo saiu com a R048CTB)", () => {
   assert.equal(validarParametro("tipos_calculo" as never, "11").ok, false);
+});
+
+test("vigência manual: devolve a linha inteira (com observação) que valeu no mês", () => {
+  const v = [
+    { vigenciaInicio: "2026-05-01", valor: 70, observacao: "reajuste" },
+    { vigenciaInicio: "2025-01-01", valor: 50, observacao: null },
+  ];
+  assert.deepEqual(vigenciaManualEm(v, "2026-07-01"), { vigenciaInicio: "2026-05-01", valor: 70, observacao: "reajuste" });
+  assert.equal(vigenciaManualEm(v, "2024-01-01"), null);
 });

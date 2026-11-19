@@ -16,6 +16,16 @@ export interface RegraConta {
   acao: "incluir" | "excluir";
 }
 
+/**
+ * Alterna a regra de UMA conta numa lista de regras (incluir/excluir): sem regra para a conta → acrescenta com `acao`; já com a MESMA ação → remove
+ * (clicar de novo desfaz); com a OUTRA ação → troca. Nunca duplica a conta. Usada pelo seletor de contas e pela ação "Entra no custo" do movimento da folha.
+ */
+export function alternarRegra(regras: RegraConta[], conta: { codemp: number; ctared: number }, acao: "incluir" | "excluir"): RegraConta[] {
+  const atual = regras.find((r) => r.ctared === conta.ctared)?.acao;
+  const resto = regras.filter((r) => r.ctared !== conta.ctared);
+  return atual === acao ? resto : [...resto, { codemp: conta.codemp, ctared: conta.ctared, acao }];
+}
+
 export interface Indicador {
   id: number;
   codigo: string;

@@ -165,10 +165,18 @@ async function main() {
     } else {
       console.log("    (sem consultor/atendente livre pra exercitar — passo ignorado)");
     }
-    const naoAtendente = await prisma.kyriaMember.findFirst({ where: { role: { not: "attendant" } }, select: { id: true } });
+    const naoAtendente = await prisma.kyriaMember.findFirst({ where: { role: { notIn: ["attendant", "admin", "manager"] } }, select: { id: true } });
     if (naoAtendente) {
       const r = await chamar("PUT", `/consultores-vinculos/${linhas[0].codemp}/${linhas[0].codusu}/kyria`, tokenAdmin, { memberId: naoAtendente.id });
-      ok("membro que não é 'attendant' é recusado (400)", r.status === 400, r.json?.error ?? "");
+      ok("membro fora de attendant/admin/manager é recusado (400)", r.status === 400, r.json?.error ?? "");
+    }
+    for (const papel of ["admin", "manager"]) {
+      const livre = await prisma.kyriaMember.findFirst({ where: { role: papel, codusu: null }, select: { id: true } });
+      const cons = linhas.find((l: any) => l.kyriaMemberIds.length === 0);
+      if (!livre || !cons) continue;
+      const r = await chamar("PUT", `/consultores-vinculos/${cons.codemp}/${cons.codusu}/kyria`, tokenAdmin, { memberId: livre.id });
+      ok(`membro '${papel}' pode ser vinculado (200)`, r.status === 200 && (await prisma.kyriaMember.findUnique({ where: { id: livre.id } }))?.codusu === cons.codusu, `${r.status} ${r.json?.error ?? ""}`);
+      await chamar("PUT", `/consultores-vinculos/${cons.codemp}/${cons.codusu}/kyria`, tokenAdmin, { memberId: null });
     }
     ok("memberId inexistente = 404", (await chamar("PUT", `/consultores-vinculos/${linhas[0].codemp}/${linhas[0].codusu}/kyria`, tokenAdmin, { memberId: "nao-existe" })).status === 404);
     ok("corpo inválido = 400", (await chamar("PUT", `/consultores-vinculos/${linhas[0].codemp}/${linhas[0].codusu}/kyria`, tokenAdmin, {})).status === 400);

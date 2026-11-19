@@ -33,7 +33,7 @@ function nomesDoConsultor(c: ConsultorParaSugestao): string[] {
 
 /**
  * Atendente do Kyria: pelo e-mail (igual, sem diferenciar maiúscula) — o e-mail é o que o Kyria e o Senior mais têm em comum — e, na falta, pelo
- * nome IGUAL. Só candidato `attendant` deve entrar na lista de `candidatos` (a regra do vínculo é de quem chama).
+ * nome IGUAL. Só candidato de papel vinculável (attendant, admin, manager) deve entrar na lista de `candidatos` (a regra do vínculo é de quem chama).
  */
 export function sugerirAtendenteKyria<T extends { name: string; email: string }>(c: ConsultorParaSugestao, candidatos: T[]): Sugestao<T> | null {
   const email = (c.email ?? "").trim().toLowerCase();

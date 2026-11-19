@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { linhaDoTempoDoContrato, montarLinhaDoTempo, valorHoraEm, type ReajusteContrato } from "./valorHoraConsultor";
+import { linhaDoTempoDoContrato, montarLinhaDoTempo, valorHoraEm, vigenciaEm, type ReajusteContrato } from "./valorHoraConsultor";
 
 // Contrato 1232 do dado real (jul/2026): 6 reajustes, o primeiro em 2019-06 (R$ 1,99 → 61,99).
 const REAL: ReajusteContrato[] = [
@@ -106,4 +106,11 @@ test("contrato por hora continua lendo o histórico de reajuste", () => {
 
 test("contrato por hora sem preço do item usa o vlrhor da view como preço atual", () => {
   assert.deepEqual(linhaDoTempoDoContrato({ fixo: false, vlrhorDaView: 70, reajustes: [], precoAtualDoItem: null }).vigencias, [{ desde: null, valor: 70, origem: "preco_atual", percentual: null }]);
+});
+
+test("vigenciaEm: devolve a vigência inteira que valeu na data (para mostrar de onde veio o valor)", () => {
+  const v = montarLinhaDoTempo(REAL, null).vigencias;
+  assert.deepEqual(vigenciaEm(v, "2023-08-15"), { desde: "2023-06-01", valor: 83.64, origem: "reajuste", percentual: 3.83 });
+  assert.equal(vigenciaEm(v, "2018-01-01")?.origem, "inicial");
+  assert.equal(vigenciaEm([], "2026-01-01"), null);
 });
