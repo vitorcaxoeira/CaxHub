@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { formatarPercentual } from "../../lib/orcadoRealizado";
 
 // Espelha backend/src/domain/matrizContabil.ts (LinhaMatrizResultado) — resposta de
 // GET /contabil/resultado.
@@ -32,22 +33,52 @@ export interface ValorClicado {
   ctareds: number[];
   mesReferencia: string;
   rotulo: string;
+  /** Com `subcolunas`: a chave da subcoluna clicada (ex.: "orcado", "realizado"), para quem abre o detalhe saber qual origem mostrar. */
+  subcoluna?: string;
 }
 
-interface MatrizContabilProps {
+/** Valores de uma linha (ou do total geral) no modo padrão: um número por mês e o total. */
+export interface ValoresPadrao {
+  valores: number[];
+  total: number;
+}
+
+/**
+ * Várias colunas por mês (e no Total), ex.: Orçado | Realizado | Variação (23/11/2026). Cada subcoluna lê o seu número da linha e do total geral,
+ * que têm o mesmo formato `V`. `null` aparece como "—". Sem `subcolunas`, a matriz é a de sempre (um número por mês).
+ */
+export interface SubcolunaMatriz<V> {
+  chave: string;
+  titulo: string;
+  mes: (v: V, i: number) => number | null;
+  total: (v: V) => number | null;
+  formato?: "numero" | "percentual";
+  /** O valor desta subcoluna vira link de detalhe (`onClickValor`), como na Matriz. */
+  detalhavel?: boolean;
+}
+
+/** A linha da árvore com os valores no formato `V` (no modo padrão, `valores` + `total`). */
+export type LinhaMatriz<V> = Omit<LinhaMatrizContabil, "valores" | "total"> & V;
+
+interface MatrizContabilProps<V> {
   meses: string[]; // ["2026-01", ..., "2026-12"]
-  linhas: LinhaMatrizContabil[];
-  totalGeral: { valores: number[]; total: number };
+  linhas: LinhaMatriz<V>[];
+  totalGeral: V;
   loading: boolean;
   /** Header da 1ª coluna — "Conta" (padrão) ou "Centro de Custo" na aba de CC. */
   rotuloColuna?: string;
   // Drilldown de lançamentos — só a aba Matriz passa isto hoje. Sem ela, os valores continuam
   // texto puro (Orçado x Realizado e Centro de Custo ainda não têm o detalhe implementado).
+  // Com `subcolunas`, só nas marcadas `detalhavel` (e o clique informa qual foi).
   onClickValor?: (params: ValorClicado) => void;
+  subcolunas?: SubcolunaMatriz<V>[];
 }
 
 const MESES_ABREV = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const numero = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 });
+
+// Modo padrão: uma subcoluna só, sem título, lendo `valores`/`total`.
+const SUBCOLUNA_PADRAO: SubcolunaMatriz<ValoresPadrao> = { chave: "valor", titulo: "", mes: (v, i) => v.valores[i], total: (v) => v.total };
 
 // Exportada pro modal de detalhe de lançamentos (mesmo formato "Jun/26" no subtítulo).
 export function formatarMes(mes: string): string {
@@ -55,15 +86,20 @@ export function formatarMes(mes: string): string {
   return `${MESES_ABREV[Number(mesNum) - 1]}/${ano.slice(2)}`;
 }
 
-function Valor({ v, className = "" }: { v: number; className?: string }) {
+function Valor({ v, formato = "numero", className = "" }: { v: number | null; formato?: "numero" | "percentual"; className?: string }) {
+  if (v === null || !Number.isFinite(v)) return <span className={`font-mono text-[12.5px] text-muted ${className}`}>—</span>;
   return (
     <span className={`font-mono text-[12.5px] tabular-nums ${v < 0 ? "text-destructive" : "text-foreground"} ${className}`}>
-      {numero.format(v)}
+      {formato === "percentual" ? formatarPercentual(v) : numero.format(v)}
     </span>
   );
 }
 
-export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColuna = "Conta", onClickValor }: MatrizContabilProps) {
+export function MatrizContabil<V = ValoresPadrao>({ meses, linhas, totalGeral, loading, rotuloColuna = "Conta", onClickValor, subcolunas }: MatrizContabilProps<V>) {
+  const multiplas = !!subcolunas && subcolunas.length > 0;
+  const colunas = (multiplas ? subcolunas : [SUBCOLUNA_PADRAO]) as SubcolunaMatriz<V>[];
+  // Com várias subcolunas, cada mês é um bloco: borda à esquerda da 1ª subcoluna para separar os meses.
+  const inicioDoBloco = (j: number) => (multiplas && j === 0 ? "border-l border-border" : "");
   const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
 
   // "Chave -> tem filhos" — decide se a linha ganha seta de expandir/recolher.
@@ -80,7 +116,7 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColun
   // o próprio pai estiver oculto, e a ocultação se propaga pros filhos dela também.
   const visiveis = useMemo(() => {
     const ocultos = new Set<string>();
-    const resultado: LinhaMatrizContabil[] = [];
+    const resultado: LinhaMatriz<V>[] = [];
     for (const linha of linhas) {
       if (linha.chavePai && ocultos.has(linha.chavePai)) {
         ocultos.add(linha.chave);
@@ -137,18 +173,42 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColun
         <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-border bg-surface-2">
-              <th className="sticky left-0 z-10 w-[340px] max-w-[340px] bg-surface-2 px-4 py-2 text-left font-mono text-[11px] font-medium uppercase tracking-wider text-muted">
+              <th
+                rowSpan={multiplas ? 2 : undefined}
+                className="sticky left-0 z-10 w-[340px] max-w-[340px] bg-surface-2 px-4 py-2 text-left font-mono text-[11px] font-medium uppercase tracking-wider text-muted"
+              >
                 {rotuloColuna}
               </th>
               {meses.map((mes) => (
-                <th key={mes} className="min-w-[92px] px-3 py-2 text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted">
+                <th
+                  key={mes}
+                  colSpan={colunas.length}
+                  className={`min-w-[92px] px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-wider text-muted ${multiplas ? "border-l border-border text-center" : "text-right"}`}
+                >
                   {formatarMes(mes)}
                 </th>
               ))}
-              <th className="min-w-[100px] px-3 py-2 text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted">
+              <th
+                colSpan={colunas.length}
+                className={`min-w-[100px] px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-wider text-muted ${multiplas ? "border-l border-border text-center" : "text-right"}`}
+              >
                 Total
               </th>
             </tr>
+            {multiplas && (
+              <tr className="border-b border-border bg-surface-2">
+                {[...meses, "total"].map((bloco) =>
+                  colunas.map((s, j) => (
+                    <th
+                      key={`${bloco}-${s.chave}`}
+                      className={`min-w-[92px] whitespace-nowrap px-3 py-1.5 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted ${inicioDoBloco(j)}`}
+                    >
+                      {s.titulo}
+                    </th>
+                  ))
+                )}
+              </tr>
+            )}
           </thead>
           <tbody>
             {visiveis.map((linha) => {
@@ -192,33 +252,38 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColun
                       </span>
                     </div>
                   </td>
-                  {linha.valores.map((v, i) => {
-                    // Link só no último nível REALMENTE exibido (folha visível, não pasta/grupo
-                    // recolhida por cima dela) e só quando há algo pra detalhar (conta real,
-                    // ctareds preenchido, valor diferente de zero) — regra 2 do pedido.
-                    const podeDetalhar = Boolean(
-                      onClickValor && linha.tipo === "conta" && !podeExpandir && linha.ctareds.length > 0 && v !== 0
-                    );
-                    return (
-                      <td key={i} className="px-3 py-1.5 text-right">
-                        {podeDetalhar ? (
-                          <button
-                            type="button"
-                            onClick={() => onClickValor!({ ctareds: linha.ctareds, mesReferencia: meses[i], rotulo: linha.rotulo })}
-                            className="rounded px-1 -mx-1 hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            title="Ver os lançamentos que compõem este valor"
-                          >
-                            <Valor v={v} className="underline decoration-dotted underline-offset-2" />
-                          </button>
-                        ) : (
-                          <Valor v={v} />
-                        )}
-                      </td>
-                    );
-                  })}
-                  <td className="px-3 py-1.5 text-right">
-                    <Valor v={linha.total} />
-                  </td>
+                  {meses.map((_, i) =>
+                    colunas.map((s, j) => {
+                      const v = s.mes(linha, i);
+                      // Link só no último nível REALMENTE exibido (folha visível, não pasta/grupo
+                      // recolhida por cima dela) e só quando há algo pra detalhar (conta real,
+                      // ctareds preenchido, valor diferente de zero) — regra 2 do pedido.
+                      const podeDetalhar = Boolean(
+                        (!multiplas || s.detalhavel) && onClickValor && linha.tipo === "conta" && !podeExpandir && linha.ctareds.length > 0 && v !== 0 && v !== null
+                      );
+                      return (
+                        <td key={`${i}-${s.chave}`} className={`px-3 py-1.5 text-right ${inicioDoBloco(j)}`}>
+                          {podeDetalhar ? (
+                            <button
+                              type="button"
+                              onClick={() => onClickValor!({ ctareds: linha.ctareds, mesReferencia: meses[i], rotulo: linha.rotulo, subcoluna: multiplas ? s.chave : undefined })}
+                              className="rounded px-1 -mx-1 hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              title="Ver os lançamentos que compõem este valor"
+                            >
+                              <Valor v={v} formato={s.formato} className="underline decoration-dotted underline-offset-2" />
+                            </button>
+                          ) : (
+                            <Valor v={v} formato={s.formato} />
+                          )}
+                        </td>
+                      );
+                    })
+                  )}
+                  {colunas.map((s, j) => (
+                    <td key={`total-${s.chave}`} className={`px-3 py-1.5 text-right ${inicioDoBloco(j)}`}>
+                      <Valor v={s.total(linha)} formato={s.formato} />
+                    </td>
+                  ))}
                 </tr>
               );
             })}
@@ -228,14 +293,18 @@ export function MatrizContabil({ meses, linhas, totalGeral, loading, rotuloColun
               <td className="sticky left-0 z-10 w-[340px] max-w-[340px] truncate bg-surface-2 px-4 py-2 font-semibold text-[13px] text-foreground">
                 Total
               </td>
-              {totalGeral.valores.map((v, i) => (
-                <td key={i} className="px-3 py-2 text-right">
-                  <Valor v={v} />
+              {meses.map((_, i) =>
+                colunas.map((s, j) => (
+                  <td key={`${i}-${s.chave}`} className={`px-3 py-2 text-right ${inicioDoBloco(j)}`}>
+                    <Valor v={s.mes(totalGeral, i)} formato={s.formato} />
+                  </td>
+                ))
+              )}
+              {colunas.map((s, j) => (
+                <td key={`total-${s.chave}`} className={`px-3 py-2 text-right ${inicioDoBloco(j)}`}>
+                  <Valor v={s.total(totalGeral)} formato={s.formato} />
                 </td>
               ))}
-              <td className="px-3 py-2 text-right">
-                <Valor v={totalGeral.total} />
-              </td>
             </tr>
           </tfoot>
         </table>
