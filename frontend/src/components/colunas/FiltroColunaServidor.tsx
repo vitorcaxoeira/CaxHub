@@ -169,11 +169,23 @@ export function FiltroColunaServidor({ coluna, filtro, onAplicar, carregarValore
   }
 
   function aplicarValores() {
-    if (marcados.length === 0) return;
+    // Nada marcado = tirar o filtro da coluna (o "Limpar seleção" + Aplicar).
+    if (marcados.length === 0) {
+      if (ativo) onAplicar(null);
+      setOpen(false);
+      return;
+    }
     if (marcados.includes("__vazio__")) onAplicar({ coluna: coluna.nome, operador: "vazio", valores: [] });
     else if (marcados.length === 1) onAplicar({ coluna: coluna.nome, operador: "=", valores: marcados });
     else onAplicar({ coluna: coluna.nome, operador: "IN", valores: marcados });
     setOpen(false);
+  }
+
+  // "Selecionar todos" (23/11/2026, mesmo padrão do MultiSelectColumnFilter): marca tudo o que a lista mostra — já recortada pela busca —,
+  // somando ao que estava marcado. "(Vazio)" fica de fora: ele é exclusivo e não combina com valores.
+  const selecionaveis = (linhasValores ?? []).filter((l) => l.chave !== "__vazio__").map((l) => l.chave);
+  function selecionarTodos() {
+    setMarcados((atual) => [...new Set([...atual.filter((m) => m !== "__vazio__"), ...selecionaveis])]);
   }
 
   function alternar(chave: string) {
@@ -208,7 +220,7 @@ export function FiltroColunaServidor({ coluna, filtro, onAplicar, carregarValore
           <div
             ref={refs.setFloating}
             style={floatingStyles}
-            className="z-popover flex w-72 flex-col overflow-hidden rounded-md border border-border bg-surface text-left normal-case tracking-normal shadow-lg"
+            className="z-popover flex w-80 flex-col overflow-hidden rounded-md border border-border bg-surface text-left normal-case tracking-normal shadow-lg"
             {...getFloatingProps({ onClick: (e) => e.stopPropagation() })}
           >
             <div className="shrink-0 border-b border-border px-2 pt-2">
@@ -293,6 +305,36 @@ export function FiltroColunaServidor({ coluna, filtro, onAplicar, carregarValore
                     {multi ? "Marque um ou mais valores." : "Escolha um valor."} {coluna.dominio ? "Lista do domínio, com a quantidade de cada." : "Mais frequentes primeiro."}
                   </p>
                 </div>
+                {/* Ações da aba Valores numa barra só, acima da lista (23/11/2026): Selecionar todos · Limpar seleção · Aplicar. Aplicar com
+                    nada marcado, quando a coluna tem filtro, tira o filtro — é o que substitui o "Limpar" do antigo rodapé. */}
+                <div className="flex shrink-0 flex-nowrap items-center gap-2 whitespace-nowrap border-b border-border px-2 py-1">
+                  {multi && (
+                    <button
+                      type="button"
+                      onClick={selecionarTodos}
+                      disabled={selecionaveis.length === 0 || selecionaveis.every((c) => marcados.includes(c))}
+                      className="shrink-0 whitespace-nowrap text-[11px] text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Selecionar todos{termo.trim() && selecionaveis.length > 0 ? ` (${selecionaveis.length})` : ""}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setMarcados([])}
+                    disabled={marcados.length === 0}
+                    className="shrink-0 whitespace-nowrap text-[11px] text-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Limpar seleção
+                  </button>
+                  <button
+                    type="button"
+                    onClick={aplicarValores}
+                    disabled={marcados.length === 0 && !ativo}
+                    className="ml-auto shrink-0 whitespace-nowrap rounded-md bg-primary px-2.5 py-1 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
+                  >
+                    Aplicar{marcados.length > 1 ? ` (${marcados.length})` : ""}
+                  </button>
+                </div>
                 <div className="min-h-0 flex-1 overflow-y-auto py-1">
                   {valores === "carregando" || valores === null ? (
                     <p className="px-3 py-3 text-center text-[11.5px] text-muted">Carregando…</p>
@@ -322,14 +364,6 @@ export function FiltroColunaServidor({ coluna, filtro, onAplicar, carregarValore
                       )}
                     </>
                   )}
-                </div>
-                <div className="flex shrink-0 justify-between border-t border-border p-2">
-                  <button type="button" onClick={() => (onAplicar(null), setOpen(false))} disabled={!ativo} className="text-[11.5px] text-muted hover:text-foreground disabled:opacity-40">
-                    Limpar
-                  </button>
-                  <button type="button" onClick={aplicarValores} disabled={marcados.length === 0} className="rounded-md bg-primary px-2.5 py-1 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40">
-                    Aplicar{marcados.length > 1 ? ` (${marcados.length})` : ""}
-                  </button>
                 </div>
               </>
             )}

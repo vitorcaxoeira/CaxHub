@@ -10,6 +10,7 @@ import { regras } from "../../components/ui/padroesFiltros/regras";
 import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { MatrizTab } from "../../components/contabil/MatrizTab";
 import { OrcadoRealizadoTab } from "../../components/contabil/OrcadoRealizadoTab";
+import { formatoVariacaoDaUrl, type FormatoVariacao } from "../../lib/orcadoRealizado";
 import { DreTab } from "../../components/contabil/DreTab";
 import { CentroCustoTab } from "../../components/contabil/CentroCustoTab";
 import { DashContabilTab } from "../../components/contabil/DashContabilTab";
@@ -92,6 +93,8 @@ export function ResultadoAnalitico() {
   const visaoDaUrl = searchParams.get("visao");
   const visaoInicial = visoesVisiveis.some((v) => v.value === visaoDaUrl) ? (visaoDaUrl as Visao) : "matriz";
   const [visao, setVisao] = useState<Visao>(visaoInicial);
+  // Orçado x Realizado: a coluna de variação em R$ (padrão) ou em % — vai pra URL como os demais filtros.
+  const [formatoVariacao, setFormatoVariacao] = useState<FormatoVariacao>(formatoVariacaoDaUrl(searchParams.get("variacao")));
 
   // Ano e mês são multi-seleção — dá pra comparar vários anos lado a lado (cada
   // combinação ano×mês vira uma coluna na matriz) e/ou recortar só alguns meses. Sem
@@ -145,6 +148,8 @@ export function ResultadoAnalitico() {
         ["grupos", "grupo"],
         ["centrosCusto", "codccu"],
         ["incluirSemGrupo", "incluirSemGrupo"],
+        ["ordenarPor", "ordenarPor"],
+        ["formatoVariacao", "variacao"],
       ] as const
     )
       .filter(([, chave]) => searchParams.has(chave))
@@ -168,6 +173,21 @@ export function ResultadoAnalitico() {
         urlKey: "codccu",
       },
       incluirSemGrupo: { rotulo: "Contas sem grupo", atual: incluirSemGrupo, aplicar: setIncluirSemGrupo, validar: regras.booleano(), semOpcoes: true },
+      ordenarPor: {
+        rotulo: "Ordenar por",
+        atual: ordenarPor,
+        aplicar: setOrdenarPor,
+        validar: regras.valorUnico("string", ["clacta", "ctared"] as const),
+        semOpcoes: true,
+      },
+      formatoVariacao: {
+        rotulo: "Variação",
+        atual: formatoVariacao,
+        aplicar: setFormatoVariacao,
+        validar: regras.valorUnico("string", ["valor", "pct"] as const),
+        semOpcoes: true,
+        urlKey: "variacao",
+      },
     },
   });
 
@@ -194,11 +214,12 @@ export function ResultadoAnalitico() {
     if (centrosCusto.length > 0) params.codccu = centrosCusto.join(",");
     if (incluirSemGrupo) params.incluirSemGrupo = "true";
     if (ordenarPor !== "clacta") params.ordenarPor = ordenarPor;
+    if (visao === "orcado" && formatoVariacao === "pct") params.variacao = "pct";
     // "Todos"/desmarcado num filtro com padrão salvo vai vazio, para o F5 manter a escolha em vez de voltar ao padrão.
     p.marcarUrl(params);
     setSearchParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor, setSearchParams, p.padroes]);
+  }, [visao, anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor, formatoVariacao, setSearchParams, p.padroes]);
 
   const opcoesAnos = useMemo(() => {
     const todos = new Set([...(opcoes?.anos ?? []), ...anos]);
@@ -339,6 +360,7 @@ export function ResultadoAnalitico() {
                 {opcao.label}
               </button>
             ))}
+            <span className="relative inline-block h-7 w-7">{p.estrela("ordenarPor")}</span>
           </div>
         )}
       </div>
@@ -365,6 +387,9 @@ export function ResultadoAnalitico() {
           centrosCusto={centrosCusto}
           incluirSemGrupo={incluirSemGrupo}
           ordenarPor={ordenarPor}
+          formatoVariacao={formatoVariacao}
+          onFormatoVariacao={setFormatoVariacao}
+          estrelaVariacao={p.estrela("formatoVariacao")}
         />
       )}
       {p.pronto && visao === "dre" && <DreTab key={refreshKey} anos={anos} meses={meses} grupos={grupos} centrosCusto={centrosCusto} />}

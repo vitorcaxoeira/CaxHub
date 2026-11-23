@@ -10,6 +10,8 @@ import { JOB_NAME as KYRIA_TEAMS_JOB, CRON_EXPR as KYRIA_TEAMS_CRON, runKyriaTea
 import { JOB_NAME as KYRIA_MEMBERS_JOB, CRON_EXPR as KYRIA_MEMBERS_CRON, runKyriaMembersSync } from "./membersSync";
 import { JOB_NAME as KYRIA_CUSTOMERS_JOB, CRON_EXPR as KYRIA_CUSTOMERS_CRON, runKyriaCustomersSync } from "./customersSync";
 import { JOB_NAME as KYRIA_TICKET_STATUSES_JOB, CRON_EXPR as KYRIA_TICKET_STATUSES_CRON, runKyriaTicketStatusesSync } from "./ticketStatusesSync";
+import { JOB_NAME as KYRIA_LABEL_GROUPS_JOB, CRON_EXPR as KYRIA_LABEL_GROUPS_CRON, runKyriaLabelGroupsSync } from "./labelGroupsSync";
+import { JOB_NAME as KYRIA_LABELS_JOB, CRON_EXPR as KYRIA_LABELS_CRON, runKyriaLabelsSync } from "./labelsSync";
 import { JOB_NAME as KYRIA_TICKETS_JOB, CRON_EXPR as KYRIA_TICKETS_CRON, runKyriaTicketsSync } from "./ticketsSync";
 import {
   JOB_NAME as KYRIA_CUSTOMER_HOURS_JOB,
@@ -18,6 +20,7 @@ import {
   mesesDoFiltro,
 } from "./customerHoursSync";
 import { JOB_NAME as KYRIA_TICKET_HOURS_JOB, CRON_EXPR as KYRIA_TICKET_HOURS_CRON, runKyriaTicketHoursSync } from "./ticketHoursSync";
+import { JOB_NAME as KYRIA_TIME_ENTRIES_JOB, CRON_EXPR as KYRIA_TIME_ENTRIES_CRON, runKyriaTimeEntriesSync } from "./timeEntriesSync";
 
 export interface KyriaSyncJobDescriptor {
   jobName: string;
@@ -78,6 +81,26 @@ export const KYRIA_SYNC_JOBS: KyriaSyncJobDescriptor[] = [
     run: runKyriaTicketStatusesSync,
     contarRegistros: () => prisma.kyriaTicketStatus.count(),
   },
+  // Antes de Etiquetas (Etiqueta.groupId aponta pra cá): catálogo independente, sem FK — mapeamento #20, 18/11/2026.
+  {
+    jobName: KYRIA_LABEL_GROUPS_JOB,
+    displayName: "Grupos de Etiqueta",
+    cronExpr: KYRIA_LABEL_GROUPS_CRON,
+    path: "/label-groups",
+    tabelaLocal: "kyria_label_groups",
+    run: runKyriaLabelGroupsSync,
+    contarRegistros: () => prisma.kyriaLabelGroup.count(),
+  },
+  // Catálogo independente (sem FK) — mapeamento #16, 18/11/2026.
+  {
+    jobName: KYRIA_LABELS_JOB,
+    displayName: "Etiquetas",
+    cronExpr: KYRIA_LABELS_CRON,
+    path: "/labels",
+    tabelaLocal: "kyria_labels",
+    run: runKyriaLabelsSync,
+    contarRegistros: () => prisma.kyriaLabel.count(),
+  },
   {
     jobName: KYRIA_TICKETS_JOB,
     displayName: "Tickets",
@@ -111,5 +134,16 @@ export const KYRIA_SYNC_JOBS: KyriaSyncJobDescriptor[] = [
       mesesDoFiltro(filtros);
     },
     contarRegistros: () => prisma.kyriaCustomerHours.count(),
+  },
+  // Depois de Tickets e Membros (FKs reais) — feed de mudanças com início/fim de cada apontamento,
+  // automático e manual. Incremental por cursor; a primeira execução é a carga inicial (~8 min).
+  {
+    jobName: KYRIA_TIME_ENTRIES_JOB,
+    displayName: "Apontamentos de horas (feed)",
+    cronExpr: KYRIA_TIME_ENTRIES_CRON,
+    path: "/time-entries",
+    tabelaLocal: "kyria_time_entries",
+    run: runKyriaTimeEntriesSync,
+    contarRegistros: () => prisma.kyriaTimeEntry.count(),
   },
 ];

@@ -9,7 +9,9 @@
 // inteiras e filtrava no cliente, e as grandes ficavam só com a busca.
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
-import type { SyncJobDescriptor } from "./registry";
+// Só a tabela local importa pra consultar o espelho — o motor serve tanto aos jobs do Senior/HCM (SyncJobDescriptor) quanto aos do
+// Kyria (KyriaSyncJobDescriptor, desde 17/11/2026), sem depender de nenhum dos dois registries.
+type JobDeTabela = { tabelaLocal: string };
 import { ColunaFiltravel, FiltroColuna, OperadorColuna, TipoColuna, operadoresDaColuna, whereDosFiltros } from "./filtroColunaLocal";
 import { OpcaoDominio, catalogoDeDominios, dominioDoCampo } from "./dominioDoSchema";
 import { type OrdemColuna } from "./ordemColuna";
@@ -80,7 +82,7 @@ function camposEscalares(model: ModeloDmmf): CampoDmmf[] {
   return [...escalares.filter((f) => !CAMPOS_CONTROLE.has(f.name)), ...escalares.filter((f) => CAMPOS_CONTROLE.has(f.name))];
 }
 
-export function colunasDoJob(job: SyncJobDescriptor): ColunaDados[] {
+export function colunasDoJob(job: JobDeTabela): ColunaDados[] {
   const model = modeloDaTabela(job.tabelaLocal);
   const chaves = new Set(model.primaryKey?.fields?.length ? model.primaryKey.fields : model.fields.filter((f) => f.isId).map((f) => f.name));
   return camposEscalares(model).map((campo) => {
@@ -91,7 +93,7 @@ export function colunasDoJob(job: SyncJobDescriptor): ColunaDados[] {
       ehChave: chaves.has(campo.name),
       ehControle: CAMPOS_CONTROLE.has(campo.name),
       obrigatoria: campo.isRequired,
-      operadores: operadoresDaColuna({ tipo, obrigatoria: campo.isRequired }),
+      operadores: operadoresDaColuna({ tipo, obrigatoria: campo.isRequired, enum: campo.kind === "enum" }),
       ...(() => {
         const d = dominioDoCampo(campo.documentation, campo.type, catalogoDoSchema());
         return d ? { dominio: d.opcoes } : {};
@@ -101,13 +103,15 @@ export function colunasDoJob(job: SyncJobDescriptor): ColunaDados[] {
 }
 
 /** Colunas com o tipo do schema, para validar e montar o filtro (filtroColunaLocal.ts). */
-export function colunasFiltraveis(job: SyncJobDescriptor): ColunaFiltravel[] {
+export function colunasFiltraveis(job: JobDeTabela): ColunaFiltravel[] {
   const model = modeloDaTabela(job.tabelaLocal);
   return camposEscalares(model).map((campo) => ({
     nome: campo.name,
     tipo: tipoDaColuna(campo) as TipoColuna,
     obrigatoria: campo.isRequired,
     prisma: campo.type,
+    // Enum do Prisma (só nos models do Kyria): filtro por igualdade/lista com os valores do próprio enum (ver filtroColunaLocal.ts).
+    ...(campo.kind === "enum" ? { enum: true, valoresEnum: Prisma.dmmf.datamodel.enums.find((e) => e.name === campo.type)?.values.map((v) => v.name) ?? [] } : {}),
   }));
 }
 
@@ -186,7 +190,7 @@ export interface OpcoesRecorte {
   filtros?: FiltroColuna[];
 }
 
-function whereDoRecorte(job: SyncJobDescriptor, model: ModeloDmmf, opcoes: OpcoesRecorte): Record<string, unknown> | undefined {
+function whereDoRecorte(job: JobDeTabela, model: ModeloDmmf, opcoes: OpcoesRecorte): Record<string, unknown> | undefined {
   const partes = [
     filtroDeBusca(model, opcoes.busca),
     opcoes.situacao
@@ -230,17 +234,19 @@ export function orderByDoRecorte(model: Pick<ModeloDmmf, "fields">, ordem: Ordem
 export const FUNCOES_RESUMO_DADOS = new Set(["soma", "media", "minimo", "maximo", "contagem", "vazios", "sim", "nao", "pctSim"]);
 
 /** Resumo do rodapé sobre TODAS as linhas do recorte (busca, situação e filtros de coluna). Chave da resposta: `coluna:funcao`. */
-export async function resumoDosDados(job: SyncJobDescriptor, pedidos: PedidoResumo[], opcoes: OpcoesRecorte): Promise<{ linhas: number; valores: Record<string, number | string | null> }> {
+export async function resumoDosDados(job: JobDeTabela, pedidos: PedidoResumo[], opcoes: OpcoesRecorte): Promise<{ linhas: number; valores: Record<string, number | string | null> }> {
   const model = modeloDaTabela(job.tabelaLocal);
   const delegate = delegateDoModelo(model, job.tabelaLocal);
   const where = whereDoRecorte(job, model, opcoes);
   const e = (extra: Record<string, unknown>) => (where ? { AND: [where, extra] } : extra);
   const tipos = new Map(colunasFiltraveis(job).map((c) => [c.nome, c.tipo]));
+  // Enum não tem "texto vazio" (e o Prisma recusa `not: ""` nele): só o nulo conta como vazio.
+  const enums = new Set(model.fields.filter((f) => f.kind === "enum").map((f) => f.name));
   // Campo obrigatório não aceita `not: null` no Prisma (e nunca é nulo): só o texto vazio conta como vazio nele.
   const obrigatorio = new Set(model.fields.filter((f) => f.isRequired).map((f) => f.name));
   const preenchido = (c: string): Record<string, unknown> => {
     const naoNulo = obrigatorio.has(c) ? [] : [{ [c]: { not: null } }];
-    const naoVazio = tipos.get(c) === "texto" ? [{ [c]: { not: "" } }] : [];
+    const naoVazio = tipos.get(c) === "texto" && !enums.has(c) ? [{ [c]: { not: "" } }] : [];
     return { AND: [...naoNulo, ...naoVazio] };
   };
 
@@ -267,7 +273,7 @@ export async function resumoDosDados(job: SyncJobDescriptor, pedidos: PedidoResu
 }
 
 export async function listarDadosDoJob(
-  job: SyncJobDescriptor,
+  job: JobDeTabela,
   opcoes: {
     page: number;
     pageSize: number;
@@ -318,7 +324,7 @@ export interface ValoresDaColuna {
  * Valores mais frequentes de UMA coluna dentro do recorte atual (aba "Valores" do funil). O filtro da própria coluna fica de fora, como
  * no Excel, para dar para trocar a seleção. `termo` restringe os valores: `contains` em texto, igualdade em número.
  */
-export async function valoresDaColuna(job: SyncJobDescriptor, coluna: string, opcoes: OpcoesRecorte & { termo: string }): Promise<ValoresDaColuna> {
+export async function valoresDaColuna(job: JobDeTabela, coluna: string, opcoes: OpcoesRecorte & { termo: string }): Promise<ValoresDaColuna> {
   const model = modeloDaTabela(job.tabelaLocal);
   const delegate = delegateDoModelo(model, job.tabelaLocal);
   const col = colunasFiltraveis(job).find((c) => c.nome === coluna);
@@ -327,7 +333,8 @@ export async function valoresDaColuna(job: SyncJobDescriptor, coluna: string, op
   const recorte = whereDoRecorte(job, model, semAPropria);
   const termo = opcoes.termo.trim();
   let doTermo: Record<string, unknown> | undefined;
-  if (termo) {
+  // Enum: o Prisma não tem `contains` nele — o termo é aplicado depois, em memória (são poucos valores).
+  if (termo && !col.enum) {
     if (col.tipo === "texto") doTermo = { [coluna]: { contains: termo, mode: "insensitive" } };
     else if (col.tipo === "inteiro" && /^-?\d{1,18}$/.test(termo)) doTermo = { [coluna]: col.prisma === "BigInt" ? BigInt(termo) : Number(termo) };
     else if (col.tipo === "decimal" && /^-?\d+(\.\d+)?$/.test(termo)) doTermo = { [coluna]: termo };
@@ -338,9 +345,11 @@ export async function valoresDaColuna(job: SyncJobDescriptor, coluna: string, op
   // única (numlct).
   const grupos = await delegate.groupBy({ by: [coluna], where, _count: { _all: true }, orderBy: { _count: { [coluna]: "desc" } }, take: MAX_VALORES_COLUNA + 1 });
   // `_count` por coluna não conta nulos; a quantidade real de cada grupo vem de `_all`. Reordena por ela (nulos podem ser muitos).
+  const termoEnum = col.enum ? termo.toLowerCase() : "";
   const valores = grupos
     .slice(0, MAX_VALORES_COLUNA)
     .map((g) => ({ valor: serializar(g[coluna]), quantidade: Number((g._count as { _all: number })._all) }))
+    .filter((v) => !termoEnum || String(v.valor ?? "").toLowerCase().includes(termoEnum))
     .sort((a, b) => b.quantidade - a.quantidade);
   return { coluna, valores, temMais: grupos.length > MAX_VALORES_COLUNA };
 }

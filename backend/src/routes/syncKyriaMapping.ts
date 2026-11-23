@@ -2,8 +2,8 @@ import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { KYRIA_KNOWN_RESOURCES } from "../kyria/knownResources";
-import { previewKyriaResource } from "../kyria/fieldPreview";
+import { buscarDocumentacao, casarCaminho } from "../kyria/openapiRecursos";
+import { previewKyriaResource, type OpenApiPropertySchema } from "../kyria/fieldPreview";
 
 // Workflow de mapeamento/tipagem de campos (Administração > Integração Kyria > Mapeamento de
 // Campos, 18/09/2026, pedido do Vitor) — arquivo separado de sync-kyria.ts de propósito:
@@ -40,22 +40,40 @@ function handleError(res: import("express").Response, error: unknown, label: str
   res.status(500).json({ error: message });
 }
 
-syncKyriaMappingRouter.get("/known-resources", async (_req, res) => {
+// Lista de recursos = os GETs da DOCUMENTAÇÃO da API do Kyria (openapi.json lido ao vivo, ver kyria/openapiRecursos.ts) — substituiu a lista fixa
+// de 14 caminhos que ficava no código (18/11/2026, pedido do Vitor). Cada recurso traz os mapeamentos já registrados que casam com ele (com os
+// valores de parâmetro de cada um); o que está registrado mas a documentação não tem mais volta em `registradosForaDaDoc`.
+syncKyriaMappingRouter.get("/openapi-resources", async (_req, res) => {
   try {
-    const registrados = await prisma.kyriaResourceMapping.findMany({
-      select: { id: true, resourcePath: true },
+    const doc = await buscarDocumentacao().catch((erro: Error) => {
+      res.status(502).json({ error: erro.message });
+      return null;
     });
-    const porPath = new Map(registrados.map((r) => [r.resourcePath, r.id]));
+    if (!doc) return;
+    const registrados = await prisma.kyriaResourceMapping.findMany({ select: { id: true, resourcePath: true, displayName: true }, orderBy: { resourcePath: "asc" } });
+
+    const porCaminho = new Map<string, { resourceId: number; resourcePath: string; displayName: string; valoresCaminho: Record<string, string>; valoresQuery: Record<string, string> }[]>();
+    const foraDaDoc: { resourceId: number; resourcePath: string; displayName: string }[] = [];
+    for (const r of registrados) {
+      const casado = casarCaminho(r.resourcePath, doc.recursos);
+      if (!casado) {
+        foraDaDoc.push({ resourceId: r.id, resourcePath: r.resourcePath, displayName: r.displayName });
+        continue;
+      }
+      const lista = porCaminho.get(casado.recurso.caminho) ?? [];
+      lista.push({ resourceId: r.id, resourcePath: r.resourcePath, displayName: r.displayName, valoresCaminho: casado.valoresCaminho, valoresQuery: casado.valoresQuery });
+      porCaminho.set(casado.recurso.caminho, lista);
+    }
 
     res.json({
-      recursos: KYRIA_KNOWN_RESOURCES.map((recurso) => ({
-        ...recurso,
-        registrado: porPath.has(recurso.path),
-        resourceId: porPath.get(recurso.path) ?? null,
-      })),
+      baseUrl: doc.baseUrl,
+      docsUrl: doc.docsUrl,
+      versaoDoc: doc.versao,
+      recursos: doc.recursos.map((recurso) => ({ ...recurso, registrados: porCaminho.get(recurso.caminho) ?? [] })),
+      registradosForaDaDoc: foraDaDoc,
     });
   } catch (error) {
-    handleError(res, error, "known-resources");
+    handleError(res, error, "openapi-resources");
   }
 });
 
@@ -67,8 +85,15 @@ syncKyriaMappingRouter.post("/preview", async (req, res) => {
       return;
     }
 
-    const conhecido = KYRIA_KNOWN_RESOURCES.find((r) => r.path === path);
-    const preview = await previewKyriaResource(path, conhecido?.openApiSchemaName);
+    // O schema do item (pro cruzamento de tipos) e o `limit` saem da MESMA leitura da documentação. Doc fora do ar não impede o preview: segue
+    // sem cruzamento de tipos, como já era quando o schema não era achado.
+    const doc = await buscarDocumentacao().catch(() => null);
+    const casado = doc ? casarCaminho(path, doc.recursos) : null;
+    const propriedades = casado?.recurso.schemaItem ? doc?.schemas[casado.recurso.schemaItem]?.properties : undefined;
+    const preview = await previewKyriaResource(path, {
+      propriedades: propriedades as Record<string, OpenApiPropertySchema> | undefined,
+      paginado: casado ? casado.recurso.paginado : true,
+    });
     res.json(preview);
   } catch (error) {
     handleError(res, error, "preview");

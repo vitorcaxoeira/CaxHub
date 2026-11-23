@@ -13,6 +13,13 @@ export interface ColunaFiltravel {
   tipo: TipoColuna;
   obrigatoria: boolean;
   prisma: string;
+  /**
+   * Coluna de enum do Prisma (ex.: status, prioridade — só nos models do Kyria; os do Senior não têm). Tem tipo "texto" na tela, mas o Prisma
+   * só aceita igualdade/lista nela: sem "contém"/"começa com" nem `mode: "insensitive"`.
+   */
+  enum?: boolean;
+  /** Valores válidos do enum; qualquer outro viraria erro do Prisma, então é recusado na validação (400). */
+  valoresEnum?: string[];
 }
 
 export interface FiltroColuna {
@@ -30,9 +37,11 @@ const OPERADORES_POR_TIPO: Record<TipoColuna, OperadorColuna[]> = {
   json: [],
 };
 
+const OPERADORES_ENUM: OperadorColuna[] = ["=", "≠", "IN"];
+
 /** Operadores que a coluna aceita (com "vazio"/"não vazio" quando ela aceita nulo). Também usado pela tela, via resposta da API. */
-export function operadoresDaColuna(c: Pick<ColunaFiltravel, "tipo" | "obrigatoria">): OperadorColuna[] {
-  const base = OPERADORES_POR_TIPO[c.tipo] ?? [];
+export function operadoresDaColuna(c: Pick<ColunaFiltravel, "tipo" | "obrigatoria" | "enum">): OperadorColuna[] {
+  const base = c.enum ? OPERADORES_ENUM : (OPERADORES_POR_TIPO[c.tipo] ?? []);
   if (base.length === 0) return [];
   return c.obrigatoria ? base : [...base, "vazio", "não vazio"];
 }
@@ -49,6 +58,7 @@ function quantosValores(operador: OperadorColuna): number | "lista" {
 }
 
 function valorValido(c: ColunaFiltravel, v: string): boolean {
+  if (c.enum && c.valoresEnum) return c.valoresEnum.includes(v);
   switch (c.tipo) {
     case "inteiro":
       return c.prisma === "BigInt" ? /^-?\d{1,18}$/.test(v) : /^-?\d{1,9}$/.test(v);
@@ -119,6 +129,12 @@ const diaSeguinte = (v: string) => new Date(new Date(`${v}T00:00:00.000Z`).getTi
 function condicao(c: ColunaFiltravel, f: FiltroColuna): unknown {
   const [v1, v2] = f.valores;
   const data = c.tipo === "data";
+  // Enum: igualdade exata e lista, sem `mode` (o Prisma recusa `mode`/`contains` em enum). "vazio"/"não vazio" seguem no switch abaixo.
+  if (c.enum) {
+    if (f.operador === "=") return v1;
+    if (f.operador === "≠") return { not: v1 };
+    if (f.operador === "IN") return { in: f.valores };
+  }
   switch (f.operador) {
     case "vazio":
       return null;

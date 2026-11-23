@@ -1,6 +1,10 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type KyriaMemberRole } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { pkFieldsDoModel } from "../sync/recorteRetroativo";
+import { converterValorInterno, ErroValorInterno } from "./valorCampoInterno";
+import { colunasDoJob, listarDadosDoJob, type ColunaDados as ColunaMotor, type ResultadoDados } from "../sync/dadosSincronizados";
+import type { FiltroColuna } from "../sync/filtroColunaLocal";
+import type { OrdemColuna } from "../sync/ordemColuna";
 import type { KyriaSyncJobDescriptor } from "./registry";
 
 // Consulta/edição dos dados JÁ SINCRONIZADOS (Administração > Integração Kyria > "Ver dados",
@@ -70,6 +74,32 @@ function clampPagina(valor: unknown, min: number, max: number, padrao: number): 
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
+/**
+ * Condição pra uma linha poder RECEBER vínculo num campo interno (rentabilidade, ajuste 03 de
+ * 17/11/2026): só membro com papel `attendant` é relacionado a um consultor — solicitante, gestor
+ * etc. não apontam hora e não entram no custo. Em 19/11/2026 entraram também `admin` e `manager` (quem
+ * atende além do papel de atendente). Chaveada por `tabelaLocal.coluna`; a validação é do
+ * backend (editarCampoInterno) e a tela só usa isto pra não oferecer "vincular" onde não vale.
+ * Remover um vínculo já existente NUNCA é bloqueado (valor null).
+ */
+/** Papéis do Kyria que podem ser ligados a um consultor (`kyria_members.codusu`). Uma só lista: o vínculo, a tela de Vínculo de Consultores e "Ver dados" leem daqui. */
+export const ROLES_VINCULAVEIS_KYRIA: readonly KyriaMemberRole[] = ["attendant", "admin", "manager"];
+
+export const RESTRICOES_VINCULO: Record<string, { coluna: string; valores: readonly string[]; motivo: string }> = {
+  "kyria_members.codusu": {
+    coluna: "role",
+    valores: ROLES_VINCULAVEIS_KYRIA,
+    motivo: "Só membro com papel \"attendant\", \"admin\" ou \"manager\" é vinculado a consultor.",
+  },
+};
+
+export interface RestricaoVinculo {
+  /** Campo Prisma da linha que precisa ter um destes `valores` (a tela lê `linha[campo]`). */
+  campo: string;
+  valores: string[];
+  motivo: string;
+}
+
 export interface ColunaDados {
   nomeInterno: string;
   ehInterno: boolean;
@@ -78,63 +108,71 @@ export interface ColunaDados {
   relacionamentoCampoDescricao: string | null;
 }
 
-export interface ListaDados {
-  total: number;
-  page: number;
-  pageSize: number;
-  colunas: ColunaDados[];
-  itens: Record<string, unknown>[];
-  // Por coluna com relacionamentoCampoDescricao registrado: mapa "valor bruto da coluna" ->
-  // rótulo legível ("123" -> "ACME LTDA"), já resolvido em lote pra tela "Ver dados" não
-  // precisar de N+1 consulta por linha.
+/**
+ * Coluna da tela "Ver dados": as do motor genérico do espelho (nome do campo Prisma, tipo, operadores
+ * de filtro...) mais o que é do Kyria — o nome da COLUNA no Postgres (`rotulo`, snake_case, o que o
+ * mapeamento registra e o que o admin reconhece) e, quando o mapeamento marca o campo como interno,
+ * o relacionamento que permite vincular/trocar/remover o registro relacionado.
+ */
+export interface ColunaKyria extends ColunaMotor {
+  rotulo: string;
+  ehInterno: boolean;
+  vinculoRestrito: RestricaoVinculo | null;
+  relacionamentoModelo: string | null;
+  relacionamentoCampo: string | null;
+  relacionamentoCampoDescricao: string | null;
+}
+
+export interface ListaDadosKyria extends ResultadoDados {
+  colunas: ColunaKyria[];
+  // Por coluna (nome do campo) com relacionamentoCampoDescricao registrado: mapa "valor bruto" ->
+  // rótulo legível ("123" -> "ACME LTDA"), resolvido em lote só pras linhas da página.
   descricoes: Record<string, Record<string, string>>;
 }
 
 /**
- * Colunas a mostrar pra tabela do job, cruzando com o mapeamento registrado (se existir) pra
- * marcar quais são internas/editáveis. Sem mapeamento registrado pro recurso, devolve as
- * colunas cruas do Prisma, nenhuma marcada como interna — degrada com segurança (mostra o
- * dado, não deixa editar sem saber o que é seguro).
+ * Colunas do espelho (todas as escalares do model, como no "Ver dados" do ERP) cruzadas com o
+ * mapeamento registrado pra marcar quais são internas/editáveis. Sem mapeamento registrado, nenhuma
+ * é interna — degrada com segurança (mostra o dado, não deixa editar sem saber o que é seguro).
  */
-async function resolverColunas(job: KyriaSyncJobDescriptor, model: Model): Promise<ColunaDados[]> {
+async function resolverColunas(job: KyriaSyncJobDescriptor, model: Model): Promise<ColunaKyria[]> {
   const recurso = await prisma.kyriaResourceMapping.findUnique({
     where: { resourcePath: job.path },
-    include: { campos: { where: { manter: true }, orderBy: { ordem: "asc" } } },
+    include: { campos: { where: { manter: true } } },
   });
+  const mapeadoPorColuna = new Map((recurso?.campos ?? []).map((c) => [c.nomeInterno, c]));
 
-  return recurso
-    ? recurso.campos.map((c) => ({
-        nomeInterno: c.nomeInterno,
-        ehInterno: c.nomeOrigem === null,
-        relacionamentoModelo: c.relacionamentoModelo,
-        relacionamentoCampo: c.relacionamentoCampo,
-        relacionamentoCampoDescricao: c.relacionamentoCampoDescricao,
-      }))
-    : model.fields
-        .filter((f) => f.kind === "scalar")
-        .map((f) => ({
-          nomeInterno: f.dbName ?? f.name,
-          ehInterno: false,
-          relacionamentoModelo: null,
-          relacionamentoCampo: null,
-          relacionamentoCampoDescricao: null,
-        }));
+  return colunasDoJob(job).map((coluna) => {
+    const rotulo = model.fields.find((f) => f.name === coluna.nome)?.dbName ?? coluna.nome;
+    const mapeado = mapeadoPorColuna.get(rotulo);
+    const restricao = RESTRICOES_VINCULO[`${job.tabelaLocal}.${rotulo}`];
+    const campoCondicao = restricao ? campoPrismaPorColuna(model, restricao.coluna) : null;
+    return {
+      ...coluna,
+      rotulo,
+      ehInterno: mapeado ? mapeado.nomeOrigem === null : false,
+      vinculoRestrito: restricao && campoCondicao ? { campo: campoCondicao, valores: [...restricao.valores], motivo: restricao.motivo } : null,
+      relacionamentoModelo: mapeado?.relacionamentoModelo ?? null,
+      relacionamentoCampo: mapeado?.relacionamentoCampo ?? null,
+      relacionamentoCampoDescricao: mapeado?.relacionamentoCampoDescricao ?? null,
+    };
+  });
 }
 
 /**
  * Resolve em lote o rótulo legível de cada coluna com relacionamento+descrição registrados —
- * uma consulta por coluna (não por linha): junta os valores distintos já carregados em `itens`,
- * busca só `relacionamentoCampo`+`relacionamentoCampoDescricao` da tabela relacionada com um
- * `IN`, monta um mapa "valor -> rótulo". Coluna sem relacionamentoCampoDescricao registrado nem
- * entra no resultado (tela mostra só o valor cru, como já fazia).
+ * uma consulta por coluna (não por linha): junta os valores distintos da página, busca só
+ * `relacionamentoCampo`+`relacionamentoCampoDescricao` da tabela relacionada com um `IN`, monta um
+ * mapa "valor -> rótulo". Coluna sem relacionamentoCampoDescricao registrado nem entra no
+ * resultado (tela mostra só o valor cru).
  */
-async function resolverDescricoes(colunas: ColunaDados[], itens: Record<string, unknown>[]): Promise<Record<string, Record<string, string>>> {
+async function resolverDescricoes(colunas: ColunaKyria[], itens: Record<string, unknown>[]): Promise<Record<string, Record<string, string>>> {
   const resultado: Record<string, Record<string, string>> = {};
 
   for (const coluna of colunas) {
     if (!coluna.ehInterno || !coluna.relacionamentoModelo || !coluna.relacionamentoCampo || !coluna.relacionamentoCampoDescricao) continue;
 
-    const valores = [...new Set(itens.map((item) => item[coluna.nomeInterno]).filter((v) => v !== null && v !== undefined))];
+    const valores = [...new Set(itens.map((item) => item[coluna.nome]).filter((v) => v !== null && v !== undefined))];
     if (valores.length === 0) continue;
 
     const modelo = resolverModel(coluna.relacionamentoModelo, false);
@@ -152,59 +190,29 @@ async function resolverDescricoes(colunas: ColunaDados[], itens: Record<string, 
       const rotulo = linha[coluna.relacionamentoCampoDescricao as string];
       if (rotulo !== null && rotulo !== undefined) mapa[chave] = String(rotulo);
     }
-    resultado[coluna.nomeInterno] = mapa;
+    resultado[coluna.nome] = mapa;
   }
 
   return resultado;
 }
 
-/** Lista as linhas já sincronizadas da tabela do job, paginado no servidor. */
-export async function listarDados(job: KyriaSyncJobDescriptor, pageRaw: unknown, pageSizeRaw: unknown): Promise<ListaDados> {
-  const model = resolverModel(job.tabelaLocal, true);
-  if (!model) throw new Error(`Model Prisma não encontrado pra tabela local "${job.tabelaLocal}".`);
-  const delegate = resolverDelegate(model);
-
-  const page = clampPagina(pageRaw, 1, Number.MAX_SAFE_INTEGER, 1);
-  const pageSize = clampPagina(pageSizeRaw, 1, 100, 30);
-  const pk = pkFieldsDoModel(job.tabelaLocal);
-
-  const [total, itensBrutos, colunas] = await Promise.all([
-    delegate.count(),
-    delegate.findMany({ skip: (page - 1) * pageSize, take: pageSize, orderBy: pk.map((campo) => ({ [campo]: "asc" })) }),
-    resolverColunas(job, model),
-  ]);
-  const itens = remapearItens(itensBrutos, colunas, model);
-  const descricoes = await resolverDescricoes(colunas, itens);
-
-  return { total, page, pageSize, colunas, itens, descricoes };
-}
-
-export interface ListaCompleta {
-  colunas: ColunaDados[];
-  itens: Record<string, unknown>[];
-  descricoes: Record<string, Record<string, string>>;
-}
-
 /**
- * Todas as linhas da tabela do job, sem paginação — pro filtro de coluna no cliente (mesmo
- * espírito de routes/pedidos.ts:GET /por-cliente/indice, que também busca tudo de uma vez pra
- * filtrar/paginar em JS). Tabelas Kyria de hoje são pequenas (9 times, 167 membros); se um
- * recurso futuro (ex.: tickets) crescer muito, isto precisa virar filtro server-side.
+ * Linhas já sincronizadas da tabela do job, tudo no SERVIDOR (17/11/2026, pedido do Vitor: mesma
+ * tela do "Ver dados" do ERP) — busca, filtro por coluna, ordem e paginação pelo motor genérico
+ * (sync/dadosSincronizados.ts), que serve a qualquer tamanho de tabela. Antes a tela carregava a
+ * tabela inteira; com kyria_time_entries (dezenas de milhares de linhas) isso deixou de caber.
  */
-export async function listarTodosDados(job: KyriaSyncJobDescriptor): Promise<ListaCompleta> {
+export async function listarDadosKyria(
+  job: KyriaSyncJobDescriptor,
+  opcoes: { page: number; pageSize: number; busca: string; filtros: FiltroColuna[]; ordem: OrdemColuna[] }
+): Promise<ListaDadosKyria> {
   const model = resolverModel(job.tabelaLocal, true);
   if (!model) throw new Error(`Model Prisma não encontrado pra tabela local "${job.tabelaLocal}".`);
-  const delegate = resolverDelegate(model);
-  const pk = pkFieldsDoModel(job.tabelaLocal);
 
-  const [itensBrutos, colunas] = await Promise.all([
-    delegate.findMany({ orderBy: pk.map((campo) => ({ [campo]: "asc" })) }),
-    resolverColunas(job, model),
-  ]);
-  const itens = remapearItens(itensBrutos, colunas, model);
-  const descricoes = await resolverDescricoes(colunas, itens);
+  const [resultado, colunas] = await Promise.all([listarDadosDoJob(job, opcoes), resolverColunas(job, model)]);
+  const descricoes = await resolverDescricoes(colunas, resultado.itens);
 
-  return { colunas, itens, descricoes };
+  return { ...resultado, colunas, descricoes };
 }
 
 /**
@@ -222,12 +230,9 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
   if (campoMapeado.nomeOrigem !== null) throw new ErroValidacao(`Campo "${campo}" vem da API — só campo interno pode ser editado aqui.`);
   if (!campoMapeado.manter) throw new ErroValidacao(`Campo "${campo}" está marcado como "não manter" no mapeamento.`);
 
-  // `valor === null` = REMOVER o vínculo (25/09/2026): não há registro relacionado pra conferir —
-  // o campo simplesmente volta a ficar vazio. Só vale pra campo que é de fato um relacionamento
-  // (senão a tela nem oferece a ação) e, mais abaixo, só se a coluna aceitar nulo.
-  if (valor === null && !(campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo)) {
-    throw new ErroValidacao(`Campo "${campo}" não é um relacionamento — não há vínculo a remover.`);
-  }
+  // `valor === null` = REMOVER o vínculo (25/09/2026) ou LIMPAR o campo (18/11/2026, campo interno que não é vínculo, ex.: um Boolean): não há
+  // registro relacionado pra conferir — o campo simplesmente volta a ficar vazio, e só se a coluna aceitar nulo (conferido mais abaixo).
+  const ehRelacionamento = !!(campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo);
   if (valor !== null && campoMapeado.relacionamentoModelo && campoMapeado.relacionamentoCampo) {
     const modeloRelacionado = resolverModel(campoMapeado.relacionamentoModelo, false);
     if (!modeloRelacionado) throw new ErroValidacao(`Model relacionado "${campoMapeado.relacionamentoModelo}" não existe mais no schema.`);
@@ -252,10 +257,31 @@ export async function editarCampoInterno(job: KyriaSyncJobDescriptor, id: string
   const pk = pkFieldsDoModel(job.tabelaLocal);
   if (pk.length !== 1) throw new Error(`"Ver dados" só suporta tabela com PK simples — "${job.tabelaLocal}" tem PK composta (${pk.join(", ")}).`);
   const delegate = resolverDelegate(model);
-  const linhaAtualizada = await delegate.update({ where: { [pk[0]]: id }, data: { [campoPrisma]: valor } });
 
-  // Remapeado pro mesmo formato de listarDados/listarTodosDados (nomeInterno, não campo Prisma
-  // cru) — o frontend hoje descarta esse retorno (DadosKyria.tsx só chama carregar() de novo
+  const restricao = valor === null ? undefined : RESTRICOES_VINCULO[`${job.tabelaLocal}.${campo}`];
+  if (restricao) {
+    const campoCondicao = campoPrismaPorColuna(model, restricao.coluna);
+    const atual = campoCondicao ? await delegate.findUnique({ where: { [pk[0]]: id }, select: { [campoCondicao]: true } }) : null;
+    if (!atual) throw new ErroValidacao(`Registro "${id}" não encontrado em "${job.tabelaLocal}".`);
+    if (!restricao.valores.includes(String(atual[campoCondicao as string]))) throw new ErroValidacao(restricao.motivo);
+  }
+
+  // Campo interno que NÃO é vínculo (18/11/2026): o valor é conferido pelo TIPO da coluna (Boolean, texto, inteiro, número) — um valor de tipo
+  // errado nunca chega ao Prisma. Vínculo continua sendo conferido contra a tabela relacionada, lá em cima.
+  let valorFinal: unknown = valor;
+  if (!ehRelacionamento) {
+    try {
+      valorFinal = converterValorInterno(model.fields.find((f) => f.name === campoPrisma)?.type ?? "", valor);
+    } catch (erro) {
+      if (erro instanceof ErroValorInterno) throw new ErroValidacao(`Campo "${campo}": ${erro.message}`);
+      throw erro;
+    }
+  }
+
+  const linhaAtualizada = await delegate.update({ where: { [pk[0]]: id }, data: { [campoPrisma]: valorFinal } });
+
+  // Remapeado pra chave nomeInterno (coluna do Postgres, não campo Prisma
+  // cru) — o frontend hoje descarta esse retorno (DadosKyria.tsx só recarrega a página
   // depois do PATCH), então não corrige bug visível nenhum, mas mantém a resposta consistente
   // com o resto da API em vez de vazar o nome do campo Prisma e um BigInt cru.
   const colunas: ColunaDados[] = recurso.campos

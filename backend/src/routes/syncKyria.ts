@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { KYRIA_SYNC_JOBS } from "../kyria/registry";
+import { kyriaFullUrl } from "../kyria/client";
 import { proximaExecucao } from "../sync/cronUtils";
 import { jobAtivo } from "../kyria/jobAtivo";
 
@@ -19,13 +20,6 @@ function handleError(res: import("express").Response, error: unknown, label: str
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[sync-kyria:${label}]`, message);
   res.status(500).json({ error: message });
-}
-
-// Degrada pra só o path se KYRIA_BASE_URL não estiver definida — diferente de kyriaConfig()
-// (client.ts), que lança, esta rota só monta uma URL informativa pra tela, não bate na rede.
-function kyriaFullUrl(path: string): string {
-  const baseUrl = (process.env.KYRIA_BASE_URL ?? "").replace(/\/$/, "");
-  return `${baseUrl}${path}`;
 }
 
 syncKyriaRouter.get("/", async (_req, res) => {

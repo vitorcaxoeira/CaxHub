@@ -149,3 +149,21 @@ export function defgruBucket(defgru: string | null): { ordem: string; rotulo: st
 // DepartamentoGrupoContabil (100% nativa do CaxHub, editável em Administração > Departamento x
 // Grupo Contábil, sem precisar de deploy pra corrigir/estender). Ver gruposPermitidos em
 // routes/contabil.ts pra quem lê essa tabela pro RBAC por departamento.
+
+// Sinal do realizado — tradução da medida DAX "Valor_Contabil" (Power BI) fornecida pelo Vitor
+// em 27/08/2026. Regra geral: crédito soma, débito subtrai — EXCETO contas de despesa (defgru=D)
+// com natureza Credora (natcta=C, ex. "Ganho Tributário Faturamento Senior" 762/763/776), que
+// sempre somam (é um ganho/redução de despesa, independente do lado do lançamento no Senior).
+// `Grupo`/`Natureza` na DAX são da CONTA-FOLHA que recebeu o lançamento (confirmado no SQL base
+// do BI: `Conta_Contabil.Grupo/Natureza` casam por `a.ctared = Fato.Conta` com `a.anasin='A'`),
+// nunca de um ancestral — por isso não precisa do nível sintético Receitas/Despesas removido em
+// 26/08/2026, `pc.defgru`/`pc.natcta` da própria conta já bastam. Validado célula a célula: só
+// essas 3 contas divergem da fórmula antiga (só debcre); nenhuma outra combinação muda de sinal.
+// Movida de routes/contabil.ts para cá em 17/11/2026 (indicadores de Rentabilidade usam a MESMA regra de sinal). Usada como template literal em toda query que soma `rateios_lancamento.vlrrat` (join com
+// `plano_contabil pc` obrigatório).
+export const FORMULA_VALOR_REALIZADO = `CASE
+    WHEN pc.defgru = 'R' AND r.debcre = 'D' THEN -r.vlrrat
+    WHEN pc.defgru = 'D' AND pc.natcta = 'C' AND r.debcre = 'C' THEN r.vlrrat
+    WHEN pc.defgru = 'D' AND pc.natcta = 'D' AND r.debcre = 'D' THEN -r.vlrrat
+    ELSE r.vlrrat
+  END`;

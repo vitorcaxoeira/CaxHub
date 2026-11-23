@@ -43,6 +43,7 @@ import axios from "axios";
 // ---------------------------------------------------------------------------
 
 const TENTATIVAS_RATE_LIMIT = 3;
+const TENTATIVAS_RATE_LIMIT_FEED = 6;
 
 function esperar(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,6 +58,16 @@ function kyriaConfig(): { baseUrl: string; token: string } {
   }
 
   return { baseUrl: baseUrl.replace(/\/$/, ""), token };
+}
+
+/** Base da API (inclui /api/v1). Diferente de kyriaConfig(), nao lanca se a variavel faltar: serve pra montar URL informativa pra tela. */
+export function kyriaBaseUrl(): string {
+  return (process.env.KYRIA_BASE_URL ?? "").replace(/\/$/, "");
+}
+
+/** URL completa de um caminho do Kyria (base + caminho), exatamente a que getKyriaSample e os jobs chamam. */
+export function kyriaFullUrl(path: string): string {
+  return `${kyriaBaseUrl()}${path}`;
 }
 
 export interface KyriaErrorBody {
@@ -414,6 +425,131 @@ export async function listAllTicketStatuses(options: Omit<ListTicketStatusesOpti
 }
 
 // ---------------------------------------------------------------------------
+// GET /label-groups
+// ---------------------------------------------------------------------------
+
+export interface KyriaLabelGroup {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  status: "active" | "inactive";
+}
+
+export interface ListLabelGroupsOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListLabelGroupsResult {
+  data: KyriaLabelGroup[];
+  page: KyriaPage;
+  requestId: string;
+}
+
+export async function listLabelGroups(options: ListLabelGroupsOptions = {}): Promise<ListLabelGroupsResult> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/label-groups`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: options.limit, cursor: options.cursor },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "listLabelGroups"));
+    }
+  }
+}
+
+/** Pagina automaticamente todas as páginas de /label-groups, seguindo `page.nextCursor`. */
+export async function listAllLabelGroups(options: Omit<ListLabelGroupsOptions, "cursor"> = {}): Promise<KyriaLabelGroup[]> {
+  const grupos: KyriaLabelGroup[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const pagina = await listLabelGroups({ ...options, cursor });
+    grupos.push(...pagina.data);
+    if (!pagina.page.hasMore || !pagina.page.nextCursor) break;
+    cursor = pagina.page.nextCursor;
+  }
+
+  return grupos;
+}
+
+// ---------------------------------------------------------------------------
+// GET /labels
+// ---------------------------------------------------------------------------
+
+export interface KyriaLabel {
+  id: string;
+  groupId: string | null;
+  teamId: string | null;
+  key: string;
+  name: string;
+  color: string | null;
+  status: "active" | "inactive";
+  sortOrder: number | null;
+}
+
+export interface ListLabelsOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListLabelsResult {
+  data: KyriaLabel[];
+  page: KyriaPage;
+  requestId: string;
+}
+
+export async function listLabels(options: ListLabelsOptions = {}): Promise<ListLabelsResult> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/labels`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: options.limit, cursor: options.cursor },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "listLabels"));
+    }
+  }
+}
+
+/** Pagina automaticamente todas as páginas de /labels, seguindo `page.nextCursor`. */
+export async function listAllLabels(options: Omit<ListLabelsOptions, "cursor"> = {}): Promise<KyriaLabel[]> {
+  const labels: KyriaLabel[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const pagina = await listLabels({ ...options, cursor });
+    labels.push(...pagina.data);
+    if (!pagina.page.hasMore || !pagina.page.nextCursor) break;
+    cursor = pagina.page.nextCursor;
+  }
+
+  return labels;
+}
+
+// ---------------------------------------------------------------------------
 // GET /reports/hours?groupBy=ticket
 // ---------------------------------------------------------------------------
 //
@@ -473,6 +609,87 @@ export async function getHoursReport(options: GetHoursReportOptions<"ticket" | "
         continue;
       }
       throw new Error(mensagemDeFalhaKyria(erro, "getHoursReport"));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET /time-entries — feed de mudanças dos apontamentos de hora do workspace inteiro
+// ---------------------------------------------------------------------------
+// NÃO é `GET /tickets/{id}/time-entries` (esse só devolve apontamentos MANUAIS, ~1,4% das horas —
+// conferido ao vivo em 17/11/2026: 644 de 45.919 min em 1–16/11). O feed traz os dois tipos
+// (`automatic` e `manual`), com início/fim reais, e funciona com o token atual (escopo
+// time_entries:read, o mesmo do /reports/hours).
+//
+// Cada item é uma MUDANÇA, não um apontamento: a mesma `entryId` aparece várias vezes (uma por
+// revisão — 75 mil mudanças pra 42 mil apontamentos na carga inicial) e uma exclusão chega como
+// `kind: "deleted"` com `tombstone`. Quem consome aplica as mudanças em ordem. Ordenação e
+// continuidade: `page.nextCursor` (opaco, `tef_v1.<id>.<posição>`) vale também quando
+// `hasMore` é false — guardá-lo e reenviá-lo depois devolve só o que mudou desde então.
+// Volume da carga inicial: ~460 páginas de 100 (limite de 60 req/min => ~8 minutos).
+
+export interface KyriaTimeEntrySnapshot {
+  ticketId: string;
+  teamId: string | null;
+  targetUserId: string | null;
+  source: "automatic" | "manual";
+  /** true = cronômetro ainda rodando; `endedAt`/`elapsedMinutes` vêm null. */
+  isOpen: boolean;
+  /** Epoch em milissegundos. */
+  startedAt: number;
+  endedAt: number | null;
+  elapsedMinutes: number | null;
+  effectiveAt: number;
+  reason: string | null;
+  createdByUserId: string | null;
+  updatedByUserId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type KyriaTimeEntryChange =
+  | { changeId: string; entryId: string; kind: "upsert"; syncRevision: number; changedAt: number; entry: KyriaTimeEntrySnapshot }
+  | {
+      changeId: string;
+      entryId: string;
+      kind: "deleted";
+      syncRevision: number;
+      changedAt: number;
+      tombstone: { ticketId: string; deletedAt: number };
+    };
+
+export interface ListTimeEntryChangesOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListTimeEntryChangesResult {
+  data: KyriaTimeEntryChange[];
+  page: KyriaPage;
+  requestId: string;
+}
+
+export async function listTimeEntryChanges(options: ListTimeEntryChangesOptions = {}): Promise<ListTimeEntryChangesResult> {
+  const { baseUrl, token } = kyriaConfig();
+
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      const response = await axios.get(`${baseUrl}/time-entries`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: options.limit, cursor: options.cursor },
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (erro) {
+      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+      // Mais tentativas que nas outras listagens: a carga inicial passa do limite de 60 req/min
+      // várias vezes (cada 429 espera a janela virar — `Retry-After`, ~40 s).
+      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT_FEED) {
+        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 10;
+        await esperar(retryAfter * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, "listTimeEntryChanges"));
     }
   }
 }

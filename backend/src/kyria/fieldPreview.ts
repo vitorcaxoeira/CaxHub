@@ -1,8 +1,5 @@
-import axios from "axios";
-import { getKyriaSample } from "./client";
+import { getKyriaSample, kyriaFullUrl } from "./client";
 import { competenciaAtual } from "./competencia";
-
-const KYRIA_OPENAPI_URL = "https://elegant-llama-879.convex.site/api/v1/openapi.json";
 
 export type TipoInferidoAmostra = "string" | "number" | "boolean" | "object" | "array" | "null";
 
@@ -69,29 +66,22 @@ export interface CampoPreview {
 
 export interface ResourcePreview {
   path: string;
+  /** URL completa exatamente como foi chamada (base + caminho + limit=1 e datas do mês corrente, quando o sistema preenche). */
+  urlChamada: string;
   amostraBruta: unknown;
   campos: CampoPreview[];
 }
 
-interface OpenApiPropertySchema {
+export interface OpenApiPropertySchema {
   type?: string | string[];
   enum?: string[];
 }
 
-// Busca o openapi.json AO VIVO a cada preview — chamada não-autenticada e barata, só acontece
-// quando um admin abre a tela (sem cron, sem hot path). Sem cache de propósito: um cache
-// arriscaria mascarar justamente a mudança de contrato que este cross-reference existe pra
-// pegar. Falha ao buscar, ou schema sem o nome pedido, degrada com segurança — devolve `{}`, e
-// quem chama trata como "sem cross-reference disponível", não como erro fatal do preview.
-async function propriedadesOpenApi(openApiSchemaName: string | undefined): Promise<Record<string, OpenApiPropertySchema>> {
-  if (!openApiSchemaName) return {};
-  try {
-    const { data } = await axios.get(KYRIA_OPENAPI_URL, { timeout: 10000 });
-    const propriedades = data?.components?.schemas?.[openApiSchemaName]?.properties;
-    return propriedades && typeof propriedades === "object" ? propriedades : {};
-  } catch {
-    return {};
-  }
+export interface OpcoesPreview {
+  /** Propriedades do schema do item (vindas da documentação, ver openapiRecursos.ts); vazio = sem cruzamento de tipos. */
+  propriedades?: Record<string, OpenApiPropertySchema>;
+  /** O recurso aceita `limit` na documentação? Só então a amostra manda limit=1. Padrão: sim. */
+  paginado?: boolean;
 }
 
 function tipoOpenApiNormalizado(schema: OpenApiPropertySchema | undefined): { tipo: string | null; nullable: boolean | null; enumValores: string[] | null } {
@@ -112,6 +102,8 @@ function primeiroRegistro(resposta: unknown): unknown {
   if (Array.isArray(data)) return data[0];
   const rows = (data as { rows?: unknown })?.rows;
   if (Array.isArray(rows)) return rows[0];
+  // GET de UM registro (ex.: /tickets/{ticketId}): `data` já é o próprio registro.
+  if (ehObjetoSimples(data)) return data;
   return undefined;
 }
 
@@ -148,7 +140,7 @@ function achatarUmNivel(amostra: Record<string, unknown>): [string, unknown][] {
  * grava nada. O resultado é o que a tela de Mapeamento de Campos mostra pro admin decidir em
  * cima (ver routes/syncKyriaMapping.ts).
  */
-export async function previewKyriaResource(path: string, openApiSchemaName?: string): Promise<ResourcePreview> {
+export async function previewKyriaResource(path: string, opcoes: OpcoesPreview = {}): Promise<ResourcePreview> {
   // `limit=1` é ignorado sem erro pelos endpoints de relatório (não fazem parte do contrato
   // deles) — testado ao vivo contra GET /reports/hours (21/09/2026): a query string do `path`
   // (ex. "?from=...&to=...&groupBy=user", digitada no campo de caminho customizado) e o
@@ -159,17 +151,20 @@ export async function previewKyriaResource(path: string, openApiSchemaName?: str
   // mapa como qualquer outro. O "/reports/hours" puro (recurso #8) segue como sempre foi.
   const relatorioPorGrupo = /^\/reports\/hours\?.*groupBy=/.test(path) && !/[?&]from=/.test(path);
   const competencia = relatorioPorGrupo ? competenciaAtual() : null;
-  const resposta = await getKyriaSample(
-    path,
-    competencia ? { limit: 1, from: competencia.from, to: competencia.to } : { limit: 1 }
-  );
+  const params: Record<string, string | number> = {
+    ...(opcoes.paginado === false ? {} : { limit: 1 }),
+    ...(competencia ? { from: competencia.from, to: competencia.to } : {}),
+  };
+  const resposta = await getKyriaSample(path, params);
+  const consulta = new URLSearchParams(Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))).toString();
+  const urlChamada = kyriaFullUrl(path) + (consulta ? (path.includes("?") ? "&" : "?") + consulta : "");
   const amostra = primeiroRegistro(resposta);
 
   if (!amostra || typeof amostra !== "object") {
     throw new Error(`"${path}" não devolveu nenhum registro — não dá pra inferir tipo de uma amostra vazia`);
   }
 
-  const propriedades = await propriedadesOpenApi(openApiSchemaName);
+  const propriedades = opcoes.propriedades ?? {};
 
   const entradas = achatarUmNivel(amostra as Record<string, unknown>);
   if (competencia) entradas.unshift(["competencia", competencia.from]);
@@ -201,5 +196,5 @@ export async function previewKyriaResource(path: string, openApiSchemaName?: str
     };
   });
 
-  return { path, amostraBruta: amostra, campos };
+  return { path, urlChamada, amostraBruta: amostra, campos };
 }

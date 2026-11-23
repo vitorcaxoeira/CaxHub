@@ -4,7 +4,7 @@ import { casoSql, col, registrarListaConsultavel } from "./listaConsultavel";
 import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { SITRAT_CONTABILIZADO, DEBCRE_LABELS, ORILCT_LABELS, defgruBucket, debcreLabel, orilctLabel, sitlotLabel } from "../domain/contabilDominio";
+import { FORMULA_VALOR_REALIZADO, SITRAT_CONTABILIZADO, DEBCRE_LABELS, ORILCT_LABELS, defgruBucket, debcreLabel, orilctLabel, sitlotLabel } from "../domain/contabilDominio";
 import { formatarHistorico } from "../domain/historicoPadrao";
 import { resolverContextoConsultor, gestorNomePorDepartamento, type ContextoConsultor } from "../domain/contextoProjeto";
 import { depexeLabel } from "../domain/propostasDominio";
@@ -46,24 +46,6 @@ function parseBoolParam(value: unknown): boolean {
 function parseCriterioOrdenacao(value: unknown): "clacta" | "ctared" {
   return value === "ctared" ? "ctared" : "clacta";
 }
-
-// Sinal do realizado — tradução da medida DAX "Valor_Contabil" (Power BI) fornecida pelo Vitor
-// em 27/08/2026. Regra geral: crédito soma, débito subtrai — EXCETO contas de despesa (defgru=D)
-// com natureza Credora (natcta=C, ex. "Ganho Tributário Faturamento Senior" 762/763/776), que
-// sempre somam (é um ganho/redução de despesa, independente do lado do lançamento no Senior).
-// `Grupo`/`Natureza` na DAX são da CONTA-FOLHA que recebeu o lançamento (confirmado no SQL base
-// do BI: `Conta_Contabil.Grupo/Natureza` casam por `a.ctared = Fato.Conta` com `a.anasin='A'`),
-// nunca de um ancestral — por isso não precisa do nível sintético Receitas/Despesas removido em
-// 26/08/2026, `pc.defgru`/`pc.natcta` da própria conta já bastam. Validado célula a célula: só
-// essas 3 contas divergem da fórmula antiga (só debcre); nenhuma outra combinação muda de sinal.
-// Usada como template literal em toda query que soma `rateios_lancamento.vlrrat` (join com
-// `plano_contabil pc` obrigatório).
-const FORMULA_VALOR_REALIZADO = `CASE
-    WHEN pc.defgru = 'R' AND r.debcre = 'D' THEN -r.vlrrat
-    WHEN pc.defgru = 'D' AND pc.natcta = 'C' AND r.debcre = 'C' THEN r.vlrrat
-    WHEN pc.defgru = 'D' AND pc.natcta = 'D' AND r.debcre = 'D' THEN -r.vlrrat
-    ELSE r.vlrrat
-  END`;
 
 function handleError(res: import("express").Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);
@@ -406,6 +388,56 @@ registrarListaConsultavel(
     };
   },
   "contabil-lancamentos",
+);
+
+// ---------- Drilldown: linhas do orçamento que compõem uma célula de Orçado (Orçado x Realizado) ----------
+// O par do drilldown de lançamentos acima, para a coluna Orçado (23/11/2026): as linhas de `orcamentos_contabeis` da conta e do mês, com o
+// MESMO sinal e os MESMOS filtros da matriz (`-vlrrat`, centro de custo, recorte de grupos do usuário). Sem filtro por coluna, o total bate
+// com a célula clicada.
+registrarListaConsultavel(
+  contabilRouter,
+  "/orcado-realizado/orcamentos",
+  async (req) => {
+    const ctx = await contextoDoUsuario(req as AuthenticatedRequest);
+    if (!ctx) throw new ErroEntradaConsulta("Usuário não encontrado", 404);
+    const { contexto, role } = ctx;
+    const permitidos = await gruposPermitidos(role, contexto);
+    if (permitidos != null && permitidos.length === 0) throw new ErroEntradaConsulta(MENSAGEM_SEM_GRUPOS, 403);
+
+    const ctareds = parseIntListParam(req.query.ctareds);
+    if (!ctareds) throw new ErroEntradaConsulta("Parâmetro ctareds é obrigatório");
+    const mesReferencia = typeof req.query.mesReferencia === "string" ? req.query.mesReferencia : "";
+    if (!/^\d{4}-\d{2}$/.test(mesReferencia)) throw new ErroEntradaConsulta("Parâmetro mesReferencia é obrigatório no formato AAAA-MM");
+    const codccu = parseStringListParam(req.query.codccu);
+    const grupos = gruposConsultados(permitidos, null);
+    return {
+      totais: ["valor"],
+      interna: Prisma.sql`
+        SELECT o.mesano AS mesano, o.ctared AS ctared, (o.ctared || ' - ' || pc.descta) AS conta,
+               (CASE WHEN f.nomfil IS NOT NULL THEN o.codfil || ' - ' || f.nomfil ELSE o.codfil::text END) AS filial,
+               (CASE WHEN cc.desccu IS NOT NULL THEN o.codccu || ' - ' || cc.desccu ELSE o.codccu END) AS centro_custo,
+               (CASE WHEN o.ctafin = 0 THEN NULL WHEN nf.descta IS NOT NULL THEN o.ctafin || ' - ' || nf.descta ELSE o.ctafin::text END) AS conta_financeira,
+               (-o.vlrrat)::float8 AS valor
+        FROM orcamentos_contabeis o
+        JOIN plano_contabil pc ON pc.codemp = o.codemp AND pc.ctared = o.ctared
+        LEFT JOIN filial f ON f.codemp = o.codemp AND f.codfil = o.codfil
+        LEFT JOIN centros_custo cc ON cc.codemp = o.codemp AND cc.codccu = o.codccu
+        LEFT JOIN naturezas_financeiras nf ON nf.codemp = o.codemp AND nf.ctafin = o.ctafin
+        WHERE o.ctared = ANY(${ctareds}::int[])
+          AND date_trunc('month', o.mesano)::date = ${`${mesReferencia}-01`}::date
+          AND (${codccu}::text[] IS NULL OR o.codccu = ANY(${codccu}::text[]))
+          AND (${grupos}::text[] IS NULL OR btrim(pc.despar) = ANY(${grupos}::text[]))`,
+      colunas: [
+        col.texto("conta", { obrigatoria: true }),
+        col.texto("filial"),
+        col.texto("centro_custo"),
+        col.texto("conta_financeira"),
+        col.decimal("valor", { obrigatoria: true }),
+      ],
+      ordemPadrao: Prisma.sql`x."conta" ASC, x."centro_custo" ASC`,
+    };
+  },
+  "contabil-orcamentos",
 );
 
 // ---------- Orçado x Realizado ----------

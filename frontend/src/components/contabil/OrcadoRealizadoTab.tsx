@@ -1,6 +1,9 @@
 import axios from "axios";
-import { useEffect, useMemo, useState } from "react";
-import { MatrizContabil, LinhaMatrizContabil } from "./MatrizContabil";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { MatrizContabil, type LinhaMatriz, type SubcolunaMatriz, type ValorClicado } from "./MatrizContabil";
+import { ModalDetalheLancamentos } from "./ModalDetalheLancamentos";
+import { ModalDetalheOrcamento } from "./ModalDetalheOrcamento";
+import { variacao, type FormatoVariacao } from "../../lib/orcadoRealizado";
 
 interface OrcadoRealizadoTabProps {
   anos: number[];
@@ -10,18 +13,15 @@ interface OrcadoRealizadoTabProps {
   centrosCusto: string[];
   incluirSemGrupo: boolean;
   ordenarPor: "clacta" | "ctared";
+  /** Variação em R$ ou em % — fica na URL junto dos outros filtros (ResultadoAnalitico). */
+  formatoVariacao: FormatoVariacao;
+  onFormatoVariacao: (f: FormatoVariacao) => void;
+  /** Estrela do padrão salvo (usePadroesTela da página). */
+  estrelaVariacao?: ReactNode;
 }
 
-type Modo = "realizado" | "orcado" | "variacaoR" | "variacaoPct";
-
-const MODOS: { value: Modo; label: string }[] = [
-  { value: "realizado", label: "Realizado" },
-  { value: "orcado", label: "Orçado" },
-  { value: "variacaoR", label: "Variação R$" },
-  { value: "variacaoPct", label: "Variação %" },
-];
-
-interface LinhaOrcadoRealizado extends Omit<LinhaMatrizContabil, "valores" | "total"> {
+/** Os números de uma linha (e do total geral) que a resposta traz: orçado e realizado por mês e no período. */
+interface ValoresOrcadoRealizado {
   valoresRealizado: number[];
   valoresOrcado: number[];
   totalRealizado: number;
@@ -30,8 +30,8 @@ interface LinhaOrcadoRealizado extends Omit<LinhaMatrizContabil, "valores" | "to
 
 interface RespostaOrcadoRealizado {
   meses: string[];
-  linhas: LinhaOrcadoRealizado[];
-  totalGeral: { valoresRealizado: number[]; valoresOrcado: number[]; totalRealizado: number; totalOrcado: number };
+  linhas: LinhaMatriz<ValoresOrcadoRealizado>[];
+  totalGeral: ValoresOrcadoRealizado;
 }
 
 const RESULTADO_VAZIO: RespostaOrcadoRealizado = {
@@ -40,35 +40,24 @@ const RESULTADO_VAZIO: RespostaOrcadoRealizado = {
   totalGeral: { valoresRealizado: [], valoresOrcado: [], totalRealizado: 0, totalOrcado: 0 },
 };
 
-// Variação % com orçado 0 vira 0 em vez de Infinity/NaN — não tem "—" no componente de
-// matriz (só número), e 0 é menos enganoso do que um NaN aparecendo na tela.
-function variacaoPct(realizado: number, orcado: number): number {
-  return orcado !== 0 ? ((realizado - orcado) / Math.abs(orcado)) * 100 : 0;
-}
+const FORMATOS: { value: FormatoVariacao; label: string }[] = [
+  { value: "valor", label: "R$" },
+  { value: "pct", label: "%" },
+];
 
-function aplicarModo(
-  valoresRealizado: number[],
-  valoresOrcado: number[],
-  totalRealizado: number,
-  totalOrcado: number,
-  modo: Modo
-): { valores: number[]; total: number } {
-  switch (modo) {
-    case "realizado":
-      return { valores: valoresRealizado, total: totalRealizado };
-    case "orcado":
-      return { valores: valoresOrcado, total: totalOrcado };
-    case "variacaoR":
-      return {
-        valores: valoresRealizado.map((v, i) => v - valoresOrcado[i]),
-        total: totalRealizado - totalOrcado,
-      };
-    case "variacaoPct":
-      return {
-        valores: valoresRealizado.map((v, i) => variacaoPct(v, valoresOrcado[i])),
-        total: variacaoPct(totalRealizado, totalOrcado),
-      };
-  }
+/** Uma visão só (23/11/2026): em cada mês e no total, Orçado | Realizado | Variação (R$ ou %). */
+function subcolunas(formato: FormatoVariacao): SubcolunaMatriz<ValoresOrcadoRealizado>[] {
+  return [
+    { chave: "orcado", titulo: "Orçado", detalhavel: true, mes: (v, i) => v.valoresOrcado[i] ?? 0, total: (v) => v.totalOrcado },
+    { chave: "realizado", titulo: "Realizado", detalhavel: true, mes: (v, i) => v.valoresRealizado[i] ?? 0, total: (v) => v.totalRealizado },
+    {
+      chave: "variacao",
+      titulo: formato === "pct" ? "Variação %" : "Variação R$",
+      formato: formato === "pct" ? "percentual" : "numero",
+      mes: (v, i) => variacao(v.valoresRealizado[i] ?? 0, v.valoresOrcado[i] ?? 0, formato),
+      total: (v) => variacao(v.totalRealizado, v.totalOrcado, formato),
+    },
+  ];
 }
 
 export function OrcadoRealizadoTab({
@@ -79,11 +68,15 @@ export function OrcadoRealizadoTab({
   centrosCusto,
   incluirSemGrupo,
   ordenarPor,
+  formatoVariacao,
+  onFormatoVariacao,
+  estrelaVariacao,
 }: OrcadoRealizadoTabProps) {
-  const [modo, setModo] = useState<Modo>("realizado");
   const [resultado, setResultado] = useState<RespostaOrcadoRealizado>(RESULTADO_VAZIO);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  // Origem do valor clicado (como na Matriz): Realizado abre os lançamentos contabilizados; Orçado, as linhas do orçamento.
+  const [detalhe, setDetalhe] = useState<ValorClicado | null>(null);
 
   useEffect(() => {
     if (anos.length === 0) return;
@@ -105,40 +98,26 @@ export function OrcadoRealizadoTab({
       .finally(() => setLoading(false));
   }, [anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor]);
 
-  const linhasNoModo = useMemo(
-    () =>
-      resultado.linhas.map((l) => ({
-        ...l,
-        ...aplicarModo(l.valoresRealizado, l.valoresOrcado, l.totalRealizado, l.totalOrcado, modo),
-      })),
-    [resultado.linhas, modo]
-  );
-  const totalGeralNoModo = useMemo(
-    () =>
-      aplicarModo(
-        resultado.totalGeral.valoresRealizado,
-        resultado.totalGeral.valoresOrcado,
-        resultado.totalGeral.totalRealizado,
-        resultado.totalGeral.totalOrcado,
-        modo
-      ),
-    [resultado.totalGeral, modo]
-  );
+  const colunas = useMemo(() => subcolunas(formatoVariacao), [formatoVariacao]);
 
   return (
     <div>
-      <div className="mb-4 flex gap-1 rounded-md border border-border p-1" style={{ width: "fit-content" }}>
-        {MODOS.map((m) => (
-          <button
-            key={m.value}
-            onClick={() => setModo(m.value)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-              modo === m.value ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground"
-            }`}
-          >
-            {m.label}
-          </button>
-        ))}
+      <div className="mb-4 flex items-center gap-2 text-sm text-muted">
+        <span>Variação</span>
+        <div className="flex gap-1 rounded-md border border-border p-1">
+          {FORMATOS.map((f) => (
+            <button
+              key={f.value}
+              onClick={() => onFormatoVariacao(f.value)}
+              className={`rounded-md px-3 py-1 text-sm font-medium transition ${
+                formatoVariacao === f.value ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+          <span className="relative inline-block h-7 w-7">{estrelaVariacao}</span>
+        </div>
       </div>
 
       {erro && (
@@ -152,13 +131,23 @@ export function OrcadoRealizadoTab({
           Selecione ao menos um ano pra ver o comparativo.
         </p>
       ) : (
-        <MatrizContabil meses={resultado.meses} linhas={linhasNoModo} totalGeral={totalGeralNoModo} loading={loading} />
+        <MatrizContabil<ValoresOrcadoRealizado>
+          meses={resultado.meses}
+          linhas={resultado.linhas}
+          totalGeral={resultado.totalGeral}
+          loading={loading}
+          subcolunas={colunas}
+          onClickValor={setDetalhe}
+        />
       )}
+
+      {detalhe?.subcoluna === "realizado" && <ModalDetalheLancamentos {...detalhe} codccu={centrosCusto} onClose={() => setDetalhe(null)} />}
+      {detalhe?.subcoluna === "orcado" && <ModalDetalheOrcamento {...detalhe} codccu={centrosCusto} onClose={() => setDetalhe(null)} />}
 
       <p className="mt-4 text-[11px] text-muted">
         Orçado vem de orcamentos_contabeis, com o sinal normalizado pra mesma convenção do
-        realizado (receita positiva, despesa negativa — o Senior guarda o oposto). Variação % com
-        orçado zero aparece como 0.
+        realizado (receita positiva, despesa negativa — o Senior guarda o oposto). Variação =
+        realizado − orçado; em %, sobre o orçado (sem orçado aparece "—").
       </p>
     </div>
   );

@@ -289,8 +289,9 @@ model Empresa {
 
   // Modelo de plano de contas/centro de custo que esta empresa usa no Senior (ver SQL de
   // Contábil/Orçamento, 11/08/2026) — codmpc pro lado de conta, codmpu pro lado de centro de
-  // custo. Espelhados sem model/FK local: a tabela de mapeamento correspondente do Senior
-  // (E043PCM) foi avaliada e descartada — não era necessária.
+  // custo. Sem FK formal: a tabela de modelos do Senior (E043PCM, espelhada em ModeloPlano —
+  // descartada em 12/08/2026, reimportada em 17/11/2026 pra Rentabilidade) casa por valor,
+  // `ModeloPlano.codmpc = Empresa.codmpc/codmpu`.
   codmpc Int?
   codmpu Int?
 
@@ -332,6 +333,8 @@ model Cliente {
   cidcli           String
   sigufs           String
   codpai           String
+  /// Centro de custo do cliente — DERIVADO, não vem de E085CLI: é o maior código de E085RAT (rateio previsto do cliente, 1 cliente pode ter N), calculado em clienteSync.ts (resolverCentroCustoPorCliente) depois do upsert. Chave pra ligar o cliente à receita/custo por CC (CentroCusto.codccu, mesmo varchar(9)); null = cliente sem rateio previsto. Sem FK: CentroCusto tem PK (codemp, codccu).
+  codccu           String?   @db.VarChar(9)
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
@@ -733,6 +736,8 @@ model Consultor {
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
   usuariosCaxHub User[]
+  vinculo        ConsultorVinculo?
+  valoresHoraManuais ConsultorValorHoraManual[]
 
   @@id([codemp, codusu])
   @@index([codfor])
@@ -838,6 +843,42 @@ model DepartamentoGrupoContabil {
 
   @@id([codemp, depexe, despar])
   @@map("departamento_grupo_contabil")
+}
+
+// Configuração 100% nativa do CaxHub (NUNCA sincronizada do Senior) — liga cada departamento
+// (depexe) aos times do Kyria (KyriaTeam) cujo atendimento ele representa. É o equivalente, na
+// rentabilidade, da "Categoria" do antigo 0800 (ERP / HCM / Acesso e Segurança): o time do TICKET
+// diz de qual departamento são as horas de suporte. Tabela própria, e não coluna em
+// DepartamentoGestor, porque aquela é espelho do Senior (1 linha por departamento, reescrita pela
+// sync) e aqui a relação é N:N — um departamento atende por vários times e um time (ex.: SUPORTE TI)
+// pode servir a mais de um departamento (05 Suporte TI ERP e 06 Suporte TI HCM). Editável só por
+// admin, em Administração > Integração Kyria > Departamento x Time Kyria
+// (GET/PUT /sync-kyria/departamentos-times).
+model DepartamentoTimeKyria {
+  codemp      Int
+  depexe      Int
+  kyriaTeamId String    @map("kyria_team_id")
+  kyriaTeam   KyriaTeam @relation(fields: [kyriaTeamId], references: [id], onDelete: Cascade)
+
+  @@id([codemp, depexe, kyriaTeamId])
+  @@index([kyriaTeamId])
+  @@map("departamento_time_kyria")
+}
+
+// Etiquetas do Kyria que um departamento usa para FILTRAR os tickets que entram na análise dele (18/11/2026, pedido do Vitor): ligação N:N
+// departamento x etiqueta, config 100% nativa. Só aparecem para escolha as etiquetas dos grupos de etiqueta marcados com `fitro_dep_time = true`
+// (kyria_label_groups, campo interno editado em Ver dados). Editável só por admin, na mesma tela de Departamento x Time Kyria
+// (GET /sync-kyria/departamentos-times e PUT /sync-kyria/departamentos-times/:codemp/:depexe/labels). O filtro em si (aplicar essas etiquetas aos
+// tickets da análise) ainda não é usado por nenhum cálculo: esta tabela só guarda a escolha.
+model DepartamentoLabelKyria {
+  codemp       Int
+  depexe       Int
+  kyriaLabelId String     @map("kyria_label_id") @db.VarChar(64)
+  kyriaLabel   KyriaLabel @relation(fields: [kyriaLabelId], references: [id], onDelete: Cascade)
+
+  @@id([codemp, depexe, kyriaLabelId])
+  @@index([kyriaLabelId])
+  @@map("departamento_label_kyria")
 }
 
 // Jornada de trabalho de um consultor, por dia da semana. Conceito só do CaxHub, sem
@@ -1992,6 +2033,132 @@ model HistoricoPadrao {
   @@map("historicos_padrao")
 }
 
+// Espelho da tabela E043PCM do Senior ERP (Tabelas - Modelos de Planos - Contas ou Centros de Custos),
+// importado em 17/11/2026 pra Rentabilidade com a ESTRUTURA do modelo de plano (e não só a descrição
+// paralela): um modelo (`codmpc`) é um plano de contas OU de centros de custo, e `ctared` é o número
+// reduzido da conta (modelo de contas) ou o código do CC (modelo de centro de custo — `ctared` casa com
+// `centros_custo.codccu` por texto). O BI de Rentabilidade lê daqui o Setor/CC Paralelo (`despar`:
+// SERP/SHCM/CERP/CHCM/COM/ADM/DEV/DIR): `Empresa.codmpc` → conta, `Empresa.codmpu` → centro de custo.
+// Foi removida em 12/08/2026 (migration remove_plano_contabil_paralelo) por falta de consumidor; agora
+// tem. Ficou de fora o que não serve à análise: conta financeira/contábil relacionada, rateio, validade,
+// atributos e auditoria de geração.
+model ModeloPlano {
+  codmpc           Int
+  ctared           Int
+  clacta           String?   @db.VarChar(30)
+  descta           String?   @db.VarChar(250)
+  abrcta           String?   @db.VarChar(20)
+  /// Domínio "LAnaSin": A=Analítico(a), S=Sintético(a)
+  anasin           String?   @db.VarChar(1)
+  nivcta           Int?
+  mskgcc           String?   @db.VarChar(40)
+  /// Definição da conta (grupo gerencial) — mesmo domínio de PlanoContabil.defgru
+  defgru           String?   @db.VarChar(1)
+  /// Natureza da conta: C=Credora, D=Devedora
+  natcta           String?   @db.VarChar(1)
+  /// Descrição "paralela" (Setor do BI de Rentabilidade); o Senior grava " " quando vazia — vira NULL
+  despar           String?   @db.VarChar(80)
+  clapar           String?   @db.VarChar(30)
+  ctapar           Int?
+  /// Só em modelo de centro de custo (tipo 3): CC sugerido e seu tipo
+  codccu           String?   @db.VarChar(9)
+  tipccu           Int?
+  datalt           DateTime? @db.Date
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codmpc, ctared])
+  @@map("modelo_planos")
+}
+
+// Espelho ENXUTO da tabela E615PRJ do Senior ERP (Financeiro - Projetos - Cadastro), importada em
+// 17/11/2026 pra Rentabilidade: o projeto é quem diz de qual CENTRO DE CUSTO é a hora de
+// consultoria (RAT: Rat.codemp+numprj → Projeto.codccu) — o BI faz exatamente esse JOIN. Só as
+// colunas de identificação, cliente, CC, situação e vigência; as ~110 colunas de bloqueio
+// orçamentário/controle físico da E615PRJ não interessam e ficaram de fora.
+model Projeto {
+  codemp           Int
+  numprj           Int
+  codfil           Int
+  codtpj           Int
+  nomprj           String?   @db.VarChar(150)
+  abrprj           String    @db.VarChar(20)
+  codcli           Int?
+  /// Cliente para faturamento do projeto (pode diferir de `codcli`)
+  clifat           Int?
+  /// CC do projeto. O Senior grava " " (um espaço) quando não há — normalizado para NULL no sync.
+  codccu           String?   @db.VarChar(9)
+  sitprj           String?   @db.VarChar(3)
+  /// Domínio "LSimNao" (S/N)
+  prjapr           String?   @db.VarChar(1)
+  prjsup           Int?
+  datipj           DateTime? @db.Date
+  datfpj           DateTime? @db.Date
+  /// Campo de usuário `USU_Cli0800`: código do cliente no 0800 (controle de chamados antigo) —
+  /// ponte pra reconciliar o histórico migrado do 0800 com o Senior.
+  cli0800          Int?
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codemp, numprj])
+  @@index([codccu])
+  @@index([codcli])
+  @@map("projetos")
+}
+
+// Indicadores da Rentabilidade (17/11/2026), 100% nativos do CaxHub (nunca sincronizados). Substituem as
+// listas FIXAS de `ctared` que o BI de Rentabilidade da Soeltech escreve nas medidas (ATST, Serviços,
+// Deduções, Repasses, Pessoal, Outros Gastos...): regra do Vitor, "nenhuma conta fixa no código" — quem
+// diz quais contas formam cada indicador é esta configuração, editada por tela e importável por JSON.
+//   tipo "contas":  soma das contas selecionadas (RentabilidadeIndicadorConta), com base realizada ou
+//                   orçada e filtro de natureza do lançamento (ambos / só débito / só crédito);
+//   tipo "formula": fórmula sobre outros indicadores (mesmo motor das colunas calculadas,
+//                   backend/src/formulas/formula.ts); TOTAL(x) = x somado em todas as linhas do recorte;
+//   tipo "sistema": campo que o sistema calcula (hoje horas do Kyria e horas de RAT por centro de custo).
+model RentabilidadeIndicador {
+  id             Int      @id @default(autoincrement())
+  /// Nome técnico usado nas fórmulas (letras, números e _; começa por letra)
+  codigo         String   @unique @db.VarChar(40)
+  rotulo         String   @db.VarChar(80)
+  /// contas | formula | sistema
+  tipo           String   @db.VarChar(10)
+  /// realizado | orcado (só tipo "contas")
+  base           String   @default("realizado") @db.VarChar(10)
+  /// ambos | debito | credito (só tipo "contas" com base realizada)
+  natureza       String   @default("ambos") @db.VarChar(10)
+  /// moeda | percentual | horas | numero
+  formato        String   @default("moeda") @db.VarChar(10)
+  /// Texto da fórmula como a pessoa escreve (tipo "formula")
+  formulaTexto   String?  @map("formula_texto") @db.VarChar(500)
+  /// Árvore da fórmula, lida pela tela e conferida no servidor
+  formulaArvore  Json?    @map("formula_arvore")
+  /// Qual campo do sistema (tipo "sistema"): HorasKyria | HorasRat
+  fonte          String?  @db.VarChar(30)
+  ordem          Int      @default(0)
+  /// false = só serve de insumo pra outras fórmulas, não aparece na tela de resultado
+  visivel        Boolean  @default(true)
+  criadoEm       DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm   DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+  contas         RentabilidadeIndicadorConta[]
+
+  @@map("rentabilidade_indicadores")
+}
+
+model RentabilidadeIndicadorConta {
+  indicadorId Int                    @map("indicador_id")
+  indicador   RentabilidadeIndicador @relation(fields: [indicadorId], references: [id], onDelete: Cascade)
+  codemp      Int
+  /// Conta de qualquer nível: sintética vale por todas as analíticas abaixo dela (pai_ctared)
+  ctared      Int
+  /// incluir | excluir (a exclusão tira a conta e tudo abaixo dela do que foi incluído)
+  acao        String                 @db.VarChar(8)
+
+  @@id([indicadorId, codemp, ctared])
+  @@map("rentabilidade_indicador_contas")
+}
+
 // Espelho local da tabela E640LCT do Senior ERP (Contábil - Lançamento - Lançamentos Contábeis).
 model LancamentoContabil {
   codemp           Int
@@ -2396,6 +2563,8 @@ model KyriaTeam {
   // Lado inverso de KyriaTicket.team — FK real (22/09/2026, pedido do Vitor: cruzar
   // kyria_tickets.team_id com kyria_teams.id).
   tickets KyriaTicket[]
+  // Lado inverso de DepartamentoTimeKyria.kyriaTeam (ligação departamento x time, config nativa).
+  departamentos DepartamentoTimeKyria[]
 
   @@map("kyria_teams")
 }
@@ -2435,6 +2604,7 @@ model KyriaMember {
   // Lado inverso de KyriaTicket.responsavel — FK real (22/09/2026, pedido do Vitor: cruzar
   // kyria_tickets.responsible_user_id com kyria_members.id).
   ticketsComoResponsavel KyriaTicket[]
+  apontamentos           KyriaTimeEntry[]
 
   @@map("kyria_members")
 }
@@ -2508,6 +2678,43 @@ model KyriaTicketStatus {
   @@map("kyria_ticket_statuses")
 }
 
+// Espelho de GET /labels do Kyria (etiquetas), mapeamento #16 registrado em 18/11/2026. Catálogo simples, como Times e Status de Ticket: upsert
+// por `id` a cada sync, sem FK. Tamanhos MAIORES que os do mapeamento (`key` e `name` foram registrados com 32, mas a API já devolve key de 33 e
+// name de 34 caracteres — uma coluna de 32 recusaria a importação). `status` usa o enum KyriaStatus, como os demais catálogos. `groupId` aponta
+// para /label-groups (ainda sem espelho) e `teamId` para kyria_teams: ficam como texto, sem FK, até esses vínculos serem decididos.
+model KyriaLabel {
+  id             String      @id @db.VarChar(64)
+  groupId        String?     @map("group_id") @db.VarChar(64)
+  teamId         String?     @map("team_id") @db.VarChar(64)
+  key            String      @db.VarChar(64)
+  name           String      @db.VarChar(255)
+  color          String?     @db.VarChar(24)
+  status         KyriaStatus
+  sortOrder      Int?        @map("sort_order")
+  sincronizadoEm DateTime    @updatedAt @map("sincronizado_em")
+
+  // Lado inverso de DepartamentoLabelKyria.kyriaLabel (etiquetas que cada departamento usa pra filtrar tickets).
+  departamentos DepartamentoLabelKyria[]
+
+  @@map("kyria_labels")
+}
+
+// Espelho de GET /label-groups do Kyria (grupos de etiqueta), mapeamento #20 registrado em 18/11/2026. Catálogo de poucas linhas (4 hoje), upsert
+// por `id` a cada sync. Tipos de texto sem tamanho, como o mapeamento registrou (TEXT, igual a KyriaTeam). `fitroDepTime` é campo INTERNO do
+// CaxHub (não existe na API): o sync nunca o grava nem o apaga. O nome da coluna (`fitro_dep_time`) é o que foi registrado no mapeamento.
+// KyriaLabel.groupId aponta pra cá por valor, sem FK (decisão pendente: ligar as duas tabelas por chave estrangeira).
+model KyriaLabelGroup {
+  id             String      @id
+  key            String
+  name           String
+  description    String?
+  status         KyriaStatus
+  fitroDepTime   Boolean?    @map("fitro_dep_time")
+  sincronizadoEm DateTime    @updatedAt @map("sincronizado_em")
+
+  @@map("kyria_label_groups")
+}
+
 // Domínio de `priority` em GET /tickets, declarado no OpenAPI do Kyria (enum fechado de 4
 // valores) — mesmo espírito de KyriaStatus/KyriaMemberRole.
 enum KyriaTicketPrioridade {
@@ -2568,9 +2775,65 @@ model KyriaTicket {
   revision          Int
   sincronizadoEm    DateTime              @updatedAt @map("sincronizado_em")
 
-  horas KyriaTicketHours?
+  horas        KyriaTicketHours?
+  apontamentos KyriaTimeEntry[]
 
   @@map("kyria_tickets")
+}
+
+// Origem do apontamento de hora no Kyria: `automatic` = cronômetro do próprio ticket (entra e sai
+// conforme o status/atribuição), `manual` = lançado à mão por uma pessoa. Domínio fechado do
+// OpenAPI (TimeEntryFeedSnapshot.source).
+enum KyriaOrigemApontamento {
+  automatic
+  manual
+}
+
+// Espelho local do Kyria — GET /time-entries (feed de mudanças do workspace; ver
+// src/kyria/timeEntriesSync.ts). 1 linha por apontamento de hora (automático ou manual) de um
+// ticket, com início/fim reais — é a fonte que permite somar horas por dia/usuário/ticket sem
+// depender da janela curta do /reports/hours. `GET /tickets/{id}/time-entries` NÃO serve: só
+// devolve os manuais (~1,4% das horas, conferido 17/11/2026).
+// Chave = id do apontamento. O feed manda VÁRIAS revisões da mesma entrada (75 mil mudanças pra
+// 42 mil entradas na carga inicial) — o job aplica as mudanças em ordem e fica com a última.
+// Entrada apagada no Kyria (`kind: deleted`) é apagada aqui também. `minutes` é nulo enquanto o
+// apontamento está aberto (`is_open`) — o cronômetro ainda está rodando.
+// FKs reais: ticket (obrigatória — apontamento de ticket ainda não sincronizado fica pendente até o
+// job sincronizar os tickets, ver timeEntriesSync.ts) e usuário (nulável — vira null se o membro
+// ainda não sincronizou).
+model KyriaTimeEntry {
+  id              String                 @id @db.VarChar(64)
+  ticketId        String                 @map("ticket_id") @db.VarChar(64)
+  ticket          KyriaTicket            @relation(fields: [ticketId], references: [id])
+  userId          String?                @map("user_id") @db.VarChar(64)
+  usuario         KyriaMember?           @relation(fields: [userId], references: [id])
+  teamId          String?                @map("team_id") @db.VarChar(64)
+  origem          KyriaOrigemApontamento
+  isOpen          Boolean                @map("is_open")
+  startedAt       DateTime               @map("started_at") @db.Timestamptz(3)
+  endedAt         DateTime?              @map("ended_at") @db.Timestamptz(3)
+  minutes         Decimal?               @db.Decimal(12, 2)
+  effectiveAt     DateTime               @map("effective_at") @db.Timestamptz(3)
+  reason          String?
+  criadoEmKyria   DateTime               @map("criado_em_kyria") @db.Timestamptz(3)
+  alteradoEmKyria DateTime               @map("alterado_em_kyria") @db.Timestamptz(3)
+  sincronizadoEm  DateTime               @updatedAt @map("sincronizado_em")
+
+  @@index([ticketId])
+  @@index([userId, startedAt])
+  @@index([startedAt])
+  @@map("kyria_time_entries")
+}
+
+// Posição (cursor) de jobs Kyria que leem um feed incremental — hoje só kyria-time-entries-sync.
+// O cursor é opaco (`tef_v1.<id>.<posição>`); guardá-lo depois de cada bloco gravado faz o job
+// retomar de onde parou, tanto após uma falha no meio da carga inicial quanto no dia seguinte.
+model KyriaSyncCursor {
+  jobName      String   @id @map("job_name") @db.VarChar(64)
+  cursor       String
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@map("kyria_sync_cursor")
 }
 
 // Espelho local do Kyria — GET /reports/hours?groupBy=ticket (recurso `/reports/hours`, ver
@@ -3779,6 +4042,8 @@ model HcmColaborador {
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
   removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
 
+  vinculoConsultor ConsultorVinculo?
+
   @@id([numemp, tipcol, numcad])
   @@map("hcm_colaboradores")
 }
@@ -4713,4 +4978,243 @@ model DescontoFechamento {
 
   @@id([competencia, codemp, codfor])
   @@map("descontos_fechamentos")
+}
+
+// Vínculo do consultor com o funcionário do HCM (custo-hora real, bloco C da Rentabilidade, 18/11/2026). Tabela NATIVA do CaxHub (nunca
+// sincronizada), uma linha por consultor que tenha vínculo. O outro lado do trio — o atendente do Kyria — continua em kyria_members.codusu (campo
+// interno que "Ver dados" e a tela Administração › Vínculo de Consultores gravam): uma só fonte, sem duas colunas que possam divergir. O HCM
+// guarda a folha (CLT = salário + encargos ÷ horas da escala); consultor PJ não tem funcionário e o custo vem do contrato (E460CTR/CCS/REA).
+// Um funcionário só pode estar ligado a um consultor (unique).
+model ConsultorVinculo {
+  codemp        Int
+  codusu        Int
+  hcmNumemp     Int?     @map("hcm_numemp")
+  hcmTipcol     Int?     @map("hcm_tipcol")
+  hcmNumcad     Int?     @map("hcm_numcad")
+  /// O preço do item do contrato PJ é um valor MENSAL (não por hora): o custo-hora é preço ÷ horas da escala. Alguns contratos do Senior guardam o mensal em `preuni` (unidade "UN"), sem marca que os distinga — por isso é uma escolha explícita.
+  contratoMensal Boolean @default(false) @map("contrato_mensal")
+  /// Quando `contratoMensal`, limita o período em que o preço é mensal (dia 1 do mês; nulo = sem limite daquele lado). Há contrato que mudou de por-hora para mensal (ou o contrário) no meio do histórico.
+  mensalDesde   DateTime? @map("mensal_desde") @db.Date
+  mensalAte     DateTime? @map("mensal_ate") @db.Date
+  observacao    String?  @db.VarChar(500)
+  criadoEm      DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+  atualizadoPor Int?     @map("atualizado_por")
+
+  consultor   Consultor       @relation(fields: [codemp, codusu], references: [codemp, codusu], onDelete: Cascade)
+  colaborador HcmColaborador? @relation(fields: [hcmNumemp, hcmTipcol, hcmNumcad], references: [numemp, tipcol, numcad], onDelete: SetNull)
+
+  @@id([codemp, codusu])
+  @@unique([hcmNumemp, hcmTipcol, hcmNumcad], map: "consultor_vinculos_hcm_key")
+  @@map("consultor_vinculos")
+}
+
+// Espelho local da tabela E460CTR do Senior ERP (Compras - Contratos - Dados Gerais). Rentabilidade, custo-hora real (18/11/2026): o contrato do
+// consultor PJ é um contrato de COMPRA com o fornecedor dele (consultores.codfor = codfor). Só o essencial: identificação, fornecedor, situação e
+// vigência. Datas "vazias" do Senior (1900-12-31) viram NULL na sync.
+model ContratoCompra {
+  codemp           Int
+  codfil           Int
+  numctr           Int
+  tipctr           Int
+  numofi           String?   @db.VarChar(20)
+  objctr           String?   @db.VarChar(250)
+  codfor           Int
+  datemi           DateTime? @db.Date
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitctr           String    @db.VarChar(1)
+  codmot           Int?
+  inivig           DateTime? @db.Date
+  fimvig           DateTime? @db.Date
+  /// Data do último reajuste processado do contrato.
+  ultrea           DateTime? @db.Date
+  /// Periodicidade de reajuste, em meses.
+  prdrea           Int?
+  /// Percentual do último reajuste.
+  perrea           Decimal?  @db.Decimal(5, 2)
+  /// Data em que será feito o primeiro reajuste.
+  inirea           DateTime? @db.Date
+  datcan           DateTime? @db.Date
+  /// Cliente para faturamento (campo de usuário USU_CliFat).
+  clifat           Int?
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codemp, codfil, numctr])
+  @@index([codfor])
+  @@map("contratos_compra")
+}
+
+// Espelho local da tabela E460CCS do Senior ERP (Compras - Contratos - Itens de Serviço): o item do contrato do consultor, onde mora o PREÇO
+// UNITÁRIO = valor-hora (`preuni`). Retenções (ISS, IRRF, INSS, PIS, CSLL, Cofins) só informativas: o custo do PJ é o valor bruto do contrato.
+// `datcpt` 1900-12-31 = item sem competência (o normal nos contratos de consultor) — fica como veio, é parte da chave.
+model ContratoCompraServico {
+  codemp           Int
+  codfil           Int
+  numctr           Int
+  datcpt           DateTime  @db.Date
+  seqccs           Int
+  codser           String?   @db.VarChar(14)
+  cplccs           String?   @db.VarChar(250)
+  qtdctr           Decimal?  @db.Decimal(14, 5)
+  qtdccs           Decimal   @db.Decimal(14, 5)
+  unimed           String?   @db.VarChar(3)
+  preuni           Decimal   @db.Decimal(21, 10)
+  usuPreuni        Decimal?  @map("usu_preuni") @db.Decimal(21, 10)
+  perdsc           Decimal?  @db.Decimal(4, 2)
+  vlrdsc           Decimal?  @db.Decimal(15, 2)
+  periss           Decimal?  @db.Decimal(6, 4)
+  perirf           Decimal?  @db.Decimal(4, 2)
+  perins           Decimal?  @db.Decimal(4, 2)
+  perpit           Decimal?  @db.Decimal(7, 4)
+  percsl           Decimal?  @db.Decimal(4, 2)
+  percrt           Decimal?  @db.Decimal(7, 4)
+  perour           Decimal?  @db.Decimal(4, 2)
+  /// Domínio "LSitReg": A=Ativo, I=Inativo
+  sitccs           String    @db.VarChar(1)
+  codmot           Int?
+  numprj           Int?
+  codccu           String?   @db.VarChar(9)
+  ctared           Int?
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codemp, codfil, numctr, datcpt, seqccs])
+  @@index([codemp, numctr])
+  @@map("contratos_compra_servicos")
+}
+
+// Espelho local da tabela E460REA do Senior ERP (Compras - Contratos - Históricos de reajuste): cada reajuste do preço do item (`vlratu` = valor
+// APÓS o reajuste, `vlrrea` = quanto subiu). É o histórico do valor-hora do consultor PJ: antes do 1º reajuste o valor era `vlratu - vlrrea`.
+// O histórico não é contínuo (há reajuste sem linha aqui); vale o último `vlratu` com `ultrea` até a data (domain/valorHoraConsultor.ts).
+model ContratoCompraReajuste {
+  codemp           Int
+  codfil           Int
+  numctr           Int
+  datcpt           DateTime  @db.Date
+  seqccs           Int
+  seqccp           Int
+  /// Data do reajuste (vigência do novo valor).
+  ultrea           DateTime  @db.Date
+  vlrrea           Decimal?  @db.Decimal(15, 2)
+  vlratu           Decimal?  @db.Decimal(15, 2)
+  codusu           Int
+  datrea           DateTime? @db.Date
+  perrea           Decimal?  @db.Decimal(7, 4)
+  reapre           Decimal?  @db.Decimal(7, 4)
+  desrea           String?   @db.VarChar(100)
+  // Colunas de controle de exclusão — ver comentário em Pedido.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+
+  @@id([codemp, codfil, numctr, datcpt, seqccs, seqccp, ultrea])
+  @@index([codemp, numctr])
+  @@map("contratos_compra_reajustes")
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Custo-hora real do consultor (bloco C da Rentabilidade, 18/11/2026). Tudo configurado por TELA, nada de valor de negócio no código (regra do Vitor):
+// as tabelas custo_* nascem VAZIAS e entram por "Importar JSON" ou pelas telas de Administração › Custo-hora real. (O CLT deixou de usar a classificação
+// de eventos e os encargos em % em 19/11/2026: ver custo_contas_folha, mais abaixo.)
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+
+// Parâmetros do cálculo (chave/valor texto): hoje só `horas_mes` (horas da escala que dividem o custo mensal do CLT contabilizado). Sem ele o CLT não é
+// calculado — o job avisa em vez de chutar. (O parâmetro `tipos_calculo` saiu em 19/11/2026, com a troca da folha pela contabilização R048CTB.)
+model CustoParametro {
+  chave        String   @id @db.VarChar(40)
+  valor        String   @db.VarChar(200)
+  atualizadoEm DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  @@map("custo_parametros")
+}
+
+// Valor-hora MANUAL com vigência, para quem não é CLT (sem funcionário no HCM com folha) nem tem contrato no Senior. Vale do mês de `vigencia_inicio`
+// em diante, até a próxima linha do mesmo consultor.
+model ConsultorValorHoraManual {
+  id             Int      @id @default(autoincrement())
+  codemp         Int
+  codusu         Int
+  vigenciaInicio DateTime @map("vigencia_inicio") @db.Date
+  valor          Decimal  @db.Decimal(15, 4)
+  observacao     String?  @db.VarChar(500)
+  criadoEm       DateTime @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoPor  Int?     @map("atualizado_por")
+
+  consultor Consultor @relation(fields: [codemp, codusu], references: [codemp, codusu], onDelete: Cascade)
+
+  @@unique([codemp, codusu, vigenciaInicio], map: "consultor_valor_hora_manual_key")
+  @@map("consultor_valor_hora_manual")
+}
+
+// RESULTADO do job: o custo-hora de cada consultor em cada competência (dia 1 do mês) e de onde veio (`clt_folha` | `pj_contrato` | `manual`).
+// `detalhe` guarda como chegou ao número (folha, benefícios, cada encargo, horas) — contém dado de remuneração: só leitura de admin. Derivada:
+// o job apaga e regrava, nunca é editada à mão.
+model ConsultorCustoHora {
+  codemp      Int
+  codusu      Int
+  competencia DateTime @db.Date
+  origem      String   @db.VarChar(12)
+  custoHora   Decimal  @map("custo_hora") @db.Decimal(15, 4)
+  detalhe     Json?
+  calculadoEm DateTime @default(now()) @map("calculado_em") @db.Timestamptz(6)
+
+  @@id([codemp, codusu, competencia])
+  @@index([competencia])
+  @@map("consultor_custo_hora")
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Custo do CLT pela CONTABILIZAÇÃO DA FOLHA (R048CTB, 19/11/2026). Substitui a classificação dos eventos (R046VER) + encargos em %: a R048CTB já traz,
+// por colaborador, o que a folha contabiliza — salários, INSS patronal/RAT/terceiros (GPS), FGTS, provisões de 13º e férias (com INSS e FGTS), indenização,
+// horas extras... — nas contas do plano do ERP. Conferido contra o razão do ERP em jul/2026: 45 das 51 contas de resultado batem ao centavo (as 6 de
+// Assistência Médica diferem porque a folha só traz o desconto do colaborador; a fatura do plano entra no ERP pela empresa).
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+
+// Espelho da R048CTB (HCM: "Contabilização - Nova"), SÓ as linhas originais (`perrat = 0`): a tabela repete cada lançamento numa cópia do rateio por CC
+// (`perrat = 100`; nunca há rateio parcial no dado real) e uma cópia isolada falta em alguns lançamentos, então a original é a completa. Sem chave
+// primária na origem: por isso um `id` próprio, e a sync apaga e regrava o mês inteiro (domínio sync/hcm/contabilizacaoFolhaSync.ts).
+model HcmContabilizacaoFolha {
+  id             Int      @id @default(autoincrement())
+  numemp         Int
+  tipcol         Int
+  numcad         Int
+  codcal         Int?
+  codlot         Int?
+  /// Data do lançamento (último dia do mês da folha).
+  datlan         DateTime @db.Date
+  /// Opção da contabilização (LOpcCtn): 1 = folha (cálculo), 3 = provisões.
+  opcctb         Int?
+  orictb         String?  @db.VarChar(1)
+  /// Código do lançamento contábil (define o histórico e as contas no cadastro do HCM).
+  codclc         Int?
+  cplhis         String?  @db.VarChar(100)
+  /// "D" = débito, "C" = crédito.
+  debcre         String   @db.VarChar(1)
+  reddeb         Int?
+  redcre         Int?
+  /// Conta reduzida do plano do ERP que recebe o lançamento: `reddeb` no débito, `redcre` no crédito.
+  ctared         Int?
+  codccu         String?  @db.VarChar(18)
+  codfil         Int?
+  vallan         Decimal  @db.Decimal(14, 2)
+  sincronizadoEm DateTime @default(now()) @map("sincronizado_em") @db.Timestamptz(6)
+
+  @@index([numemp, tipcol, numcad, datlan])
+  @@index([datlan])
+  @@map("hcm_contabilizacao_folha")
+}
+
+// Quais contas do plano compõem o custo do CLT (regras incluir/excluir, em QUALQUER nível: a sintética vale por todas as analíticas abaixo — a mesma
+// semântica de rentabilidade_indicador_contas). `codemp` é a empresa do plano no ERP; a R048CTB casa pela empresa do HCM (numemp), que na Soeltech é a mesma.
+// Nasce vazia: nenhuma conta no código.
+model CustoContaFolha {
+  codemp Int
+  ctared Int
+  /// "incluir" | "excluir" (exclusão vence).
+  acao   String @db.VarChar(10)
+
+  @@id([codemp, ctared])
+  @@map("custo_contas_folha")
 }
