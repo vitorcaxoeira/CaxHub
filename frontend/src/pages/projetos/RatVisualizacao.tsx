@@ -22,6 +22,9 @@ interface RatDetalhe {
   sitratTone: Tone;
   obsrat: string | null;
   origemCaxHub: boolean;
+  // Preenchido quando a RAT foi excluída no Senior (só acontece pra origemCaxHub=false) —
+  // sitratLabel já mostra "Excluída" na badge; este campo só dá a data pra tarja abaixo.
+  removidoEmSenior: string | null;
 }
 
 interface ItemDetalhe {
@@ -34,6 +37,9 @@ interface ItemDetalhe {
   duracaoMinutos: number | null;
   desati: string | null;
   confirmadoNoSenior: boolean;
+  // Preenchido quando o item foi excluído no Senior (ver desvincularItensAusentesNoSenior no
+  // backend) — numrat/seqrat continuam preenchidos como histórico.
+  removidoEmSenior: string | null;
 }
 
 interface DespesaViagemDetalhe {
@@ -148,6 +154,14 @@ export function RatVisualizacao() {
             </p>
             <p className="mt-1 text-sm text-muted">{rat.cliente ?? "—"}</p>
           </div>
+
+          {rat.removidoEmSenior && (
+            <div className="mb-6 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-foreground">
+              <span className="font-semibold">Esta RAT não existe mais no Senior.</span> Ela sumiu da consulta ao
+              ERP em {formatData(rat.removidoEmSenior)} — os dados abaixo são o último retrato que o CaxHub
+              recebeu antes disso.
+            </div>
+          )}
 
           <Tabs
             tabs={[
@@ -289,10 +303,15 @@ export function RatVisualizacao() {
                         <td className="px-4 py-2.5">
                           <span
                             className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-medium ${
-                              item.confirmadoNoSenior ? toneBadge.success : toneBadge.warning
+                              item.removidoEmSenior
+                                ? toneBadge.destructive
+                                : item.confirmadoNoSenior
+                                  ? toneBadge.success
+                                  : toneBadge.warning
                             }`}
+                            title={item.removidoEmSenior ? `Excluído no Senior em ${formatData(item.removidoEmSenior)}` : undefined}
                           >
-                            {item.confirmadoNoSenior ? "Sim" : "Pendente"}
+                            {item.removidoEmSenior ? "Excluído" : item.confirmadoNoSenior ? "Sim" : "Pendente"}
                           </span>
                         </td>
                       </tr>

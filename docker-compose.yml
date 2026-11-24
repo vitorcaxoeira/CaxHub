@@ -15,6 +15,9 @@ services:
     restart: unless-stopped
     env_file:
       - ./backend/.env
+    environment:
+      # De onde o Chromium do backend carrega o frontend ao gerar PDF (nginx, rede interna do compose).
+      PDF_FRONTEND_URL: http://frontend
     depends_on:
       - db
     volumes:
@@ -29,6 +32,10 @@ services:
       - backend
     ports:
       - "8080:80"
+    volumes:
+      # Instalador do CaxHub Desktop (CaxHub-Desktop-Setup.exe), copiado por scp na VPS —
+      # o binário não vai pro git nem passa pelo build da imagem (ver desktop/README.md).
+      - ./downloads:/srv/downloads:ro
 
 volumes:
   db_data:

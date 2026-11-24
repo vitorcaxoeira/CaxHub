@@ -1,9 +1,11 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "movimentos_conta-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -42,8 +44,7 @@ interface MovimentoContaRow {
 }
 
 // Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores — cast conferido contra
-// schema.prisma (MovimentoConta): vlrmov Decimal(15,2), debcre VarChar(1) NOT NULL. Sem
-// carimbo — esta tabela não tem vistoEmSync/removidoEmSenior.
+// schema.prisma (MovimentoConta): vlrmov Decimal(15,2), debcre VarChar(1) NOT NULL.
 const COLUNAS: ColunaUpsert[] = [
   { nome: "codemp", cast: "int" },
   { nome: "numcco", cast: "text" },
@@ -101,8 +102,22 @@ export async function runMovimentoContaSync(desde?: Date): Promise<void> {
       tabela: "movimentos_conta",
       colunas: COLUNAS,
       colunasPk: ["codemp", "numcco", "datmov", "seqmov"],
+      carimbo: inicio,
     });
     const msEscrita = Date.now() - inicioEscrita;
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.MovimentoContaWhereInput>(prisma.movimentoConta, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(BASE_QUERY),
+      inicio,
+      linhasProcessadas: resultado.linhasProcessadas,
+      desde,
+    });
 
     await prisma.syncLog.create({
       data: {
@@ -111,7 +126,11 @@ export async function runMovimentoContaSync(desde?: Date): Promise<void> {
         status: "success",
         message:
           `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
-          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
         duracaoMs: Date.now() - inicio.getTime(),
       },
     });

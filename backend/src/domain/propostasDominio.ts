@@ -8,17 +8,16 @@ export const SITPRO_LABELS: Record<number, string> = {
   6: "Cancelada",
   7: "Em Execução",
   8: "Executada",
-  9: "Levantamento Interno",
+  // 9 era "Levantamento Interno" no CaxHub; o Vitor confirmou em 16/11/2026 que é DECLINADA (ação Declinar da Gestão Propostas). Nenhuma proposta tinha 9 no espelho.
+  9: "Declinada",
 };
 export const SITPRO_ORDER = [1, 2, 3, 4, 7, 9, 8, 5, 6];
 
-// "Pipeline em aberto" = ainda não decidida (nem aprovada, nem perdida) e ainda não virou projeto.
-// Usado pelos KPIs/funil já existentes — não mexer (inclui Levantamento Interno).
-export const SITPRO_ABERTA = [1, 2, 3, 9];
+// "Pipeline em aberto" = ainda não decidida (nem aprovada, nem perdida) e ainda não virou projeto. Declinada (9) é decisão tomada: fora do pipeline (16/11/2026).
+export const SITPRO_ABERTA = [1, 2, 3];
 
 // Conjuntos de negócio dos indicadores comerciais novos — "em decisão" aqui EXCLUI
-// Levantamento Interno (9), por ser trabalho interno e não venda propriamente dita.
-// Distinto de SITPRO_ABERTA de propósito, para não confundir os dois esquemas.
+// os mesmos 1, 2, 3 (antes de 16/11/2026 a SITPRO_ABERTA também levava o 9, que deixou de ser "Levantamento Interno").
 export const SITPRO_EM_DECISAO = [1, 2, 3];
 // Ganhas = mesmo conjunto já usado pelo KPI de conversão existente. sitpro=4 (Aprovada)
 // sozinho é um estado transitório (a proposta sai dele assim que a execução começa),
@@ -34,12 +33,37 @@ export const SITPRO_GANHAS = [4, 7, 8];
 // 4=Aprovada e 7=Em Execução: a proposta já foi ganha e o trabalho ainda está de pé.
 // 8=Executada fica de fora de propósito — projeto encerrado sai do quadro.
 export const SITPRO_ATIVIDADES_VISIVEIS = [4, 7];
-export const SITPRO_PERDIDAS = [5, 6];
-export const SITPRO_DECIDIDAS = [4, 5, 6, 7, 8];
+export const SITPRO_PERDIDAS = [5, 6, 9];
+export const SITPRO_DECIDIDAS = [4, 5, 6, 7, 8, 9];
 
 // Só propostas Aprovada ou Em Execução podem ter horas alocadas pra consultores —
 // usado pela área de Alocação (backend/src/routes/alocacao.ts).
 export const SITPRO_ALOCAVEL = [4, 7];
+
+// Tela Gestão Propostas (09/11/2026): "Finalizar" leva a proposta para Executada (8) e só parte de Em Execução (7); "Em Execução" volta de
+// Executada (8) para 7. O domínio USU_SitPro não tem "Finalizada": o estado terminal é 8 = Executada. As 59 propostas Aprovadas (4) não podem
+// ser finalizadas por esta tela (decisão do Vitor): para finalizar uma, ela precisa antes estar Em Execução.
+export const SITPRO_APROVADA = 4;
+export const SITPRO_REJEITADA = 5;
+export const SITPRO_CANCELADA = 6;
+export const SITPRO_DECLINADA = 9;
+export const SITPRO_EM_EXECUCAO = 7;
+export const SITPRO_EXECUTADA = 8;
+export const SITPRO_FINALIZAVEL = [SITPRO_EM_EXECUCAO];
+// Gestão Propostas (16/11/2026): de Aprovada (4) a pessoa pode Rejeitar (5), Cancelar (6), Declinar (9) ou iniciar a execução (7); o Em Execução também continua
+// valendo de Executada (8). Todas pedem o MOTIVO, enviado ao Senior em obsSit (VarChar(200), o tamanho de propostas.obssit).
+export const SITPRO_ORIGEM_DECISAO = [SITPRO_APROVADA];
+export const SITPRO_ORIGEM_EM_EXECUCAO = [SITPRO_APROVADA, SITPRO_EXECUTADA];
+export const OBSSIT_MAX = 200;
+
+/** O motivo do corpo do pedido: aparado; obrigatório nas ações que o pedem (até OBSSIT_MAX caracteres) e ignorado nas que não o levam (Finalizar). */
+export function lerMotivo(valor: unknown, obrigatorio: boolean): { ok: true; motivo: string | null } | { ok: false; erro: string } {
+  const texto = typeof valor === "string" ? valor.trim() : "";
+  if (!obrigatorio) return { ok: true, motivo: null };
+  if (!texto) return { ok: false, erro: "Informe o motivo da mudança de situação." };
+  if (texto.length > OBSSIT_MAX) return { ok: false, erro: `O motivo pode ter até ${OBSSIT_MAX} caracteres (tem ${texto.length}).` };
+  return { ok: true, motivo: texto };
+}
 
 // Domínio "USU_TipVen" do Senior (tipo de venda de serviços).
 export const TIPVEN_LABELS: Record<number, string> = {
@@ -55,6 +79,8 @@ export const MODPRO_LABELS: Record<number, string> = {
   1: "Levantamento",
   2: "DRM",
 };
+
+export const MODPRO_ORDER = [0, 1, 2];
 
 export function modproLabel(modpro: number | null): string {
   if (modpro === null) return "—";
@@ -131,6 +157,16 @@ export function depexeLabel(depexe: number | null): string {
 export const DEPEXE_DIRETORIA = 0;
 export const DEPEXE_COMERCIAL = 2;
 
+// Departamentos cujos gestores, além do admin, gerem o Plano de Evolução PJ (Gestão de Projetos › Plano de Evolução PJ): Consultoria
+// ERP e Consultoria HCM (pedido do Vitor, 20/10/2026). Em sincronia com DEPEXES_PLANO_EVOLUCAO do frontend (auth/acessoPlanoEvolucao.ts).
+export const DEPEXES_PLANO_EVOLUCAO: readonly number[] = [8, 9];
+
+// Cliente (`clientes.codcli`) que representa a própria empresa: proposta com este cliente é
+// interna (trabalho da casa, não de cliente externo). Não existe flag no Senior pra isso —
+// decisão do Vitor (05/10/2026): interna = cliente da própria empresa. Medido no banco: codcli 1
+// é "SOELTECH DESENVOLVIMENTO". Usado pelo Painel de Eficiência (domain/eficienciaDados.ts).
+export const CODCLI_EMPRESA_PROPRIA = 1;
+
 // Domínio "USU_TRatForFat" do Senior (forma de faturamento).
 export const FORFAT_LABELS: Record<number, string> = {
   0: "Mediante RAT",
@@ -155,8 +191,8 @@ export function sitproLabel(sitpro: number | null): string {
 export function sitproTone(sitpro: number | null): "success" | "warning" | "destructive" | "neutral" {
   if (sitpro === 7) return "success";
   if (sitpro === 4 || sitpro === 8) return "success";
-  if (sitpro === 5 || sitpro === 6) return "destructive";
-  if (sitpro === 1 || sitpro === 2 || sitpro === 3 || sitpro === 9) return "warning";
+  if (sitpro === 5 || sitpro === 6 || sitpro === 9) return "destructive";
+  if (sitpro === 1 || sitpro === 2 || sitpro === 3) return "warning";
   return "neutral";
 }
 

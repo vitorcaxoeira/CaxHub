@@ -1,3 +1,6 @@
+import type { ReactNode } from "react";
+import { opcoesDePorPagina } from "../../lib/porPagina";
+
 interface PaginationProps {
   page: number;
   pageSize: number;
@@ -5,9 +8,13 @@ interface PaginationProps {
   loading: boolean;
   onPageChange: (page: number) => void;
   label?: string;
+  /** Com esta prop aparece o seletor "Por página" (5, 10, 15, 25, 50, 100 e 200 — lib/porPagina.ts), em vez de um teto fixo. */
+  onPageSizeChange?: (pageSize: number) => void;
+  /** Estrela de "padrão" (BotaoPadraoFiltro) do seletor "Por página": fica no canto do seletor, como a dos filtros do topo. */
+  acessorioPorPagina?: ReactNode;
 }
 
-export function Pagination({ page, pageSize, total, loading, onPageChange, label = "registros" }: PaginationProps) {
+export function Pagination({ page, pageSize, total, loading, onPageChange, label = "registros", onPageSizeChange, acessorioPorPagina }: PaginationProps) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -15,7 +22,27 @@ export function Pagination({ page, pageSize, total, loading, onPageChange, label
       <p className="text-[11.5px] text-muted">
         {total.toLocaleString("pt-BR")} {label} · página {page} de {totalPages}
       </p>
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
+        {onPageSizeChange && (
+          <label className="mr-2 flex items-center gap-1.5 text-[11.5px] text-muted">
+            Por página
+            {/* `relative` + recuo à direita: a estrela (absolute, canto superior direito) fica ao lado do seletor, sem cobrir a seta dele. */}
+            <span className={acessorioPorPagina ? "relative inline-flex pr-6" : "inline-flex"}>
+              <select
+                value={pageSize}
+                onChange={(e) => onPageSizeChange(Number(e.target.value))}
+                className="rounded-md border border-border bg-surface px-1.5 py-1 text-[11.5px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {opcoesDePorPagina(pageSize).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              {acessorioPorPagina}
+            </span>
+          </label>
+        )}
         <button
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1 || loading}

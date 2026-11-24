@@ -26,6 +26,11 @@ import { JOB_NAME as ITEM_SERVICO_NFV_JOB, CRON_EXPR as ITEM_SERVICO_NFV_CRON, C
 import { JOB_NAME as ITEM_PRODUTO_NFV_JOB, CRON_EXPR as ITEM_PRODUTO_NFV_CRON, CAMPO_DATA as ITEM_PRODUTO_NFV_DATA, BASE_QUERY as ITEM_PRODUTO_NFV_QUERY, runItemProdutoNfVendaSync } from "./itemProdutoNfVendaSync";
 import { JOB_NAME as RATEIO_NFV_JOB, CRON_EXPR as RATEIO_NFV_CRON, CAMPO_DATA as RATEIO_NFV_DATA, BASE_QUERY as RATEIO_NFV_QUERY, runRateioNfVendaSync } from "./rateioNfVendaSync";
 import { JOB_NAME as META_ANUAL_JOB, CRON_EXPR as META_ANUAL_CRON, CAMPO_DATA as META_ANUAL_DATA, BASE_QUERY as META_ANUAL_QUERY, runMetaAnualSync } from "./metaAnualSync";
+import { JOB_NAME as CONTRATO_VENDA_JOB, CRON_EXPR as CONTRATO_VENDA_CRON, CAMPO_DATA as CONTRATO_VENDA_DATA, BASE_QUERY as CONTRATO_VENDA_QUERY, runContratoVendaSync } from "./contratoVendaSync";
+import { JOB_NAME as CONTRATO_VENDA_SERVICO_JOB, CRON_EXPR as CONTRATO_VENDA_SERVICO_CRON, CAMPO_DATA as CONTRATO_VENDA_SERVICO_DATA, BASE_QUERY as CONTRATO_VENDA_SERVICO_QUERY, runContratoVendaServicoSync } from "./contratoVendaServicoSync";
+import { JOB_NAME as CONTRATO_VENDA_REAJUSTE_JOB, CRON_EXPR as CONTRATO_VENDA_REAJUSTE_CRON, CAMPO_DATA as CONTRATO_VENDA_REAJUSTE_DATA, BASE_QUERY as CONTRATO_VENDA_REAJUSTE_QUERY, runContratoVendaReajusteSync } from "./contratoVendaReajusteSync";
+import { JOB_NAME as PEDIDO_ITEM_SERVICO_JOB, CRON_EXPR as PEDIDO_ITEM_SERVICO_CRON, CAMPO_DATA as PEDIDO_ITEM_SERVICO_DATA, BASE_QUERY as PEDIDO_ITEM_SERVICO_QUERY, runPedidoItemServicoSync } from "./pedidoItemServicoSync";
+import { JOB_NAME as PEDIDO_RATEIO_JOB, CRON_EXPR as PEDIDO_RATEIO_CRON, CAMPO_DATA as PEDIDO_RATEIO_DATA, BASE_QUERY as PEDIDO_RATEIO_QUERY, runPedidoRateioSync } from "./pedidoRateioSync";
 import { JOB_NAME as NATUREZA_FINANCEIRA_JOB, CRON_EXPR as NATUREZA_FINANCEIRA_CRON, CAMPO_DATA as NATUREZA_FINANCEIRA_DATA, QUERY as NATUREZA_FINANCEIRA_QUERY, runNaturezaFinanceiraSync } from "./naturezaFinanceiraSync";
 import { JOB_NAME as ORCAMENTO_CONTABIL_JOB, CRON_EXPR as ORCAMENTO_CONTABIL_CRON, CAMPO_DATA as ORCAMENTO_CONTABIL_DATA, QUERY as ORCAMENTO_CONTABIL_QUERY, runOrcamentoContabilSync } from "./orcamentoContabilSync";
 import { JOB_NAME as PEDIDO_JOB, CRON_EXPR as PEDIDO_CRON, CAMPO_DATA as PEDIDO_DATA, BASE_QUERY as PEDIDO_QUERY, runPedidoSync } from "./pedidoSync";
@@ -44,12 +49,26 @@ import { JOB_NAME as RAT_JOB, CRON_EXPR as RAT_CRON, CAMPO_DATA as RAT_DATA, BAS
 import { JOB_NAME as RAT_ITEM_JOB, CRON_EXPR as RAT_ITEM_CRON, CAMPO_DATA as RAT_ITEM_DATA, BASE_QUERY as RAT_ITEM_QUERY, runRatItemSync } from "./ratItemSync";
 import { JOB_NAME as RATEIO_LANCAMENTO_JOB, CRON_EXPR as RATEIO_LANCAMENTO_CRON, CAMPO_DATA as RATEIO_LANCAMENTO_DATA, QUERY as RATEIO_LANCAMENTO_QUERY, runRateioLancamentoSync } from "./rateioLancamentoSync";
 import { JOB_NAME as HISTORICO_PADRAO_JOB, CRON_EXPR as HISTORICO_PADRAO_CRON, CAMPO_DATA as HISTORICO_PADRAO_DATA, QUERY as HISTORICO_PADRAO_QUERY, runHistoricoPadraoSync } from "./historicoPadraoSync";
+import { JOB_NAME as MODELO_PLANO_JOB, CRON_EXPR as MODELO_PLANO_CRON, CAMPO_DATA as MODELO_PLANO_DATA, QUERY as MODELO_PLANO_QUERY, runModeloPlanoSync } from "./modeloPlanoSync";
+import { JOB_NAME as PROJETO_JOB, CRON_EXPR as PROJETO_CRON, CAMPO_DATA as PROJETO_DATA, QUERY as PROJETO_QUERY, runProjetoSync } from "./projetoSync";
+import { JOB_NAME as CONTRATO_COMPRA_JOB, CRON_EXPR as CONTRATO_COMPRA_CRON, CAMPO_DATA as CONTRATO_COMPRA_DATA, QUERY as CONTRATO_COMPRA_QUERY, runContratoCompraSync } from "./contratoCompraSync";
+import { JOB_NAME as CONTRATO_COMPRA_SERVICO_JOB, CRON_EXPR as CONTRATO_COMPRA_SERVICO_CRON, CAMPO_DATA as CONTRATO_COMPRA_SERVICO_DATA, QUERY as CONTRATO_COMPRA_SERVICO_QUERY, runContratoCompraServicoSync } from "./contratoCompraServicoSync";
+import { JOB_NAME as CONTRATO_COMPRA_REAJUSTE_JOB, CRON_EXPR as CONTRATO_COMPRA_REAJUSTE_CRON, CAMPO_DATA as CONTRATO_COMPRA_REAJUSTE_DATA, QUERY as CONTRATO_COMPRA_REAJUSTE_QUERY, runContratoCompraReajusteSync } from "./contratoCompraReajusteSync";
 import { JOB_NAME as REPRESENTANTE_JOB, CRON_EXPR as REPRESENTANTE_CRON, CAMPO_DATA as REPRESENTANTE_DATA, BASE_QUERY as REPRESENTANTE_QUERY, runRepresentanteSync } from "./representanteSync";
 import { JOB_NAME as TIPO_TITULO_JOB, CRON_EXPR as TIPO_TITULO_CRON, CAMPO_DATA as TIPO_TITULO_DATA, QUERY as TIPO_TITULO_QUERY, runTipoTituloSync } from "./tipoTituloSync";
 import { JOB_NAME as TITULO_RECEBER_JOB, CRON_EXPR as TITULO_RECEBER_CRON, CAMPO_DATA as TITULO_RECEBER_DATA, BASE_QUERY as TITULO_RECEBER_QUERY, runTituloReceberSync } from "./tituloReceberSync";
+import { JOB_NAME as FORNECEDOR_JOB, CRON_EXPR as FORNECEDOR_CRON, CAMPO_DATA as FORNECEDOR_DATA, BASE_QUERY as FORNECEDOR_QUERY, runFornecedorSync } from "./fornecedorSync";
+import { JOB_NAME as TITULO_PAGAR_JOB, CRON_EXPR as TITULO_PAGAR_CRON, CAMPO_DATA as TITULO_PAGAR_DATA, BASE_QUERY as TITULO_PAGAR_QUERY, runTituloPagarSync } from "./tituloPagarSync";
+import { JOB_NAME as MOVIMENTO_TITULO_PAGAR_JOB, CRON_EXPR as MOVIMENTO_TITULO_PAGAR_CRON, CAMPO_DATA as MOVIMENTO_TITULO_PAGAR_DATA, BASE_QUERY as MOVIMENTO_TITULO_PAGAR_QUERY, runMovimentoTituloPagarSync } from "./movimentoTituloPagarSync";
+import { JOB_NAME as RATEIO_TITULO_PAGAR_JOB, CRON_EXPR as RATEIO_TITULO_PAGAR_CRON, CAMPO_DATA as RATEIO_TITULO_PAGAR_DATA, BASE_QUERY as RATEIO_TITULO_PAGAR_QUERY, runRateioTituloPagarSync } from "./rateioTituloPagarSync";
 import { JOB_NAME as TRANSACAO_JOB, CRON_EXPR as TRANSACAO_CRON, CAMPO_DATA as TRANSACAO_DATA, BASE_QUERY as TRANSACAO_QUERY, runTransacaoSync } from "./transacaoSync";
 import { prisma } from "../db/prisma";
+import type { SistemaSenior } from "../config/sistemaSenior";
+import { TABELAS_HCM } from "./hcm/tabelasHcm";
+import { definirTodosSyncsHcm } from "./hcm/definirSyncHcm";
+import { JOB_NAME as CONTABILIZACAO_FOLHA_JOB, DISPLAY_NAME as CONTABILIZACAO_FOLHA_NOME, TABELA_LOCAL as CONTABILIZACAO_FOLHA_TABELA, QUERY as CONTABILIZACAO_FOLHA_QUERY, runContabilizacaoFolhaSync } from "./hcm/contabilizacaoFolhaSync";
 import { extrairTabela, extrairColunas, ColunaQuery } from "./consultaSenior";
+import { delegatePorTabelaLocal, pkFieldsDoModel } from "./recorteRetroativo";
 
 // USU_VBI00Cons/USU_VBI01CTRCS são views de BI sem registro em r996tbl/r998tbl — o
 // dicionário do Senior não as conhece, então getTableInfo (soap/metadata.ts) lança exceção
@@ -65,6 +84,7 @@ const JOBS_SEM_DICIONARIO = new Set([CONSULTOR_JOB, CONTRATO_CONSULTOR_JOB]);
 // tabela fora daqui devolve erro claro em vez de aceitar em silêncio algo que o `run()` dela
 // não consome.
 const JOBS_COM_FILTRO = new Set([
+  ...TABELAS_HCM.map((t) => t.jobName),
   ATIVIDADE_CONSULTOR_JOB,
   CENTRO_CUSTO_JOB,
   CLIENTE_JOB,
@@ -91,6 +111,11 @@ const JOBS_COM_FILTRO = new Set([
   PERCURSO_VIAGEM_JOB,
   ROTA_PERCURSO_JOB,
   PLANO_CONTABIL_JOB,
+  MODELO_PLANO_JOB,
+  PROJETO_JOB,
+  CONTRATO_COMPRA_JOB,
+  CONTRATO_COMPRA_SERVICO_JOB,
+  CONTRATO_COMPRA_REAJUSTE_JOB,
   PORTADOR_JOB,
   PROPOSTA_ITEM_JOB,
   PROPOSTA_JOB,
@@ -99,6 +124,10 @@ const JOBS_COM_FILTRO = new Set([
   RATEIO_LANCAMENTO_JOB,
   REPRESENTANTE_JOB,
   TIPO_TITULO_JOB,
+  FORNECEDOR_JOB,
+  TITULO_PAGAR_JOB,
+  MOVIMENTO_TITULO_PAGAR_JOB,
+  RATEIO_TITULO_PAGAR_JOB,
   TITULO_RECEBER_JOB,
   TRANSACAO_JOB,
 ]);
@@ -112,8 +141,10 @@ const JOBS_COM_FILTRO = new Set([
 function catalogo(
   jobName: string,
   query: string,
-  tabelaLocal: string
+  tabelaLocal: string,
+  sistema: SistemaSenior = "erp"
 ): {
+  sistema: SistemaSenior;
   tabelaSenior: string;
   colunas: ColunaQuery[];
   temDicionario: boolean;
@@ -122,6 +153,7 @@ function catalogo(
   suportaFiltro: boolean;
 } {
   return {
+    sistema,
     tabelaSenior: extrairTabela(query),
     colunas: extrairColunas(query),
     temDicionario: !JOBS_SEM_DICIONARIO.has(jobName),
@@ -133,6 +165,9 @@ function catalogo(
 
 export interface SyncJobDescriptor {
   jobName: string;
+  // Sistema Senior de onde o job lê: "erp" (padrão, todos os jobs de antes do RH) ou "hcm". Decide o canal
+  // SOAP, o dicionário e o dialeto do job (config/sistemaSenior.ts) e em qual tela ele aparece.
+  sistema: SistemaSenior;
   displayName: string;
   cronExpr: string;
   suportaAlterados: boolean;
@@ -177,6 +212,12 @@ export interface SyncJobDescriptor {
   // antigo que isso). Sem isso, em modo "simular" a lista viria sempre vazia — e é
   // justamente na simulação que a conferência precisa acontecer.
   listarRemovidos?: (limite: number, candidatosDesde: Date | null) => Promise<ItemRemovido[]>;
+  // true só nos jobs cujo `run()` já chama upsertEmLote() — marcado explicitamente por job
+  // (não derivado), mesmo espírito de `suportaAlterados`. É o que decide se o campo "tamanho
+  // do lote" fica editável na tela (sync/politicaLote.ts) — nos jobs `false`, o upsert ainda
+  // é linha a linha, sem NENHUMA opção de lote (não é config faltando, é código que ainda não
+  // foi escrito para isso). Porte do CaxHub_Atlas (11/09/2026).
+  usaUpsertEmLote: boolean;
 }
 
 export interface ItemRemovido {
@@ -194,6 +235,9 @@ export interface ItemRemovido {
 //   Filial                 -> Empresa
 //   TituloReceber          -> Cliente, TipoTitulo, Portador
 //   MovimentoTituloReceber -> TituloReceber, Transacao
+//   TituloPagar            -> Fornecedor
+//   MovimentoTituloPagar   -> TituloPagar, Transacao
+//   RateioTituloPagar      -> TituloPagar
 //   Proposta               -> Cliente
 //   PropostaItem           -> Proposta
 //   AtividadeConsultor     -> FaseProposta
@@ -211,35 +255,86 @@ export interface ItemRemovido {
 // desaparecer da consulta ao Senior, não sobre o valor deste campo (ver schema.prisma).
 const SITUACAO_LANCAMENTO: Record<number, string> = { 1: "A Contabilizar", 2: "Contabilizado", 3: "Excluído", 4: "Desativado" };
 
+// `contarRemovidos`/`listarRemovidos` genéricos (10/09/2026, porte do CaxHub_Atlas) — antes só
+// Pedido/Lançamento Contábil/Rateio de Lançamento tinham essas duas funções, escritas à mão.
+// Em vez de repetir o mesmo par ~41 vezes pras tabelas que ganharam a varredura nesta leva,
+// reaproveita o truque de `Prisma.dmmf` que `recorteRetroativo.ts` já usa pra achar o delegate
+// certo a partir de `tabelaLocal` em runtime. Os 3 jobs acima continuam com a versão própria
+// (rótulo mais rico: nome do cliente/situação/valor) — não precisa trocar algo que já funciona
+// por uma versão genérica pior. Seguro até pras 4 tabelas de mão dupla (AtividadeConsultor,
+// Rat, RatItem, RegistroDespesaViagem): o escopo especial delas entra na hora de MARCAR (ver
+// varrerRemovidos.ts), não na hora de LISTAR o que já foi marcado — listar é sempre "WHERE
+// removidoEmSenior IS NOT NULL", igual em qualquer tabela.
+function contarRemovidosGenerico(tabelaLocal: string): () => Promise<number> {
+  return () => delegatePorTabelaLocal(tabelaLocal).count({ where: { removidoEmSenior: { not: null } } });
+}
+
+function listarRemovidosGenerico(
+  tabelaLocal: string,
+  displayName: string
+): (limite: number, candidatosDesde: Date | null) => Promise<ItemRemovido[]> {
+  return async (limite, candidatosDesde) => {
+    const delegate = delegatePorTabelaLocal(tabelaLocal);
+    const pk = pkFieldsDoModel(tabelaLocal);
+    const linhas = await delegate.findMany({
+      where: candidatosDesde
+        ? // Marcados + os que a varredura marcaria agora (útil em modo "simular", onde os
+          // primeiros ainda não existem). `lt` estrito ignora carimbo NULL, então registro
+          // nascido fora do sync (mão dupla) é imune por construção.
+          { OR: [{ removidoEmSenior: { not: null } }, { vistoEmSync: { lt: candidatosDesde } }] }
+        : { removidoEmSenior: { not: null } },
+      orderBy: { removidoEmSenior: "desc" },
+      take: limite,
+    });
+    return linhas.map((linha) => {
+      const chave = pk.map((campo) => String(linha[campo])).join("/");
+      return {
+        chave,
+        rotulo: `${displayName} ${chave}`,
+        removidoEmSenior: linha.removidoEmSenior as Date | null,
+        marcado: linha.removidoEmSenior != null,
+      };
+    });
+  };
+}
+
 export const SYNC_JOBS: SyncJobDescriptor[] = [
-  { jobName: EMPRESA_JOB, displayName: "Empresas", cronExpr: EMPRESA_CRON, suportaAlterados: EMPRESA_DATA != null, campoData: EMPRESA_DATA, ...catalogo(EMPRESA_JOB, EMPRESA_QUERY, "empresa"), run: runEmpresaSync, contarRegistros: () => prisma.empresa.count() },
-  { jobName: FILIAL_JOB, displayName: "Filiais", cronExpr: FILIAL_CRON, suportaAlterados: FILIAL_DATA != null, campoData: FILIAL_DATA, ...catalogo(FILIAL_JOB, FILIAL_QUERY, "filial"), run: runFilialSync, contarRegistros: () => prisma.filial.count() },
-  { jobName: CLIENTE_JOB, displayName: "Clientes", cronExpr: CLIENTE_CRON, suportaAlterados: CLIENTE_DATA != null, campoData: CLIENTE_DATA, ...catalogo(CLIENTE_JOB, CLIENTE_QUERY, "clientes"), run: runClienteSync, contarRegistros: () => prisma.cliente.count() },
-  { jobName: TIPO_TITULO_JOB, displayName: "Tipos de Título", cronExpr: TIPO_TITULO_CRON, suportaAlterados: TIPO_TITULO_DATA != null, campoData: TIPO_TITULO_DATA, ...catalogo(TIPO_TITULO_JOB, TIPO_TITULO_QUERY, "tipos_titulo"), run: runTipoTituloSync, contarRegistros: () => prisma.tipoTitulo.count() },
-  { jobName: PORTADOR_JOB, displayName: "Portadores", cronExpr: PORTADOR_CRON, suportaAlterados: PORTADOR_DATA != null, campoData: PORTADOR_DATA, ...catalogo(PORTADOR_JOB, PORTADOR_QUERY, "portadores"), run: runPortadorSync, contarRegistros: () => prisma.portador.count() },
-  { jobName: TRANSACAO_JOB, displayName: "Transações", cronExpr: TRANSACAO_CRON, suportaAlterados: TRANSACAO_DATA != null, campoData: TRANSACAO_DATA, ...catalogo(TRANSACAO_JOB, TRANSACAO_QUERY, "transacoes"), run: runTransacaoSync, contarRegistros: () => prisma.transacao.count() },
-  { jobName: TITULO_RECEBER_JOB, displayName: "Títulos a Receber", cronExpr: TITULO_RECEBER_CRON, suportaAlterados: TITULO_RECEBER_DATA != null, campoData: TITULO_RECEBER_DATA, ...catalogo(TITULO_RECEBER_JOB, TITULO_RECEBER_QUERY, "titulos_receber"), run: runTituloReceberSync, contarRegistros: () => prisma.tituloReceber.count() },
-  { jobName: MOVIMENTO_TITULO_JOB, displayName: "Movimentos de Títulos a Receber", cronExpr: MOVIMENTO_TITULO_CRON, suportaAlterados: MOVIMENTO_TITULO_DATA != null, campoData: MOVIMENTO_TITULO_DATA, ...catalogo(MOVIMENTO_TITULO_JOB, MOVIMENTO_TITULO_QUERY, "movimentos_receber"), run: runMovimentoTituloReceberSync, contarRegistros: () => prisma.movimentoTituloReceber.count() },
-  { jobName: REPRESENTANTE_JOB, displayName: "Representantes", cronExpr: REPRESENTANTE_CRON, suportaAlterados: REPRESENTANTE_DATA != null, campoData: REPRESENTANTE_DATA, ...catalogo(REPRESENTANTE_JOB, REPRESENTANTE_QUERY, "representantes"), run: runRepresentanteSync, contarRegistros: () => prisma.representante.count() },
-  { jobName: CENTRO_CUSTO_JOB, displayName: "Centros de Custo", cronExpr: CENTRO_CUSTO_CRON, suportaAlterados: CENTRO_CUSTO_DATA != null, campoData: CENTRO_CUSTO_DATA, ...catalogo(CENTRO_CUSTO_JOB, CENTRO_CUSTO_QUERY, "centros_custo"), run: runCentroCustoSync, contarRegistros: () => prisma.centroCusto.count() },
-  { jobName: MOVIMENTO_CONTA_JOB, displayName: "Movimentos de Conta", cronExpr: MOVIMENTO_CONTA_CRON, suportaAlterados: MOVIMENTO_CONTA_DATA != null, campoData: MOVIMENTO_CONTA_DATA, ...catalogo(MOVIMENTO_CONTA_JOB, MOVIMENTO_CONTA_QUERY, "movimentos_conta"), run: runMovimentoContaSync, contarRegistros: () => prisma.movimentoConta.count() },
-  { jobName: NATUREZA_FINANCEIRA_JOB, displayName: "Naturezas Financeiras", cronExpr: NATUREZA_FINANCEIRA_CRON, suportaAlterados: NATUREZA_FINANCEIRA_DATA != null, campoData: NATUREZA_FINANCEIRA_DATA, ...catalogo(NATUREZA_FINANCEIRA_JOB, NATUREZA_FINANCEIRA_QUERY, "naturezas_financeiras"), run: runNaturezaFinanceiraSync, contarRegistros: () => prisma.naturezaFinanceira.count() },
-  { jobName: MOEDA_JOB, displayName: "Moedas", cronExpr: MOEDA_CRON, suportaAlterados: MOEDA_DATA != null, campoData: MOEDA_DATA, ...catalogo(MOEDA_JOB, MOEDA_QUERY, "moedas"), run: runMoedaSync, contarRegistros: () => prisma.moeda.count() },
-  { jobName: CONTA_CORRENTE_JOB, displayName: "Contas Correntes", cronExpr: CONTA_CORRENTE_CRON, suportaAlterados: CONTA_CORRENTE_DATA != null, campoData: CONTA_CORRENTE_DATA, ...catalogo(CONTA_CORRENTE_JOB, CONTA_CORRENTE_QUERY, "contas_correntes"), run: runContaCorrenteSync, contarRegistros: () => prisma.contaCorrente.count() },
-  { jobName: PROPOSTA_JOB, displayName: "Propostas", cronExpr: PROPOSTA_CRON, suportaAlterados: PROPOSTA_DATA != null, campoData: PROPOSTA_DATA, ...catalogo(PROPOSTA_JOB, PROPOSTA_QUERY, "propostas"), run: runPropostaSync, contarRegistros: () => prisma.proposta.count() },
-  { jobName: PROPOSTA_ITEM_JOB, displayName: "Itens de Proposta", cronExpr: PROPOSTA_ITEM_CRON, suportaAlterados: PROPOSTA_ITEM_DATA != null, campoData: PROPOSTA_ITEM_DATA, ...catalogo(PROPOSTA_ITEM_JOB, PROPOSTA_ITEM_QUERY, "propostas_itens"), run: runPropostaItemSync, contarRegistros: () => prisma.propostaItem.count() },
-  { jobName: CONSULTOR_JOB, displayName: "Consultores", cronExpr: CONSULTOR_CRON, suportaAlterados: CONSULTOR_DATA != null, campoData: CONSULTOR_DATA, ...catalogo(CONSULTOR_JOB, CONSULTOR_QUERY, "consultores"), run: runConsultorSync, contarRegistros: () => prisma.consultor.count() },
+  { jobName: EMPRESA_JOB, displayName: "Empresas", cronExpr: EMPRESA_CRON, suportaAlterados: EMPRESA_DATA != null, campoData: EMPRESA_DATA, ...catalogo(EMPRESA_JOB, EMPRESA_QUERY, "empresa"), run: runEmpresaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.empresa.count(), contarRemovidos: contarRemovidosGenerico("empresa"), listarRemovidos: listarRemovidosGenerico("empresa", "Empresa") },
+  { jobName: FILIAL_JOB, displayName: "Filiais", cronExpr: FILIAL_CRON, suportaAlterados: FILIAL_DATA != null, campoData: FILIAL_DATA, ...catalogo(FILIAL_JOB, FILIAL_QUERY, "filial"), run: runFilialSync, usaUpsertEmLote: true, contarRegistros: () => prisma.filial.count(), contarRemovidos: contarRemovidosGenerico("filial"), listarRemovidos: listarRemovidosGenerico("filial", "Filial") },
+  { jobName: CLIENTE_JOB, displayName: "Clientes", cronExpr: CLIENTE_CRON, suportaAlterados: CLIENTE_DATA != null, campoData: CLIENTE_DATA, ...catalogo(CLIENTE_JOB, CLIENTE_QUERY, "clientes"), run: runClienteSync, usaUpsertEmLote: true, contarRegistros: () => prisma.cliente.count(), contarRemovidos: contarRemovidosGenerico("clientes"), listarRemovidos: listarRemovidosGenerico("clientes", "Cliente") },
+  { jobName: TIPO_TITULO_JOB, displayName: "Tipos de Título", cronExpr: TIPO_TITULO_CRON, suportaAlterados: TIPO_TITULO_DATA != null, campoData: TIPO_TITULO_DATA, ...catalogo(TIPO_TITULO_JOB, TIPO_TITULO_QUERY, "tipos_titulo"), run: runTipoTituloSync, usaUpsertEmLote: true, contarRegistros: () => prisma.tipoTitulo.count(), contarRemovidos: contarRemovidosGenerico("tipos_titulo"), listarRemovidos: listarRemovidosGenerico("tipos_titulo", "Tipo de Título") },
+  { jobName: PORTADOR_JOB, displayName: "Portadores", cronExpr: PORTADOR_CRON, suportaAlterados: PORTADOR_DATA != null, campoData: PORTADOR_DATA, ...catalogo(PORTADOR_JOB, PORTADOR_QUERY, "portadores"), run: runPortadorSync, usaUpsertEmLote: true, contarRegistros: () => prisma.portador.count(), contarRemovidos: contarRemovidosGenerico("portadores"), listarRemovidos: listarRemovidosGenerico("portadores", "Portador") },
+  { jobName: TRANSACAO_JOB, displayName: "Transações", cronExpr: TRANSACAO_CRON, suportaAlterados: TRANSACAO_DATA != null, campoData: TRANSACAO_DATA, ...catalogo(TRANSACAO_JOB, TRANSACAO_QUERY, "transacoes"), run: runTransacaoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.transacao.count(), contarRemovidos: contarRemovidosGenerico("transacoes"), listarRemovidos: listarRemovidosGenerico("transacoes", "Transação") },
+  { jobName: FORNECEDOR_JOB, displayName: "Fornecedores", cronExpr: FORNECEDOR_CRON, suportaAlterados: FORNECEDOR_DATA != null, campoData: FORNECEDOR_DATA, ...catalogo(FORNECEDOR_JOB, FORNECEDOR_QUERY, "fornecedores"), run: runFornecedorSync, usaUpsertEmLote: true, contarRegistros: () => prisma.fornecedor.count(), contarRemovidos: contarRemovidosGenerico("fornecedores"), listarRemovidos: listarRemovidosGenerico("fornecedores", "Fornecedor") },
+  { jobName: TITULO_RECEBER_JOB, displayName: "Títulos a Receber", cronExpr: TITULO_RECEBER_CRON, suportaAlterados: TITULO_RECEBER_DATA != null, campoData: TITULO_RECEBER_DATA, ...catalogo(TITULO_RECEBER_JOB, TITULO_RECEBER_QUERY, "titulos_receber"), run: runTituloReceberSync, usaUpsertEmLote: true, contarRegistros: () => prisma.tituloReceber.count(), contarRemovidos: contarRemovidosGenerico("titulos_receber"), listarRemovidos: listarRemovidosGenerico("titulos_receber", "Título a Receber") },
+  { jobName: MOVIMENTO_TITULO_JOB, displayName: "Movimentos de Títulos a Receber", cronExpr: MOVIMENTO_TITULO_CRON, suportaAlterados: MOVIMENTO_TITULO_DATA != null, campoData: MOVIMENTO_TITULO_DATA, ...catalogo(MOVIMENTO_TITULO_JOB, MOVIMENTO_TITULO_QUERY, "movimentos_receber"), run: runMovimentoTituloReceberSync, usaUpsertEmLote: true, contarRegistros: () => prisma.movimentoTituloReceber.count(), contarRemovidos: contarRemovidosGenerico("movimentos_receber"), listarRemovidos: listarRemovidosGenerico("movimentos_receber", "Movimento de Título") },
+  // Contas a Pagar (24/09/2026), mesmo desenho do CaxHub_Atlas: E501TCP/E501MCP/E501RAT inteiras,
+  // sem recorte fixo. O card de RDV da Home lê titulos_pagar filtrando codtpt='10' na consulta
+  // (domain/resumoConsultor.ts). Fornecedor e Transação já vêm antes, então Título -> Movimento
+  // -> Rateio entram em sequência sem quebrar FK.
+  { jobName: TITULO_PAGAR_JOB, displayName: "Títulos a Pagar", cronExpr: TITULO_PAGAR_CRON, suportaAlterados: TITULO_PAGAR_DATA != null, campoData: TITULO_PAGAR_DATA, ...catalogo(TITULO_PAGAR_JOB, TITULO_PAGAR_QUERY, "titulos_pagar"), run: runTituloPagarSync, usaUpsertEmLote: true, contarRegistros: () => prisma.tituloPagar.count(), contarRemovidos: contarRemovidosGenerico("titulos_pagar"), listarRemovidos: listarRemovidosGenerico("titulos_pagar", "Título a Pagar") },
+  { jobName: MOVIMENTO_TITULO_PAGAR_JOB, displayName: "Movimentos de Títulos a Pagar", cronExpr: MOVIMENTO_TITULO_PAGAR_CRON, suportaAlterados: MOVIMENTO_TITULO_PAGAR_DATA != null, campoData: MOVIMENTO_TITULO_PAGAR_DATA, ...catalogo(MOVIMENTO_TITULO_PAGAR_JOB, MOVIMENTO_TITULO_PAGAR_QUERY, "movimentos_pagar"), run: runMovimentoTituloPagarSync, usaUpsertEmLote: true, contarRegistros: () => prisma.movimentoTituloPagar.count(), contarRemovidos: contarRemovidosGenerico("movimentos_pagar"), listarRemovidos: listarRemovidosGenerico("movimentos_pagar", "Movimento de Título a Pagar") },
+  { jobName: RATEIO_TITULO_PAGAR_JOB, displayName: "Rateios de Títulos a Pagar", cronExpr: RATEIO_TITULO_PAGAR_CRON, suportaAlterados: RATEIO_TITULO_PAGAR_DATA != null, campoData: RATEIO_TITULO_PAGAR_DATA, ...catalogo(RATEIO_TITULO_PAGAR_JOB, RATEIO_TITULO_PAGAR_QUERY, "rateios_pagar"), run: runRateioTituloPagarSync, usaUpsertEmLote: true, contarRegistros: () => prisma.rateioTituloPagar.count(), contarRemovidos: contarRemovidosGenerico("rateios_pagar"), listarRemovidos: listarRemovidosGenerico("rateios_pagar", "Rateio de Título a Pagar") },
+  { jobName: REPRESENTANTE_JOB, displayName: "Representantes", cronExpr: REPRESENTANTE_CRON, suportaAlterados: REPRESENTANTE_DATA != null, campoData: REPRESENTANTE_DATA, ...catalogo(REPRESENTANTE_JOB, REPRESENTANTE_QUERY, "representantes"), run: runRepresentanteSync, usaUpsertEmLote: true, contarRegistros: () => prisma.representante.count(), contarRemovidos: contarRemovidosGenerico("representantes"), listarRemovidos: listarRemovidosGenerico("representantes", "Representante") },
+  { jobName: CENTRO_CUSTO_JOB, displayName: "Centros de Custo", cronExpr: CENTRO_CUSTO_CRON, suportaAlterados: CENTRO_CUSTO_DATA != null, campoData: CENTRO_CUSTO_DATA, ...catalogo(CENTRO_CUSTO_JOB, CENTRO_CUSTO_QUERY, "centros_custo"), run: runCentroCustoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.centroCusto.count(), contarRemovidos: contarRemovidosGenerico("centros_custo"), listarRemovidos: listarRemovidosGenerico("centros_custo", "Centro de Custo") },
+  { jobName: MOVIMENTO_CONTA_JOB, displayName: "Movimentos de Conta", cronExpr: MOVIMENTO_CONTA_CRON, suportaAlterados: MOVIMENTO_CONTA_DATA != null, campoData: MOVIMENTO_CONTA_DATA, ...catalogo(MOVIMENTO_CONTA_JOB, MOVIMENTO_CONTA_QUERY, "movimentos_conta"), run: runMovimentoContaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.movimentoConta.count(), contarRemovidos: contarRemovidosGenerico("movimentos_conta"), listarRemovidos: listarRemovidosGenerico("movimentos_conta", "Movimento de Conta") },
+  { jobName: NATUREZA_FINANCEIRA_JOB, displayName: "Naturezas Financeiras", cronExpr: NATUREZA_FINANCEIRA_CRON, suportaAlterados: NATUREZA_FINANCEIRA_DATA != null, campoData: NATUREZA_FINANCEIRA_DATA, ...catalogo(NATUREZA_FINANCEIRA_JOB, NATUREZA_FINANCEIRA_QUERY, "naturezas_financeiras"), run: runNaturezaFinanceiraSync, usaUpsertEmLote: true, contarRegistros: () => prisma.naturezaFinanceira.count(), contarRemovidos: contarRemovidosGenerico("naturezas_financeiras"), listarRemovidos: listarRemovidosGenerico("naturezas_financeiras", "Natureza Financeira") },
+  { jobName: MOEDA_JOB, displayName: "Moedas", cronExpr: MOEDA_CRON, suportaAlterados: MOEDA_DATA != null, campoData: MOEDA_DATA, ...catalogo(MOEDA_JOB, MOEDA_QUERY, "moedas"), run: runMoedaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.moeda.count(), contarRemovidos: contarRemovidosGenerico("moedas"), listarRemovidos: listarRemovidosGenerico("moedas", "Moeda") },
+  { jobName: CONTA_CORRENTE_JOB, displayName: "Contas Correntes", cronExpr: CONTA_CORRENTE_CRON, suportaAlterados: CONTA_CORRENTE_DATA != null, campoData: CONTA_CORRENTE_DATA, ...catalogo(CONTA_CORRENTE_JOB, CONTA_CORRENTE_QUERY, "contas_correntes"), run: runContaCorrenteSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contaCorrente.count(), contarRemovidos: contarRemovidosGenerico("contas_correntes"), listarRemovidos: listarRemovidosGenerico("contas_correntes", "Conta Corrente") },
+  { jobName: PROPOSTA_JOB, displayName: "Propostas", cronExpr: PROPOSTA_CRON, suportaAlterados: PROPOSTA_DATA != null, campoData: PROPOSTA_DATA, ...catalogo(PROPOSTA_JOB, PROPOSTA_QUERY, "propostas"), run: runPropostaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.proposta.count(), contarRemovidos: contarRemovidosGenerico("propostas"), listarRemovidos: listarRemovidosGenerico("propostas", "Proposta") },
+  { jobName: PROPOSTA_ITEM_JOB, displayName: "Itens de Proposta", cronExpr: PROPOSTA_ITEM_CRON, suportaAlterados: PROPOSTA_ITEM_DATA != null, campoData: PROPOSTA_ITEM_DATA, ...catalogo(PROPOSTA_ITEM_JOB, PROPOSTA_ITEM_QUERY, "propostas_itens"), run: runPropostaItemSync, usaUpsertEmLote: true, contarRegistros: () => prisma.propostaItem.count(), contarRemovidos: contarRemovidosGenerico("propostas_itens"), listarRemovidos: listarRemovidosGenerico("propostas_itens", "Item de Proposta") },
+  { jobName: CONSULTOR_JOB, displayName: "Consultores", cronExpr: CONSULTOR_CRON, suportaAlterados: CONSULTOR_DATA != null, campoData: CONSULTOR_DATA, ...catalogo(CONSULTOR_JOB, CONSULTOR_QUERY, "consultores"), run: runConsultorSync, usaUpsertEmLote: true, contarRegistros: () => prisma.consultor.count(), contarRemovidos: contarRemovidosGenerico("consultores"), listarRemovidos: listarRemovidosGenerico("consultores", "Consultor") },
   // Contrato/valor-hora do consultor (dashboard inicial, 17/08/2026) — mesma chave de
   // Consultor, sem FK formal (mesmo espírito de casamento por valor do resto do projeto).
-  { jobName: CONTRATO_CONSULTOR_JOB, displayName: "Contratos de Consultores (Valor-hora)", cronExpr: CONTRATO_CONSULTOR_CRON, suportaAlterados: CONTRATO_CONSULTOR_DATA != null, campoData: CONTRATO_CONSULTOR_DATA, ...catalogo(CONTRATO_CONSULTOR_JOB, CONTRATO_CONSULTOR_QUERY, "contratos_consultores"), run: runContratoConsultorSync, contarRegistros: () => prisma.contratoConsultor.count() },
-  { jobName: DEPARTAMENTO_GESTOR_JOB, displayName: "Gestores de Departamento", cronExpr: DEPARTAMENTO_GESTOR_CRON, suportaAlterados: DEPARTAMENTO_GESTOR_DATA != null, campoData: DEPARTAMENTO_GESTOR_DATA, ...catalogo(DEPARTAMENTO_GESTOR_JOB, DEPARTAMENTO_GESTOR_QUERY, "departamentos_gestores"), run: runDepartamentoGestorSync, contarRegistros: () => prisma.departamentoGestor.count() },
-  { jobName: DEPARTAMENTO_TIME_JOB, displayName: "Time por Departamento", cronExpr: DEPARTAMENTO_TIME_CRON, suportaAlterados: DEPARTAMENTO_TIME_DATA != null, campoData: DEPARTAMENTO_TIME_DATA, ...catalogo(DEPARTAMENTO_TIME_JOB, DEPARTAMENTO_TIME_QUERY, "departamento_time"), run: runDepartamentoTimeSync, contarRegistros: () => prisma.departamentoTime.count() },
+  { jobName: CONTRATO_CONSULTOR_JOB, displayName: "Contratos de Consultores (Valor-hora)", cronExpr: CONTRATO_CONSULTOR_CRON, suportaAlterados: CONTRATO_CONSULTOR_DATA != null, campoData: CONTRATO_CONSULTOR_DATA, ...catalogo(CONTRATO_CONSULTOR_JOB, CONTRATO_CONSULTOR_QUERY, "contratos_consultores"), run: runContratoConsultorSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoConsultor.count(), contarRemovidos: contarRemovidosGenerico("contratos_consultores"), listarRemovidos: listarRemovidosGenerico("contratos_consultores", "Contrato de Consultor") },
+  { jobName: DEPARTAMENTO_GESTOR_JOB, displayName: "Gestores de Departamento", cronExpr: DEPARTAMENTO_GESTOR_CRON, suportaAlterados: DEPARTAMENTO_GESTOR_DATA != null, campoData: DEPARTAMENTO_GESTOR_DATA, ...catalogo(DEPARTAMENTO_GESTOR_JOB, DEPARTAMENTO_GESTOR_QUERY, "departamentos_gestores"), run: runDepartamentoGestorSync, usaUpsertEmLote: true, contarRegistros: () => prisma.departamentoGestor.count(), contarRemovidos: contarRemovidosGenerico("departamentos_gestores"), listarRemovidos: listarRemovidosGenerico("departamentos_gestores", "Gestor de Departamento") },
+  { jobName: DEPARTAMENTO_TIME_JOB, displayName: "Time por Departamento", cronExpr: DEPARTAMENTO_TIME_CRON, suportaAlterados: DEPARTAMENTO_TIME_DATA != null, campoData: DEPARTAMENTO_TIME_DATA, ...catalogo(DEPARTAMENTO_TIME_JOB, DEPARTAMENTO_TIME_QUERY, "departamento_time"), run: runDepartamentoTimeSync, usaUpsertEmLote: true, contarRegistros: () => prisma.departamentoTime.count(), contarRemovidos: contarRemovidosGenerico("departamento_time"), listarRemovidos: listarRemovidosGenerico("departamento_time", "Time de Departamento") },
   // FaseProposta roda antes de AtividadeConsultor: AtividadeConsultor.fasid é FK pra fases_proposta.
-  { jobName: FASE_PROPOSTA_JOB, displayName: "Fases de Proposta", cronExpr: FASE_PROPOSTA_CRON, suportaAlterados: FASE_PROPOSTA_DATA != null, campoData: FASE_PROPOSTA_DATA, ...catalogo(FASE_PROPOSTA_JOB, FASE_PROPOSTA_QUERY, "fases_proposta"), run: runFasePropostaSync, contarRegistros: () => prisma.faseProposta.count() },
-  { jobName: ATIVIDADE_CONSULTOR_JOB, displayName: "Atividades por Consultor", cronExpr: ATIVIDADE_CONSULTOR_CRON, suportaAlterados: ATIVIDADE_CONSULTOR_DATA != null, campoData: ATIVIDADE_CONSULTOR_DATA, ...catalogo(ATIVIDADE_CONSULTOR_JOB, ATIVIDADE_CONSULTOR_QUERY, "atividades_consultor"), run: runAtividadeConsultorSync, contarRegistros: () => prisma.atividadeConsultor.count() },
-  { jobName: RAT_JOB, displayName: "RATs (Cabeçalho)", cronExpr: RAT_CRON, suportaAlterados: RAT_DATA != null, campoData: RAT_DATA, ...catalogo(RAT_JOB, RAT_QUERY, "rats"), run: runRatSync, contarRegistros: () => prisma.rat.count() },
+  { jobName: FASE_PROPOSTA_JOB, displayName: "Fases de Proposta", cronExpr: FASE_PROPOSTA_CRON, suportaAlterados: FASE_PROPOSTA_DATA != null, campoData: FASE_PROPOSTA_DATA, ...catalogo(FASE_PROPOSTA_JOB, FASE_PROPOSTA_QUERY, "fases_proposta"), run: runFasePropostaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.faseProposta.count(), contarRemovidos: contarRemovidosGenerico("fases_proposta"), listarRemovidos: listarRemovidosGenerico("fases_proposta", "Fase de Proposta") },
+  { jobName: ATIVIDADE_CONSULTOR_JOB, displayName: "Atividades por Consultor", cronExpr: ATIVIDADE_CONSULTOR_CRON, suportaAlterados: ATIVIDADE_CONSULTOR_DATA != null, campoData: ATIVIDADE_CONSULTOR_DATA, ...catalogo(ATIVIDADE_CONSULTOR_JOB, ATIVIDADE_CONSULTOR_QUERY, "atividades_consultor"), run: runAtividadeConsultorSync, usaUpsertEmLote: true, contarRegistros: () => prisma.atividadeConsultor.count(), contarRemovidos: contarRemovidosGenerico("atividades_consultor"), listarRemovidos: listarRemovidosGenerico("atividades_consultor", "Atividade") },
+  { jobName: RAT_JOB, displayName: "RATs (Cabeçalho)", cronExpr: RAT_CRON, suportaAlterados: RAT_DATA != null, campoData: RAT_DATA, ...catalogo(RAT_JOB, RAT_QUERY, "rats"), run: runRatSync, usaUpsertEmLote: true, contarRegistros: () => prisma.rat.count(), contarRemovidos: contarRemovidosGenerico("rats"), listarRemovidos: listarRemovidosGenerico("rats", "RAT") },
   // RatItem roda depois de Rat: RatItem.ratId é resolvido casando (codemp, numrat, codpro) contra Rat já sincronizado.
-  { jobName: RAT_ITEM_JOB, displayName: "Itens de RAT (Apontamentos)", cronExpr: RAT_ITEM_CRON, suportaAlterados: RAT_ITEM_DATA != null, campoData: RAT_ITEM_DATA, ...catalogo(RAT_ITEM_JOB, RAT_ITEM_QUERY, "rat_itens"), run: runRatItemSync, contarRegistros: () => prisma.ratItem.count() },
+  { jobName: RAT_ITEM_JOB, displayName: "Itens de RAT (Apontamentos)", cronExpr: RAT_ITEM_CRON, suportaAlterados: RAT_ITEM_DATA != null, campoData: RAT_ITEM_DATA, ...catalogo(RAT_ITEM_JOB, RAT_ITEM_QUERY, "rat_itens"), run: runRatItemSync, usaUpsertEmLote: true, contarRegistros: () => prisma.ratItem.count(), contarRemovidos: contarRemovidosGenerico("rat_itens"), listarRemovidos: listarRemovidosGenerico("rat_itens", "Item de RAT") },
   // Pedido.numrat é só um valor espelhado (campo customizado do Senior), sem resolução de FK no sync — não depende de nenhum job acima.
   // Piloto da detecção de exclusão no Senior — por enquanto o único job com contarRemovidos/
   // listarRemovidos preenchidos (ver sync/politicaVarredura.ts pro modo atual).
@@ -249,7 +344,7 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
     cronExpr: PEDIDO_CRON,
     suportaAlterados: PEDIDO_DATA != null, campoData: PEDIDO_DATA,
     ...catalogo(PEDIDO_JOB, PEDIDO_QUERY, "pedidos"),
-    run: runPedidoSync,
+    run: runPedidoSync, usaUpsertEmLote: true,
     contarRegistros: () => prisma.pedido.count(),
     contarRemovidos: () => prisma.pedido.count({ where: { removidoEmSenior: { not: null } } }),
     listarRemovidos: async (limite, candidatosDesde) => {
@@ -272,14 +367,14 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
       }));
     },
   },
-  { jobName: FORMA_PAGAMENTO_JOB, displayName: "Formas de Pagamento", cronExpr: FORMA_PAGAMENTO_CRON, suportaAlterados: FORMA_PAGAMENTO_DATA != null, campoData: FORMA_PAGAMENTO_DATA, ...catalogo(FORMA_PAGAMENTO_JOB, FORMA_PAGAMENTO_QUERY, "formas_pagamento"), run: runFormaPagamentoSync, contarRegistros: () => prisma.formaPagamento.count() },
-  { jobName: CONDICAO_PAGAMENTO_JOB, displayName: "Condições de Pagamento", cronExpr: CONDICAO_PAGAMENTO_CRON, suportaAlterados: CONDICAO_PAGAMENTO_DATA != null, campoData: CONDICAO_PAGAMENTO_DATA, ...catalogo(CONDICAO_PAGAMENTO_JOB, CONDICAO_PAGAMENTO_QUERY, "condicoes_pagamento"), run: runCondicaoPagamentoSync, contarRegistros: () => prisma.condicaoPagamento.count() },
+  { jobName: FORMA_PAGAMENTO_JOB, displayName: "Formas de Pagamento", cronExpr: FORMA_PAGAMENTO_CRON, suportaAlterados: FORMA_PAGAMENTO_DATA != null, campoData: FORMA_PAGAMENTO_DATA, ...catalogo(FORMA_PAGAMENTO_JOB, FORMA_PAGAMENTO_QUERY, "formas_pagamento"), run: runFormaPagamentoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.formaPagamento.count(), contarRemovidos: contarRemovidosGenerico("formas_pagamento"), listarRemovidos: listarRemovidosGenerico("formas_pagamento", "Forma de Pagamento") },
+  { jobName: CONDICAO_PAGAMENTO_JOB, displayName: "Condições de Pagamento", cronExpr: CONDICAO_PAGAMENTO_CRON, suportaAlterados: CONDICAO_PAGAMENTO_DATA != null, campoData: CONDICAO_PAGAMENTO_DATA, ...catalogo(CONDICAO_PAGAMENTO_JOB, CONDICAO_PAGAMENTO_QUERY, "condicoes_pagamento"), run: runCondicaoPagamentoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.condicaoPagamento.count(), contarRemovidos: contarRemovidosGenerico("condicoes_pagamento"), listarRemovidos: listarRemovidosGenerico("condicoes_pagamento", "Condição de Pagamento") },
   // Tabelas de Contábil/Orçamento (e045pla/e640lct/e640rat/e650rto), identificadas a partir de
   // uma SQL de BI (11/08/2026). Sem dependência das tabelas acima — PlanoContabil não depende
   // de nada novo; RateioLancamento depende de LancamentoContabil já carregado; OrcamentoContabil
-  // é independente das demais. (e043pcm/PlanoContabilParalelo foi avaliada e removida em
-  // 12/08/2026 — não era necessária.)
-  { jobName: PLANO_CONTABIL_JOB, displayName: "Plano Contábil", cronExpr: PLANO_CONTABIL_CRON, suportaAlterados: PLANO_CONTABIL_DATA != null, campoData: PLANO_CONTABIL_DATA, ...catalogo(PLANO_CONTABIL_JOB, PLANO_CONTABIL_QUERY, "plano_contabil"), run: runPlanoContabilSync, contarRegistros: () => prisma.planoContabil.count() },
+  // é independente das demais. (e043pcm foi removida em 12/08/2026 por falta de consumidor e
+  // reimportada em 17/11/2026 como ModeloPlano (modelo_planos) pra Rentabilidade — ver abaixo.)
+  { jobName: PLANO_CONTABIL_JOB, displayName: "Plano Contábil", cronExpr: PLANO_CONTABIL_CRON, suportaAlterados: PLANO_CONTABIL_DATA != null, campoData: PLANO_CONTABIL_DATA, ...catalogo(PLANO_CONTABIL_JOB, PLANO_CONTABIL_QUERY, "plano_contabil"), run: runPlanoContabilSync, usaUpsertEmLote: true, contarRegistros: () => prisma.planoContabil.count(), contarRemovidos: contarRemovidosGenerico("plano_contabil"), listarRemovidos: listarRemovidosGenerico("plano_contabil", "Conta do Plano Contábil") },
   // Detecção de exclusão física ligada em 20/08/2026 a pedido do Vitor (rateio/lançamento
   // tem manutenção pesada no Senior, ver lancamentoContabilSync.ts) — rodando em "simular"
   // (politicaVarredura.ts). `contarRemovidos`/`listarRemovidos` (adicionados 22/08/2026, só
@@ -291,7 +386,7 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
     cronExpr: LANCAMENTO_CONTABIL_CRON,
     suportaAlterados: LANCAMENTO_CONTABIL_DATA != null, campoData: LANCAMENTO_CONTABIL_DATA,
     ...catalogo(LANCAMENTO_CONTABIL_JOB, LANCAMENTO_CONTABIL_QUERY, "lancamentos_contabeis"),
-    run: runLancamentoContabilSync,
+    run: runLancamentoContabilSync, usaUpsertEmLote: true,
     contarRegistros: () => prisma.lancamentoContabil.count(),
     contarRemovidos: () => prisma.lancamentoContabil.count({ where: { removidoEmSenior: { not: null } } }),
     listarRemovidos: async (limite, candidatosDesde) => {
@@ -319,7 +414,7 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
     cronExpr: RATEIO_LANCAMENTO_CRON,
     suportaAlterados: RATEIO_LANCAMENTO_DATA != null, campoData: RATEIO_LANCAMENTO_DATA,
     ...catalogo(RATEIO_LANCAMENTO_JOB, RATEIO_LANCAMENTO_QUERY, "rateios_lancamento"),
-    run: runRateioLancamentoSync,
+    run: runRateioLancamentoSync, usaUpsertEmLote: true,
     contarRegistros: () => prisma.rateioLancamento.count(),
     contarRemovidos: () => prisma.rateioLancamento.count({ where: { removidoEmSenior: { not: null } } }),
     listarRemovidos: async (limite, candidatosDesde) => {
@@ -341,38 +436,101 @@ export const SYNC_JOBS: SyncJobDescriptor[] = [
       }));
     },
   },
-  { jobName: ORCAMENTO_CONTABIL_JOB, displayName: "Orçamentos Contábeis", cronExpr: ORCAMENTO_CONTABIL_CRON, suportaAlterados: ORCAMENTO_CONTABIL_DATA != null, campoData: ORCAMENTO_CONTABIL_DATA, ...catalogo(ORCAMENTO_CONTABIL_JOB, ORCAMENTO_CONTABIL_QUERY, "orcamentos_contabeis"), run: runOrcamentoContabilSync, contarRegistros: () => prisma.orcamentoContabil.count() },
+  { jobName: ORCAMENTO_CONTABIL_JOB, displayName: "Orçamentos Contábeis", cronExpr: ORCAMENTO_CONTABIL_CRON, suportaAlterados: ORCAMENTO_CONTABIL_DATA != null, campoData: ORCAMENTO_CONTABIL_DATA, ...catalogo(ORCAMENTO_CONTABIL_JOB, ORCAMENTO_CONTABIL_QUERY, "orcamentos_contabeis"), run: runOrcamentoContabilSync, usaUpsertEmLote: true, contarRegistros: () => prisma.orcamentoContabil.count(), contarRemovidos: contarRemovidosGenerico("orcamentos_contabeis"), listarRemovidos: listarRemovidosGenerico("orcamentos_contabeis", "Orçamento Contábil") },
   // Catálogo de templates de "Complemento Hist." (E046HPD), pedido do Vitor em 01/09/2026 pra
   // montar o texto legível do Histórico no drilldown de lançamentos (domain/historicoPadrao.ts)
-  // — sem dependência das tabelas acima. Configuração, não transacional: sem varredura de
-  // exclusão (mesmo espírito de FORMA_PAGAMENTO_JOB), decisão confirmada com o Vitor.
-  { jobName: HISTORICO_PADRAO_JOB, displayName: "Históricos Padrão", cronExpr: HISTORICO_PADRAO_CRON, suportaAlterados: HISTORICO_PADRAO_DATA != null, campoData: HISTORICO_PADRAO_DATA, ...catalogo(HISTORICO_PADRAO_JOB, HISTORICO_PADRAO_QUERY, "historicos_padrao"), run: runHistoricoPadraoSync, contarRegistros: () => prisma.historicoPadrao.count() },
+  // — sem dependência das tabelas acima. Até 10/09/2026 ficava sem varredura de propósito
+  // (catálogo global, raramente muda) — revertido: ver comentário em schema.prisma.
+  { jobName: HISTORICO_PADRAO_JOB, displayName: "Históricos Padrão", cronExpr: HISTORICO_PADRAO_CRON, suportaAlterados: HISTORICO_PADRAO_DATA != null, campoData: HISTORICO_PADRAO_DATA, ...catalogo(HISTORICO_PADRAO_JOB, HISTORICO_PADRAO_QUERY, "historicos_padrao"), run: runHistoricoPadraoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.historicoPadrao.count(), contarRemovidos: contarRemovidosGenerico("historicos_padrao"), listarRemovidos: listarRemovidosGenerico("historicos_padrao", "Histórico Padrão") },
+  // Rentabilidade (17/11/2026), a pedido do Vitor: E043PCM (modelos de planos: descrição "paralela" de
+  // conta/CC — Setor/CC Paralelo do BI) e E615PRJ (projeto → CC da hora de
+  // consultoria). Independentes das demais.
+  { jobName: MODELO_PLANO_JOB, displayName: "Modelos de Planos", cronExpr: MODELO_PLANO_CRON, suportaAlterados: MODELO_PLANO_DATA != null, campoData: MODELO_PLANO_DATA, ...catalogo(MODELO_PLANO_JOB, MODELO_PLANO_QUERY, "modelo_planos"), run: runModeloPlanoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.modeloPlano.count(), contarRemovidos: contarRemovidosGenerico("modelo_planos"), listarRemovidos: listarRemovidosGenerico("modelo_planos", "Conta/CC do Modelo de Plano") },
+  { jobName: PROJETO_JOB, displayName: "Projetos", cronExpr: PROJETO_CRON, suportaAlterados: PROJETO_DATA != null, campoData: PROJETO_DATA, ...catalogo(PROJETO_JOB, PROJETO_QUERY, "projetos"), run: runProjetoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.projeto.count(), contarRemovidos: contarRemovidosGenerico("projetos"), listarRemovidos: listarRemovidosGenerico("projetos", "Projeto") },
+  // Custo-hora real do consultor PJ (18/11/2026): contratos de COMPRA do fornecedor do consultor (E460CTR/CCS/REA) — cabeçalho, itens (preço = valor-hora)
+  // e histórico de reajuste. Independentes das demais; itens e reajustes só fazem sentido depois do cabeçalho, mas não há FK.
+  { jobName: CONTRATO_COMPRA_JOB, displayName: "Contratos de Compra", cronExpr: CONTRATO_COMPRA_CRON, suportaAlterados: CONTRATO_COMPRA_DATA != null, campoData: CONTRATO_COMPRA_DATA, ...catalogo(CONTRATO_COMPRA_JOB, CONTRATO_COMPRA_QUERY, "contratos_compra"), run: runContratoCompraSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoCompra.count(), contarRemovidos: contarRemovidosGenerico("contratos_compra"), listarRemovidos: listarRemovidosGenerico("contratos_compra", "Contrato de Compra") },
+  { jobName: CONTRATO_COMPRA_SERVICO_JOB, displayName: "Itens dos Contratos de Compra", cronExpr: CONTRATO_COMPRA_SERVICO_CRON, suportaAlterados: CONTRATO_COMPRA_SERVICO_DATA != null, campoData: CONTRATO_COMPRA_SERVICO_DATA, ...catalogo(CONTRATO_COMPRA_SERVICO_JOB, CONTRATO_COMPRA_SERVICO_QUERY, "contratos_compra_servicos"), run: runContratoCompraServicoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoCompraServico.count(), contarRemovidos: contarRemovidosGenerico("contratos_compra_servicos"), listarRemovidos: listarRemovidosGenerico("contratos_compra_servicos", "Item de Contrato de Compra") },
+  { jobName: CONTRATO_COMPRA_REAJUSTE_JOB, displayName: "Reajustes dos Contratos de Compra", cronExpr: CONTRATO_COMPRA_REAJUSTE_CRON, suportaAlterados: CONTRATO_COMPRA_REAJUSTE_DATA != null, campoData: CONTRATO_COMPRA_REAJUSTE_DATA, ...catalogo(CONTRATO_COMPRA_REAJUSTE_JOB, CONTRATO_COMPRA_REAJUSTE_QUERY, "contratos_compra_reajustes"), run: runContratoCompraReajusteSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoCompraReajuste.count(), contarRemovidos: contarRemovidosGenerico("contratos_compra_reajustes"), listarRemovidos: listarRemovidosGenerico("contratos_compra_reajustes", "Reajuste de Contrato de Compra") },
   // Despesas de viagem lançadas em RAT (USU_TE777RDV) + catálogo de rotas/percursos,
   // identificadas a pedido do Vitor em 13/08/2026. Sem dependência das tabelas acima — RDV
   // referencia Rat só por valor (codemp+numrat), sem FK formal. Rota/Percurso rodam antes da
   // junção só por organização (RotaPercurso não tem FK formal também, a ordem não é exigida).
-  { jobName: ROTA_VIAGEM_JOB, displayName: "Rotas de Viagem", cronExpr: ROTA_VIAGEM_CRON, suportaAlterados: ROTA_VIAGEM_DATA != null, campoData: ROTA_VIAGEM_DATA, ...catalogo(ROTA_VIAGEM_JOB, ROTA_VIAGEM_QUERY, "rotas_viagem"), run: runRotaViagemSync, contarRegistros: () => prisma.rotaViagem.count() },
-  { jobName: PERCURSO_VIAGEM_JOB, displayName: "Percursos de Viagem", cronExpr: PERCURSO_VIAGEM_CRON, suportaAlterados: PERCURSO_VIAGEM_DATA != null, campoData: PERCURSO_VIAGEM_DATA, ...catalogo(PERCURSO_VIAGEM_JOB, PERCURSO_VIAGEM_QUERY, "percursos_viagem"), run: runPercursoViagemSync, contarRegistros: () => prisma.percursoViagem.count() },
-  { jobName: ROTA_PERCURSO_JOB, displayName: "Rotas x Percursos", cronExpr: ROTA_PERCURSO_CRON, suportaAlterados: ROTA_PERCURSO_DATA != null, campoData: ROTA_PERCURSO_DATA, ...catalogo(ROTA_PERCURSO_JOB, ROTA_PERCURSO_QUERY, "rotas_percursos"), run: runRotaPercursoSync, contarRegistros: () => prisma.rotaPercurso.count() },
-  { jobName: REGISTRO_DESPESA_VIAGEM_JOB, displayName: "Despesas de Viagem (RAT)", cronExpr: REGISTRO_DESPESA_VIAGEM_CRON, suportaAlterados: REGISTRO_DESPESA_VIAGEM_DATA != null, campoData: REGISTRO_DESPESA_VIAGEM_DATA, ...catalogo(REGISTRO_DESPESA_VIAGEM_JOB, REGISTRO_DESPESA_VIAGEM_QUERY, "registros_despesa_viagem"), run: runRegistroDespesaViagemSync, contarRegistros: () => prisma.registroDespesaViagem.count() },
+  { jobName: ROTA_VIAGEM_JOB, displayName: "Rotas de Viagem", cronExpr: ROTA_VIAGEM_CRON, suportaAlterados: ROTA_VIAGEM_DATA != null, campoData: ROTA_VIAGEM_DATA, ...catalogo(ROTA_VIAGEM_JOB, ROTA_VIAGEM_QUERY, "rotas_viagem"), run: runRotaViagemSync, usaUpsertEmLote: true, contarRegistros: () => prisma.rotaViagem.count(), contarRemovidos: contarRemovidosGenerico("rotas_viagem"), listarRemovidos: listarRemovidosGenerico("rotas_viagem", "Rota de Viagem") },
+  { jobName: PERCURSO_VIAGEM_JOB, displayName: "Percursos de Viagem", cronExpr: PERCURSO_VIAGEM_CRON, suportaAlterados: PERCURSO_VIAGEM_DATA != null, campoData: PERCURSO_VIAGEM_DATA, ...catalogo(PERCURSO_VIAGEM_JOB, PERCURSO_VIAGEM_QUERY, "percursos_viagem"), run: runPercursoViagemSync, usaUpsertEmLote: true, contarRegistros: () => prisma.percursoViagem.count(), contarRemovidos: contarRemovidosGenerico("percursos_viagem"), listarRemovidos: listarRemovidosGenerico("percursos_viagem", "Percurso de Viagem") },
+  { jobName: ROTA_PERCURSO_JOB, displayName: "Rotas x Percursos", cronExpr: ROTA_PERCURSO_CRON, suportaAlterados: ROTA_PERCURSO_DATA != null, campoData: ROTA_PERCURSO_DATA, ...catalogo(ROTA_PERCURSO_JOB, ROTA_PERCURSO_QUERY, "rotas_percursos"), run: runRotaPercursoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.rotaPercurso.count(), contarRemovidos: contarRemovidosGenerico("rotas_percursos"), listarRemovidos: listarRemovidosGenerico("rotas_percursos", "Rota x Percurso") },
+  { jobName: REGISTRO_DESPESA_VIAGEM_JOB, displayName: "Despesas de Viagem (RAT)", cronExpr: REGISTRO_DESPESA_VIAGEM_CRON, suportaAlterados: REGISTRO_DESPESA_VIAGEM_DATA != null, campoData: REGISTRO_DESPESA_VIAGEM_DATA, ...catalogo(REGISTRO_DESPESA_VIAGEM_JOB, REGISTRO_DESPESA_VIAGEM_QUERY, "registros_despesa_viagem"), run: runRegistroDespesaViagemSync, usaUpsertEmLote: true, contarRegistros: () => prisma.registroDespesaViagem.count(), contarRemovidos: contarRemovidosGenerico("registros_despesa_viagem"), listarRemovidos: listarRemovidosGenerico("registros_despesa_viagem", "Despesa de Viagem") },
   // Catálogo de Produtos/Derivações/Serviços (e075pro/e075der/e080ser), pedido do Vitor em
   // 24/08/2026 a partir da mesma família de tabelas do levantamento de Faturamento (NF de
   // venda) — ver ~/.claude/plans/jaunty-crafting-neumann.md. Produto antes de Derivação: FK
   // real (DerivacaoProduto.codpro -> Produto), confirmada pela própria query da aplicação
   // Senior que o Vitor forneceu (JOIN e075der.codpro=e075pro.codpro). Serviço é independente.
-  { jobName: PRODUTO_JOB, displayName: "Produtos", cronExpr: PRODUTO_CRON, suportaAlterados: PRODUTO_DATA != null, campoData: PRODUTO_DATA, ...catalogo(PRODUTO_JOB, PRODUTO_QUERY, "produtos"), run: runProdutoSync, contarRegistros: () => prisma.produto.count() },
-  { jobName: DERIVACAO_PRODUTO_JOB, displayName: "Derivações de Produto", cronExpr: DERIVACAO_PRODUTO_CRON, suportaAlterados: DERIVACAO_PRODUTO_DATA != null, campoData: DERIVACAO_PRODUTO_DATA, ...catalogo(DERIVACAO_PRODUTO_JOB, DERIVACAO_PRODUTO_QUERY, "derivacoes_produto"), run: runDerivacaoProdutoSync, contarRegistros: () => prisma.derivacaoProduto.count() },
-  { jobName: SERVICO_JOB, displayName: "Serviços", cronExpr: SERVICO_CRON, suportaAlterados: SERVICO_DATA != null, campoData: SERVICO_DATA, ...catalogo(SERVICO_JOB, SERVICO_QUERY, "servicos"), run: runServicoSync, contarRegistros: () => prisma.servico.count() },
+  { jobName: PRODUTO_JOB, displayName: "Produtos", cronExpr: PRODUTO_CRON, suportaAlterados: PRODUTO_DATA != null, campoData: PRODUTO_DATA, ...catalogo(PRODUTO_JOB, PRODUTO_QUERY, "produtos"), run: runProdutoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.produto.count(), contarRemovidos: contarRemovidosGenerico("produtos"), listarRemovidos: listarRemovidosGenerico("produtos", "Produto") },
+  { jobName: DERIVACAO_PRODUTO_JOB, displayName: "Derivações de Produto", cronExpr: DERIVACAO_PRODUTO_CRON, suportaAlterados: DERIVACAO_PRODUTO_DATA != null, campoData: DERIVACAO_PRODUTO_DATA, ...catalogo(DERIVACAO_PRODUTO_JOB, DERIVACAO_PRODUTO_QUERY, "derivacoes_produto"), run: runDerivacaoProdutoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.derivacaoProduto.count(), contarRemovidos: contarRemovidosGenerico("derivacoes_produto"), listarRemovidos: listarRemovidosGenerico("derivacoes_produto", "Derivação de Produto") },
+  { jobName: SERVICO_JOB, displayName: "Serviços", cronExpr: SERVICO_CRON, suportaAlterados: SERVICO_DATA != null, campoData: SERVICO_DATA, ...catalogo(SERVICO_JOB, SERVICO_QUERY, "servicos"), run: runServicoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.servico.count(), contarRemovidos: contarRemovidosGenerico("servicos"), listarRemovidos: listarRemovidosGenerico("servicos", "Serviço") },
   // Família da NF de venda (e140nfv/e140isv/e140ipv/e140rat), completando a query de
   // Faturamento do início da sessão de 24/08/2026 (Cliente/Produto/Serviço já entraram antes).
   // Ordem de dependência: NotaFiscalVenda (cabeçalho) -> Item de Serviço/Produto (FK real,
   // INNER JOIN na query original) -> RateioNfVenda (referencia os itens por SeqIsv/SeqIpv, sem
   // FK Prisma formal ainda — ver ~/.claude/plans/jaunty-crafting-neumann.md).
-  { jobName: NOTA_FISCAL_VENDA_JOB, displayName: "Notas Fiscais de Venda", cronExpr: NOTA_FISCAL_VENDA_CRON, suportaAlterados: NOTA_FISCAL_VENDA_DATA != null, campoData: NOTA_FISCAL_VENDA_DATA, ...catalogo(NOTA_FISCAL_VENDA_JOB, NOTA_FISCAL_VENDA_QUERY, "notas_fiscais_venda"), run: runNotaFiscalVendaSync, contarRegistros: () => prisma.notaFiscalVenda.count() },
-  { jobName: ITEM_SERVICO_NFV_JOB, displayName: "Itens de Serviço da NF", cronExpr: ITEM_SERVICO_NFV_CRON, suportaAlterados: ITEM_SERVICO_NFV_DATA != null, campoData: ITEM_SERVICO_NFV_DATA, ...catalogo(ITEM_SERVICO_NFV_JOB, ITEM_SERVICO_NFV_QUERY, "itens_servico_nfv"), run: runItemServicoNfVendaSync, contarRegistros: () => prisma.itemServicoNfVenda.count() },
-  { jobName: ITEM_PRODUTO_NFV_JOB, displayName: "Itens de Produto da NF", cronExpr: ITEM_PRODUTO_NFV_CRON, suportaAlterados: ITEM_PRODUTO_NFV_DATA != null, campoData: ITEM_PRODUTO_NFV_DATA, ...catalogo(ITEM_PRODUTO_NFV_JOB, ITEM_PRODUTO_NFV_QUERY, "itens_produto_nfv"), run: runItemProdutoNfVendaSync, contarRegistros: () => prisma.itemProdutoNfVenda.count() },
-  { jobName: RATEIO_NFV_JOB, displayName: "Rateios de NF", cronExpr: RATEIO_NFV_CRON, suportaAlterados: RATEIO_NFV_DATA != null, campoData: RATEIO_NFV_DATA, ...catalogo(RATEIO_NFV_JOB, RATEIO_NFV_QUERY, "rateios_nfv"), run: runRateioNfVendaSync, contarRegistros: () => prisma.rateioNfVenda.count() },
+  { jobName: NOTA_FISCAL_VENDA_JOB, displayName: "Notas Fiscais de Venda", cronExpr: NOTA_FISCAL_VENDA_CRON, suportaAlterados: NOTA_FISCAL_VENDA_DATA != null, campoData: NOTA_FISCAL_VENDA_DATA, ...catalogo(NOTA_FISCAL_VENDA_JOB, NOTA_FISCAL_VENDA_QUERY, "notas_fiscais_venda"), run: runNotaFiscalVendaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.notaFiscalVenda.count(), contarRemovidos: contarRemovidosGenerico("notas_fiscais_venda"), listarRemovidos: listarRemovidosGenerico("notas_fiscais_venda", "Nota Fiscal de Venda") },
+  { jobName: ITEM_SERVICO_NFV_JOB, displayName: "Itens de Serviço da NF", cronExpr: ITEM_SERVICO_NFV_CRON, suportaAlterados: ITEM_SERVICO_NFV_DATA != null, campoData: ITEM_SERVICO_NFV_DATA, ...catalogo(ITEM_SERVICO_NFV_JOB, ITEM_SERVICO_NFV_QUERY, "itens_servico_nfv"), run: runItemServicoNfVendaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.itemServicoNfVenda.count(), contarRemovidos: contarRemovidosGenerico("itens_servico_nfv"), listarRemovidos: listarRemovidosGenerico("itens_servico_nfv", "Item de Serviço da NF") },
+  { jobName: ITEM_PRODUTO_NFV_JOB, displayName: "Itens de Produto da NF", cronExpr: ITEM_PRODUTO_NFV_CRON, suportaAlterados: ITEM_PRODUTO_NFV_DATA != null, campoData: ITEM_PRODUTO_NFV_DATA, ...catalogo(ITEM_PRODUTO_NFV_JOB, ITEM_PRODUTO_NFV_QUERY, "itens_produto_nfv"), run: runItemProdutoNfVendaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.itemProdutoNfVenda.count(), contarRemovidos: contarRemovidosGenerico("itens_produto_nfv"), listarRemovidos: listarRemovidosGenerico("itens_produto_nfv", "Item de Produto da NF") },
+  { jobName: RATEIO_NFV_JOB, displayName: "Rateios de NF", cronExpr: RATEIO_NFV_CRON, suportaAlterados: RATEIO_NFV_DATA != null, campoData: RATEIO_NFV_DATA, ...catalogo(RATEIO_NFV_JOB, RATEIO_NFV_QUERY, "rateios_nfv"), run: runRateioNfVendaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.rateioNfVenda.count(), contarRemovidos: contarRemovidosGenerico("rateios_nfv"), listarRemovidos: listarRemovidosGenerico("rateios_nfv", "Rateio de NF") },
   // USU_TMetaAnual (tabela customizada) — meta de faturamento por empresa/filial/ano, pedido do
   // Vitor em 24/08/2026. Independente das demais (sem JOIN na query original).
-  { jobName: META_ANUAL_JOB, displayName: "Metas Anuais", cronExpr: META_ANUAL_CRON, suportaAlterados: META_ANUAL_DATA != null, campoData: META_ANUAL_DATA, ...catalogo(META_ANUAL_JOB, META_ANUAL_QUERY, "metas_anuais"), run: runMetaAnualSync, contarRegistros: () => prisma.metaAnual.count() },
+  { jobName: META_ANUAL_JOB, displayName: "Metas Anuais", cronExpr: META_ANUAL_CRON, suportaAlterados: META_ANUAL_DATA != null, campoData: META_ANUAL_DATA, ...catalogo(META_ANUAL_JOB, META_ANUAL_QUERY, "metas_anuais"), run: runMetaAnualSync, usaUpsertEmLote: true, contarRegistros: () => prisma.metaAnual.count(), contarRemovidos: contarRemovidosGenerico("metas_anuais"), listarRemovidos: listarRemovidosGenerico("metas_anuais", "Meta Anual") },
+  // E160CTR/E160CVS (contratos de venda e seus itens de serviço), pedido do Vitor em 19/10/2026: base da carteira de mensalidades
+  // (relatório RVTR101, motivo 500) que alimenta a Mensalidade da Gestão de Metas do Comercial. Ao fim de cada uma, a foto do mês é
+  // refeita (domain/metasComercial/carteira.ts).
+  { jobName: CONTRATO_VENDA_JOB, displayName: "Contratos de Venda", cronExpr: CONTRATO_VENDA_CRON, suportaAlterados: CONTRATO_VENDA_DATA != null, campoData: CONTRATO_VENDA_DATA, ...catalogo(CONTRATO_VENDA_JOB, CONTRATO_VENDA_QUERY, "contratos_venda"), run: runContratoVendaSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoVenda.count(), contarRemovidos: contarRemovidosGenerico("contratos_venda"), listarRemovidos: listarRemovidosGenerico("contratos_venda", "Contrato de Venda") },
+  { jobName: CONTRATO_VENDA_SERVICO_JOB, displayName: "Serviços dos Contratos de Venda", cronExpr: CONTRATO_VENDA_SERVICO_CRON, suportaAlterados: CONTRATO_VENDA_SERVICO_DATA != null, campoData: CONTRATO_VENDA_SERVICO_DATA, ...catalogo(CONTRATO_VENDA_SERVICO_JOB, CONTRATO_VENDA_SERVICO_QUERY, "contratos_venda_servicos"), run: runContratoVendaServicoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoVendaServico.count(), contarRemovidos: contarRemovidosGenerico("contratos_venda_servicos"), listarRemovidos: listarRemovidosGenerico("contratos_venda_servicos", "Serviço de Contrato de Venda") },
+  { jobName: CONTRATO_VENDA_REAJUSTE_JOB, displayName: "Reajustes dos Contratos de Venda", cronExpr: CONTRATO_VENDA_REAJUSTE_CRON, suportaAlterados: CONTRATO_VENDA_REAJUSTE_DATA != null, campoData: CONTRATO_VENDA_REAJUSTE_DATA, ...catalogo(CONTRATO_VENDA_REAJUSTE_JOB, CONTRATO_VENDA_REAJUSTE_QUERY, "contratos_venda_reajustes"), run: runContratoVendaReajusteSync, usaUpsertEmLote: true, contarRegistros: () => prisma.contratoVendaReajuste.count(), contarRemovidos: contarRemovidosGenerico("contratos_venda_reajustes"), listarRemovidos: listarRemovidosGenerico("contratos_venda_reajustes", "Reajuste de Contrato de Venda") },
+  // E120ISP/E120RAT (itens de serviço e rateios dos pedidos), pedido do Vitor em 19/10/2026: realizado de Licenças da Gestão de Metas
+  // = itens de pedido com rateio na conta financeira 177 (domain/metasComercial/licencasPedidos.ts).
+  { jobName: PEDIDO_ITEM_SERVICO_JOB, displayName: "Itens de Serviço dos Pedidos", cronExpr: PEDIDO_ITEM_SERVICO_CRON, suportaAlterados: PEDIDO_ITEM_SERVICO_DATA != null, campoData: PEDIDO_ITEM_SERVICO_DATA, ...catalogo(PEDIDO_ITEM_SERVICO_JOB, PEDIDO_ITEM_SERVICO_QUERY, "pedidos_itens_servico"), run: runPedidoItemServicoSync, usaUpsertEmLote: true, contarRegistros: () => prisma.pedidoItemServico.count(), contarRemovidos: contarRemovidosGenerico("pedidos_itens_servico"), listarRemovidos: listarRemovidosGenerico("pedidos_itens_servico", "Item de Serviço de Pedido") },
+  { jobName: PEDIDO_RATEIO_JOB, displayName: "Rateios dos Pedidos", cronExpr: PEDIDO_RATEIO_CRON, suportaAlterados: PEDIDO_RATEIO_DATA != null, campoData: PEDIDO_RATEIO_DATA, ...catalogo(PEDIDO_RATEIO_JOB, PEDIDO_RATEIO_QUERY, "pedidos_rateios"), run: runPedidoRateioSync, usaUpsertEmLote: true, contarRegistros: () => prisma.pedidoRateio.count(), contarRemovidos: contarRemovidosGenerico("pedidos_rateios"), listarRemovidos: listarRemovidosGenerico("pedidos_rateios", "Rateio de Pedido") },
 ];
+
+// Jobs do HCM (módulo RH): um por tabela de sync/hcm/tabelasHcm.ts, todos no mesmo padrão. Rodam
+// encadeados num cron só (server.ts / sync/agendamento.ts), então cronExpr aqui é só o horário de
+// exibição. SYNC_JOBS continua sendo SÓ o ERP (a tela e as rotas de antes do RH não mudam); o HCM tem a
+// sua lista e a tela "Importados do HCM" lê dela.
+export const CRON_HCM = "0 4 * * *";
+export const SYNC_JOBS_HCM: SyncJobDescriptor[] = [
+  ...definirTodosSyncsHcm(TABELAS_HCM).map(({ tabela, sync }) => ({
+  jobName: tabela.jobName,
+  displayName: tabela.displayName,
+  cronExpr: CRON_HCM,
+  suportaAlterados: tabela.campoData != null,
+  campoData: tabela.campoData,
+  ...catalogo(tabela.jobName, sync.queryBase, tabela.tabelaLocal, "hcm"),
+  run: sync.run,
+  usaUpsertEmLote: true,
+  contarRegistros: () => delegatePorTabelaLocal(tabela.tabelaLocal).count({ where: {} }),
+  contarRemovidos: contarRemovidosGenerico(tabela.tabelaLocal),
+  listarRemovidos: listarRemovidosGenerico(tabela.tabelaLocal, tabela.displayName.replace(/ \(HCM\)$/, "")),
+})),
+  // Contabilização da folha (R048CTB, 19/11/2026): base do custo do CLT. Escrita à mão (a tabela não tem chave primária) e SEM varredura de removidos: a sync
+  // regrava o mês inteiro, então o que sumiu no Senior some aqui sozinho.
+  {
+    jobName: CONTABILIZACAO_FOLHA_JOB,
+    displayName: CONTABILIZACAO_FOLHA_NOME,
+    cronExpr: CRON_HCM,
+    suportaAlterados: false,
+    campoData: null,
+    ...catalogo(CONTABILIZACAO_FOLHA_JOB, CONTABILIZACAO_FOLHA_QUERY, CONTABILIZACAO_FOLHA_TABELA, "hcm"),
+    run: runContabilizacaoFolhaSync,
+    usaUpsertEmLote: false,
+    contarRegistros: () => prisma.hcmContabilizacaoFolha.count(),
+  },
+];
+
+// União dos dois sistemas. `carregarFiltrosAtivos` SUBSTITUI o snapshot inteiro e descarta o filtro de
+// qualquer job que não esteja na lista que recebe: com só a lista de um sistema, salvar um filtro no
+// HCM apagaria da memória os filtros do ERP (e vice-versa) até o próximo boot.
+export const TODOS_OS_SYNC_JOBS: SyncJobDescriptor[] = [...SYNC_JOBS, ...SYNC_JOBS_HCM];
+
+export function jobsDoSistema(sistema: SistemaSenior): SyncJobDescriptor[] {
+  return sistema === "hcm" ? SYNC_JOBS_HCM : SYNC_JOBS;
+}

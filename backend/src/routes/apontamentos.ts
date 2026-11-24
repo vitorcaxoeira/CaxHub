@@ -1,15 +1,26 @@
 import { Router } from "express";
-import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
+import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis, codforsDoTime } from "../domain/contextoProjeto";
 import { formatarMinutos, saldoDaAtividade } from "../domain/tetoAtividade";
-import { paraHoraBrasil } from "../domain/fusoBrasil";
-import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
+import { toleranciaTetoDoConsultor } from "../domain/toleranciaTeto";
+import { diaBrasilComoData, paraHoraBrasil } from "../domain/fusoBrasil";
+import {
+  enfileirar,
+  enfileirarEdicaoApontamento,
+  processarFilaSincronizacao,
+  prepararReenvioItem,
+  rearmarEdicaoApontamento,
+} from "../sync/outboxSenior";
+import { conflitosDoIntervalo, mensagemDeConflito } from "../domain/conflitoApontamento";
+import { camposQueMudaram, horariosDoSenior, motivoBloqueioManutencao } from "../domain/manutencaoSessao";
 import { calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone } from "../domain/ratDominio";
+import { randomUUID } from "crypto";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
-import { entidadeIdAtividade } from "../audit/identidadeEntidade";
+import { entidadeIdAtividade, entidadeIdRat } from "../audit/identidadeEntidade";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
+import { confirmouExcluirAjuste, decidirExclusaoComAjuste } from "../domain/exclusaoApontamento";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
 // rastreou (ver AtividadeSessaoExecucao / PATCH /atividades/:id/mover) e confirma —
@@ -42,14 +53,9 @@ function minutosDesdeMeiaNoite(data: Date): number {
   return paraHoraBrasil(data).minutosDoDia;
 }
 
-// Dia brasileiro do instante, como meia-noite UTC — o formato que @db.Date espera.
-// Exportada porque a aprovação de ajuste de horário (routes/solicitacoesAjuste.ts) reescreve
-// datati/horini/horfim do RatItem e precisa da MESMA conversão — duas cópias divergiriam, e
-// já custou caro uma vez (ver o comentário de fuso acima).
-export function diaBrasilComoData(data: Date): Date {
-  const { ano, mes, dia } = paraHoraBrasil(data);
-  return new Date(Date.UTC(ano, mes - 1, dia));
-}
+// Dia brasileiro do instante, como meia-noite UTC — o formato que @db.Date espera. Vive em
+// domain/fusoBrasil.ts; reexportada aqui porque routes/solicitacoesAjuste.ts importa daqui.
+export { diaBrasilComoData };
 
 // "07/08 09:00–10:30 (1:30)" — hora de parede brasileira, nunca o relógio do servidor.
 // Usado nas frases de histórico e notificação de exclusão e de ajuste.
@@ -93,23 +99,36 @@ function podeLancarManual(role: string, contexto: { departamentosGerenciados: nu
 // (mesma regra de podeExecutarAcao); se um consultor apontar em itens de departamentos
 // diferentes na mesma proposta (raro), a RAT fica com o depexe do primeiro item, não
 // resolvemos RAT multi-departamento nesta fase.
+// Devolve `criada` além do `Rat` — o chamador (confirmarSessao) usa isso pra saber se precisa
+// gravar RAT_CRIADA (13/09/2026): reaproveitar uma RAT rascunho já existente não é criação.
 async function buscarOuCriarRatRascunho(
   atividade: { codemp: number; codpro: number },
   codfor: number,
   depexe: number,
   dataSessao: Date
-) {
+): Promise<{ rat: Awaited<ReturnType<typeof prisma.rat.create>>; criada: boolean }> {
   const existente = await prisma.rat.findFirst({
     where: { sitrat: 9, codemp: atividade.codemp, codfor, codpro: atividade.codpro },
     orderBy: { id: "desc" },
   });
-  if (existente) return existente;
+  if (existente) return { rat: existente, criada: false };
+  return { rat: await criarRatRascunho(atividade, codfor, depexe, dataSessao), criada: true };
+}
 
+// Cria o cabeçalho de uma RAT Digitada local, sem número do Senior ainda. Separada de
+// buscarOuCriarRatRascunho (25/09/2026) pra atender quem confirma e pede "Gerar RAT nova"
+// mesmo havendo RAT aberta — o envio manda `gerRat=S` pro Senior não anexar numa aberta.
+async function criarRatRascunho(
+  atividade: { codemp: number; codpro: number },
+  codfor: number,
+  depexe: number,
+  dataSessao: Date
+) {
   const proposta = await prisma.proposta.findUnique({
     where: { codemp_codpro: { codemp: atividade.codemp, codpro: atividade.codpro } },
   });
 
-  return prisma.rat.create({
+  const rat = await prisma.rat.create({
     data: {
       codemp: atividade.codemp,
       codfor,
@@ -123,6 +142,61 @@ async function buscarOuCriarRatRascunho(
       origemCaxHub: true,
     },
   });
+  return rat;
+}
+
+// A partir de quantas RATs Digitadas do consultor na proposta a tela oferece escolher o
+// destino. Começou em 2 (decisão do Vitor, 25/09/2026), mas com uma RAT aberta só o seletor
+// não aparecia e não havia como pedir "Gerar RAT nova" (sessões 1856 e 1857 confirmaram
+// direto). Passou pra 1 no mesmo dia, a pedido: o seletor aparece sempre que existe pelo
+// menos uma RAT aberta pra escolher. Sem nenhuma aberta, cria a RAT sozinho.
+const MIN_RATS_PARA_ESCOLHER_DESTINO = 1;
+
+/** Destino escolhido por quem confirma. Ausente = regra automática (buscarOuCriarRatRascunho). */
+export type RatDestino = { ratId: number } | { nova: true };
+
+// Lê `ratDestino` do corpo da requisição sem confiar no formato. Inválido vira ausente
+// (regra automática) em vez de erro: a tela antiga, sem o seletor, nunca manda o campo.
+function lerRatDestino(bruto: unknown): RatDestino | undefined {
+  if (bruto == null || typeof bruto !== "object") return undefined;
+  const b = bruto as Record<string, unknown>;
+  if (b.nova === true) return { nova: true };
+  const ratId = Number(b.ratId);
+  return Number.isInteger(ratId) && ratId > 0 ? { ratId } : undefined;
+}
+
+// Resolve a RAT que vai receber o apontamento. Sem destino escolhido (tela antiga, ou sessão
+// confirmada por outro caminho), segue a regra automática de sempre. A RAT escolhida precisa ser do MESMO consultor+proposta e ainda estar Digitada — é o que o
+// Senior também vai exigir, e barrar aqui evita um RatItem que nasce pra ser recusado.
+async function resolverRatDaConfirmacao(
+  atividade: { codemp: number; codpro: number },
+  codfor: number,
+  depexe: number,
+  dataSessao: Date,
+  destino: RatDestino | undefined
+): Promise<
+  | { ok: true; rat: Awaited<ReturnType<typeof criarRatRascunho>>; criada: boolean; escolha: "automatico" | "rat" | "nova" }
+  | { ok: false; status: number; error: string }
+> {
+  if (!destino) {
+    const r = await buscarOuCriarRatRascunho(atividade, codfor, depexe, dataSessao);
+    return { ok: true, ...r, escolha: "automatico" };
+  }
+  if ("nova" in destino) {
+    return { ok: true, rat: await criarRatRascunho(atividade, codfor, depexe, dataSessao), criada: true, escolha: "nova" };
+  }
+  const rat = await prisma.rat.findUnique({ where: { id: destino.ratId } });
+  if (!rat || rat.codemp !== atividade.codemp || rat.codfor !== codfor || rat.codpro !== atividade.codpro) {
+    return { ok: false, status: 400, error: "A RAT escolhida não é deste consultor nesta proposta" };
+  }
+  if (rat.sitrat !== 9 || rat.removidoEmSenior != null) {
+    return {
+      ok: false,
+      status: 409,
+      error: `A RAT ${rat.numrat ?? rat.id} não está mais Digitada — recarregue a tela e escolha outra`,
+    };
+  }
+  return { ok: true, rat, criada: false, escolha: "rat" };
 }
 
 // Teto de apontamento = alocado + excedentes autorizados. Vale pro gestor também: pra
@@ -131,25 +205,51 @@ async function buscarOuCriarRatRascunho(
 //
 // `descontarMinutos` é a duração de uma sessão que JÁ está no realizado e vai ser
 // substituída por este intervalo. Zero quando a sessão ainda nem existe.
+//
+// `opcoes` só é passado na CRIAÇÃO de pedidos (solicitação de apontamento/ajuste); sem ele a
+// conta é a de sempre, e confirmar/aprovar não mudam:
+//   - `exigirTeto`: atividade sem horas alocadas (teto 0) é recusada. Nos outros fluxos ela
+//     passa de propósito (executar numa atividade ainda não dimensionada), mas um PEDIDO
+//     sem teto não tem contra o que o gestor conferir.
+//   - `reservadoPendente`: minutos que outros pedidos pendentes da atividade já reservam.
+//   - `toleranciaMin`: folga, em minutos, sobre o TOTAL acima do teto. Só a confirmação de sessão
+//     já trabalhada passa isto (ver toleranciaTeto.ts); mensagem e campos da resposta continuam
+//     sobre o teto real — a tolerância é folga silenciosa, não saldo anunciado.
 export async function recusarSeEstourarTeto(
   atividade: Parameters<typeof saldoDaAtividade>[0],
   inicio: Date,
   fim: Date,
-  descontarMinutos = 0
+  descontarMinutos = 0,
+  opcoes: { exigirTeto?: boolean; reservadoPendente?: number; toleranciaMin?: number } = {}
 ): Promise<{ status: number; body: Record<string, unknown> } | null> {
   const duracao = Math.round((fim.getTime() - inicio.getTime()) / 60000);
   const { teto, realizado } = await saldoDaAtividade(atividade);
-  const realizadoBase = realizado - descontarMinutos;
-  if (teto <= 0 || realizadoBase + duracao <= teto) return null;
+  if (teto <= 0) {
+    if (!opcoes.exigirTeto) return null;
+    return {
+      status: 409,
+      body: {
+        error: "Esta atividade ainda não tem horas alocadas — peça ao gestor pra alocar antes de solicitar apontamento.",
+        teto,
+        realizado,
+        disponivel: 0,
+      },
+    };
+  }
+
+  const reservado = opcoes.reservadoPendente ?? 0;
+  const realizadoBase = realizado - descontarMinutos + reservado;
+  if (realizadoBase + duracao <= teto + (opcoes.toleranciaMin ?? 0)) return null;
 
   const disponivel = teto - realizadoBase;
+  const sufixoReserva = reservado > 0 ? ` (já descontados ${formatarMinutos(reservado)} de pedidos pendentes)` : "";
   return {
     status: 409,
     body: {
       error:
         disponivel > 0
-          ? `Apontamento de ${formatarMinutos(duracao)} excede o teto da atividade. Saldo disponível: ${formatarMinutos(disponivel)} (alocado + excedentes: ${formatarMinutos(teto)}). Ajuste o horário ou peça ao gestor pra liberar horas excedentes.`
-          : `A atividade já consumiu todo o teto de ${formatarMinutos(teto)} (alocado + excedentes). Peça ao gestor pra liberar horas excedentes antes de apontar.`,
+          ? `Apontamento de ${formatarMinutos(duracao)} excede o teto da atividade. Saldo disponível: ${formatarMinutos(disponivel)}${sufixoReserva} (alocado + excedentes: ${formatarMinutos(teto)}). Ajuste o horário ou peça ao gestor pra liberar horas excedentes.`
+          : `A atividade já consumiu todo o teto de ${formatarMinutos(teto)} (alocado + excedentes)${sufixoReserva}. Peça ao gestor pra liberar horas excedentes antes de apontar.`,
       teto,
       realizado: realizadoBase,
       disponivel,
@@ -166,6 +266,8 @@ interface AjustesConfirmacao {
   // com isto ligado fica responsável por rodar `processarFilaSincronizacao()` uma vez no
   // fim — ela drena a fila em laço serial (ver outboxSenior.ts).
   adiarEnvio?: boolean;
+  // RAT de destino escolhida por quem confirma (25/09/2026) — ver resolverRatDaConfirmacao.
+  ratDestino?: RatDestino;
 }
 
 // Núcleo compartilhado por POST /confirmar (sessão já existe, veio de movimentação de
@@ -217,7 +319,19 @@ async function confirmarSessao(
     return { status: 400, body: { error: "Item de proposta correspondente não encontrado" } };
   }
   if (!podeExecutarAcao(role, contexto, "lancarApontamento", { depexe: item.depexe, codfor: atividade.codfor })) {
-    return { status: 403, body: { error: "Sem permissão para lançar apontamento nesta atividade" } };
+    // Gestor do CONSULTOR que executou a sessão também pode lançar/confirmar, mesmo quando
+    // o item pertence a um departamento que ele não gerencia — mesmo critério que já decide
+    // o que aparece em GET /sessoes-pendentes (codforsDoTime, populada pelo departamento do
+    // CONSULTOR, não do item), pra não mostrar uma sessão que o botão Confirmar depois
+    // recusa. Achado real (17/09/2026): Jacson gerencia o departamento 6 (time do Vinicius)
+    // e via a sessão 1354 na lista, mas não conseguia confirmar porque o ITEM da proposta
+    // estava classificado no departamento 9 (Consultoria HCM) — outro departamento, que ele
+    // não gerencia. Calculado só aqui, como fallback (nunca no caminho feliz, que já
+    // resolveu via item.depexe acima), pra não pagar a consulta extra à toa.
+    const souGestorDoConsultor = (await codforsDoTime(role, contexto))?.has(atividade.codfor) ?? false;
+    if (!souGestorDoConsultor) {
+      return { status: 403, body: { error: "Sem permissão para lançar apontamento nesta atividade" } };
+    }
   }
   // Bloqueio de apontamento (proposta ou atividade) — ver domain/bloqueioApontamento.ts.
   // Só barra sessão RECÉM-CRIADA (/manual, gestor lançando tempo novo na hora): o horário já
@@ -282,7 +396,13 @@ async function confirmarSessao(
   // duração atual dela — senão a mesma hora contaria duas vezes e o bloqueio dispararia
   // com metade do saldo consumido.
   const duracaoAtualDaSessao = Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000);
-  const recusa = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao);
+
+  // Tolerância só pra sessão PREEXISTENTE (tempo já trabalhado: card movido, Start/Stop,
+  // solicitação aprovada) e a do consultor DONO da atividade, não a de quem confirma. O /manual
+  // ("recem-criada") é tempo novo declarado na hora, não deriva de arredondamento: teto exato.
+  const toleranciaMin =
+    origemSessao === "preexistente" ? await toleranciaTetoDoConsultor(atividade.codemp, atividade.codfor) : 0;
+  const recusa = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtualDaSessao, { toleranciaMin });
   if (recusa) return recusa;
 
   // O check de `fim > inicio` logo acima (linha 234) é em MILISSEGUNDOS; horini/horfim são
@@ -305,8 +425,29 @@ async function confirmarSessao(
     };
   }
 
-  const rat = await buscarOuCriarRatRascunho(atividade, atividade.codfor, item.depexe, inicio);
+  const destino = await resolverRatDaConfirmacao(atividade, atividade.codfor, item.depexe, inicio, ajustes.ratDestino);
+  if (!destino.ok) return { status: destino.status, body: { error: destino.error } };
+  const { rat, criada: ratCriada, escolha: escolhaDestino } = destino;
   const ratNovo = rat.origemCaxHub && rat.numrat == null;
+
+  // RAT_CRIADA (13/09/2026) — só quando o rascunho nasceu agora, não quando reaproveitou um
+  // já existente. Sem `req` aqui (confirmarSessao recebe só `ctx`), então `correlationId`
+  // próprio por criação — mesmo espírito dos eventos que o outbox assíncrono já gera.
+  if (ratCriada) {
+    await criarEventoAuditoria({
+      origem: "tela",
+      usuarioId: ctx.user.id,
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+      eventoTipo: EVENTOS_AUDITORIA.RAT_CRIADA,
+      alteracoes: null,
+      metadata: { origemCriacao: "caxhub" },
+      correlationId: randomUUID(),
+    });
+  }
 
   const ratItem = await prisma.ratItem.create({
     data: {
@@ -331,6 +472,28 @@ async function confirmarSessao(
       desati: ajustes.descricao?.trim() || null,
       origemCaxHub: true,
     },
+  });
+
+  // RAT_ITEM_CRIADO (13/09/2026) — mesmo espírito de RAT_CRIADA acima, mas todo item novo
+  // gera o dele (diferente do cabeçalho, que só nasce uma vez por RAT).
+  await criarEventoAuditoria({
+    origem: "tela",
+    usuarioId: ctx.user.id,
+    codemp: rat.codemp,
+    codpro: rat.codpro,
+    entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+    entidadeId: entidadeIdRat(rat.id),
+    entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+    eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_CRIADO,
+    alteracoes: null,
+    metadata: {
+      origemCriacao: "caxhub",
+      ratItemId: ratItem.id,
+      seqite: ratItem.seqite,
+      datati: ratItem.datati,
+      destinoEscolhido: escolhaDestino,
+    },
+    correlationId: randomUUID(),
   });
 
   await prisma.atividadeSessaoExecucao.update({
@@ -422,18 +585,23 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
       where: { codfor, sitreg: "A", seqati: { not: null } },
       orderBy: { id: "desc" },
     });
-    const chavesItem = atividades.map((a) => ({ codemp: a.codemp, codpro: a.codpro, seqite: a.seqite }));
-    const chavesProposta = [...new Set(atividades.map((a) => `${a.codemp}-${a.codpro}`))].map((chave) => {
-      const [codemp, codpro] = chave.split("-").map(Number);
-      return { codemp, codpro };
-    });
+    // `IN` por codemp/codpro (superconjunto), e não um `OR` com uma cláusula por atividade: com centenas de
+    // atividades o planejamento do Postgres explode (ver routes/alocacao.ts). Quem consome busca por chave
+    // exata (`itemPorChave`/`propostaPorChave`), então o que sobra do superconjunto é ignorado.
+    const codempsDasAtividades = [...new Set(atividades.map((a) => a.codemp))];
+    const codprosDasAtividades = [...new Set(atividades.map((a) => a.codpro))];
 
     const [itens, propostas] = await Promise.all([
-      chavesItem.length > 0 ? prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : Promise.resolve([]),
+      atividades.length > 0
+        ? prisma.propostaItem.findMany({ where: { codemp: { in: codempsDasAtividades }, codpro: { in: codprosDasAtividades } } })
+        : Promise.resolve([]),
       // Cliente é o que dá sentido ao agrupamento por proposta no seletor da tela —
       // número de proposta sozinho não identifica o projeto pra quem lança pelo time.
-      chavesProposta.length > 0
-        ? prisma.proposta.findMany({ where: { OR: chavesProposta }, include: { cliente: true } })
+      atividades.length > 0
+        ? prisma.proposta.findMany({
+            where: { codemp: { in: codempsDasAtividades }, codpro: { in: codprosDasAtividades } },
+            include: { cliente: true },
+          })
         : Promise.resolve([]),
     ]);
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
@@ -444,8 +612,11 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
         .map((a) => {
           const item = itemPorChave.get(`${a.codemp}-${a.codpro}-${a.seqite}`);
           // `depexe` do item é o que governa a permissão (não o departamento do consultor)
-          // — mesma origem usada por confirmarSessao.
-          if (item?.depexe == null) return null;
+          // — mesma origem usada por confirmarSessao. Item sumido do Senior (ver
+          // varrerRemovidos.ts) some do seletor — não oferece lançar apontamento NOVO em
+          // cima de item já removido (a alocação em si continua existindo/visível em
+          // outro lugar, só este seletor de "novo lançamento" some com a opção).
+          if (item?.depexe == null || item.removidoEmSenior != null) return null;
           if (!podeExecutarAcao(role, contexto, "lancarApontamento", { depexe: item.depexe, codfor })) return null;
           const proposta = propostaPorChave.get(`${a.codemp}-${a.codpro}`);
           return {
@@ -475,9 +646,10 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
 //
 // Confirmar já é liberado pro gestor sobre sessão do time (podeExecutarAcao, chamado dentro de
 // confirmarSessao) — o problema que isto resolve é só a LISTAGEM nunca mostrar essa sessão pra
-// ele confirmar. Ações "só o dono" (editar descrição/pedir ajuste/excluir) continuam exigindo
-// `codfor` exato nos respectivos endpoints, sem extensão nenhuma — a tela já esconde esses
-// botões via `souDono`, calculado abaixo.
+// ele confirmar. Ações "só o dono" (editar descrição/pedir ajuste) continuam exigindo `codfor`
+// exato nos respectivos endpoints, sem extensão nenhuma — a tela já esconde esses botões via
+// `souDono`, calculado abaixo. Excluir é a exceção: admin também pode, sobre qualquer sessão
+// (ver `podeExcluir` abaixo e DELETE /:id).
 apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
@@ -504,21 +676,36 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
         atividade: { sitreg: "A", ...(role === "admin" ? {} : { codfor: { in: [...codforsPermitidos!] } }) },
       },
       include: { atividade: true, coluna: true },
-      orderBy: { id: "desc" },
+      // Data/hora de início decrescente (mais recente primeiro) — pedido do Vitor
+      // (10/09/2026). Antes era por id desc, que coincide na maioria dos casos (sessão criada
+      // em ordem cronológica) mas diverge quando uma sessão mais antiga é rastreada/ajustada
+      // depois de outras mais novas já existirem.
+      orderBy: { inicio: "desc" },
     });
 
     const chavesProposta = [...new Set(sessoes.map((s) => `${s.atividade.codemp}-${s.atividade.codpro}`))];
     const propostas =
       chavesProposta.length > 0
         ? await prisma.proposta.findMany({
-            where: { OR: chavesProposta.map((c) => ({ codemp: Number(c.split("-")[0]), codpro: Number(c.split("-")[1]) })) },
+            // `IN` (superconjunto) em vez de `OR` por proposta — o consumo é por chave exata.
+            where: {
+              codemp: { in: [...new Set(chavesProposta.map((c) => Number(c.split("-")[0])))] },
+              codpro: { in: [...new Set(chavesProposta.map((c) => Number(c.split("-")[1])))] },
+            },
             include: { cliente: true },
           })
         : [];
     const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
 
-    const chavesItem = sessoes.map((s) => ({ codemp: s.atividade.codemp, codpro: s.atividade.codpro, seqite: s.atividade.seqite }));
-    const itens = chavesItem.length > 0 ? await prisma.propostaItem.findMany({ where: { OR: chavesItem } }) : [];
+    const itens =
+      sessoes.length > 0
+        ? await prisma.propostaItem.findMany({
+            where: {
+              codemp: { in: [...new Set(sessoes.map((s) => s.atividade.codemp))] },
+              codpro: { in: [...new Set(sessoes.map((s) => s.atividade.codpro))] },
+            },
+          })
+        : [];
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
 
     // Nome do consultor de cada sessão — só usado quando `mostrarConsultor` (a lista do
@@ -564,8 +751,41 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
       sessoes.map((s) => ({ codemp: s.atividade.codemp, codpro: s.atividade.codpro }))
     );
 
+    // RATs Digitadas candidatas a destino, por consultor+proposta (25/09/2026) — mesma
+    // chave codemp-codfor-codpro do agrupamento do "Confirmar Todos". Uma query só pra todas
+    // as sessões. Os itens vêm junto porque a descrição deles é o único jeito de reconhecer
+    // qual RAT é qual (ex.: proposta 7935, uma RAT por filial do cliente, e a filial só
+    // aparece no texto: "EMPRESA 110, FILIAL 1 - ..."). Só grupos com
+    // MIN_RATS_PARA_ESCOLHER_DESTINO ou mais entram — nos outros a tela confirma direto.
+    const ratsDestino: Record<string, ReturnType<typeof resumirRatDestino>[]> = {};
+    if (sessoes.length > 0) {
+      const chavesGrupo = [
+        ...new Map(
+          sessoes.map((s) => [
+            `${s.atividade.codemp}-${s.atividade.codfor}-${s.atividade.codpro}`,
+            { codemp: s.atividade.codemp, codfor: s.atividade.codfor, codpro: s.atividade.codpro },
+          ])
+        ).values(),
+      ];
+      const ratsAbertas = await prisma.rat.findMany({
+        where: { sitrat: 9, removidoEmSenior: null, OR: chavesGrupo },
+        include: { itens: { select: { datati: true, horini: true, horfim: true, desati: true, id: true } } },
+        orderBy: { id: "desc" },
+      });
+      for (const rat of ratsAbertas) {
+        const chave = `${rat.codemp}-${rat.codfor}-${rat.codpro}`;
+        (ratsDestino[chave] ??= []).push(resumirRatDestino(rat));
+      }
+      for (const chave of Object.keys(ratsDestino)) {
+        if (ratsDestino[chave].length < MIN_RATS_PARA_ESCOLHER_DESTINO) delete ratsDestino[chave];
+      }
+    }
+
     res.json({
       mostrarConsultor,
+      // Primeira de cada lista = a que a regra automática escolheria (id mais alto, mesma
+      // ordem de buscarOuCriarRatRascunho) — a tela pré-seleciona ela.
+      ratsDestino,
       sessoes: sessoes.map((s) => {
         const proposta = propostaPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
         const item = itemPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}-${s.atividade.seqite}`);
@@ -619,6 +839,10 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           // o servidor vai recusar. Consultor comum: sempre true (a lista já é só dele).
           // Gestor/admin: true só na própria sessão, false nas do time.
           souDono: !mostrarConsultor || s.atividade.codfor === meuCodfor,
+          // Exclusão também libera pro admin sobre sessão de qualquer consultor (DELETE
+          // /:id abaixo aceita isso) — diferente de editar descrição/pedir ajuste, que
+          // continuam "só o dono" mesmo pro admin.
+          podeExcluir: role === "admin" || !mostrarConsultor || s.atividade.codfor === meuCodfor,
           // Mesma previsão de erro acima, agora pro bloqueio de apontamento — confirmar essa
           // sessão vai recusar 409 (ver confirmarSessao).
           bloqueadoApontamentoEfetivo: resolverBloqueioComConfig(
@@ -639,6 +863,24 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
   }
 });
 
+// Resumo de uma RAT candidata a destino, pro seletor da confirmação.
+function resumirRatDestino(rat: {
+  id: number;
+  numrat: number | null;
+  datemi: Date | null;
+  itens: { id: number; datati: Date | null; horini: number | null; horfim: number | null; desati: string | null }[];
+}) {
+  const minutos = rat.itens.reduce(
+    (total, i) => total + (i.horini != null && i.horfim != null && i.horfim > i.horini ? i.horfim - i.horini : 0),
+    0
+  );
+  const recentes = [...rat.itens]
+    .sort((a, b) => (b.datati?.getTime() ?? 0) - (a.datati?.getTime() ?? 0) || b.id - a.id)
+    .slice(0, 2)
+    .map((i) => ({ datati: i.datati, desati: i.desati }));
+  return { id: rat.id, numrat: rat.numrat, datemi: rat.datemi, qtdItens: rat.itens.length, minutos, recentes };
+}
+
 apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => {
   try {
     const sessaoId = Number(req.body?.sessaoId);
@@ -655,6 +897,7 @@ apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => 
       ajusteInicio: req.body?.ajusteInicio,
       ajusteFim: req.body?.ajusteFim,
       descricao: req.body?.descricao,
+      ratDestino: lerRatDestino(req.body?.ratDestino),
     }, ctx);
     res.status(status).json(body);
   } catch (error) {
@@ -679,8 +922,15 @@ apontamentosRouter.post("/confirmar", async (req: AuthenticatedRequest, res) => 
 apontamentosRouter.post("/confirmar-lote", async (req: AuthenticatedRequest, res) => {
   try {
     const itensBrutos = Array.isArray(req.body?.itens) ? req.body.itens : [];
-    const itens = itensBrutos
-      .map((i: any) => ({ sessaoId: Number(i?.sessaoId), descricao: typeof i?.descricao === "string" ? i.descricao : undefined }))
+    const itens: { sessaoId: number; descricao?: string; ratDestino?: RatDestino; grupo: string | null }[] = itensBrutos
+      .map((i: any) => ({
+        sessaoId: Number(i?.sessaoId),
+        descricao: typeof i?.descricao === "string" ? i.descricao : undefined,
+        ratDestino: lerRatDestino(i?.ratDestino),
+        // "Gerar RAT nova" no lote vale pro GRUPO (consultor+proposta), não por sessão:
+        // todas as sessões marcadas com o mesmo grupo vão pra MESMA RAT nova.
+        grupo: typeof i?.ratDestino?.grupo === "string" ? i.ratDestino.grupo : null,
+      }))
       .filter((i: { sessaoId: number }) => Number.isFinite(i.sessaoId));
     if (itens.length === 0) {
       res.status(400).json({ error: "Informe ao menos um sessaoId" });
@@ -702,15 +952,24 @@ apontamentosRouter.post("/confirmar-lote", async (req: AuthenticatedRequest, res
     const confirmados: { sessaoId: number; ratItemId: number; ratId: number }[] = [];
     const falhas: { sessaoId: number; erro: string }[] = [];
 
+    // Grupo -> RAT criada pela 1ª sessão do grupo que pediu "Gerar RAT nova". O laço é
+    // sequencial (ver acima), então a 2ª sessão já acha a RAT que a 1ª criou.
+    const ratNovaPorGrupo = new Map<string, number>();
+
     for (const item of itens) {
+      let ratDestino = item.ratDestino;
+      if (ratDestino && "nova" in ratDestino && item.grupo != null && ratNovaPorGrupo.has(item.grupo)) {
+        ratDestino = { ratId: ratNovaPorGrupo.get(item.grupo)! };
+      }
       const { status, body } = await confirmarSessao(
         item.sessaoId,
-        { descricao: item.descricao, adiarEnvio: true },
+        { descricao: item.descricao, adiarEnvio: true, ratDestino },
         ctx
       );
       if (status >= 400) {
         falhas.push({ sessaoId: item.sessaoId, erro: (body?.error as string) ?? `Falha (status ${status})` });
       } else {
+        if (ratDestino && "nova" in ratDestino && item.grupo != null) ratNovaPorGrupo.set(item.grupo, body.ratId as number);
         confirmados.push({ sessaoId: item.sessaoId, ratItemId: body.ratItemId as number, ratId: body.ratId as number });
       }
     }
@@ -961,6 +1220,20 @@ apontamentosRouter.post("/envio/:ratItemId/reenviar", async (req: AuthenticatedR
     }
     const { ratItem, pendencia } = envio;
 
+    // Apontamento já registrado: o que pode ter falhado é a ALTERAÇÃO da sessão (tipEve A), que só o admin faz.
+    // Rearma a pendência de edição parada em vez de cair na recusa "já registrado" de prepararReenvioItem.
+    if (ratItem.numrat != null && ctx.role === "admin") {
+      const atividadeId = ratItem.sessoes[0]?.atividadeId;
+      const edicaoId = atividadeId != null ? await rearmarEdicaoApontamento(atividadeId, ratItem.id) : null;
+      if (edicaoId != null) {
+        processarFilaSincronizacao({ apenasIds: [edicaoId] }).catch((erro) => {
+          console.error("[apontamentos] reenvio da alteração ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+        });
+        res.status(202).json({ status: "reenviando" });
+        return;
+      }
+    }
+
     // Guardas de negócio (já registrado / envio em andamento) e o branch reset-vs-enfileirar
     // moram em prepararReenvioItem (28/08/2026) — reaproveitado também pelo reenvio em lote
     // de POST /rats/:id/sincronizar, ver outboxSenior.ts.
@@ -1050,6 +1323,229 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// PATCH /:id/sessao — manutenção de uma sessão JÁ CONFIRMADA (vinculada a um RatItem), só admin, e só com a
+// RAT Digitada (sitrat 9). Altera data, início, fim e descrição — os 4 campos que viajam no
+// `registrarAtividades` (datAti, horIni, horFim, desAti). Se o apontamento já está registrado no Senior
+// (numrat preenchido) e algum desses campos mudou, a alteração é enfileirada na hora com tipEve A para
+// equalizar (ver enviarEdicaoApontamento em sync/outboxSenior.ts). Ainda não registrado: só grava local,
+// porque a pendência `criar_apontamento` relê o RatItem vivo ao enviar e já leva os valores novos.
+//
+// A janela de dias retroativos NÃO vale aqui: ela existe para o consultor pedir apontamento/ajuste, não para
+// a correção feita pelo admin. Teto da atividade e conflito de horário continuam valendo.
+apontamentosRouter.patch("/:id/sessao", requireRole("admin"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const sessaoId = Number(req.params.id);
+    if (!Number.isInteger(sessaoId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+
+    const inicio = new Date(String(req.body?.inicio ?? ""));
+    const fim = new Date(String(req.body?.fim ?? ""));
+    const descricao = typeof req.body?.descricao === "string" ? req.body.descricao.trim() : "";
+    if (Number.isNaN(inicio.getTime()) || Number.isNaN(fim.getTime())) {
+      res.status(400).json({ error: "Informe a data, a hora inicial e a hora final." });
+      return;
+    }
+    if (!descricao) {
+      res.status(400).json({ error: "A descrição é obrigatória." });
+      return;
+    }
+    if (descricao.length > 1000) {
+      res.status(400).json({ error: "A descrição pode ter no máximo 1000 caracteres." });
+      return;
+    }
+    if (!(fim.getTime() > inicio.getTime())) {
+      res.status(400).json({ error: "O fim precisa ser depois do início" });
+      return;
+    }
+    const diaIni = paraHoraBrasil(inicio);
+    const diaFim = paraHoraBrasil(fim);
+    if (diaIni.ano !== diaFim.ano || diaIni.mes !== diaFim.mes || diaIni.dia !== diaFim.dia) {
+      res.status(400).json({ error: "Início e fim precisam estar no mesmo dia." });
+      return;
+    }
+    const horarios = horariosDoSenior(inicio, fim);
+    if (!horarios.ok) {
+      res.status(400).json({ error: horarios.erro });
+      return;
+    }
+
+    const sessao = await prisma.atividadeSessaoExecucao.findUnique({
+      where: { id: sessaoId },
+      include: { atividade: true, ratItem: { include: { rat: true } } },
+    });
+    if (!sessao || sessao.excluidaEm != null) {
+      res.status(404).json({ error: "Apontamento não encontrado" });
+      return;
+    }
+    if (sessao.fim == null) {
+      res.status(400).json({ error: "Sessão ainda em andamento" });
+      return;
+    }
+    // Mesma regra que GET /rats/:id/itens usa para oferecer (ou não) a manutenção na tela.
+    const bloqueioManutencao = motivoBloqueioManutencao({
+      souAdmin: ctx.role === "admin",
+      temRatItem: sessao.ratItem != null,
+      removidaNoSenior: sessao.ratItem?.rat.removidoEmSenior != null,
+      sitrat: sessao.ratItem?.rat.sitrat ?? null,
+    });
+    if (bloqueioManutencao) {
+      res.status(400).json({ error: bloqueioManutencao });
+      return;
+    }
+    const ratItem = sessao.ratItem!;
+
+    // Antes (para o de/para e para decidir se algo vai ao Senior) e depois.
+    const atividade = sessao.atividade;
+    const datatiNova = diaBrasilComoData(inicio);
+    const mudou = camposQueMudaram(
+      { datati: ratItem.datati, horini: ratItem.horini, horfim: ratItem.horfim, desati: ratItem.desati },
+      { datati: datatiNova, horini: horarios.horini, horfim: horarios.horfim, desati: descricao }
+    );
+    const inicioMudou = inicio.getTime() !== sessao.inicio.getTime() || fim.getTime() !== sessao.fim.getTime();
+    if (mudou.length === 0 && !inicioMudou && (sessao.observacao ?? "").trim() === descricao) {
+      res.json({ ok: true, alterado: false, equalizacao: "nao_necessaria" });
+      return;
+    }
+
+    // Envio em voo (criação ou edição anterior): o job já leu o RatItem para montar o payload.
+    const emVoo = await prisma.sincronizacaoPendente.findFirst({
+      where: { tipo: { in: ["criar_apontamento", "editar_apontamento"] }, atividadeId: sessao.atividadeId, status: "enviando" },
+      select: { id: true },
+    });
+    if (emVoo) {
+      res.status(409).json({ error: "Envio ao Senior em andamento — aguarde para alterar" });
+      return;
+    }
+    // Não atropela uma decisão que o gestor ainda vai tomar.
+    const ajustePendente = await prisma.solicitacaoAjusteApontamento.findFirst({
+      where: { sessaoId, status: "pendente" },
+      select: { id: true },
+    });
+    if (ajustePendente) {
+      res.status(409).json({
+        error: `Há um ajuste de horário aguardando o gestor (solicitação ${ajustePendente.id}) — decida o pedido antes de alterar a sessão`,
+      });
+      return;
+    }
+
+    // Conflito com outro apontamento do MESMO consultor, ignorando esta sessão e o RatItem dela.
+    const conflitos = await conflitosDoIntervalo(atividade.codemp, atividade.codfor, inicio, fim, {
+      ignorarSessaoId: sessao.id,
+      ignorarRatItemId: ratItem.id,
+    });
+    if (conflitos.length > 0) {
+      res.status(409).json({ error: mensagemDeConflito(conflitos) });
+      return;
+    }
+
+    // Teto da atividade: desconta a duração ATUAL da sessão, que já entra no realizado (senão a mesma hora
+    // contaria duas vezes). Mesma tolerância da confirmação de sessão já trabalhada.
+    const duracaoAtual = Math.round((sessao.fim.getTime() - sessao.inicio.getTime()) / 60000);
+    const toleranciaMin = await toleranciaTetoDoConsultor(atividade.codemp, atividade.codfor);
+    const recusaTeto = await recusarSeEstourarTeto(atividade, inicio, fim, duracaoAtual, { toleranciaMin });
+    if (recusaTeto) {
+      res.status(recusaTeto.status).json(recusaTeto.body);
+      return;
+    }
+
+    const fato = `alterou o apontamento de ${descreverIntervaloSessao(sessao.inicio, sessao.fim)} para ${descreverIntervaloSessao(inicio, fim)}`;
+    const alteracoes = {
+      ...(inicioMudou || mudou.includes("horini") || mudou.includes("horfim") || mudou.includes("datati")
+        ? {
+            horario: {
+              de: descreverIntervaloSessao(sessao.inicio, sessao.fim),
+              para: descreverIntervaloSessao(inicio, fim),
+              rotulo: "Data e horário",
+            },
+          }
+        : {}),
+      ...(mudou.includes("desati")
+        ? { descricao: { de: ratItem.desati ?? null, para: descricao, rotulo: "Descrição" } }
+        : {}),
+    };
+
+    const registradoNoSenior = ratItem.numrat != null && ratItem.seqrat != null;
+    const vaiAoSenior = registradoNoSenior && mudou.length > 0;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.atividadeSessaoExecucao.update({
+        where: { id: sessaoId },
+        data: { inicio, fim, observacao: descricao },
+      });
+      await tx.ratItem.update({
+        where: { id: ratItem.id },
+        data: { datati: datatiNova, horini: horarios.horini, horfim: horarios.horfim, desati: descricao },
+      });
+      await tx.atividadeHistoricoMovimentacao.create({
+        data: {
+          atividadeId: sessao.atividadeId,
+          tipo: "apontamento_alterado",
+          descricao: fato.slice(0, 300),
+          userId: ctx.user.id,
+        },
+      });
+      await criarEventoAuditoria(
+        {
+          origem: "tela",
+          usuarioId: ctx.user.id,
+          codemp: atividade.codemp,
+          codpro: atividade.codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+          entidadeId: entidadeIdAtividade(sessao.atividadeId),
+          entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
+          eventoTipo: EVENTOS_AUDITORIA.APONTAMENTO_SESSAO_ALTERADA,
+          alteracoes,
+          metadata: {
+            sessaoId,
+            ratItemId: ratItem.id,
+            ratId: ratItem.ratId,
+            numrat: ratItem.numrat,
+            seqrat: ratItem.seqrat,
+            camposQueViajamAoSenior: mudou,
+            equalizacaoEnfileirada: vaiAoSenior,
+          },
+          correlationId: req.correlationId!,
+        },
+        tx
+      );
+    });
+
+    // Depois da transação, para o envio imediato já enxergar os valores novos.
+    if (vaiAoSenior) {
+      try {
+        await enfileirarEdicaoApontamento(sessao.atividadeId, ratItem.id, ratItem.ratId);
+      } catch (erroFila) {
+        // A alteração local já está gravada; sem a pendência o Senior ficaria para trás sem ninguém saber.
+        console.error("[apontamentos:manter-sessao] falha ao enfileirar a equalização:", erroFila);
+        res.status(500).json({
+          error:
+            "A alteração foi gravada no CaxHub, mas não foi possível enfileirar o envio ao Senior. " +
+            "Salve novamente para tentar de novo.",
+        });
+        return;
+      }
+    }
+
+    res.json({
+      ok: true,
+      alterado: true,
+      camposQueViajamAoSenior: mudou,
+      // enfileirada: tipEve A a caminho · no_envio_inicial: ainda não está no Senior, a inclusão leva os valores
+      // novos · nao_necessaria: só mudou algo que não viaja
+      equalizacao: vaiAoSenior ? "enfileirada" : registradoNoSenior ? "nao_necessaria" : "no_envio_inicial",
+    });
+  } catch (error) {
+    handleError(res, error, "manter-sessao");
+  }
+});
+
 // Só desfaz enquanto o envio ainda está pendente — nunca depois de já ter ido/travado
 // no Senior, pra não apagar algo que já pode existir do outro lado.
 apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
@@ -1060,8 +1556,15 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       return;
     }
     const ctx = await contextoDoUsuario(req);
-    const codfor = ctx?.contexto.consultor?.codfor;
-    if (!codfor) {
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const codfor = ctx.contexto.consultor?.codfor;
+    // Admin pode excluir sessão de qualquer consultor (mesmo espírito de podeExecutarAcao
+    // em Confirmar) — os demais continuam restritos à própria (codfor exato), como antes.
+    const souAdmin = ctx.role === "admin";
+    if (!souAdmin && !codfor) {
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
@@ -1070,7 +1573,7 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       where: { id: sessaoId },
       include: { atividade: true, ratItem: true },
     });
-    if (!sessao || sessao.atividade.codfor !== codfor) {
+    if (!sessao || (!souAdmin && sessao.atividade.codfor !== codfor)) {
       res.status(404).json({ error: "Apontamento não encontrado" });
       return;
     }
@@ -1091,6 +1594,19 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    // Pedido de ajuste de horário aguardando o gestor vai junto com o apontamento (04/11/2026), mas só depois do aviso: sem
+    // `?excluirAjuste=1` a resposta é 409 "ajuste_pendente" e nada muda (ver domain/exclusaoApontamento.ts).
+    const ajustes = await prisma.solicitacaoAjusteApontamento.findMany({
+      where: { sessaoId },
+      select: { id: true, status: true, inicioSolicitado: true, fimSolicitado: true, motivo: true, criadoEm: true },
+    });
+    const decisao = decidirExclusaoComAjuste(ajustes, confirmouExcluirAjuste(req.query.excluirAjuste));
+    if (!decisao.ok) {
+      res.status(decisao.status).json(decisao.body);
+      return;
+    }
+    const ajustesExcluidos = ajustes.filter((a) => decisao.ajustesAExcluir.includes(a.id));
+
     // Exclusão LÓGICA da sessão: antes isto desfazia a confirmação, e o apontamento voltava
     // pra fila de "a confirmar" — quem queria apagar via o item reaparecer. Agora a sessão
     // é marcada e sai de vista, do realizado e da fila de confirmação.
@@ -1099,7 +1615,9 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
     // e guardar um "excluído" que nunca chegou lá não descreve nada. Só existe quando a
     // sessão já tinha sido confirmada — a exclusão vale também pra sessão que nunca foi.
     const ratItemId = sessao.ratItem?.id ?? null;
-    const fato = `excluiu o apontamento de ${descreverIntervaloSessao(sessao.inicio, sessao.fim)}`;
+    const fato =
+      `excluiu o apontamento de ${descreverIntervaloSessao(sessao.inicio, sessao.fim)}` +
+      (ajustesExcluidos.length > 0 ? " e o pedido de ajuste de horário pendente" : "");
 
     await prisma.$transaction(async (tx) => {
       await tx.atividadeSessaoExecucao.update({
@@ -1108,6 +1626,13 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
       });
       if (pendencia) await tx.sincronizacaoPendente.delete({ where: { id: pendencia.id } });
       if (ratItemId) await tx.ratItem.delete({ where: { id: ratItemId } });
+      // Exclusão física do pedido pendente (pedido do Vitor); o que foi pedido fica na auditoria abaixo (`ajustesExcluidos`).
+      // `status: "pendente"` de novo aqui: se o gestor decidiu entre a leitura acima e agora, o pedido decidido fica como histórico.
+      if (ajustesExcluidos.length > 0) {
+        await tx.solicitacaoAjusteApontamento.deleteMany({
+          where: { id: { in: ajustesExcluidos.map((a) => a.id) }, status: "pendente" },
+        });
+      }
       await tx.atividadeHistoricoMovimentacao.create({
         data: { atividadeId: sessao.atividadeId, tipo: "apontamento_excluido", descricao: fato, userId: ctx!.user.id },
       });
@@ -1127,6 +1652,17 @@ apontamentosRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
             fim: sessao.fim?.toISOString() ?? null,
             estavaConfirmada: sessao.confirmada,
             ratItemRemovido: ratItemId,
+            ...(ajustesExcluidos.length > 0
+              ? {
+                  ajustesExcluidos: ajustesExcluidos.map((a) => ({
+                    id: a.id,
+                    inicioSolicitado: a.inicioSolicitado.toISOString(),
+                    fimSolicitado: a.fimSolicitado.toISOString(),
+                    motivo: a.motivo,
+                    criadoEm: a.criadoEm.toISOString(),
+                  })),
+                }
+              : {}),
           },
           correlationId: req.correlationId!,
         },

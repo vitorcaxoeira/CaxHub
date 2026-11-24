@@ -353,15 +353,24 @@ function derivarOrcamento(
 // Só faz sentido pra nó tipo="item" (é o único nível com horasContratadas próprio —
 // pasta nunca tem teto, só soma). O chamador decide quando chamar; a função não valida
 // o tipo pra não duplicar a checagem que já existe em quem monta a árvore.
-// Largura das três colunas numéricas do cronograma (Orçado/Realizado/Alocado), em px.
+// Largura das colunas numéricas do cronograma (Orçado/Realizado/Alocado/Hrs. Exce.), em px.
 //
 // Em px, e não em "ch" como antes: o cabeçalho é 11px e as linhas são 12px, então o mesmo
-// número de "ch" dava larguras diferentes nos dois e as colunas não alinhavam. O piso de
-// 96px vem do maior RÓTULO ("Realizado" em 11px mono com tracking-wider), que na prática
-// é sempre maior que o número — sem ele os rótulos se sobrepunham no cabeçalho. O termo
-// com `larguraHoras` só entra em cena numa proposta com muitos dígitos de hora.
-export function larguraColunaHorasPx(larguraHoras: number): number {
-  return Math.max(96, (larguraHoras + 4) * 8);
+// número de "ch" dava larguras diferentes nos dois e as colunas não alinhavam. O piso vem do
+// RÓTULO da própria coluna (11px mono com tracking-wider ≈ 7,15px por caractere, ver
+// COLUNA_HORAS_MIN_PX) — sem ele os rótulos se sobrepunham no cabeçalho. Antes era um piso
+// único de 96px, o do maior rótulo ("Realizado"), e as colunas de rótulo curto ficavam com
+// um vazio enorme à esquerda dos números. O termo com `larguraHoras` só entra em cena numa
+// proposta com muitos dígitos de hora.
+export const COLUNA_HORAS_MIN_PX = {
+  orcado: 56, // "ORÇADO" 43px
+  realizado: 72, // "REALIZADO" 64px
+  alocado: 60, // "ALOCADO" 50px
+  excedente: 72, // "HRS. EXCE." 72px (e o input + "×" inline cabem em ~63px)
+} as const;
+
+export function larguraColunaHorasPx(larguraHoras: number, minimo: number): number {
+  return Math.max(minimo, (larguraHoras + 4) * 8);
 }
 
 // Orçado = horas contratadas do item da proposta (PropostaItem.qtdhor, que chega no nó
@@ -497,4 +506,121 @@ export function projetarSaldo(
   const distribuidasProjetadas = distribuidasAtuais - valorAtual + novoValorMinutos;
   const horasContratadas = item.horasPrevistas ?? 0;
   return horasContratadas - distribuidasProjetadas;
+}
+
+// Mínimo que dá pra alocar (qtdhor) sem deixar o realizado "sobrando" acima do teto (alocado
+// + excedente). Mesma fórmula do backend (domain/tetoAtividade.ts, usada em PATCH
+// /alocacao/estrutura/:id, PATCH /alocacao/alocacoes/:id e PATCH
+// /atividades/:id/horas-excedentes): o excedente já autorizado cobre parte do realizado,
+// então só o que sobra depois dele precisa continuar coberto pelo alocado. Sem isso, reduzir
+// as horas previstas travava no realizado cheio mesmo quando o excedente já cobria a
+// diferença (caso real: atividade 86354, 46:00 realizadas, 30:00 de excedente — mínimo
+// alocável é 16:00, não 46:00).
+export function minimoAlocavel(horasRealizadas: number, horasExcedentes: number): number {
+  return Math.max(0, horasRealizadas - horasExcedentes);
+}
+
+// --- Hierarquia de datas ------------------------------------------------------------------
+// Espelha backend/src/domain/datasCronograma.ts: pasta raiz → item → pasta → atividade, cada nível
+// com período opcional, e o filho cabe no período do ancestral MAIS PRÓXIMO que tem data (cada lado,
+// início e fim, resolvido separadamente). O backend é quem barra de verdade; aqui serve pra limitar
+// os campos de data e mostrar o "período permitido" antes de o usuário bater no servidor.
+
+export interface NoComPeriodo {
+  id: number;
+  parentId: number | null;
+  nome: string;
+  dataPrevistaInicio?: string | null;
+  dataPrevistaFim?: string | null;
+}
+
+// A API manda a data como ISO completo ("2026-10-01T00:00:00.000Z") — o que vale é o dia.
+export function dataIso(valor: string | null | undefined): string | null {
+  return valor ? valor.slice(0, 10) : null;
+}
+
+export function formatarDataBr(iso: string | null | undefined): string {
+  const dia = dataIso(iso);
+  if (!dia) return "";
+  const [a, m, d] = dia.split("-");
+  return `${d}/${m}/${a}`;
+}
+
+export function formatarDataCurta(iso: string | null | undefined): string {
+  const dia = dataIso(iso);
+  if (!dia) return "";
+  const [a, m, d] = dia.split("-");
+  return `${d}/${m}/${a.slice(2)}`;
+}
+
+export interface LimitesDatas {
+  inicio: string | null;
+  fim: string | null;
+  origemInicio: string | null;
+  origemFim: string | null;
+}
+
+// Limite imposto pelos ANCESTRAIS de `no` (o próprio nó não conta).
+export function limitesDatasDoNo<T extends NoComPeriodo>(no: T, porId: Map<number, T>): LimitesDatas {
+  const limites: LimitesDatas = { inicio: null, fim: null, origemInicio: null, origemFim: null };
+  let atual = no.parentId != null ? porId.get(no.parentId) : undefined;
+  for (let passos = 0; atual && passos < 64; passos++) {
+    const inicio = dataIso(atual.dataPrevistaInicio);
+    const fim = dataIso(atual.dataPrevistaFim);
+    if (limites.inicio == null && inicio != null) {
+      limites.inicio = inicio;
+      limites.origemInicio = atual.nome;
+    }
+    if (limites.fim == null && fim != null) {
+      limites.fim = fim;
+      limites.origemFim = atual.nome;
+    }
+    if (limites.inicio != null && limites.fim != null) break;
+    atual = atual.parentId != null ? porId.get(atual.parentId) : undefined;
+  }
+  return limites;
+}
+
+export interface PeriodoEfetivo {
+  inicio: string | null;
+  fim: string | null;
+  // true = não é do próprio nó: vem do menor início / maior fim dos descendentes.
+  inicioDerivado: boolean;
+  fimDerivado: boolean;
+}
+
+// Período de cada nó pra exibição: o próprio, quando tem; senão (pasta/item sem data) o que os
+// descendentes cobrem — dá pra ler o cronograma mesmo quando só as atividades têm data.
+export function periodosEfetivos<T extends NoComPeriodo>(nos: T[]): Map<number, PeriodoEfetivo> {
+  const filhosDe = new Map<number | null, T[]>();
+  for (const n of nos) {
+    if (!filhosDe.has(n.parentId)) filhosDe.set(n.parentId, []);
+    filhosDe.get(n.parentId)!.push(n);
+  }
+  const resultado = new Map<number, PeriodoEfetivo>();
+
+  function calcular(no: T): PeriodoEfetivo {
+    const existente = resultado.get(no.id);
+    if (existente) return existente;
+    let menor: string | null = null;
+    let maior: string | null = null;
+    for (const filho of filhosDe.get(no.id) ?? []) {
+      const p = calcular(filho);
+      if (p.inicio != null && (menor == null || p.inicio < menor)) menor = p.inicio;
+      if (p.fim != null && (maior == null || p.fim > maior)) maior = p.fim;
+    }
+    const proprioInicio = dataIso(no.dataPrevistaInicio);
+    const proprioFim = dataIso(no.dataPrevistaFim);
+    const periodo: PeriodoEfetivo = {
+      inicio: proprioInicio ?? menor,
+      fim: proprioFim ?? maior,
+      inicioDerivado: proprioInicio == null && menor != null,
+      fimDerivado: proprioFim == null && maior != null,
+    };
+    resultado.set(no.id, periodo);
+    return periodo;
+  }
+
+  for (const n of nos) calcular(n);
+  return resultado;
 }

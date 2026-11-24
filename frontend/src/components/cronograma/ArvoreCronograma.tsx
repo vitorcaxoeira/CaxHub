@@ -10,17 +10,29 @@ import {
   estadoAlertaItem,
   FaixaAninhamento,
   filtrarPreservandoAncestrais,
+  COLUNA_HORAS_MIN_PX,
   larguraColunaHorasPx,
   OrcamentoItem,
   StatusNo,
 } from "../../lib/cronograma";
-import { NoCronogramaCompleto, PatchNo, NovoNo } from "../../hooks/useCronograma";
+import { ErroDatasForaDoPai, ImpactoDatas, NoCronogramaCompleto, PatchNo, NovoNo } from "../../hooks/useCronograma";
 import { BarraFerramentas, FiltrosCronograma } from "./BarraFerramentas";
-import { LinhaNo } from "./LinhaNo";
+import {
+  CLASSES_ESPACAMENTO_LINHA,
+  LARGURA_COLUNA_BLOQ_APTO_PX,
+  LARGURA_COLUNA_BLOQ_EXCE_PX,
+  LARGURA_COLUNA_RESP_PX,
+  LinhaNo,
+} from "./LinhaNo";
 import { LinhaNovaAtividade } from "./LinhaNovaAtividade";
 import { DrawerAtividade } from "./DrawerAtividade";
 import { DestinoMover } from "./MenuAcoesNo";
 import { ModalAlocarConsultores } from "./ModalAlocarConsultores";
+import { ModalAjusteDatasFilhos } from "./ModalAjusteDatasFilhos";
+
+// Quem cancelou o modal de ajuste de datas rejeita a promessa com esta mensagem — os pontos que
+// mostram erro no banner ignoram, porque cancelar é uma escolha e não uma falha.
+const AJUSTE_CANCELADO = "Alteração cancelada — nada foi salvo.";
 
 const FILTROS_VAZIOS: FiltrosCronograma = {
   status: [],
@@ -67,7 +79,7 @@ interface ArvoreCronogramaProps {
   criarNo: (novo: NovoNo) => Promise<NoCronogramaCompleto>;
   excluirNo: (id: number) => Promise<void>;
   duplicarNo: (no: NoCronogramaCompleto) => Promise<void>;
-  moverItem: (seqite: number, parentId: number | null) => Promise<void>;
+  moverItem: (seqite: number, parentId: number | null, ajustarFilhos?: boolean) => Promise<void>;
   // Cria pasta raiz (agrupa itens da proposta) — ação de nível de proposta inteira, não
   // de um item específico (ver backend podeGerenciarProposta).
   podeGerenciarProposta: boolean;
@@ -127,6 +139,14 @@ export function ArvoreCronograma({
   const [erroAcao, setErroAcao] = useState<string | null>(null);
   const [ghostAberto, setGhostAberto] = useState<number | null>(null);
   const [alocarConsultoresNoId, setAlocarConsultoresNoId] = useState<number | null>(null);
+  // Mexer nas datas de um pai (ou mover um nó) que deixaria nós abaixo fora do período: o servidor
+  // devolve a lista, e este modal pergunta se pode encaixar as datas deles. `aplicar` repete a
+  // operação original pedindo o ajuste; `cancelar` rejeita a promessa que a operação está esperando.
+  const [ajusteDatas, setAjusteDatas] = useState<{
+    impactos: ImpactoDatas[];
+    aplicar: () => Promise<void>;
+    cancelar: () => void;
+  } | null>(null);
 
   useEffect(() => {
     setExpandidos(carregarExpansaoSalva(projetoId));
@@ -338,6 +358,34 @@ export function ArvoreCronograma({
     setExpandidos(tudoExpandido ? new Set() : new Set(idsComFilhos));
   }
 
+  // Roda uma operação que muda datas/pai. Se o servidor avisar que ficaria nó abaixo fora do período
+  // (409), mostra o modal e, aceito o ajuste, repete a operação com `ajustarFilhos`. A promessa só
+  // termina quando o usuário decide — aplicou (resolve) ou cancelou (rejeita com AJUSTE_CANCELADO).
+  function comAjusteDeDatas(acao: (ajustarFilhos: boolean) => Promise<void>): Promise<void> {
+    return acao(false).catch((err) => {
+      if (!(err instanceof ErroDatasForaDoPai)) throw err;
+      return new Promise<void>((resolve, reject) => {
+        setAjusteDatas({
+          impactos: err.impactos,
+          aplicar: async () => {
+            await acao(true);
+            setAjusteDatas(null);
+            resolve();
+          },
+          cancelar: () => {
+            setAjusteDatas(null);
+            reject(new Error(AJUSTE_CANCELADO));
+          },
+        });
+      });
+    });
+  }
+
+  function mostrarErroAcao(err: unknown) {
+    const mensagem = (err as Error).message;
+    if (mensagem !== AJUSTE_CANCELADO) setErroAcao(mensagem);
+  }
+
   async function duplicar(no: NoCronogramaCompleto) {
     try {
       await duplicarNo(no);
@@ -349,14 +397,14 @@ export function ArvoreCronograma({
   async function moverPara(no: NoCronogramaCompleto, novoParentId: number) {
     try {
       if (no.tipo === "item") {
-        await moverItem(no.seqite!, novoParentId);
+        await comAjusteDeDatas((ajustar) => moverItem(no.seqite!, novoParentId, ajustar));
       } else {
         const irmaos = filhosDe.get(novoParentId) ?? [];
-        await atualizarNo(no.id, { parentId: novoParentId, ordem: irmaos.length });
+        await comAjusteDeDatas((ajustar) => atualizarNo(no.id, { parentId: novoParentId, ordem: irmaos.length, ajustarFilhos: ajustar }));
       }
       setExpandidos((atual) => new Set(atual).add(novoParentId));
     } catch (err) {
-      setErroAcao((err as Error).message);
+      mostrarErroAcao(err);
     }
   }
 
@@ -469,7 +517,7 @@ export function ArvoreCronograma({
     }
     const destino = filhosDe.get(novoPai.id) ?? [];
     setExpandidos((atual) => new Set(atual).add(novoPai.id));
-    atualizarNo(no.id, { parentId: novoPai.id, ordem: destino.length }).catch((err) => setErroAcao((err as Error).message));
+    comAjusteDeDatas((ajustar) => atualizarNo(no.id, { parentId: novoPai.id, ordem: destino.length, ajustarFilhos: ajustar })).catch(mostrarErroAcao);
   }
 
   function dedentar(no: NoCronogramaCompleto) {
@@ -483,7 +531,7 @@ export function ArvoreCronograma({
     if (avoId == null) return;
     const irmaosDestino = (filhosDe.get(avoId) ?? []).slice().sort((a, b) => a.ordem - b.ordem);
     const idxPai = irmaosDestino.findIndex((n) => n.id === pai.id);
-    atualizarNo(no.id, { parentId: avoId, ordem: idxPai + 1 }).catch((err) => setErroAcao((err as Error).message));
+    comAjusteDeDatas((ajustar) => atualizarNo(no.id, { parentId: avoId, ordem: idxPai + 1, ajustarFilhos: ajustar })).catch(mostrarErroAcao);
   }
 
   useEffect(() => {
@@ -544,9 +592,9 @@ export function ArvoreCronograma({
       setErroAcao(null);
       setExpandidos((atualExp) => new Set(atualExp).add(targetNo.id));
       try {
-        await moverItem(dragNo.seqite!, targetNo.id);
+        await comAjusteDeDatas((ajustar) => moverItem(dragNo.seqite!, targetNo.id, ajustar));
       } catch (err) {
-        setErroAcao((err as Error).message);
+        mostrarErroAcao(err);
       }
       return;
     }
@@ -613,15 +661,27 @@ export function ArvoreCronograma({
     setErroAcao(null);
     setExpandidos((atualExp) => (modo === "into" ? new Set(atualExp).add(novoParentId!) : atualExp));
     try {
-      await Promise.all(
-        novaLista.map((n, i) =>
-          n.ordem === i && n.parentId === novoParentId ? Promise.resolve() : atualizarNo(n.id, { ordem: i, parentId: novoParentId })
-        )
+      await comAjusteDeDatas((ajustar) =>
+        Promise.all(
+          novaLista.map((n, i) =>
+            n.ordem === i && n.parentId === novoParentId
+              ? Promise.resolve()
+              : atualizarNo(n.id, { ordem: i, parentId: novoParentId, ajustarFilhos: ajustar })
+          )
+        ).then(() => undefined)
       );
     } catch (err) {
-      setErroAcao((err as Error).message);
+      mostrarErroAcao(err);
+      // As demais reordenações já foram gravadas mesmo quando a do nó movido foi recusada/cancelada.
       onTentarNovamente();
     }
+  }
+
+  // Salvar pelo drawer: se as novas datas deixariam nó abaixo fora do período, o modal pergunta e a
+  // promessa só resolve quando o ajuste foi aplicado (o drawer fecha sozinho) — cancelar rejeita e o
+  // drawer segue aberto com a mensagem.
+  function salvarDoDrawer(id: number, patch: PatchNo): Promise<void> {
+    return comAjusteDeDatas((ajustar) => atualizarNo(id, { ...patch, ajustarFilhos: ajustar }));
   }
 
   const drawerNo = drawerNoId != null ? porId.get(drawerNoId) : undefined;
@@ -778,21 +838,30 @@ export function ArvoreCronograma({
           </div>
         ) : (
           <div>
-            <div className="flex items-center gap-2 border-b border-border bg-surface-2 py-2 pl-[14px] pr-3">
+            {/* Cabeçalho com o MESMO espaçamento (gap/pr) e as MESMAS larguras da linha (LinhaNo.tsx):
+                qualquer diferença aqui desloca o rótulo de cada coluna em relação ao valor. */}
+            <div className={`flex items-center ${CLASSES_ESPACAMENTO_LINHA} border-b border-border bg-surface-2 py-2 pl-[14px]`}>
               <span className="w-4 flex-none" />
               <span className="flex-1 font-mono text-[11px] font-medium uppercase tracking-wider text-muted">Estrutura</span>
-              {/* Rótulos das colunas estáticas da linha de item — as larguras têm que
-                  bater com as de LinhaNo, senão o cabeçalho descola do conteúdo. */}
               {/* Um rótulo pra vaga compartilhada: item mostra o departamento executor,
                   atividade mostra o responsável. */}
-              <span className="hidden w-[168px] flex-none font-mono text-[11px] font-medium uppercase tracking-wider text-muted sm:block">
+              <span
+                className="hidden flex-none font-mono text-[11px] font-medium uppercase tracking-wider text-muted sm:block"
+                style={{ width: LARGURA_COLUNA_RESP_PX }}
+              >
                 Depto. / Resp.
               </span>
-              {["Orçado", "Realizado", "Alocado"].map((rotulo) => (
+              {(
+                [
+                  ["Orçado", COLUNA_HORAS_MIN_PX.orcado],
+                  ["Realizado", COLUNA_HORAS_MIN_PX.realizado],
+                  ["Alocado", COLUNA_HORAS_MIN_PX.alocado],
+                ] as const
+              ).map(([rotulo, minimo]) => (
                 <span
                   key={rotulo}
                   className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
-                  style={{ width: larguraColunaHorasPx(larguraHoras) }}
+                  style={{ width: larguraColunaHorasPx(larguraHoras, minimo) }}
                 >
                   {rotulo}
                 </span>
@@ -800,16 +869,22 @@ export function ArvoreCronograma({
               {/* Bloq. Exce. / Hrs. Exce. / Bloq. Apto. — trio fixo, nesta ordem exata (ver
                   LinhaNo: checkbox, valor/input, checkbox, todos operando na mesma alocação
                   quando o nó tem exatamente 1). */}
-              <span className="hidden w-[104px] flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block">
+              <span
+                className="hidden flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
+                style={{ width: LARGURA_COLUNA_BLOQ_EXCE_PX }}
+              >
                 Bloq. Exce.
               </span>
               <span
                 className="hidden flex-none text-right font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
-                style={{ width: larguraColunaHorasPx(larguraHoras) }}
+                style={{ width: larguraColunaHorasPx(larguraHoras, COLUNA_HORAS_MIN_PX.excedente) }}
               >
                 Hrs. Exce.
               </span>
-              <span className="hidden w-[84px] flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block">
+              <span
+                className="hidden flex-none text-center font-mono text-[11px] font-medium uppercase tracking-wider text-muted md:block"
+                style={{ width: LARGURA_COLUNA_BLOQ_APTO_PX }}
+              >
                 Bloq. Apto.
               </span>
               <span className="w-6 flex-none" />
@@ -834,11 +909,15 @@ export function ArvoreCronograma({
           agregados={agregados}
           candidatosPredecessora={candidatosPredecessora}
           onFechar={() => setDrawerNoId(null)}
-          onSalvar={atualizarNo}
+          onSalvar={salvarDoDrawer}
           larguraHoras={larguraHoras}
           bloqueiaExcedenteEstrutura={bloqueiaExcedenteEstrutura}
           atualizarConfigApontamentoAlocacao={atualizarConfigApontamentoAlocacao}
         />
+      )}
+
+      {ajusteDatas && (
+        <ModalAjusteDatasFilhos impactos={ajusteDatas.impactos} onAplicar={ajusteDatas.aplicar} onCancelar={ajusteDatas.cancelar} />
       )}
 
       {alocarConsultoresNoId != null &&

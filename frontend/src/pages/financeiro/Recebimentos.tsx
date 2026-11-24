@@ -6,8 +6,13 @@ import { ContaFilter, ContaOption } from "../../components/financeiro/ContaFilte
 import { ClienteFilter, ClienteOption } from "../../components/financeiro/ClienteFilter";
 import { RankingBarra, RankingItem } from "../../components/ui/RankingBarra";
 import { RecebidoPorDiaChart, PontoRecebidoDia } from "../../components/financeiro/RecebidoPorDiaChart";
-import { RecebimentosTable, RecebimentoRow } from "../../components/financeiro/RecebimentosTable";
-import { Skeleton } from "../../components/ui/Skeleton";
+import { RecebimentosTable } from "../../components/financeiro/RecebimentosTable";
+import { KpiTile, KpiTileSkeleton } from "../../components/ui/KpiTile";
+import { SeletorPeriodo } from "../../components/financeiro/SeletorPeriodo";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
+import { campoEmpFil, campoPeriodo } from "../../components/ui/padroesFiltros/campos";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePeriodo } from "../../utils/periodo";
 
 const API_BASE = "/api/financeiro/recebimentos";
 
@@ -25,22 +30,9 @@ interface OpcoesFiltro {
   contas: ContaOption[];
 }
 
-interface ListaResponse {
-  rows: RecebimentoRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-}
-
-const LISTA_VAZIA: ListaResponse = { rows: [], page: 1, pageSize: 50, total: 0 };
-
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtMoney = (v: number) => `R$ ${currency.format(v)}`;
 const fmtPct = (v: number) => `${v.toFixed(1)}%`;
-
-function dateInputClass() {
-  return "rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-}
 
 export function Recebimentos() {
   const [opcoes, setOpcoes] = useState<OpcoesFiltro | null>(null);
@@ -48,19 +40,31 @@ export function Recebimentos() {
   const [portadores, setPortadores] = useState<string[]>([]);
   const [contas, setContas] = useState<string[]>([]);
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
-  const [datpgtInicio, setDatpgtInicio] = useState<string | null>(null);
-  const [datpgtFim, setDatpgtFim] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
+  const periodo = usePeriodo();
+  const { de: datpgtInicio, ate: datpgtFim } = periodo;
 
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [porDia, setPorDia] = useState<PontoRecebidoDia[]>([]);
   const [porPortador, setPorPortador] = useState<RankingItem[]>([]);
   const [porConta, setPorConta] = useState<RankingItem[]>([]);
-  const [lista, setLista] = useState<ListaResponse>(LISTA_VAZIA);
 
   const [loadingResumo, setLoadingResumo] = useState(true);
-  const [loadingTabela, setLoadingTabela] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+
+  // Padrão de cada filtro (estrela): aplicado uma vez ao abrir, antes da 1ª consulta.
+  const p = usePadroesTela({
+    tela: "financeiro.recebimentos",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    campos: {
+      clientes: { rotulo: "Cliente", atual: clientes, aplicar: setClientes, validar: regras.listaObjetos("codcli"), semOpcoes: true },
+      empFil: campoEmpFil(empresasFiliais, setEmpresasFiliais, opcoes?.filiais),
+      portadores: { rotulo: "Portador", atual: portadores, aplicar: setPortadores, validar: regras.lista("string", opcoes?.portadores.map((x) => x.codpor)) },
+      contas: { rotulo: "Conta", atual: contas, aplicar: setContas, validar: regras.lista("string", opcoes?.contas.map((x) => x.numcco)) },
+      periodo: campoPeriodo(periodo),
+    },
+  });
 
   const empFilIds = empresasFiliais.join(",") || undefined;
   const portadorIds = portadores.join(",") || undefined;
@@ -71,10 +75,14 @@ export function Recebimentos() {
     axios
       .get(`${API_BASE}/opcoes-filtro`)
       .then(({ data }) => setOpcoes(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro"));
+      .catch((err) => {
+        setOpcoesFalharam(true);
+        setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro");
+      });
   }, []);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoadingResumo(true);
     const params = {
       empFil: empFilIds,
@@ -113,48 +121,24 @@ export function Recebimentos() {
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os indicadores"))
       .finally(() => setLoadingResumo(false));
-  }, [empFilIds, portadorIds, contaIds, clienteIds, datpgtInicio, datpgtFim]);
-
-  useEffect(() => {
-    setLoadingTabela(true);
-    axios
-      .get(API_BASE, {
-        params: {
-          empFil: empFilIds,
-          portadores: portadorIds,
-          contas: contaIds,
-          clientes: clienteIds,
-          datpgtInicio: datpgtInicio ?? undefined,
-          datpgtFim: datpgtFim ?? undefined,
-          page,
-          pageSize: 50,
-        },
-      })
-      .then(({ data }) => setLista(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a lista de recebimentos"))
-      .finally(() => setLoadingTabela(false));
-  }, [empFilIds, portadorIds, contaIds, clienteIds, datpgtInicio, datpgtFim, page]);
+  }, [empFilIds, portadorIds, contaIds, clienteIds, datpgtInicio, datpgtFim, p.pronto]);
 
   function handleEmpFilChange(v: string[]) {
     setEmpresasFiliais(v);
-    setPage(1);
   }
   function handlePortadoresChange(v: string[]) {
     setPortadores(v);
-    setPage(1);
   }
   function handleContasChange(v: string[]) {
     setContas(v);
-    setPage(1);
   }
   function handleClientesChange(v: ClienteOption[]) {
     setClientes(v);
-    setPage(1);
   }
 
   const kpiCards = kpis
     ? [
-        { label: "Total Recebido", value: fmtMoney(kpis.totalRecebido), sub: "no período (últimos 30d por padrão)" },
+        { label: "Total Recebido", value: fmtMoney(kpis.totalRecebido), sub: "no período (mês corrente por padrão)" },
         { label: "Nº de Recebimentos", value: kpis.qtdRecebimentos.toLocaleString("pt-BR"), sub: "movimentos com baixa PG" },
         { label: "Ticket Médio", value: fmtMoney(kpis.ticketMedio), sub: "por recebimento" },
         { label: "% Recebido no Prazo", value: fmtPct(kpis.pctNoPrazo), sub: "sem dias de atraso" },
@@ -169,40 +153,18 @@ export function Recebimentos() {
 
       <div className="mb-6 flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <ClienteFilter selecionados={clientes} onChange={handleClientesChange} />
+          <ClienteFilter selecionados={clientes} onChange={handleClientesChange} acessorio={p.estrela("clientes")} />
           <EmpresaFilialFilter
             empresas={opcoes?.empresas ?? []}
             filiais={opcoes?.filiais ?? []}
             selecionados={empresasFiliais}
             onChange={handleEmpFilChange}
+            acessorio={p.estrela("empFil")}
           />
-          <PortadorFilter opcoes={opcoes?.portadores ?? []} selecionados={portadores} onChange={handlePortadoresChange} />
-          <ContaFilter opcoes={opcoes?.contas ?? []} selecionados={contas} onChange={handleContasChange} />
+          <PortadorFilter opcoes={opcoes?.portadores ?? []} selecionados={portadores} onChange={handlePortadoresChange} acessorio={p.estrela("portadores")} />
+          <ContaFilter opcoes={opcoes?.contas ?? []} selecionados={contas} onChange={handleContasChange} acessorio={p.estrela("contas")} />
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted">Recebido entre:</span>
-            <input
-              type="date"
-              className={dateInputClass()}
-              value={datpgtInicio ?? ""}
-              onChange={(e) => {
-                setDatpgtInicio(e.target.value || null);
-                setPage(1);
-              }}
-            />
-            <span className="text-sm text-muted">até</span>
-            <input
-              type="date"
-              className={dateInputClass()}
-              value={datpgtFim ?? ""}
-              onChange={(e) => {
-                setDatpgtFim(e.target.value || null);
-                setPage(1);
-              }}
-            />
-          </div>
-        </div>
+        <SeletorPeriodo periodo={periodo} rotuloDatas="Recebido entre" acessorio={p.estrela("periodo")} />
       </div>
 
       {erro && (
@@ -214,11 +176,7 @@ export function Recebimentos() {
       {loadingResumo ? (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="rounded-lg border border-border bg-surface p-5">
-              <Skeleton className="mb-2 h-3.5 w-32" />
-              <Skeleton className="h-7 w-20" />
-              <Skeleton className="mt-2 h-3 w-24" />
-            </div>
+            <KpiTileSkeleton key={i} />
           ))}
         </div>
       ) : (
@@ -226,11 +184,7 @@ export function Recebimentos() {
           <>
             <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {kpiCards.map((kpi) => (
-                <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
-                  <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
-                  <span className="block font-mono text-2xl font-semibold tabular-nums text-foreground">{kpi.value}</span>
-                  <p className="mt-1.5 text-[11px] text-muted">{kpi.sub}</p>
-                </div>
+                <KpiTile key={kpi.label} label={kpi.label} value={kpi.value} sub={kpi.sub} />
               ))}
             </div>
 
@@ -248,12 +202,8 @@ export function Recebimentos() {
 
       <div className="mt-6">
         <RecebimentosTable
-          rows={lista.rows}
-          page={lista.page}
-          pageSize={lista.pageSize}
-          total={lista.total}
-          loading={loadingTabela}
-          onPageChange={setPage}
+          url={API_BASE}
+          params={{ empFil: empFilIds, portadores: portadorIds, contas: contaIds, clientes: clienteIds, datpgtInicio: datpgtInicio ?? undefined, datpgtFim: datpgtFim ?? undefined }}
         />
       </div>
     </div>

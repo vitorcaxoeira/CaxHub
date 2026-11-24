@@ -7,16 +7,22 @@ import { randomUUID } from "crypto";
 //
 // Separado de pararExecucoesAutomaticamente.ts (teto de horas / fim de expediente) de
 // propósito: aquela varredura roda a cada 5 minutos, calibrada pra um atraso que ninguém
-// nota porque o motivo (acabaram as horas, acabou o expediente) já era esperado. Aqui o
-// pedido foi por uma resposta perto de 10s — fechar a aba é uma ação do agora, não algo
-// que se descobre "eventualmente".
+// nota porque o motivo (acabaram as horas, acabou o expediente) já era esperado. Aqui a
+// varredura roda a cada 15s, mas só para depois de TOLERANCIA_MS sem sinal do app.
 //
 // O cancelamento mora do OUTRO lado (GET /atividades/minha-sessao-aberta, que o vigia já
 // consulta a cada 30s): se o app volta a perguntar pela sessão, `fechamentoSolicitadoEm`
 // volta a null sozinho. Esta função só vê o que sobrou sem resposta.
 
 const INTERVALO_MS = 15_000;
-const TOLERANCIA_MS = 10_000;
+// 90s e não os 10s de antes (24/09/2026): uma aba do CaxHub ESCONDIDA só consulta a sessão
+// ~1x/min (o Chrome limita os timers), e a visível a cada 30s. Com 10s, fechar/recarregar UMA
+// aba com outra aberta, ou sair da página e voltar com Voltar, quase sempre parava a
+// atividade — a consultora do codfor 396 (atividade 47713) reclamou de paradas por
+// "pagina_fechada" sem ter fechado nada. As horas não mudam: a sessão fecha no instante do
+// AVISO (fechamentoSolicitadoEm), não no desta checagem. Custo: fechar de verdade deixa o
+// card "em andamento" por até 90s.
+const TOLERANCIA_MS = 90_000;
 
 export interface ResultadoParadaPorFechamento {
   analisadas: number;
@@ -56,6 +62,14 @@ export async function pararSessoesAoFecharPagina(agora: Date = new Date()): Prom
         agora: sessao.fechamentoSolicitadoEm!,
         origemEvento: "job",
         motivoParada: "pagina_fechada",
+        gatilhoParada: {
+          ...(sessao.fechamentoDetalhe && typeof sessao.fechamentoDetalhe === "object" && !Array.isArray(sessao.fechamentoDetalhe)
+            ? (sessao.fechamentoDetalhe as Record<string, unknown>)
+            : {}),
+          solicitadoEm: sessao.fechamentoSolicitadoEm!.toISOString(),
+          // Quanto ficou sem sinal do app até o job agir — se for bem acima de 90s, o job ficou parado.
+          aguardouSegundos: Math.round((agora.getTime() - sessao.fechamentoSolicitadoEm!.getTime()) / 1000),
+        },
       });
       await prisma.$transaction(operacoes);
       resultado.paradas++;

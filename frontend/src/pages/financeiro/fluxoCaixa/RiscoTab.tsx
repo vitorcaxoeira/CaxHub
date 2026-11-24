@@ -2,18 +2,9 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { AgingBucketsChart, AgingBucket } from "../../../components/financeiro/AgingBucketsChart";
 import { DonutChart, DonutItem } from "../../../components/ui/DonutChart";
-import { ClientesRiscoTable, ClienteRiscoRow } from "../../../components/financeiro/ClientesRiscoTable";
+import { ClientesRiscoTable } from "../../../components/financeiro/ClientesRiscoTable";
 
 const API_BASE = "/api/financeiro/fluxo-caixa";
-
-interface ListaClientesRisco {
-  rows: ClienteRiscoRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-}
-
-const LISTA_VAZIA: ListaClientesRisco = { rows: [], page: 1, pageSize: 20, total: 0 };
 
 interface RiscoTabProps {
   empFilIds?: string;
@@ -30,12 +21,6 @@ export function RiscoTab({ empFilIds, refreshKey }: RiscoTabProps) {
   const [erroConcentracao, setErroConcentracao] = useState<string | null>(null);
   const [loadingConcentracao, setLoadingConcentracao] = useState(true);
 
-  const [lista, setLista] = useState<ListaClientesRisco>(LISTA_VAZIA);
-  const [erroLista, setErroLista] = useState<string | null>(null);
-  const [loadingLista, setLoadingLista] = useState(true);
-  const [page, setPage] = useState(1);
-  const [sort, setSort] = useState("score");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     setLoadingAging(true);
@@ -70,29 +55,8 @@ export function RiscoTab({ empFilIds, refreshKey }: RiscoTabProps) {
       .finally(() => setLoadingConcentracao(false));
   }, [empFilIds, refreshKey]);
 
-  useEffect(() => {
-    setLoadingLista(true);
-    axios
-      .get(`${API_BASE}/clientes-risco`, {
-        params: { empFil: empFilIds, bucket: bucketSelecionado ?? undefined, page, pageSize: 20, sort, dir },
-      })
-      .then(({ data }) => {
-        setLista(data);
-        setErroLista(null);
-      })
-      .catch((err) => setErroLista(err.response?.data?.error ?? "Falha ao carregar os clientes em risco"))
-      .finally(() => setLoadingLista(false));
-  }, [empFilIds, bucketSelecionado, page, sort, dir, refreshKey]);
-
   function handleSelectBucket(bucket: string | null) {
     setBucketSelecionado(bucket);
-    setPage(1);
-  }
-
-  function handleSortChange(novoSort: string, novoDir: "asc" | "desc") {
-    setSort(novoSort);
-    setDir(novoDir);
-    setPage(1);
   }
 
   return (
@@ -127,21 +91,7 @@ export function RiscoTab({ empFilIds, refreshKey }: RiscoTabProps) {
         </div>
       </div>
 
-      {erroLista && (
-        <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{erroLista}</div>
-      )}
-      <ClientesRiscoTable
-        rows={lista.rows}
-        page={lista.page}
-        pageSize={lista.pageSize}
-        total={lista.total}
-        loading={loadingLista}
-        onPageChange={setPage}
-        sort={sort}
-        dir={dir}
-        onSortChange={handleSortChange}
-        empFilIds={empFilIds}
-      />
+      <ClientesRiscoTable url={`${API_BASE}/clientes-risco`} params={{ empFil: empFilIds, bucket: bucketSelecionado ?? undefined }} empFilIds={empFilIds} recarga={refreshKey} />
     </div>
   );
 }

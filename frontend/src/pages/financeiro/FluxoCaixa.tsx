@@ -1,5 +1,9 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { CampoFiltro, SelectFiltro } from "../../components/ui/ControlesFiltro";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
+import { campoEmpFil } from "../../components/ui/padroesFiltros/campos";
+import { regras } from "../../components/ui/padroesFiltros/regras";
 import { EmpresaFilialFilter, EmpresaOption, FilialOption } from "../../components/financeiro/EmpresaFilialFilter";
 import { SincronizacaoStatus } from "../../components/financeiro/SincronizacaoStatus";
 import { Tabs } from "../../components/ui/Tabs";
@@ -16,10 +20,6 @@ interface OpcoesFiltro {
 
 type PeriodoPreset = "30" | "60" | "90" | "custom";
 
-function dateInputClass() {
-  return "rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-}
-
 const TABS = [
   { key: "executiva", label: "Executiva" },
   { key: "risco", label: "Risco" },
@@ -35,6 +35,30 @@ export function FluxoCaixa() {
   const [activeTab, setActiveTab] = useState("executiva");
   const [refreshKey, setRefreshKey] = useState(0);
   const [erro, setErro] = useState<string | null>(null);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+
+  // Padrão de cada filtro (estrela): aplicado uma vez ao abrir, antes da 1ª consulta das abas.
+  const p = usePadroesTela({
+    tela: "financeiro.fluxo-caixa",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    campos: {
+      empFil: campoEmpFil(empresasFiliais, setEmpresasFiliais, opcoes?.filiais),
+      // O preset (30/60/90 dias) ou, em "Personalizado", as datas fixas.
+      periodo: {
+        rotulo: "Período",
+        atual: periodoPreset === "custom" ? ["custom", periodoInicioCustom ?? "", periodoFimCustom ?? ""] : [periodoPreset],
+        aplicar: (v: { preset: string; de?: string; ate?: string }) => {
+          setPeriodoPreset(v.preset as PeriodoPreset);
+          setPeriodoInicioCustom(v.de ?? null);
+          setPeriodoFimCustom(v.ate ?? null);
+        },
+        validar: regras.periodo(["30", "60", "90", "custom"], "custom"),
+        semOpcoes: true,
+        ordem: true,
+      },
+    },
+  });
 
   const empFilIds = empresasFiliais.join(",") || undefined;
 
@@ -42,7 +66,10 @@ export function FluxoCaixa() {
     axios
       .get(`${API_BASE}/opcoes-filtro`)
       .then(({ data }) => setOpcoes(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro"));
+      .catch((err) => {
+        setOpcoesFalharam(true);
+        setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro");
+      });
   }, []);
 
   function handleSincronizado() {
@@ -69,32 +96,25 @@ export function FluxoCaixa() {
           filiais={opcoes?.filiais ?? []}
           selecionados={empresasFiliais}
           onChange={setEmpresasFiliais}
+          acessorio={p.estrela("empFil")}
         />
-        <select
+        <SelectFiltro
+          aria-label="Período"
+          className="w-44"
           value={periodoPreset}
           onChange={(e) => setPeriodoPreset(e.target.value as PeriodoPreset)}
-          className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          acessorio={p.estrela("periodo")}
         >
           <option value="30">30 dias</option>
           <option value="60">60 dias</option>
           <option value="90">90 dias</option>
           <option value="custom">Personalizado</option>
-        </select>
+        </SelectFiltro>
         {periodoPreset === "custom" && (
           <div className="flex items-center gap-2">
-            <input
-              type="date"
-              className={dateInputClass()}
-              value={periodoInicioCustom ?? ""}
-              onChange={(e) => setPeriodoInicioCustom(e.target.value || null)}
-            />
+            <CampoFiltro type="date" aria-label="Período, de" value={periodoInicioCustom ?? ""} onChange={(e) => setPeriodoInicioCustom(e.target.value || null)} />
             <span className="text-sm text-muted">até</span>
-            <input
-              type="date"
-              className={dateInputClass()}
-              value={periodoFimCustom ?? ""}
-              onChange={(e) => setPeriodoFimCustom(e.target.value || null)}
-            />
+            <CampoFiltro type="date" aria-label="Período, até" value={periodoFimCustom ?? ""} onChange={(e) => setPeriodoFimCustom(e.target.value || null)} />
           </div>
         )}
       </div>
@@ -107,11 +127,11 @@ export function FluxoCaixa() {
 
       <Tabs tabs={TABS} activeKey={activeTab} onChange={setActiveTab} />
 
-      {activeTab === "executiva" && (
+      {p.pronto && activeTab === "executiva" && (
         <ExecutivaTab empFilIds={empFilIds} periodoParams={periodoParams} refreshKey={refreshKey} />
       )}
-      {activeTab === "risco" && <RiscoTab empFilIds={empFilIds} refreshKey={refreshKey} />}
-      {activeTab === "operacional" && <OperacionalTab empFilIds={empFilIds} refreshKey={refreshKey} />}
+      {p.pronto && activeTab === "risco" && <RiscoTab empFilIds={empFilIds} refreshKey={refreshKey} />}
+      {p.pronto && activeTab === "operacional" && <OperacionalTab empFilIds={empFilIds} refreshKey={refreshKey} />}
     </div>
   );
 }

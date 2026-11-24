@@ -1,9 +1,11 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "metas_anuais-sync";
 export const CRON_EXPR = "15 6 * * *";
@@ -76,43 +78,31 @@ export async function runMetaAnualSync(desde?: Date): Promise<void> {
     });
     const msEscrita = Date.now() - inicioEscrita;
 
-    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — vem comentada de
-    // propósito: ligar a varredura exige duas decisões que um gerador não tem como
-    // adivinhar, e o default de politicaVarredura.ts é "desligada" justamente pra tabela
-    // nova nunca começar a marcar registro sozinha.
-    //   1. ESCOPO — precisa excluir registro nascido no CaxHub, se esta tabela for de mão
-    //      dupla (ex.: { origemCaxHub: false }), senão ele é acusado de removido.
-    //   2. CONTAGEM NA ORIGEM — tem que repetir exatamente o mesmo FROM/WHERE da QUERY
-    //      acima, incluindo filtro aplicado às linhas dentro do laço, senão a guarda
-    //      acusa truncamento onde não houve.
-    //
-    // Pra ligar: descomentar o bloco, acrescentar aos imports
-    //   import { Prisma } from "@prisma/client";
-    //   import { varrerRemovidos } from "./varrerRemovidos";
-    // e registrar o JOB_NAME em src/sync/politicaVarredura.ts começando por "simular" —
-    // nunca direto em "marcar", sem antes conferir os detectados contra o ERP.
-    //
-    // const varredura = await varrerRemovidos<Prisma.MetaAnualWhereInput>(prisma.metaAnual, {
-    //   jobName: JOB_NAME,
-    //   inicio,
-    //   linhasProcessadas: rows.length,
-    //   escopo: {},
-    //   queryContagemOrigem: `SELECT COUNT(*) AS total FROM usu_tmetaanual`,
-    // });
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo, nunca só o schema). Escopo
+    // `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do escopo.
+    // Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela tela é
+    // decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.MetaAnualWhereInput>(prisma.metaAnual, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(BASE_QUERY),
+      inicio,
+      linhasProcessadas: resultado.linhasProcessadas,
+      desde,
+    });
 
     await prisma.syncLog.create({
-      // Ao ligar a varredura, acrescentar aqui pra ela aparecer no painel:
-      //   message: `${resultado.linhasProcessadas} linhas em ...s — ${varredura.resumo}`,
-      //   varreduraModo: varredura.modo,
-      //   varreduraDetectados: varredura.candidatos,
-      //   varreduraInicio: inicio,
       data: {
         jobName: JOB_NAME,
         query: QUERY,
         status: "success",
         message:
           `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
-          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)`,
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
         duracaoMs: Date.now() - inicio.getTime(),
       },
     });

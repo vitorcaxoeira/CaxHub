@@ -1,5 +1,7 @@
 import axios from "axios";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
+import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Modal } from "../../components/ui/Modal";
 import { SelectBuscavel, OpcaoBuscavel } from "../../components/ui/SelectBuscavel";
@@ -8,6 +10,9 @@ import { formatarDuracao } from "../../utils/duracao";
 interface JobSync {
   jobName: string;
   displayName: string;
+  // Nome da tabela na origem (Senior) e local (Postgres) — subtítulo sob o nome, no Atlas.
+  tabelaSenior: string;
+  tabelaLocal: string;
   ordemExecucao: number;
   totalRegistros: number;
   suportaAlterados: boolean;
@@ -43,14 +48,44 @@ interface JobSync {
   temFiltroAlterados: boolean;
   proximaExecucao: string;
   emAndamento: boolean;
+  // Modo CONFIGURADO (10/09/2026, porte do CaxHub_Atlas) — diferente de `ultimaVarredura.modo`
+  // acima, que é o modo da ÚLTIMA EXECUÇÃO. Editável pelo <select> na aba "Removidos" quando
+  // varreduraDisponivel; os dois podem divergir logo depois de mudar o modo pela tela, antes
+  // do próximo sync rodar.
+  varreduraModo: "desligada" | "simular" | "marcar";
+  varreduraDisponivel: boolean;
+  // Tamanho de lote de upsert (11/09/2026, porte do CaxHub_Atlas) — editável só em jobs com
+  // `usaUpsertEmLote: true` (o upsert dos demais ainda é linha a linha, sem opção nenhuma de
+  // lote). `tamanhoLoteConfigurado` é `null` quando não há config salva; `tamanhoLoteEfetivo`
+  // é o número que de fato vale (o configurado, ou o default de upsertEmLote.ts) — mostrar os
+  // dois evita a tela sugerir que 1000 foi uma escolha do admin quando é só o default.
+  usaUpsertEmLote: boolean;
+  tamanhoLoteConfigurado: number | null;
+  tamanhoLoteEfetivo: number;
+  // Por que a ÚLTIMA varredura não marcou (21/10/2026): teto, filtro em campo não espelhado, contagem... `null` = não foi barrada.
+  bloqueioVarredura: BloqueioVarredura | null;
+  // Teto da varredura em % do que está vivo: o configurado na aba "Removidos" (null = padrão) e o que vale de fato.
+  tetoPctConfigurado: number | null;
+  tetoPctEfetivo: number;
 }
 
-interface ItemRemovido {
-  chave: string;
-  rotulo: string;
-  removidoEmSenior: string | null;
-  marcado: boolean;
+interface BloqueioVarredura {
+  tipo: "teto" | "filtro" | "contagem" | "puladas" | "falha";
+  motivo: string | null;
+  candidatos: number;
+  limite: number | null;
+  totalEscopo: number;
+  em: string;
 }
+
+// Selo da coluna Detecção quando a última varredura foi barrada; o motivo completo vai no title.
+const ROTULO_BLOQUEIO: Record<BloqueioVarredura["tipo"], (b: BloqueioVarredura) => string> = {
+  teto: (b) => `teto · ${b.candidatos.toLocaleString("pt-BR")}`,
+  filtro: () => "sem varredura: filtro",
+  contagem: () => "contagem não bate",
+  puladas: () => "linhas puladas",
+  falha: () => "falha na contagem",
+};
 
 // Catálogo de campos filtráveis (Fase 2 do plano de filtros na importação) — só leitura,
 // nenhum filtro é aplicado ainda. `fonte: "espelhado"` é o caminho instantâneo (sem SOAP,
@@ -217,6 +252,31 @@ const statusTone: Record<string, string> = {
   error: "bg-destructive/15 text-destructive",
 };
 
+// Filtros dos cards de resumo do topo — cada card é um botão. "todas" = sem filtro. Combina
+// (E) com a busca por texto, e os NÚMEROS dos cards continuam contando tudo, filtrado ou não.
+type FiltroKpi = "todas" | "erro" | "rodando" | "sumidos" | "bloqueada" | "desatualizada";
+
+const ROTULO_FILTRO_KPI: Record<Exclude<FiltroKpi, "todas">, string> = {
+  erro: "Com erro",
+  rodando: "Sincronizando agora",
+  sumidos: "Sumidos no Senior",
+  bloqueada: "Varredura bloqueada",
+  desatualizada: "Mais desatualizada",
+};
+
+// O que o modal de erro mostra: um instantâneo do job no momento do clique. O polling de 10s
+// pode trocar o status por baixo enquanto o modal está aberto, e o erro que a pessoa está lendo
+// não deve mudar de repente.
+interface ErroAberto {
+  jobName: string;
+  displayName: string;
+  tabelaSenior: string;
+  tabelaLocal: string;
+  quando: string | null;
+  duracaoMs: number | null;
+  mensagem: string;
+}
+
 // Quanto a varredura pode ficar atrás da sincronização antes de virar alerta. Uma tabela
 // que só roda no modo "Alterados" nunca é varrida — o cron completo é diário, então mais
 // de 3 dias de defasagem indica que só o incremental vem rodando.
@@ -242,7 +302,19 @@ function formatTempoAtras(iso: string | null): string {
   return `há ${diffDias} dia${diffDias === 1 ? "" : "s"}`;
 }
 
-export function SincronizacaoErp() {
+// A mesma tela serve aos dois sistemas Senior: o ERP (/sync-erp) e o HCM (/sync-hcm, módulo RH). O que muda
+// é a base da API, a dimensão de empresa (codemp no ERP, numemp no HCM), a rota de "Ver dados", os textos e,
+// só no HCM, o cartão de conexão no topo.
+export type SistemaSync = "erp" | "hcm";
+
+const CONFIG_SISTEMA: Record<SistemaSync, { api: string; rota: string; dimensao: string; titulo: string }> = {
+  erp: { api: "/api/sync-erp", rota: "/admin/sincronizacao-erp", dimensao: "codemp", titulo: "Importados do ERP" },
+  hcm: { api: "/api/sync-hcm", rota: "/admin/sincronizacao-hcm", dimensao: "numemp", titulo: "Importados do HCM" },
+};
+
+export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
+  const { api: API, rota: ROTA, dimensao: DIM, titulo: TITULO } = CONFIG_SISTEMA[sistema];
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState<JobSync[]>([]);
   const [sincronizandoTodos, setSincronizandoTodos] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -258,8 +330,20 @@ export function SincronizacaoErp() {
   // seletor de campo dos predicados (Filtro Todos/Alterados) passou a listar os mesmos campos
   // com busca — "Filtro(Todos)" é a aba padrão agora, único requisito é `job.suportaFiltro`
   // (true nos 35 jobs hoje).
-  const [abaExpandida, setAbaExpandida] = useState<"removidos" | "filtroTodos" | "filtroAlterados">("filtroTodos");
-  const [removidosPorJob, setRemovidosPorJob] = useState<Record<string, ItemRemovido[] | "carregando" | "erro">>({});
+  const [abaExpandida, setAbaExpandida] = useState<"removidos" | "lote" | "filtroTodos" | "filtroAlterados">("filtroTodos");
+  // Modo de varredura sendo salvo agora (10/09/2026, porte do CaxHub_Atlas) — um jobName de
+  // cada vez, mesmo padrão de `salvandoFiltro` abaixo.
+  const [salvandoVarredura, setSalvandoVarredura] = useState<string | null>(null);
+  // Teto da varredura por tabela (21/10/2026): rascunho do campo (por jobName) e liberação única do teto em dois passos.
+  const [rascunhoTetoPorJob, setRascunhoTetoPorJob] = useState<Record<string, string>>({});
+  const [confirmandoLiberacao, setConfirmandoLiberacao] = useState<string | null>(null);
+  const [liberando, setLiberando] = useState<string | null>(null);
+  // Tamanho de lote sendo salvo agora (11/09/2026, porte do CaxHub_Atlas), mesmo espírito de
+  // salvandoVarredura. Valor do input enquanto o admin edita (chaveado por jobName) — só vira
+  // PUT de verdade ao clicar "Salvar" (número livre merece confirmação, diferente do <select>
+  // de varredura que salva a cada troca).
+  const [salvandoLote, setSalvandoLote] = useState<string | null>(null);
+  const [rascunhoLotePorJob, setRascunhoLotePorJob] = useState<Record<string, string>>({});
   // Chave composta `jobName:fonte` — permite guardar o resultado espelhado e o do ERP ao
   // mesmo tempo (trocar de fonte não descarta o que já foi buscado).
   const [camposPorJob, setCamposPorJob] = useState<Record<string, RespostaCampos | "carregando" | { erro: string }>>({});
@@ -318,10 +402,12 @@ export function SincronizacaoErp() {
   // técnico do job ("empresa-sync"), útil pra achar rápido numa lista que já passa de 30
   // tabelas. Só filtra a tabela; os cards de resumo continuam contando tudo.
   const [busca, setBusca] = useState("");
+  const [filtroKpi, setFiltroKpi] = useState<FiltroKpi>("todas");
+  const [erroAberto, setErroAberto] = useState<ErroAberto | null>(null);
 
   function carregar() {
     axios
-      .get<ListaSyncErp>("/api/sync-erp")
+      .get<ListaSyncErp>(API)
       .then(({ data }) => {
         setJobs(data.jobs);
         setSincronizandoTodos(data.sincronizandoTodos);
@@ -334,19 +420,29 @@ export function SincronizacaoErp() {
   useEffect(() => {
     carregar();
     // Atualiza sozinho a cada 10s pra refletir "em andamento" -> concluído sem precisar
-    // que o usuário recarregue a página manualmente.
-    const intervalo = setInterval(carregar, 10000);
-    return () => clearInterval(intervalo);
+    // que o usuário recarregue a página manualmente. Aba em segundo plano não consulta (a lista
+    // custa uma rodada de COUNT(*) no banco) e, ao voltar, atualiza na hora.
+    const intervalo = setInterval(() => {
+      if (!document.hidden) carregar();
+    }, 10000);
+    const aoVoltar = () => {
+      if (!document.hidden) carregar();
+    };
+    document.addEventListener("visibilitychange", aoVoltar);
+    return () => {
+      clearInterval(intervalo);
+      document.removeEventListener("visibilitychange", aoVoltar);
+    };
   }, []);
 
   useEffect(() => {
     axios
-      .get<{ dimensoes: DimensaoInfo[] }>("/api/sync-erp/dimensoes")
+      .get<{ dimensoes: DimensaoInfo[] }>(`${API}/dimensoes`)
       .then(({ data }) => setDimensoes(data.dimensoes))
       .catch(() => {}); // botão "Filtro por Empresa" só some se isso falhar — sem alarde extra
   }, []);
 
-  const dimensaoCodemp = dimensoes.find((d) => d.chave === "codemp") ?? null;
+  const dimensaoCodemp = dimensoes.find((d) => d.chave === DIM) ?? null;
 
   function abrirModalDimensao() {
     setModalDimensaoAberto(true);
@@ -376,7 +472,7 @@ export function SincronizacaoErp() {
   function prevvisualizarCascata() {
     setPreviewCascata("carregando");
     axios
-      .post<{ resultados: ResultadoPropagacao[] }>("/api/sync-erp/dimensoes/codemp/pre-visualizar", {
+      .post<{ resultados: ResultadoPropagacao[] }>(`${API}/dimensoes/${DIM}/pre-visualizar`, {
         operador: operadorDimensao,
         valores: valoresDimensaoAtual(),
       })
@@ -389,7 +485,7 @@ export function SincronizacaoErp() {
     setErro(null);
     setConfirmacaoRecorteCascata(null);
     try {
-      const { data } = await axios.post<{ resultados: ResultadoPropagacao[] }>("/api/sync-erp/dimensoes/codemp/aplicar", {
+      const { data } = await axios.post<{ resultados: ResultadoPropagacao[] }>(`${API}/dimensoes/${DIM}/aplicar`, {
         operador: operadorDimensao,
         valores: valoresDimensaoAtual(),
         jobsExcluidos: [...excluidosCascata],
@@ -417,7 +513,7 @@ export function SincronizacaoErp() {
     setAplicandoCascata(true);
     setErro(null);
     try {
-      await axios.delete("/api/sync-erp/dimensoes/codemp");
+      await axios.delete(`${API}/dimensoes/${DIM}`);
       setPreviewCascata(null);
       carregar();
     } catch (err: any) {
@@ -431,7 +527,7 @@ export function SincronizacaoErp() {
     setDisparando(`${job.jobName}-${modo}`);
     setErro(null);
     try {
-      await axios.post(`/api/sync-erp/${job.jobName}/run`, { modo });
+      await axios.post(`${API}/${job.jobName}/run`, { modo });
       carregar();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao iniciar sincronização");
@@ -444,7 +540,7 @@ export function SincronizacaoErp() {
     setIniciandoTodos(true);
     setErro(null);
     try {
-      await axios.post("/api/sync-erp/run-all");
+      await axios.post(`${API}/run-all`);
       carregar();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao iniciar sincronização de todas as tabelas");
@@ -456,7 +552,7 @@ export function SincronizacaoErp() {
   // Abre/fecha o painel expansível da linha numa aba específica. Clicar de novo na mesma
   // aba já aberta fecha o painel (mesmo toggle que "Sumidos" já tinha); clicar numa aba
   // diferente com o painel já aberto só troca de conteúdo, sem fechar.
-  function abrirPainel(job: JobSync, aba: "removidos" | "filtroTodos" | "filtroAlterados") {
+  function abrirPainel(job: JobSync, aba: "removidos" | "lote" | "filtroTodos" | "filtroAlterados") {
     if (expandido === job.jobName && abaExpandida === aba) {
       setExpandido(null);
       return;
@@ -467,25 +563,8 @@ export function SincronizacaoErp() {
     // sempre, não só na aba de filtro, pro seletor de campo do predicado (Filtro Todos/
     // Alterados) já estar pronto assim que o admin chegar lá. Idempotente, não duplica round-trip.
     carregarCampos(job, "espelhado");
-    if (aba === "removidos") carregarRemovidos(job);
-    else if (aba === "filtroTodos") carregarFiltro(job, "todos");
+    if (aba === "filtroTodos") carregarFiltro(job, "todos");
     else if (aba === "filtroAlterados") carregarFiltro(job, "alterados");
-  }
-
-  function carregarRemovidos(job: JobSync) {
-    if (removidosPorJob[job.jobName]) return;
-    // Tabela sem detecção configurada (job.totalRemovidos===null) não tem nada pra buscar —
-    // a rota devolveria 400 ("esta tabela ainda não tem detecção") e isso virava sempre
-    // "Falha ao carregar", escondendo a mensagem amigável que já existe pra esse caso. Como a
-    // linha inteira agora abre o painel (e por padrão vai pra "Filtro(Todos)", mas a aba
-    // "Removidos" continua alcançável em qualquer tabela), essa checagem local evita o
-    // round-trip inútil.
-    if (job.totalRemovidos === null) return;
-    setRemovidosPorJob((r) => ({ ...r, [job.jobName]: "carregando" }));
-    axios
-      .get<{ itens: ItemRemovido[] }>(`/api/sync-erp/${job.jobName}/removidos`)
-      .then(({ data }) => setRemovidosPorJob((r) => ({ ...r, [job.jobName]: data.itens })))
-      .catch(() => setRemovidosPorJob((r) => ({ ...r, [job.jobName]: "erro" })));
   }
 
   // `fonte: "erp"` é sob demanda (botão "ver todos os campos do ERP" dentro do painel) — 1
@@ -496,7 +575,7 @@ export function SincronizacaoErp() {
     if (camposPorJob[chave]) return;
     setCamposPorJob((c) => ({ ...c, [chave]: "carregando" }));
     axios
-      .get<RespostaCampos>(`/api/sync-erp/${job.jobName}/campos`, fonte === "erp" ? { params: { fonte: "erp" } } : undefined)
+      .get<RespostaCampos>(`${API}/${job.jobName}/campos`, fonte === "erp" ? { params: { fonte: "erp" } } : undefined)
       .then(({ data }) => setCamposPorJob((c) => ({ ...c, [chave]: data })))
       .catch((err) =>
         setCamposPorJob((c) => ({ ...c, [chave]: { erro: err.response?.data?.error ?? "Falha ao carregar os campos" } }))
@@ -511,7 +590,7 @@ export function SincronizacaoErp() {
     if (filtroPorJob[chave]) return;
     setFiltroPorJob((f) => ({ ...f, [chave]: "carregando" }));
     axios
-      .get<RespostaFiltro>(`/api/sync-erp/${job.jobName}/filtro/${modo}`)
+      .get<RespostaFiltro>(`${API}/${job.jobName}/filtro/${modo}`)
       .then(({ data }) => {
         setFiltroPorJob((f) => ({ ...f, [chave]: data }));
         setRascunhoPorJob((r) => ({
@@ -566,7 +645,7 @@ export function SincronizacaoErp() {
     const chave = `${job.jobName}:${modo}`;
     setPreviewPorJob((p) => ({ ...p, [chave]: "carregando" }));
     axios
-      .post<RespostaPreview>(`/api/sync-erp/${job.jobName}/preview`, { predicados: predicadosPreenchidos(job, modo) })
+      .post<RespostaPreview>(`${API}/${job.jobName}/preview`, { predicados: predicadosPreenchidos(job, modo) })
       .then(({ data }) => setPreviewPorJob((p) => ({ ...p, [chave]: data })))
       .catch((err) =>
         setPreviewPorJob((p) => ({ ...p, [chave]: { erro: err.response?.data?.error ?? "Falha ao montar a query" } }))
@@ -582,13 +661,84 @@ export function SincronizacaoErp() {
   // Fase 6: salvar em "todos" numa tabela que também tem "Alterados" nunca trava esperando
   // decisão de propagação (decisão do Vitor 21/08/2026) — o backend já diz em
   // `alteradosDivergente` se vale a pena perguntar, e o aviso aparece DEPOIS, dispensável.
+  // Muda o modo de varredura de removidos DESSA tabela (10/09/2026, porte do CaxHub_Atlas:
+  // campo editável na tela em vez de editar politicaVarredura.ts e fazer deploy). O backend
+  // recusa pular direto pra "marcar" (400) — essa mensagem chega pronta em
+  // err.response.data.error, mesmo padrão de erro do resto da tela.
+  async function salvarModoVarredura(job: JobSync, modo: "desligada" | "simular" | "marcar") {
+    setSalvandoVarredura(job.jobName);
+    setErro(null);
+    try {
+      await axios.put(`${API}/${job.jobName}/varredura`, { modo });
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao mudar o modo de varredura");
+    } finally {
+      setSalvandoVarredura(null);
+    }
+  }
+
+  // Muda o tamanho do lote de upsert DESSA tabela (11/09/2026, porte do CaxHub_Atlas: campo
+  // editável na tela em vez de deploy, mesmo padrão de salvarModoVarredura). `tamanhoLote:
+  // null` restaura o default de upsertEmLote.ts — apaga a config salva.
+  // Teto da varredura DESSA tabela, em % do que está vivo (vazio = padrão). Mesmo PUT do modo.
+  async function salvarTeto(job: JobSync) {
+    const bruto = (rascunhoTetoPorJob[job.jobName] ?? "").trim();
+    setSalvandoVarredura(job.jobName);
+    setErro(null);
+    try {
+      await axios.put(`${API}/${job.jobName}/varredura`, { tetoPct: bruto === "" ? null : bruto });
+      setRascunhoTetoPorJob((r) => {
+        const { [job.jobName]: _descartado, ...resto } = r;
+        return resto;
+      });
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao salvar o teto da varredura");
+    } finally {
+      setSalvandoVarredura(null);
+    }
+  }
+
+  // Liberação única do teto, depois de conferir os candidatos: dispara a sync desta tabela ignorando o teto só nesta execução.
+  async function liberarTeto(job: JobSync) {
+    setLiberando(job.jobName);
+    setErro(null);
+    try {
+      await axios.post(`${API}/${job.jobName}/varredura/liberar-teto`);
+      setConfirmandoLiberacao(null);
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao liberar o teto");
+    } finally {
+      setLiberando(null);
+    }
+  }
+
+  async function salvarTamanhoLote(job: JobSync, tamanhoLote: number | null) {
+    setSalvandoLote(job.jobName);
+    setErro(null);
+    try {
+      await axios.put(`${API}/${job.jobName}/lote`, { tamanhoLote });
+      setRascunhoLotePorJob((r) => {
+        const { [job.jobName]: _descartado, ...resto } = r;
+        return resto;
+      });
+      carregar();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao mudar o tamanho do lote");
+    } finally {
+      setSalvandoLote(null);
+    }
+  }
+
   async function salvarFiltro(job: JobSync, modo: "todos" | "alterados", acaoRecorte?: "deixar" | "marcar") {
     const chave = `${job.jobName}:${modo}`;
     setSalvandoFiltro(chave);
     setErro(null);
     setConfirmacaoRecorte(null);
     try {
-      const { data } = await axios.put<RespostaFiltro>(`/api/sync-erp/${job.jobName}/filtro/${modo}`, {
+      const { data } = await axios.put<RespostaFiltro>(`${API}/${job.jobName}/filtro/${modo}`, {
         predicados: predicadosPreenchidos(job, modo),
         ...(acaoRecorte ? { acaoRecorte } : {}),
       });
@@ -624,7 +774,7 @@ export function SincronizacaoErp() {
     setSalvandoFiltro(chave);
     setErro(null);
     try {
-      await axios.delete(`/api/sync-erp/${job.jobName}/filtro/${modo}`);
+      await axios.delete(`${API}/${job.jobName}/filtro/${modo}`);
       setFiltroPorJob((f) => ({ ...f, [chave]: { predicados: [], predicadosSql: [], escopavel: true, motivoNaoEscopavel: null } }));
       setRascunhoPorJob((r) => ({ ...r, [chave]: [rascunhoVazio()] }));
       setPreviewPorJob((p) => {
@@ -647,7 +797,7 @@ export function SincronizacaoErp() {
     setConfirmacaoPropagar(null);
     try {
       const { data } = await axios.post<RespostaFiltro>(
-        `/api/sync-erp/${job.jobName}/filtro/todos/propagar`,
+        `${API}/${job.jobName}/filtro/todos/propagar`,
         acaoRecorte ? { acaoRecorte } : {}
       );
       const chave = `${job.jobName}:alterados`;
@@ -684,13 +834,9 @@ export function SincronizacaoErp() {
     (soma, j) => soma + (j.ultimaVarredura?.modo === "simular" ? j.ultimaVarredura.detectados : 0),
     0
   );
-  const buscaNormalizada = busca.trim().toLowerCase();
-  const jobsFiltrados = buscaNormalizada
-    ? jobs.filter(
-        (j) => j.displayName.toLowerCase().includes(buscaNormalizada) || j.jobName.toLowerCase().includes(buscaNormalizada)
-      )
-    : jobs;
   const rodandoAgora = jobs.filter((j) => j.emAndamento).length;
+  // Tabelas cuja última varredura de removidos foi barrada (teto, filtro, contagem): exclusão no Senior que NÃO está sendo marcada.
+  const varredurasBloqueadas = jobs.filter((j) => j.bloqueioVarredura != null).length;
   const maisDesatualizada = jobs.reduce<JobSync | null>((pior, job) => {
     if (!pior) return job;
     const tempoJob = job.ultimaSincronizacao ? new Date(job.ultimaSincronizacao).getTime() : -Infinity;
@@ -698,15 +844,68 @@ export function SincronizacaoErp() {
     return tempoJob < tempoPior ? job : pior;
   }, null);
 
+  // Mesmo critério do card "Sumidos no Senior": marcados como removidos OU só detectados em
+  // modo "simular" (o número que interessa na fase de observação).
+  function temSumidos(j: JobSync): boolean {
+    return (j.totalRemovidos ?? 0) > 0 || (j.ultimaVarredura?.modo === "simular" && j.ultimaVarredura.detectados > 0);
+  }
+
+  function passaFiltroKpi(j: JobSync): boolean {
+    switch (filtroKpi) {
+      case "erro":
+        return j.ultimoStatus === "error";
+      case "rodando":
+        return j.emAndamento;
+      case "sumidos":
+        return temSumidos(j);
+      case "bloqueada":
+        return j.bloqueioVarredura != null;
+      case "desatualizada":
+        return j.jobName === maisDesatualizada?.jobName;
+      default:
+        return true;
+    }
+  }
+
+  // Clicar no card já ativo desliga o filtro (volta a mostrar tudo).
+  function alternarFiltroKpi(f: Exclude<FiltroKpi, "todas">) {
+    setFiltroKpi((atual) => (atual === f ? "todas" : f));
+  }
+
+  function abrirErro(job: JobSync) {
+    setErroAberto({
+      jobName: job.jobName,
+      displayName: job.displayName,
+      tabelaSenior: job.tabelaSenior,
+      tabelaLocal: job.tabelaLocal,
+      quando: job.ultimaSincronizacao,
+      duracaoMs: job.ultimaDuracaoMs,
+      mensagem: job.ultimaMensagem ?? "Sem detalhes registrados para este erro.",
+    });
+  }
+
+  const buscaNormalizada = busca.trim().toLowerCase();
+  const jobsFiltrados = jobs.filter(
+    (j) =>
+      passaFiltroKpi(j) &&
+      (!buscaNormalizada ||
+        j.displayName.toLowerCase().includes(buscaNormalizada) ||
+        j.jobName.toLowerCase().includes(buscaNormalizada) ||
+        j.tabelaSenior.toLowerCase().includes(buscaNormalizada) ||
+        j.tabelaLocal.toLowerCase().includes(buscaNormalizada))
+  );
+
   return (
     <div>
       <p className="mb-4 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">
-        Administração · Importados do Senior
+        Administração · {TITULO}
       </p>
+
+      {sistema === "hcm" && <CartaoConexaoHcm api={API} />}
 
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-bold text-foreground">Importados do Senior</h1>
+          <h1 className="font-display text-2xl font-bold text-foreground">{TITULO}</h1>
           <p className="mt-1 text-sm text-muted">
             Cada tabela roda sozinha no horário agendado. "Alterados" filtra pela data de geração/alteração do registro
             desde a última sincronização com sucesso — só aparece pra tabelas que têm esse campo no Senior.
@@ -755,8 +954,18 @@ export function SincronizacaoErp() {
         />
       )}
 
+      <Modal
+        open={erroAberto !== null}
+        onClose={() => setErroAberto(null)}
+        title="Erro na sincronização"
+        subtitulo={erroAberto ? `${erroAberto.displayName} · ${erroAberto.jobName}` : undefined}
+        className="max-w-3xl"
+      >
+        {erroAberto && <ConteudoErro erro={erroAberto} onFechar={() => setErroAberto(null)} />}
+      </Modal>
+
       {loading && (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-border bg-surface p-5">
               <Skeleton className="mb-2 h-3.5 w-28" />
@@ -767,28 +976,40 @@ export function SincronizacaoErp() {
       )}
 
       {!loading && jobs.length > 0 && (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <div className="rounded-lg border border-border bg-surface p-5">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+          <CardKpi ativo={filtroKpi === "todas"} onClick={() => setFiltroKpi("todas")} titulo="Mostrar todas as tabelas">
             <p className="mb-2 text-[11.5px] text-muted">Total de tabelas</p>
             <span className="block font-mono text-2xl font-semibold tabular-nums text-foreground">{totalTabelas}</span>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "erro"}
+            onClick={() => alternarFiltroKpi("erro")}
+            titulo="Mostrar só as tabelas cuja última execução terminou em erro"
+          >
             <p className="mb-2 text-[11.5px] text-muted">Com erro</p>
             <span
               className={`block font-mono text-2xl font-semibold tabular-nums ${comErro > 0 ? "text-destructive" : "text-foreground"}`}
             >
               {comErro}
             </span>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "rodando"}
+            onClick={() => alternarFiltroKpi("rodando")}
+            titulo="Mostrar só as tabelas que estão sincronizando agora"
+          >
             <p className="mb-2 text-[11.5px] text-muted">Sincronizando agora</p>
             <span
               className={`block font-mono text-2xl font-semibold tabular-nums ${rodandoAgora > 0 ? "text-warning" : "text-foreground"}`}
             >
               {rodandoAgora}
             </span>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "sumidos"}
+            onClick={() => alternarFiltroKpi("sumidos")}
+            titulo="Mostrar só as tabelas com registros sumidos (ou detectados em modo simular)"
+          >
             <p className="mb-2 text-[11.5px] text-muted">Sumidos no Senior</p>
             <span
               className={`block font-mono text-2xl font-semibold tabular-nums ${
@@ -807,8 +1028,23 @@ export function SincronizacaoErp() {
                 ? "detecção ainda não ligada"
                 : `em ${tabelasComDeteccao} tabela${tabelasComDeteccao === 1 ? "" : "s"} com detecção`}
             </p>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-5">
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "bloqueada"}
+            onClick={() => alternarFiltroKpi("bloqueada")}
+            titulo="Mostrar só as tabelas cuja última varredura de removidos foi barrada (teto, filtro ou contagem)"
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Varredura bloqueada</p>
+            <span className={`block font-mono text-2xl font-semibold tabular-nums ${varredurasBloqueadas > 0 ? "text-destructive" : "text-foreground"}`}>
+              {varredurasBloqueadas}
+            </span>
+            <p className="mt-1 text-[11px] text-muted">{varredurasBloqueadas > 0 ? "exclusões no Senior sem marcar" : "nenhuma barrada"}</p>
+          </CardKpi>
+          <CardKpi
+            ativo={filtroKpi === "desatualizada"}
+            onClick={() => alternarFiltroKpi("desatualizada")}
+            titulo="Mostrar só a tabela mais desatualizada"
+          >
             <p className="mb-2 text-[11.5px] text-muted">Mais desatualizada</p>
             <span className="block truncate font-mono text-lg font-semibold tabular-nums text-foreground" title={maisDesatualizada?.displayName}>
               {maisDesatualizada?.displayName ?? "—"}
@@ -816,7 +1052,7 @@ export function SincronizacaoErp() {
             <p className="mt-1 text-[11px] text-muted">
               {maisDesatualizada ? formatTempoAtras(maisDesatualizada.ultimaSincronizacao) : "—"}
             </p>
-          </div>
+          </CardKpi>
         </div>
       )}
 
@@ -826,13 +1062,29 @@ export function SincronizacaoErp() {
         </p>
       )}
 
-      <div className="mb-3">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
         <input
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
           placeholder="Buscar por descrição ou nome da tabela..."
           className="w-80 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
+        {filtroKpi !== "todas" && (
+          <button
+            type="button"
+            onClick={() => setFiltroKpi("todas")}
+            className="flex items-center gap-2 rounded-md border border-primary bg-primary/5 px-3 py-1.5 text-sm text-foreground hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title="Limpar o filtro do card"
+          >
+            <span>
+              Filtro: <strong className="font-semibold">{ROTULO_FILTRO_KPI[filtroKpi]}</strong>
+              <span className="ml-1.5 text-muted">
+                ({jobsFiltrados.length} de {totalTabelas})
+              </span>
+            </span>
+            <span aria-hidden className="text-muted">✕</span>
+          </button>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-lg border border-border bg-surface">
@@ -851,6 +1103,9 @@ export function SincronizacaoErp() {
                 </th>
                 <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Sumidos
+                </th>
+                <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
+                  Detecção de exclusão
                 </th>
                 <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Última sincronização
@@ -884,6 +1139,9 @@ export function SincronizacaoErp() {
                     </td>
                     <td className="px-2.5 py-3.5 text-right">
                       <Skeleton className="ml-auto h-4 w-10" />
+                    </td>
+                    <td className="px-2.5 py-3.5 text-right">
+                      <Skeleton className="ml-auto h-5 w-16 rounded" />
                     </td>
                     <td className="px-2.5 py-3.5">
                       <Skeleton className="h-4 w-28" />
@@ -921,11 +1179,13 @@ export function SincronizacaoErp() {
                       expandido === job.jobName ? "border-l border-primary" : ""
                     }`}
                   >
-                    {job.ordemExecucao}
+                    {String(job.ordemExecucao).padStart(2, "0")}
                   </td>
                   <td className="px-2.5 py-3.5 text-sm font-semibold text-foreground">
                     <span className="flex items-center gap-2">
-                      {job.displayName}
+                      <span className="max-w-[240px] truncate" title={job.displayName}>
+                        {job.displayName}
+                      </span>
                       {job.suportaFiltro && (job.temFiltroTodos || job.temFiltroAlterados) && (
                         <span
                           className="text-primary"
@@ -939,33 +1199,10 @@ export function SincronizacaoErp() {
                           ●
                         </span>
                       )}
-                      {job.ultimaVarredura && (
-                        <span
-                          className={`inline-block rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide ${
-                            modoTone[job.ultimaVarredura.modo] ?? modoTone.desligada
-                          }`}
-                          title={`${
-                            job.ultimaVarredura.modo === "marcar"
-                              ? "Registros que sumirem do Senior são marcados como removidos"
-                              : "Varredura só conta os que sumiram, sem marcar nada"
-                          } — última varredura em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}`}
-                        >
-                          {modoRotulo[job.ultimaVarredura.modo] ?? job.ultimaVarredura.modo}
-                        </span>
-                      )}
-                      {varreduraDefasada(job) && (
-                        <span
-                          className="inline-block rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide text-warning"
-                          title={
-                            job.ultimaVarredura
-                              ? `Sincronizada em ${dateTimeFormatter.format(new Date(job.ultimaSincronizacao as string))}, mas varrida pela última vez em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}. O modo "Alterados" não varre — rode "Sincronizar Todos" pra detectar exclusões.`
-                              : 'Esta tabela tem detecção configurada mas nunca foi varrida. O modo "Alterados" não varre — rode "Sincronizar Todos".'
-                          }
-                        >
-                          varredura atrasada
-                        </span>
-                      )}
                     </span>
+                    <p className="mt-0.5 text-[11px] text-muted">
+                      {job.tabelaSenior} → {job.tabelaLocal}
+                    </p>
                   </td>
                   <td className="px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted">
                     {numberFormatter.format(job.totalRegistros)}
@@ -994,7 +1231,7 @@ export function SincronizacaoErp() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            abrirPainel(job, "removidos");
+                            navigate(`${ROTA}/removidos/${job.jobName}?situacao=${simulados > 0 ? "sumidos" : "removidos"}`);
                           }}
                           className="font-mono text-sm font-semibold tabular-nums text-warning hover:underline"
                           title="Ver quais registros sumiram do Senior"
@@ -1009,18 +1246,81 @@ export function SincronizacaoErp() {
                       );
                     })()}
                   </td>
+                  <td className="px-2.5 py-3.5 text-right">
+                    {!job.varreduraDisponivel ? (
+                      <span
+                        className="font-mono text-sm text-muted"
+                        title="Detecção de exclusão ainda não disponível nesta tabela (falta ligar a execução no código, não é só a coluna no banco)"
+                      >
+                        —
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span
+                          className={`inline-block rounded px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide ${
+                            modoTone[job.varreduraModo] ?? modoTone.desligada
+                          }`}
+                          title={
+                            job.ultimaVarredura
+                              ? `${
+                                  job.ultimaVarredura.modo === "marcar"
+                                    ? "Registros que sumirem do Senior são marcados como removidos"
+                                    : "Varredura só conta os que sumiram, sem marcar nada"
+                                } — última varredura em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}`
+                              : "Detecção configurada, mas ainda não varrida — abra a linha pra mudar o modo."
+                          }
+                        >
+                          {modoRotulo[job.varreduraModo] ?? job.varreduraModo}
+                        </span>
+                        {varreduraDefasada(job) && (
+                          <span
+                            className="inline-block rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide text-warning"
+                            title={
+                              job.ultimaVarredura
+                                ? `Sincronizada em ${dateTimeFormatter.format(new Date(job.ultimaSincronizacao as string))}, mas varrida pela última vez em ${dateTimeFormatter.format(new Date(job.ultimaVarredura.em))}. O modo "Alterados" não varre — rode "Sincronizar Todos" pra detectar exclusões.`
+                                : 'Esta tabela tem detecção configurada mas nunca foi varrida. O modo "Alterados" não varre — rode "Sincronizar Todos".'
+                            }
+                          >
+                            atrasada
+                          </span>
+                        )}
+                        {job.bloqueioVarredura && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              abrirPainel(job, "removidos");
+                            }}
+                            className="inline-block whitespace-nowrap rounded bg-destructive/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium uppercase tracking-wide text-destructive hover:underline"
+                            title={`Varredura de ${dateTimeFormatter.format(new Date(job.bloqueioVarredura.em))} não marcou nada: ${job.bloqueioVarredura.motivo ?? job.bloqueioVarredura.tipo}. Clique para ver e decidir.`}
+                          >
+                            {ROTULO_BLOQUEIO[job.bloqueioVarredura.tipo](job.bloqueioVarredura)}
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-2.5 py-3.5 text-[12.5px] text-muted">
                     {job.ultimaSincronizacao ? dateTimeFormatter.format(new Date(job.ultimaSincronizacao)) : "Nunca"}
-                    {job.ultimaMensagem && (
-                      <p
-                        className={`mt-0.5 max-w-[240px] truncate text-[11px] ${
-                          job.ultimoStatus === "error" ? "text-destructive" : "text-muted"
-                        }`}
-                        title={job.ultimaMensagem}
-                      >
-                        {job.ultimaMensagem}
-                      </p>
-                    )}
+                    {job.ultimaMensagem &&
+                      (job.ultimoStatus === "error" ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            // A linha inteira abre o painel de filtro; o erro tem o próprio destino.
+                            e.stopPropagation();
+                            abrirErro(job);
+                          }}
+                          className="mt-0.5 block max-w-[240px] truncate text-left text-[11px] text-destructive hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          title="Clique para ver o erro completo"
+                        >
+                          {job.ultimaMensagem}
+                        </button>
+                      ) : (
+                        <p className="mt-0.5 max-w-[240px] truncate text-[11px] text-muted" title={job.ultimaMensagem}>
+                          {job.ultimaMensagem}
+                        </p>
+                      ))}
                   </td>
                   <td className="px-2.5 py-3.5 text-right font-mono text-[12.5px] tabular-nums text-muted">
                     {job.ultimaDuracaoMs != null ? formatarDuracao(job.ultimaDuracaoMs) : "—"}
@@ -1033,6 +1333,18 @@ export function SincronizacaoErp() {
                       <span className="inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide bg-warning/15 text-warning">
                         rodando...
                       </span>
+                    ) : job.ultimoStatus === "error" ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          abrirErro(job);
+                        }}
+                        title="Clique para ver o erro completo"
+                        className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide hover:opacity-70 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${statusTone.error}`}
+                      >
+                        erro
+                      </button>
                     ) : job.ultimoStatus ? (
                       <span
                         className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
@@ -1050,34 +1362,51 @@ export function SincronizacaoErp() {
                   <td
                     className={`px-2.5 py-3.5 text-right ${expandido === job.jobName ? "border-r border-primary" : ""}`}
                   >
-                    <div className="flex justify-end gap-3">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          disparar(job, "todos");
-                        }}
-                        disabled={job.emAndamento || disparando !== null || sincronizandoTodos}
-                        className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {disparando === `${job.jobName}-todos` ? "Iniciando..." : "Sincronizar Todos"}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          disparar(job, "alterados");
-                        }}
-                        disabled={!job.suportaAlterados || job.emAndamento || disparando !== null || sincronizandoTodos}
-                        title={!job.suportaAlterados ? "Essa tabela não tem campo de data de geração/alteração no Senior" : undefined}
-                        className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {disparando === `${job.jobName}-alterados` ? "Iniciando..." : "Sincronizar Alterados"}
-                      </button>
+                    {/* Ações da linha agrupadas no menu "⋯". O wrapper barra o clique: o Content vai
+                        num portal, mas eventos React sobem pela árvore de componentes até o onClick
+                        da <tr>, que abriria/fecharia o painel expansível. */}
+                    <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenu placement="bottom-end">
+                        <DropdownMenu.Trigger>
+                          <button
+                            aria-label={`Ações de ${job.displayName}`}
+                            title="Ações"
+                            className="rounded-md px-2 py-1 text-lg leading-none text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            ⋯
+                          </button>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Content className="w-56 p-0 py-1">
+                          <DropdownMenu.Item
+                            onSelect={() => navigate(`${ROTA}/dados/${job.jobName}`)}
+                            className="rounded-none px-3 py-2"
+                          >
+                            Ver dados
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Item
+                            onSelect={() => disparar(job, "todos")}
+                            disabled={job.emAndamento || disparando !== null || sincronizandoTodos}
+                            className="rounded-none px-3 py-2"
+                          >
+                            {disparando === `${job.jobName}-todos` ? "Iniciando..." : "Sincronizar Todos"}
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            onSelect={() => disparar(job, "alterados")}
+                            disabled={!job.suportaAlterados || job.emAndamento || disparando !== null || sincronizandoTodos}
+                            title={!job.suportaAlterados ? "Essa tabela não tem campo de data de geração/alteração no Senior" : undefined}
+                            className="rounded-none px-3 py-2"
+                          >
+                            {disparando === `${job.jobName}-alterados` ? "Iniciando..." : "Sincronizar Alterados"}
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu>
                     </div>
                   </td>
                 </tr>
                 {expandido === job.jobName && (
                   <tr className="border-t border-border/60 bg-surface-2/40">
-                    <td colSpan={9} className="border-b border-l border-r border-primary px-2.5 py-3">
+                    <td colSpan={10} className="border-b border-l border-r border-primary px-2.5 py-3">
                       <div className="mb-3 flex items-center gap-4 border-b border-border/60">
                         <button
                           onClick={() => abrirPainel(job, "removidos")}
@@ -1088,6 +1417,16 @@ export function SincronizacaoErp() {
                           }`}
                         >
                           Removidos
+                        </button>
+                        <button
+                          onClick={() => abrirPainel(job, "lote")}
+                          className={`-mb-px border-b-2 pb-1.5 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
+                            abaExpandida === "lote"
+                              ? "border-primary text-primary"
+                              : "border-transparent text-muted hover:text-foreground"
+                          }`}
+                        >
+                          Lote
                         </button>
                         {job.suportaFiltro && (
                           <button
@@ -1171,36 +1510,173 @@ export function SincronizacaoErp() {
 
                       {abaExpandida === "removidos" && (
                         <>
-                          <p className="mb-2 text-[11.5px] text-muted">
-                            Registros que não vieram mais na consulta ao Senior. Confira alguns direto no ERP: se eles
-                            realmente não existem mais lá, a detecção está correta.
+                          <div className="mb-3 flex flex-wrap items-center gap-2">
+                            <span className="text-[11.5px] text-muted">Detecção de exclusão:</span>
+                            <select
+                              value={job.varreduraModo}
+                              disabled={!job.varreduraDisponivel || salvandoVarredura === job.jobName}
+                              onChange={(e) =>
+                                salvarModoVarredura(job, e.target.value as "desligada" | "simular" | "marcar")
+                              }
+                              title={
+                                job.varreduraModo !== "simular" && job.varreduraModo !== "marcar"
+                                  ? 'Passe por "Simular" antes de "Marcar" — nenhuma tabela pula direto pra marcar registro como removido.'
+                                  : undefined
+                              }
+                              className="rounded-md border border-border bg-surface px-2 py-1 text-[12.5px] text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <option value="desligada">Desligada</option>
+                              <option value="simular">Simular</option>
+                              <option value="marcar" disabled={job.varreduraModo !== "simular" && job.varreduraModo !== "marcar"}>
+                                Marcar
+                              </option>
+                            </select>
+                            {salvandoVarredura === job.jobName && <span className="text-[11px] text-muted">salvando...</span>}
+                            {job.varreduraDisponivel && (
+                              <span className="ml-3 inline-flex items-center gap-1.5">
+                                <label htmlFor={`teto-${job.jobName}`} className="text-[11.5px] text-muted">
+                                  Teto por execução:
+                                </label>
+                                <input
+                                  id={`teto-${job.jobName}`}
+                                  inputMode="decimal"
+                                  value={rascunhoTetoPorJob[job.jobName] ?? (job.tetoPctConfigurado != null ? String(job.tetoPctConfigurado).replace(".", ",") : "")}
+                                  onChange={(e) => setRascunhoTetoPorJob((r) => ({ ...r, [job.jobName]: e.target.value }))}
+                                  placeholder={String(job.tetoPctEfetivo).replace(".", ",")}
+                                  disabled={salvandoVarredura === job.jobName}
+                                  className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-right text-[12.5px] text-foreground disabled:opacity-40"
+                                />
+                                <span className="text-[11.5px] text-muted">% do que está vivo</span>
+                                {rascunhoTetoPorJob[job.jobName] !== undefined && (
+                                  <button type="button" onClick={() => salvarTeto(job)} className="rounded-md bg-primary px-2 py-1 text-[11.5px] font-medium text-primary-foreground hover:opacity-90">
+                                    Salvar
+                                  </button>
+                                )}
+                                <span className="text-[11px] text-muted" title="Nunca menos que 50 linhas, para tabela pequena não travar por poucas exclusões.">
+                                  {job.tetoPctConfigurado == null ? `(padrão ${String(job.tetoPctEfetivo).replace(".", ",")}%)` : "(configurado)"}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                          {job.bloqueioVarredura && (
+                            <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-[12.5px] text-foreground">
+                              <p className="font-medium text-destructive">
+                                {job.bloqueioVarredura.tipo === "teto"
+                                  ? `A última varredura (${dateTimeFormatter.format(new Date(job.bloqueioVarredura.em))}) encontrou ${numberFormatter.format(job.bloqueioVarredura.candidatos)} registro(s) que sumiram do Senior, acima do teto de ${numberFormatter.format(job.bloqueioVarredura.limite ?? 0)} (${numberFormatter.format(job.bloqueioVarredura.totalEscopo)} vivos). Nada foi marcado.`
+                                  : `A última varredura (${dateTimeFormatter.format(new Date(job.bloqueioVarredura.em))}) não marcou nada.`}
+                              </p>
+                              {job.bloqueioVarredura.motivo && <p className="mt-1 text-[12px] text-muted">{job.bloqueioVarredura.motivo}</p>}
+                              {job.bloqueioVarredura.tipo === "teto" && (
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <span className="text-[12px] text-muted">
+                                    <button type="button" onClick={() => navigate(`${ROTA}/removidos/${job.jobName}?situacao=candidatos`)} className="font-medium text-primary hover:underline">
+                                      Confira os candidatos
+                                    </button>{" "}
+                                    direto no Senior. Se sumiram mesmo, libere a marcação uma vez:
+                                  </span>
+                                  {confirmandoLiberacao === job.jobName ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => liberarTeto(job)}
+                                        disabled={liberando === job.jobName || job.varreduraModo !== "marcar"}
+                                        className="rounded-md bg-destructive px-2.5 py-1 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                                      >
+                                        {liberando === job.jobName ? "Liberando…" : `Sim, sincronizar e marcar os ${numberFormatter.format(job.bloqueioVarredura.candidatos)}`}
+                                      </button>
+                                      <button type="button" onClick={() => setConfirmandoLiberacao(null)} className="rounded-md border border-border px-2.5 py-1 text-[12px] text-foreground hover:bg-surface-2">
+                                        Cancelar
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmandoLiberacao(job.jobName)}
+                                      disabled={job.varreduraModo !== "marcar" || job.emAndamento}
+                                      title={job.varreduraModo !== "marcar" ? 'A detecção precisa estar em "Marcar".' : undefined}
+                                      className="rounded-md border border-destructive/40 bg-surface px-2.5 py-1 text-[12px] font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                                    >
+                                      Conferi, liberar a marcação desta vez
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {!job.varreduraDisponivel ? (
+                            <p className="py-2 text-sm text-muted">
+                              Detecção de exclusão ainda não disponível nesta tabela (falta ligar a execução no código,
+                              não é só a coluna no banco) — não é possível controlar o modo aqui.
+                            </p>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
+                              <span className="text-muted">Registros que não vieram mais na consulta ao Senior:</span>
+                              <button
+                                type="button"
+                                onClick={() => navigate(`${ROTA}/removidos/${job.jobName}?situacao=candidatos`)}
+                                className="rounded-md border border-border bg-surface px-2.5 py-1 font-medium text-foreground hover:border-primary hover:text-primary"
+                              >
+                                Ver candidatos da última varredura
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => navigate(`${ROTA}/removidos/${job.jobName}?situacao=removidos`)}
+                                className="rounded-md border border-border bg-surface px-2.5 py-1 font-medium text-foreground hover:border-primary hover:text-primary"
+                              >
+                                Ver marcados como removidos
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                      {abaExpandida === "lote" && (
+                        <>
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="text-[11.5px] text-muted">Tamanho do lote de upsert:</span>
+                            <input
+                              type="number"
+                              min={1}
+                              disabled={!job.usaUpsertEmLote || salvandoLote === job.jobName}
+                              value={rascunhoLotePorJob[job.jobName] ?? String(job.tamanhoLoteConfigurado ?? "")}
+                              onChange={(e) =>
+                                setRascunhoLotePorJob((r) => ({ ...r, [job.jobName]: e.target.value }))
+                              }
+                              placeholder={String(job.tamanhoLoteEfetivo)}
+                              className="w-28 rounded-md border border-border bg-surface px-2 py-1 text-[12.5px] text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            />
+                            <button
+                              onClick={() => {
+                                const bruto = rascunhoLotePorJob[job.jobName];
+                                const numero = bruto != null && bruto.trim() !== "" ? Number(bruto) : null;
+                                salvarTamanhoLote(job, numero);
+                              }}
+                              disabled={!job.usaUpsertEmLote || salvandoLote === job.jobName || rascunhoLotePorJob[job.jobName] == null}
+                              className="rounded-md border border-border px-2 py-1 text-[11px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Salvar
+                            </button>
+                            {job.tamanhoLoteConfigurado != null && (
+                              <button
+                                onClick={() => salvarTamanhoLote(job, null)}
+                                disabled={salvandoLote === job.jobName}
+                                className="rounded-md border border-border px-2 py-1 text-[11px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                Restaurar padrão
+                              </button>
+                            )}
+                            {salvandoLote === job.jobName && <span className="text-[11px] text-muted">salvando...</span>}
+                          </div>
+                          <p className="text-[11.5px] text-muted">
+                            {job.usaUpsertEmLote ? (
+                              <>
+                                Quantas linhas por <code>INSERT</code> — hoje vale{" "}
+                                <span className="font-mono text-foreground">{job.tamanhoLoteEfetivo}</span>
+                                {job.tamanhoLoteConfigurado == null ? " (padrão, sem configuração salva)." : " (configurado pela tela)."}
+                              </>
+                            ) : (
+                              "Esta tabela ainda não usa upsert em lote — o upsert é linha a linha, sem opção de lote aqui."
+                            )}
                           </p>
-                          {removidosPorJob[job.jobName] === "carregando" && (
-                            <p className="py-2 text-sm text-muted">Carregando...</p>
-                          )}
-                          {removidosPorJob[job.jobName] === "erro" && (
-                            <p className="py-2 text-sm text-destructive">Falha ao carregar os registros removidos.</p>
-                          )}
-                          {job.totalRemovidos === null && !removidosPorJob[job.jobName] && (
-                            <p className="py-2 text-sm text-muted">Detecção de exclusão ainda não ligada nesta tabela.</p>
-                          )}
-                          {Array.isArray(removidosPorJob[job.jobName]) && (
-                            <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
-                              {(removidosPorJob[job.jobName] as ItemRemovido[]).map((item) => (
-                                <li key={item.chave} className="flex items-baseline gap-2 text-[12.5px]">
-                                  <span className="font-mono font-semibold text-foreground">{item.chave}</span>
-                                  <span className="truncate text-muted" title={item.rotulo}>
-                                    {item.rotulo}
-                                  </span>
-                                  <span className="ml-auto shrink-0 font-mono text-[11px] text-muted">
-                                    {item.marcado && item.removidoEmSenior
-                                      ? dateTimeFormatter.format(new Date(item.removidoEmSenior))
-                                      : "candidato"}
-                                  </span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
                         </>
                       )}
                     </td>
@@ -1210,15 +1686,17 @@ export function SincronizacaoErp() {
               ))}
               {!loading && jobs.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-2.5 py-8 text-center text-sm text-muted">
+                  <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
                     Nenhuma tabela cadastrada.
                   </td>
                 </tr>
               )}
               {!loading && jobs.length > 0 && jobsFiltrados.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-2.5 py-8 text-center text-sm text-muted">
-                    Nenhuma tabela encontrada para "{busca.trim()}".
+                  <td colSpan={10} className="px-2.5 py-8 text-center text-sm text-muted">
+                    {busca.trim()
+                      ? `Nenhuma tabela encontrada para "${busca.trim()}"${filtroKpi !== "todas" ? ` no filtro "${ROTULO_FILTRO_KPI[filtroKpi]}"` : ""}.`
+                      : `Nenhuma tabela no filtro "${filtroKpi !== "todas" ? ROTULO_FILTRO_KPI[filtroKpi] : ""}" agora.`}
                   </td>
                 </tr>
               )}
@@ -1775,5 +2253,180 @@ function ModalDimensao({
         )}
       </div>
     </Modal>
+  );
+}
+
+// Card de resumo que é, ao mesmo tempo, botão de filtro. Borda de destaque igual à da linha
+// expandida da tabela (border-primary + bg-primary/5) pra "ativo" ter a mesma cara no app todo.
+function CardKpi({
+  ativo,
+  onClick,
+  titulo,
+  children,
+}: {
+  ativo: boolean;
+  onClick: () => void;
+  titulo: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={ativo}
+      title={titulo}
+      className={`min-w-0 rounded-lg border p-5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        ativo ? "border-primary bg-primary/5" : "border-border bg-surface hover:bg-surface-2"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Corpo do modal de erro: contexto da execução + a mensagem INTEIRA (o backend não corta,
+// SyncLog.message é texto livre; a linha da tabela é que trunca em 240px).
+function ConteudoErro({ erro, onFechar }: { erro: ErroAberto; onFechar: () => void }) {
+  const [copiado, setCopiado] = useState(false);
+
+  async function copiar() {
+    try {
+      await navigator.clipboard.writeText(erro.mensagem.trim());
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      // Sem permissão de área de transferência (contexto não seguro): o texto continua
+      // selecionável no bloco abaixo.
+    }
+  }
+
+  return (
+    <div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12.5px]">
+        <dt className="text-muted">Tabela</dt>
+        <dd className="font-mono text-foreground">
+          {erro.tabelaSenior} → {erro.tabelaLocal}
+        </dd>
+        <dt className="text-muted">Executada em</dt>
+        <dd className="text-foreground">{erro.quando ? dateTimeFormatter.format(new Date(erro.quando)) : "—"}</dd>
+        <dt className="text-muted">Duração</dt>
+        <dd className="font-mono text-foreground">{erro.duracaoMs != null ? formatarDuracao(erro.duracaoMs) : "—"}</dd>
+      </dl>
+      <pre className="mt-3 max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-[12px] leading-relaxed text-destructive">
+        {erro.mensagem.trim()}
+      </pre>
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={copiar}
+          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition hover:bg-surface-2"
+        >
+          {copiado ? "Copiado ✓" : "Copiar erro"}
+        </button>
+        <button
+          type="button"
+          onClick={onFechar}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
+        >
+          Fechar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function SincronizacaoErp() {
+  return <SincronizacaoSenior sistema="erp" />;
+}
+
+export function SincronizacaoHcm() {
+  return <SincronizacaoSenior sistema="hcm" />;
+}
+
+interface ConexaoHcm {
+  configurado: boolean;
+  motivo?: string;
+  url?: string;
+  usuario?: string;
+  banco?: string | null;
+  herdaDoErp?: boolean;
+}
+
+interface ResultadoTeste {
+  ok: boolean;
+  colaboradores?: number;
+  erro?: string;
+  latenciaMs: number;
+}
+
+// Canal do HCM: URL (sem credenciais), usuário e banco, lidos do .env do backend. A senha nunca chega
+// aqui. "Testar conexão" roda uma contagem de colaboradores pelo mesmo canal dos jobs.
+function CartaoConexaoHcm({ api }: { api: string }) {
+  const [conexao, setConexao] = useState<ConexaoHcm | null>(null);
+  const [teste, setTeste] = useState<ResultadoTeste | "testando" | null>(null);
+
+  useEffect(() => {
+    axios
+      .get<ConexaoHcm>(`${api}/conexao`)
+      .then(({ data }) => setConexao(data))
+      .catch(() => setConexao({ configurado: false, motivo: "Não foi possível ler a configuração do HCM" }));
+  }, [api]);
+
+  async function testar() {
+    setTeste("testando");
+    try {
+      const { data } = await axios.post<ResultadoTeste>(`${api}/conexao/testar`);
+      setTeste(data);
+    } catch (err) {
+      const msg = axios.isAxiosError(err) ? err.response?.data?.error ?? err.message : "Falha ao testar";
+      setTeste({ ok: false, erro: String(msg), latenciaMs: 0 });
+    }
+  }
+
+  return (
+    <div className="mb-6 rounded-lg border border-border bg-surface p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Conexão com o HCM</p>
+          {!conexao && <p className="mt-1 text-sm text-muted">Carregando…</p>}
+          {conexao && !conexao.configurado && (
+            <p className="mt-1 text-sm text-destructive">
+              Não configurado: {conexao.motivo}. Defina SENIOR_HCM_BANCO (ex.: rhsenior.dbo.) no .env do backend para usar o serviço do ERP, ou
+              SENIOR_HCM_SOAP_URL, SENIOR_HCM_SOAP_USER e SENIOR_HCM_SOAP_PASSWORD para um serviço próprio.
+            </p>
+          )}
+          {conexao?.configurado && (
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+              <dt className="text-muted">Serviço</dt>
+              <dd className="break-all font-mono text-[12.5px] text-foreground">{conexao.url}</dd>
+              <dt className="text-muted">Usuário</dt>
+              <dd className="font-mono text-[12.5px] text-foreground">{conexao.usuario}</dd>
+              <dt className="text-muted">Banco do RH</dt>
+              <dd className="font-mono text-[12.5px] text-foreground">{conexao.banco ?? "o banco da própria conexão"}</dd>
+              <dt className="text-muted">Canal</dt>
+              <dd className="text-foreground">
+                {conexao.herdaDoErp
+                  ? "Usa o serviço do ERP (SENIOR_HCM_SOAP_* vazias) — troque quando o serviço do HCM for publicado"
+                  : "Serviço próprio do HCM"}
+              </dd>
+            </dl>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <button
+            onClick={testar}
+            disabled={!conexao?.configurado || teste === "testando"}
+            className="rounded-md border border-border px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {teste === "testando" ? "Testando…" : "Testar conexão"}
+          </button>
+          {teste && teste !== "testando" && (
+            <p className={`text-sm ${teste.ok ? "text-success" : "text-destructive"}`}>
+              {teste.ok ? `Conectou: ${teste.colaboradores} colaboradores (${teste.latenciaMs} ms)` : `Falhou: ${teste.erro}`}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

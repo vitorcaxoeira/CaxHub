@@ -1,10 +1,14 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
+import { campoEmpFil } from "../../components/ui/padroesFiltros/campos";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { SelectFiltro } from "../../components/ui/ControlesFiltro";
 import { EmpresaFilialFilter, EmpresaOption, FilialOption } from "../../components/financeiro/EmpresaFilialFilter";
 import { RankingBarra, RankingItem } from "../../components/ui/RankingBarra";
 import { CurvaABC, ClasseABC } from "../../components/financeiro/CurvaABC";
-import { InadimplenciaTable, InadimplenciaRow } from "../../components/financeiro/InadimplenciaTable";
-import { Skeleton } from "../../components/ui/Skeleton";
+import { InadimplenciaTable } from "../../components/financeiro/InadimplenciaTable";
+import { KpiTile, KpiTileSkeleton } from "../../components/ui/KpiTile";
 
 const API_BASE = "/api/financeiro/inadimplencia";
 
@@ -19,15 +23,6 @@ interface OpcoesFiltro {
   empresas: EmpresaOption[];
   filiais: FilialOption[];
 }
-
-interface ListaResponse {
-  rows: InadimplenciaRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-}
-
-const LISTA_VAZIA: ListaResponse = { rows: [], page: 1, pageSize: 50, total: 0 };
 
 const currency = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtMoney = (v: number) => `R$ ${currency.format(v)}`;
@@ -46,16 +41,25 @@ export function Inadimplencia() {
   const [opcoes, setOpcoes] = useState<OpcoesFiltro | null>(null);
   const [empresasFiliais, setEmpresasFiliais] = useState<string[]>([]);
   const [faixa, setFaixa] = useState("");
-  const [page, setPage] = useState(1);
 
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [rankingDevedores, setRankingDevedores] = useState<RankingItem[]>([]);
   const [curva, setCurva] = useState<ClasseABC[]>([]);
-  const [lista, setLista] = useState<ListaResponse>(LISTA_VAZIA);
 
   const [loadingResumo, setLoadingResumo] = useState(true);
-  const [loadingTabela, setLoadingTabela] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+
+  // Padrão de cada filtro (estrela): aplicado uma vez ao abrir, antes da 1ª consulta.
+  const p = usePadroesTela({
+    tela: "financeiro.inadimplencia",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    campos: {
+      empFil: campoEmpFil(empresasFiliais, setEmpresasFiliais, opcoes?.filiais),
+      faixa: { rotulo: "Faixa de atraso", atual: faixa, aplicar: setFaixa, validar: regras.valorUnico("string", FAIXAS.map((f) => f.value)), semOpcoes: true },
+    },
+  });
 
   const empFilIds = empresasFiliais.join(",") || undefined;
 
@@ -63,10 +67,14 @@ export function Inadimplencia() {
     axios
       .get(`${API_BASE}/opcoes-filtro`)
       .then(({ data }) => setOpcoes(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro"));
+      .catch((err) => {
+        setOpcoesFalharam(true);
+        setErro(err.response?.data?.error ?? "Falha ao carregar as opções de filtro");
+      });
   }, []);
 
   useEffect(() => {
+    if (!p.pronto) return;
     setLoadingResumo(true);
     const params = { empFil: empFilIds, faixa: faixa || undefined };
     Promise.all([
@@ -89,24 +97,13 @@ export function Inadimplencia() {
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar os indicadores"))
       .finally(() => setLoadingResumo(false));
-  }, [empFilIds, faixa]);
-
-  useEffect(() => {
-    setLoadingTabela(true);
-    axios
-      .get(API_BASE, { params: { empFil: empFilIds, faixa: faixa || undefined, page, pageSize: 50 } })
-      .then(({ data }) => setLista(data))
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a lista de títulos vencidos"))
-      .finally(() => setLoadingTabela(false));
-  }, [empFilIds, faixa, page]);
+  }, [empFilIds, faixa, p.pronto]);
 
   function handleEmpFilChange(v: string[]) {
     setEmpresasFiliais(v);
-    setPage(1);
   }
   function handleFaixaChange(v: string) {
     setFaixa(v);
-    setPage(1);
   }
 
   const kpiCards = kpis
@@ -118,8 +115,6 @@ export function Inadimplencia() {
       ]
     : [];
 
-  const toneText: Record<string, string> = { success: "text-success", warning: "text-warning", destructive: "text-destructive", neutral: "text-foreground" };
-  const toneBg: Record<string, string> = { success: "bg-success", warning: "bg-warning", destructive: "bg-destructive", neutral: "bg-muted" };
 
   return (
     <div>
@@ -133,18 +128,21 @@ export function Inadimplencia() {
           filiais={opcoes?.filiais ?? []}
           selecionados={empresasFiliais}
           onChange={handleEmpFilChange}
+          acessorio={p.estrela("empFil")}
         />
-        <select
+        <SelectFiltro
+          aria-label="Faixa de atraso"
+          className="w-48"
           value={faixa}
           onChange={(e) => handleFaixaChange(e.target.value)}
-          className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          acessorio={p.estrela("faixa")}
         >
           {FAIXAS.map((f) => (
             <option key={f.value} value={f.value}>
               {f.label}
             </option>
           ))}
-        </select>
+        </SelectFiltro>
       </div>
 
       {erro && (
@@ -156,11 +154,7 @@ export function Inadimplencia() {
       {loadingResumo ? (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="rounded-lg border border-border bg-surface p-5">
-              <Skeleton className="mb-2 h-3.5 w-32" />
-              <Skeleton className="h-7 w-20" />
-              <Skeleton className="mt-2 h-3 w-24" />
-            </div>
+            <KpiTileSkeleton key={i} />
           ))}
         </div>
       ) : (
@@ -168,14 +162,7 @@ export function Inadimplencia() {
           <>
             <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {kpiCards.map((kpi) => (
-                <div key={kpi.label} className="rounded-lg border border-border bg-surface p-5">
-                  <p className="mb-2 text-[11.5px] text-muted">{kpi.label}</p>
-                  <span className={`block font-mono text-2xl font-semibold tabular-nums ${toneText[kpi.tone]}`}>{kpi.value}</span>
-                  <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted">
-                    <span className={`h-1.5 w-1.5 flex-none rounded-full ${toneBg[kpi.tone]}`} />
-                    {kpi.sub}
-                  </p>
-                </div>
+                <KpiTile key={kpi.label} label={kpi.label} value={kpi.value} sub={kpi.sub} tone={kpi.tone} />
               ))}
             </div>
 
@@ -191,14 +178,7 @@ export function Inadimplencia() {
       )}
 
       <div className="mt-6">
-        <InadimplenciaTable
-          rows={lista.rows}
-          page={lista.page}
-          pageSize={lista.pageSize}
-          total={lista.total}
-          loading={loadingTabela}
-          onPageChange={setPage}
-        />
+        {p.pronto && <InadimplenciaTable url={API_BASE} params={{ empFil: empFilIds, faixa: faixa || undefined }} />}
       </div>
     </div>
   );

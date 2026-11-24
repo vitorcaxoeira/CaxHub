@@ -5,8 +5,12 @@ import { useAuth } from "../../auth/AuthContext";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
 import { SincronizacaoStatus } from "../../components/financeiro/SincronizacaoStatus";
 import { MESES_OPCOES } from "../../lib/periodos";
+import { CaixaMarcacaoFiltro } from "../../components/ui/ControlesFiltro";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { MatrizTab } from "../../components/contabil/MatrizTab";
 import { OrcadoRealizadoTab } from "../../components/contabil/OrcadoRealizadoTab";
+import { formatoVariacaoDaUrl, periodoDaUrl, type FormatoVariacao, type Periodo } from "../../lib/orcadoRealizado";
 import { DreTab } from "../../components/contabil/DreTab";
 import { CentroCustoTab } from "../../components/contabil/CentroCustoTab";
 import { DashContabilTab } from "../../components/contabil/DashContabilTab";
@@ -89,6 +93,10 @@ export function ResultadoAnalitico() {
   const visaoDaUrl = searchParams.get("visao");
   const visaoInicial = visoesVisiveis.some((v) => v.value === visaoDaUrl) ? (visaoDaUrl as Visao) : "matriz";
   const [visao, setVisao] = useState<Visao>(visaoInicial);
+  // Orçado x Realizado: a coluna de variação em R$ (padrão) ou em % — vai pra URL como os demais filtros.
+  const [formatoVariacao, setFormatoVariacao] = useState<FormatoVariacao>(formatoVariacaoDaUrl(searchParams.get("variacao")));
+  // Orçado x Realizado: colunas por mês ou por ano (24/11/2026). Vai pra URL como `periodo=ano`, só na aba Orçado.
+  const [periodo, setPeriodo] = useState<Periodo>(periodoDaUrl(searchParams.get("periodo")));
 
   // Ano e mês são multi-seleção — dá pra comparar vários anos lado a lado (cada
   // combinação ano×mês vira uma coluna na matriz) e/ou recortar só alguns meses. Sem
@@ -104,7 +112,8 @@ export function ResultadoAnalitico() {
   });
   const [meses, setMeses] = useState<number[]>(() => {
     const daUrl = listaDeNumeros(searchParams.get("meses"));
-    if (daUrl.length > 0) return daUrl;
+    // `meses=` vazio na URL = "Todos" escolhido de propósito (ver marcarUrl), não "sem nada na URL".
+    if (daUrl.length > 0 || searchParams.get("meses") === "") return daUrl;
     const mesAtual = new Date().getMonth() + 1;
     return Array.from({ length: mesAtual }, (_, i) => i + 1);
   });
@@ -116,7 +125,7 @@ export function ResultadoAnalitico() {
   // idioma de "default esperto, não vazio genérico" já usado em anos/meses acima.
   const [niveis, setNiveis] = useState<number[]>(() => {
     const daUrl = listaDeNumeros(searchParams.get("niveis"));
-    return daUrl.length > 0 ? daUrl : [1, 5, 6];
+    return daUrl.length > 0 || searchParams.get("niveis") === "" ? daUrl : [1, 5, 6];
   });
   const [grupos, setGrupos] = useState<string[]>(() => searchParams.get("grupo")?.split(",").filter(Boolean) ?? []);
   const [centrosCusto, setCentrosCusto] = useState<string[]>(() => searchParams.get("codccu")?.split(",").filter(Boolean) ?? []);
@@ -129,6 +138,70 @@ export function ResultadoAnalitico() {
     searchParams.get("ordenarPor") === "ctared" ? "ctared" : "clacta"
   );
 
+  // Padrão de cada filtro (estrela, trazido do CaxHub_Dash em 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta das abas. O que
+  // veio na URL (link, F5) vale mais que o padrão salvo.
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+  const [daUrl] = useState(() =>
+    (
+      [
+        ["anos", "anos"],
+        ["meses", "meses"],
+        ["niveis", "niveis"],
+        ["grupos", "grupo"],
+        ["centrosCusto", "codccu"],
+        ["incluirSemGrupo", "incluirSemGrupo"],
+        ["ordenarPor", "ordenarPor"],
+        ["formatoVariacao", "variacao"],
+        ["periodo", "periodo"],
+      ] as const
+    )
+      .filter(([, chave]) => searchParams.has(chave))
+      .map(([campo]) => campo)
+  );
+  const p = usePadroesTela({
+    tela: "contabil.resultado-analitico",
+    opcoesProntas: !!opcoes,
+    opcoesFalharam,
+    daUrl,
+    campos: {
+      anos: { rotulo: "Ano", atual: anos, aplicar: setAnos, validar: regras.lista("number", opcoes?.anos), urlKey: "anos" },
+      meses: { rotulo: "Meses", atual: meses, aplicar: setMeses, validar: regras.lista("number", MESES_OPCOES.map((m) => m.value)), semOpcoes: true },
+      niveis: { rotulo: "Nível", atual: niveis, aplicar: setNiveis, validar: regras.lista("number", opcoes?.niveis) },
+      grupos: { rotulo: "Grupo", atual: grupos, aplicar: setGrupos, validar: regras.lista("string", opcoes?.grupos.map((g) => g.value)), urlKey: "grupo" },
+      centrosCusto: {
+        rotulo: "Centro de custo",
+        atual: centrosCusto,
+        aplicar: setCentrosCusto,
+        validar: regras.lista("string", opcoes?.centrosCusto.map((c) => c.value)),
+        urlKey: "codccu",
+      },
+      incluirSemGrupo: { rotulo: "Contas sem grupo", atual: incluirSemGrupo, aplicar: setIncluirSemGrupo, validar: regras.booleano(), semOpcoes: true },
+      ordenarPor: {
+        rotulo: "Ordenar por",
+        atual: ordenarPor,
+        aplicar: setOrdenarPor,
+        validar: regras.valorUnico("string", ["clacta", "ctared"] as const),
+        semOpcoes: true,
+      },
+      periodo: {
+        rotulo: "Visualização",
+        atual: periodo,
+        aplicar: setPeriodo,
+        validar: regras.valorUnico("string", ["mes", "ano"] as const),
+        semOpcoes: true,
+        urlKey: "periodo",
+      },
+      formatoVariacao: {
+        rotulo: "Variação",
+        atual: formatoVariacao,
+        aplicar: setFormatoVariacao,
+        validar: regras.valorUnico("string", ["valor", "pct"] as const),
+        semOpcoes: true,
+        urlKey: "variacao",
+      },
+    },
+  });
+
   useEffect(() => {
     axios
       .get("/api/contabil/resultado/opcoes-filtro")
@@ -137,6 +210,7 @@ export function ResultadoAnalitico() {
         setSemAcesso(false);
       })
       .catch((err) => {
+        setOpcoesFalharam(true);
         if (err.response?.status === 403) setSemAcesso(true);
       });
   }, []);
@@ -151,8 +225,13 @@ export function ResultadoAnalitico() {
     if (centrosCusto.length > 0) params.codccu = centrosCusto.join(",");
     if (incluirSemGrupo) params.incluirSemGrupo = "true";
     if (ordenarPor !== "clacta") params.ordenarPor = ordenarPor;
+    if (visao === "orcado" && formatoVariacao === "pct") params.variacao = "pct";
+    if (visao === "orcado" && periodo === "ano") params.periodo = "ano";
+    // "Todos"/desmarcado num filtro com padrão salvo vai vazio, para o F5 manter a escolha em vez de voltar ao padrão.
+    p.marcarUrl(params);
     setSearchParams(params, { replace: true });
-  }, [visao, anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor, setSearchParams]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visao, anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor, formatoVariacao, periodo, setSearchParams, p.padroes]);
 
   const opcoesAnos = useMemo(() => {
     const todos = new Set([...(opcoes?.anos ?? []), ...anos]);
@@ -220,10 +299,18 @@ export function ResultadoAnalitico() {
           onChange={setAnos}
           labelTodos="Nenhum ano"
           labelSufixo="anos"
+          acessorio={p.estrela("anos")}
         />
 
         {mostrarMeses && (
-          <MultiSelectDropdown opcoes={MESES_OPCOES} selecionados={meses} onChange={setMeses} labelTodos="Todos os meses" labelSufixo="meses" />
+          <MultiSelectDropdown
+            opcoes={MESES_OPCOES}
+            selecionados={meses}
+            onChange={setMeses}
+            labelTodos="Todos os meses"
+            labelSufixo="meses"
+            acessorio={p.estrela("meses")}
+          />
         )}
 
         {mostrarNiveis && (
@@ -233,6 +320,7 @@ export function ResultadoAnalitico() {
             onChange={setNiveis}
             labelTodos="Todos os níveis"
             labelSufixo="níveis"
+            acessorio={p.estrela("niveis")}
           />
         )}
 
@@ -243,6 +331,7 @@ export function ResultadoAnalitico() {
             onChange={setGrupos}
             labelTodos="Todos os grupos"
             labelSufixo="grupos"
+            acessorio={p.estrela("grupos")}
           />
         )}
 
@@ -253,19 +342,14 @@ export function ResultadoAnalitico() {
             onChange={setCentrosCusto}
             labelTodos="Todos os centros de custo"
             labelSufixo="centros de custo"
+            acessorio={p.estrela("centrosCusto")}
           />
         )}
 
         {mostrarIncluirSemGrupo && (
-          <label className="flex items-center gap-1.5 text-[12.5px] text-muted">
-            <input
-              type="checkbox"
-              checked={incluirSemGrupo}
-              onChange={(e) => setIncluirSemGrupo(e.target.checked)}
-              className="accent-primary"
-            />
+          <CaixaMarcacaoFiltro marcado={incluirSemGrupo} onChange={setIncluirSemGrupo} acessorio={p.estrela("incluirSemGrupo")}>
             Incluir contas sem grupo
-          </label>
+          </CaixaMarcacaoFiltro>
         )}
 
         {mostrarOrdenarPor && (
@@ -288,11 +372,12 @@ export function ResultadoAnalitico() {
                 {opcao.label}
               </button>
             ))}
+            <span className="relative inline-block h-7 w-7">{p.estrela("ordenarPor")}</span>
           </div>
         )}
       </div>
 
-      {visao === "matriz" && (
+      {p.pronto && visao === "matriz" && (
         <MatrizTab
           key={refreshKey}
           anos={anos}
@@ -304,7 +389,7 @@ export function ResultadoAnalitico() {
           ordenarPor={ordenarPor}
         />
       )}
-      {visao === "orcado" && (
+      {p.pronto && visao === "orcado" && (
         <OrcadoRealizadoTab
           key={refreshKey}
           anos={anos}
@@ -314,11 +399,17 @@ export function ResultadoAnalitico() {
           centrosCusto={centrosCusto}
           incluirSemGrupo={incluirSemGrupo}
           ordenarPor={ordenarPor}
+          formatoVariacao={formatoVariacao}
+          onFormatoVariacao={setFormatoVariacao}
+          estrelaVariacao={p.estrela("formatoVariacao")}
+          periodo={periodo}
+          onPeriodo={setPeriodo}
+          estrelaPeriodo={p.estrela("periodo")}
         />
       )}
-      {visao === "dre" && <DreTab key={refreshKey} anos={anos} meses={meses} grupos={grupos} centrosCusto={centrosCusto} />}
-      {visao === "cc" && <CentroCustoTab key={refreshKey} anos={anos} meses={meses} centrosCusto={centrosCusto} />}
-      {visao === "dash" && <DashContabilTab key={refreshKey} ano={anos[0] ?? new Date().getFullYear()} grupos={grupos} />}
+      {p.pronto && visao === "dre" && <DreTab key={refreshKey} anos={anos} meses={meses} grupos={grupos} centrosCusto={centrosCusto} />}
+      {p.pronto && visao === "cc" && <CentroCustoTab key={refreshKey} anos={anos} meses={meses} centrosCusto={centrosCusto} />}
+      {p.pronto && visao === "dash" && <DashContabilTab key={refreshKey} ano={anos[0] ?? new Date().getFullYear()} grupos={grupos} />}
     </div>
   );
 }

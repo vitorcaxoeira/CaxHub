@@ -1,6 +1,6 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
-import { OperacionalTitulosTable, OperacionalRow } from "../../../components/financeiro/OperacionalTitulosTable";
+import { OperacionalTitulosTable } from "../../../components/financeiro/OperacionalTitulosTable";
 import { Skeleton } from "../../../components/ui/Skeleton";
 
 const API_BASE = "/api/financeiro/fluxo-caixa";
@@ -11,15 +11,6 @@ interface KpisOperacional {
   recebidoHoje: { valor: number; qtd: number };
   semBaixa5d: { valor: number; qtd: number };
 }
-
-interface ListaOperacional {
-  rows: OperacionalRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-}
-
-const LISTA_VAZIA: ListaOperacional = { rows: [], page: 1, pageSize: 50, total: 0 };
 
 const CORTES = [
   { key: "vencendo_hoje", label: "Vencendo Hoje" },
@@ -42,11 +33,6 @@ export function OperacionalTab({ empFilIds, refreshKey }: OperacionalTabProps) {
   const [loadingKpis, setLoadingKpis] = useState(true);
 
   const [corte, setCorte] = useState("vencendo_hoje");
-  const [q, setQ] = useState("");
-  const [page, setPage] = useState(1);
-  const [lista, setLista] = useState<ListaOperacional>(LISTA_VAZIA);
-  const [erroLista, setErroLista] = useState<string | null>(null);
-  const [loadingLista, setLoadingLista] = useState(true);
 
   useEffect(() => {
     setLoadingKpis(true);
@@ -60,28 +46,8 @@ export function OperacionalTab({ empFilIds, refreshKey }: OperacionalTabProps) {
       .finally(() => setLoadingKpis(false));
   }, [empFilIds, refreshKey]);
 
-  useEffect(() => {
-    setLoadingLista(true);
-    axios
-      .get(`${API_BASE}/operacional/titulos`, {
-        params: { empFil: empFilIds, corte, q: q || undefined, page, pageSize: 50 },
-      })
-      .then(({ data }) => {
-        setLista(data);
-        setErroLista(null);
-      })
-      .catch((err) => setErroLista(err.response?.data?.error ?? "Falha ao carregar os títulos"))
-      .finally(() => setLoadingLista(false));
-  }, [empFilIds, corte, q, page, refreshKey]);
-
   function handleSelectCorte(key: string) {
     setCorte(key);
-    setPage(1);
-  }
-
-  function handleBuscaChange(novoQ: string) {
-    setQ(novoQ);
-    setPage(1);
   }
 
   const cards = kpis
@@ -133,22 +99,7 @@ export function OperacionalTab({ empFilIds, refreshKey }: OperacionalTabProps) {
         )
       )}
 
-      {erroLista && (
-        <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {erroLista}
-        </div>
-      )}
-      <OperacionalTitulosTable
-        rows={lista.rows}
-        page={lista.page}
-        pageSize={lista.pageSize}
-        total={lista.total}
-        loading={loadingLista}
-        onPageChange={setPage}
-        onBuscaChange={handleBuscaChange}
-        corte={corte}
-        empFilIds={empFilIds}
-      />
+      <OperacionalTitulosTable corte={corte} empFilIds={empFilIds} recarga={refreshKey} />
     </div>
   );
 }

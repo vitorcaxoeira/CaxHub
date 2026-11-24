@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { requireAuth } from "../auth/middleware";
+import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
+import { resolverContextoConsultor } from "../domain/contextoProjeto";
+import { podeVerValoresDaProposta } from "../domain/valoresDaProposta";
 import { prisma } from "../db/prisma";
 import {
   depexeLabel,
@@ -42,7 +44,8 @@ function textoOuNulo(valor: string | null): string | null {
   return limpo === "" ? null : limpo;
 }
 
-propostaVisualizacaoRouter.get("/:codemp/:codpro", async (req, res) => {
+propostaVisualizacaoRouter.get("/:codemp/:codpro", async (reqBruto, res) => {
+  const req = reqBruto as AuthenticatedRequest;
   try {
     const codemp = Number(req.params.codemp);
     const codpro = Number(req.params.codpro);
@@ -60,13 +63,20 @@ propostaVisualizacaoRouter.get("/:codemp/:codpro", async (req, res) => {
       return;
     }
 
+    // Valores só para admin, Comercial e gestor de área (domain/valoresDaProposta.ts); para os outros o servidor nem manda o número.
+    const usuario = await prisma.user.findUnique({ where: { id: req.user!.userId }, select: { email: true } });
+    const contexto = usuario ? await resolverContextoConsultor(usuario.email) : null;
+    const podeVerValores = podeVerValoresDaProposta(req.user!.role, contexto?.departamentosGerenciados ?? []);
+
     const [clienteFaturamento, representante, centroCusto, itens] = await Promise.all([
       proposta.clifat != null ? prisma.cliente.findUnique({ where: { codcli: proposta.clifat } }) : null,
       prisma.representante.findUnique({ where: { codrep: proposta.codrep } }),
       proposta.codccu != null
         ? prisma.centroCusto.findUnique({ where: { codemp_codccu: { codemp, codccu: proposta.codccu } } })
         : null,
-      prisma.propostaItem.findMany({ where: { codemp, codpro }, orderBy: { seqite: "asc" } }),
+      // `removidoEmSenior: null` — item sumido do Senior não entra na lista nem na soma de
+      // horas/valor abaixo (mesmo padrão de routes/pedidos.ts).
+      prisma.propostaItem.findMany({ where: { codemp, codpro, removidoEmSenior: null }, orderBy: { seqite: "asc" } }),
     ]);
 
     const itensResp = itens.map((item) => {
@@ -78,9 +88,10 @@ propostaVisualizacaoRouter.get("/:codemp/:codpro", async (req, res) => {
         despro: textoOuNulo(item.despro),
         entpro: textoOuNulo(item.entpro),
         depexeLabel: depexeLabel(item.depexe),
+        // Departamento de Custo/Receita do item (USU_DepCusRec, 05/11/2026); mesmo domínio do departamento executor.
+        depcusrecLabel: depexeLabel(item.depcusrec),
         qtdhor: item.qtdhor,
-        valhor,
-        valorTotal: horas * valhor,
+        ...(podeVerValores ? { valhor, valorTotal: horas * valhor } : {}),
         fatserLabel: fatserLabel(item.fatser),
         sitprzLabel: sitprzLabel(item.sitprz),
       };
@@ -89,7 +100,7 @@ propostaVisualizacaoRouter.get("/:codemp/:codpro", async (req, res) => {
     const totais = itensResp.reduce(
       (acc, item) => ({
         horas: acc.horas + (item.qtdhor ?? 0),
-        valor: acc.valor + item.valorTotal,
+        valor: acc.valor + (item.valorTotal ?? 0),
       }),
       { horas: 0, valor: 0 }
     );
@@ -138,8 +149,9 @@ propostaVisualizacaoRouter.get("/:codemp/:codpro", async (req, res) => {
         obspro: textoOuNulo(proposta.obspro),
         hispro: textoOuNulo(proposta.hispro),
       },
+      podeVerValores,
       itens: itensResp,
-      totais,
+      totais: podeVerValores ? totais : { horas: totais.horas },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

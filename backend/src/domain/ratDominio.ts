@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 // Domínio "USU_LSITRAT" do Senior (situação da RAT — Registro de Atividade Técnica).
 // Valores confirmados via getFieldDomainValues("USU_LSITRAT") direto no dicionário do
 // Senior (não é suposição).
@@ -22,6 +24,17 @@ export const SITRAT_ORDER = [9, 8, 6, 5, 4, 2, 1];
 // "destructive" (ver sitratTone abaixo). Uma RAT cancelada não vira trabalho realizado.
 export const SITRAT_CANCELADO = 5;
 
+// Filtro do RatItem que conta como hora REALIZADA: fora a RAT cancelada, o item excluído no Senior
+// e o item de RAT excluída lá. Um lugar só, porque o teto da atividade, o card do quadro, a
+// alocação e o resumo do consultor têm de somar a mesma coisa (13/10/2026: só o relatório de
+// produtividade e a eficiência filtravam o excluído, então 144 h de apontamento enviado em dobro ao
+// Senior seguiriam consumindo o teto mesmo depois de apagadas no ERP). `rat` acrescenta condições
+// do cabeçalho (ex.: `{ codfor }`) sem perder as regras acima. Não vale pro cálculo SQL cru de
+// domain/eficienciaDados.ts (RAT_ITEM_VALIDO), que repete as mesmas regras em SQL.
+export function filtroRatItemRealizado(rat: Prisma.RatWhereInput = {}): Prisma.RatItemWhereInput {
+  return { removidoEmSenior: null, rat: { ...rat, sitrat: { not: SITRAT_CANCELADO }, removidoEmSenior: null } };
+}
+
 export function sitratLabel(sitrat: number | null): string {
   if (sitrat === null) return "—";
   return SITRAT_LABELS[sitrat] ?? `Situação ${sitrat}`;
@@ -32,6 +45,27 @@ export function sitratTone(sitrat: number | null): "success" | "warning" | "dest
   if (sitrat === 9) return "warning"; // ainda digitado/rascunho, não confirmado
   if (sitrat === null) return "neutral";
   return "success"; // impresso/aprovado/faturado/fechado
+}
+
+// "Excluída" (14/09/2026, pedido do Vitor) — conceito 100% CaxHub, não existe no domínio
+// USU_LSITRAT do Senior: uma RAT com origemCaxHub=false (nasceu lá, nunca teve rascunho
+// local) cujo documento sumiu de vez da origem. Não é um valor de `sitrat` (que continua
+// espelhando fielmente a última situação real conhecida no Senior — sitratLabel/sitratTone
+// acima ficam intocadas) e sim um estado ORTOGONAL, guardado em `Rat.removidoEmSenior`
+// (mesma coluna que a varredura completa de exclusão usa em qualquer tabela de mão dupla,
+// ver varrerRemovidos.ts) — por isso os dois wrappers abaixo, chamados no lugar de
+// sitratLabel/sitratTone em toda resposta que mostra a situação da RAT pro usuário. Por
+// construção, `removidoEmSenior` só é gravado em RAT com origemCaxHub=false (ver
+// desvincularRatAusenteNoSenior em routes/rats.ts e o escopo `{origemCaxHub:false}` de
+// runRatSync), então não precisa checar origemCaxHub aqui de novo.
+export function sitratLabelEfetivo(rat: { sitrat: number | null; removidoEmSenior: Date | null }): string {
+  if (rat.removidoEmSenior != null) return "Excluída";
+  return sitratLabel(rat.sitrat);
+}
+
+export function sitratToneEfetivo(rat: { sitrat: number | null; removidoEmSenior: Date | null }): "success" | "warning" | "destructive" | "neutral" {
+  if (rat.removidoEmSenior != null) return "destructive";
+  return sitratTone(rat.sitrat);
 }
 
 // Status agregado de integração com o Senior (28/08/2026) — construído em cima da fila já

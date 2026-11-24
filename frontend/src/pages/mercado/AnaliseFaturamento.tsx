@@ -1,6 +1,9 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { SelectFiltro } from "../../components/ui/ControlesFiltro";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { FaturamentoVisaoGeralTab } from "../../components/mercado/FaturamentoVisaoGeralTab";
 import { FaturamentoRecorrenciaTab } from "../../components/mercado/FaturamentoRecorrenciaTab";
 import { FaturamentoClientesTab } from "../../components/mercado/FaturamentoClientesTab";
@@ -28,6 +31,21 @@ export function AnaliseFaturamento() {
 
   const anoDaUrl = Number(searchParams.get("ano"));
   const [anoBase, setAnoBase] = useState<number>(Number.isInteger(anoDaUrl) && anoDaUrl > 0 ? anoDaUrl : new Date().getFullYear());
+  const [opcoesProntas, setOpcoesProntas] = useState(false);
+  const [opcoesFalharam, setOpcoesFalharam] = useState(false);
+
+  // Padrão do Ano Base (estrela): aplicado uma vez ao abrir, antes da 1ª consulta das abas. O ano que veio na URL (link, F5) vale mais
+  // que o padrão salvo. Mesmo do CaxHub_Dash.
+  const [daUrl] = useState(() => (searchParams.has("ano") ? ["anoBase"] : []));
+  const p = usePadroesTela({
+    tela: "mercado.analise-faturamento",
+    opcoesProntas,
+    opcoesFalharam,
+    daUrl,
+    campos: {
+      anoBase: { rotulo: "Ano Base", atual: anoBase, aplicar: setAnoBase, validar: regras.valorUnico("number", anosDisponiveis) },
+    },
+  });
 
   useEffect(() => {
     axios
@@ -36,8 +54,9 @@ export function AnaliseFaturamento() {
         const anos: number[] = data.anos ?? [];
         setAnosDisponiveis(anos);
         if (anos.length > 0) setAnoBase((atual) => (anos.includes(atual) ? atual : anos[0]));
+        setOpcoesProntas(true);
       })
-      .catch(() => {});
+      .catch(() => setOpcoesFalharam(true));
   }, []);
 
   // Aba ativa + Ano Base na URL — recarregar a página (ou compartilhar o link) volta
@@ -60,17 +79,13 @@ export function AnaliseFaturamento() {
         </div>
         <label className="flex items-center gap-2 text-sm text-muted">
           Ano Base
-          <select
-            value={anoBase}
-            onChange={(e) => setAnoBase(Number(e.target.value))}
-            className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
+          <SelectFiltro aria-label="Ano Base" className="w-32" value={anoBase} onChange={(e) => setAnoBase(Number(e.target.value))} acessorio={p.estrela("anoBase")}>
             {(anosDisponiveis.includes(anoBase) ? anosDisponiveis : [anoBase, ...anosDisponiveis]).map((ano) => (
               <option key={ano} value={ano}>
                 {ano}
               </option>
             ))}
-          </select>
+          </SelectFiltro>
         </label>
       </div>
 
@@ -82,12 +97,12 @@ export function AnaliseFaturamento() {
         ))}
       </div>
 
-      {visao === "geral" && <FaturamentoVisaoGeralTab ano={anoBase} />}
-      {visao === "recorrencia" && <FaturamentoRecorrenciaTab ano={anoBase} />}
-      {visao === "clientes" && <FaturamentoClientesTab ano={anoBase} />}
-      {visao === "servicos" && <FaturamentoServicosTab ano={anoBase} />}
-      {visao === "sazonalidade" && <FaturamentoSazonalidadeTab ano={anoBase} />}
-      {visao === "geografia" && <FaturamentoGeografiaTab ano={anoBase} />}
+      {p.pronto && visao === "geral" && <FaturamentoVisaoGeralTab ano={anoBase} />}
+      {p.pronto && visao === "recorrencia" && <FaturamentoRecorrenciaTab ano={anoBase} />}
+      {p.pronto && visao === "clientes" && <FaturamentoClientesTab ano={anoBase} />}
+      {p.pronto && visao === "servicos" && <FaturamentoServicosTab ano={anoBase} />}
+      {p.pronto && visao === "sazonalidade" && <FaturamentoSazonalidadeTab ano={anoBase} />}
+      {p.pronto && visao === "geografia" && <FaturamentoGeografiaTab ano={anoBase} />}
     </div>
   );
 }

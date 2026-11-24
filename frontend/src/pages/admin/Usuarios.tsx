@@ -5,6 +5,12 @@ import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/Mult
 import { Skeleton } from "../../components/ui/Skeleton";
 import { copiarParaAreaDeTransferencia } from "../../utils/clipboard";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { ModalComputadoresUsuario } from "../../components/admin/ModalComputadoresUsuario";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 
 interface Role {
   id: number;
@@ -19,6 +25,8 @@ interface Usuario {
   roleId: number;
   roleName: string;
   status: string;
+  // Computadores com o CaxHub Desktop conectados (só conta usuário ativo) — ver GET /users.
+  desktopConectados: number;
 }
 
 interface FormState {
@@ -40,7 +48,137 @@ const CONVITE_VAZIO: ConviteFormState = { email: "", nome: "", roleId: "" };
 const statusTone: Record<string, string> = {
   ativo: "bg-success/15 text-success",
   pendente: "bg-warning/15 text-warning",
+  inativo: "bg-muted/15 text-muted",
 };
+
+const statusRotulo: Record<string, string> = { ativo: "Ativo", pendente: "Pendente", inativo: "Inativo" };
+
+function IconeComputador() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="13" rx="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+    </svg>
+  );
+}
+
+function rotuloComputadores(n: number): string {
+  if (n === 0) return "Nenhum computador conectado";
+  return n === 1 ? "1 computador conectado" : `${n} computadores conectados`;
+}
+
+/** O que cada linha da tabela de usuários pode fazer (as ações vivem na tela). */
+interface AcoesUsuario {
+  logadoId: number | undefined;
+  computadores: (u: Usuario) => void;
+  reenviarConvite: (u: Usuario) => void;
+  inativar: (u: Usuario) => void;
+  reativar: (u: Usuario) => void;
+  gerarToken: (u: Usuario) => void;
+  editar: (u: Usuario) => void;
+  excluir: (u: Usuario) => void;
+}
+
+// Tabela de usuários com filtro e ordem por coluna, colunas configuráveis e resumo no rodapé (TabelaLocal, 03/11/2026): a lista já vem
+// inteira do servidor (filtrada pela busca, papel e situação do topo).
+const COLUNAS_LOCAIS: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "email", tipo: "texto", obrigatoria: true },
+  { nome: "roleName", tipo: "texto", obrigatoria: true },
+  { nome: "situacao", tipo: "texto", obrigatoria: true },
+  { nome: "desktopConectados", tipo: "inteiro", obrigatoria: true },
+];
+
+const COLUNAS_USUARIOS: DefColuna<Usuario, AcoesUsuario>[] = [
+  { nome: "nome", titulo: "Nome", fixa: true, largura: 220, classe: "text-sm font-semibold text-foreground", texto: (u) => u.nome, render: (u) => u.nome },
+  { nome: "email", titulo: "E-mail", largura: 260, classe: "text-sm text-muted", texto: (u) => u.email, render: (u) => u.email },
+  {
+    nome: "roleName",
+    titulo: "Papel",
+    largura: 130,
+    render: (u) => (
+      <span className="inline-block rounded bg-muted/15 px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide text-muted">{u.roleName}</span>
+    ),
+  },
+  {
+    nome: "situacao",
+    titulo: "Status",
+    largura: 110,
+    render: (u) => (
+      <span className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${statusTone[u.status] ?? statusTone.ativo}`}>
+        {statusRotulo[u.status] ?? "Ativo"}
+      </span>
+    ),
+  },
+  {
+    nome: "desktopConectados",
+    titulo: "Desktop",
+    centro: true,
+    largura: 90,
+    render: (u, a) => (
+      // Verde = há computador conectado (clique abre a lista); cinza apagado = nenhum.
+      <button
+        onClick={() => a.computadores(u)}
+        disabled={u.desktopConectados === 0}
+        aria-label={rotuloComputadores(u.desktopConectados)}
+        title={rotuloComputadores(u.desktopConectados)}
+        className={`inline-flex rounded p-1 transition ${u.desktopConectados > 0 ? "text-success hover:bg-success/15" : "cursor-default text-muted/40"}`}
+      >
+        <IconeComputador />
+      </button>
+    ),
+  },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    direita: true,
+    semOrdenar: true,
+    largura: 300,
+    render: (u, a) => (
+      <>
+        {u.status === "pendente" && (
+          <button onClick={() => a.reenviarConvite(u)} className="mr-3 text-sm text-primary hover:underline">
+            Copiar link
+          </button>
+        )}
+        {u.status === "ativo" && (
+          <button
+            onClick={() => a.inativar(u)}
+            disabled={u.id === a.logadoId}
+            title={u.id === a.logadoId ? "Você não pode inativar seu próprio usuário" : undefined}
+            className="mr-3 text-sm text-warning hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Inativar
+          </button>
+        )}
+        {u.status === "inativo" && (
+          <button onClick={() => a.reativar(u)} className="mr-3 text-sm text-success hover:underline">
+            Reativar
+          </button>
+        )}
+        {u.roleName === "system" && (
+          <button onClick={() => a.gerarToken(u)} className="mr-3 text-sm text-primary hover:underline">
+            Gerar token
+          </button>
+        )}
+        <button onClick={() => a.editar(u)} className="mr-3 text-sm text-primary hover:underline">
+          Editar
+        </button>
+        <button
+          onClick={() => a.excluir(u)}
+          disabled={u.id === a.logadoId}
+          className="text-sm text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Excluir
+        </button>
+      </>
+    ),
+  },
+];
+
+/** Valor de cada coluna para filtrar e ordenar (a situação pelo rótulo, como aparece na tela). */
+const lerUsuario = (u: Usuario, nome: string): unknown => (nome === "situacao" ? statusRotulo[u.status] ?? "Ativo" : (u as unknown as Record<string, unknown>)[nome]);
 
 export function Usuarios() {
   const { user: usuarioLogado } = useAuth();
@@ -70,6 +208,10 @@ export function Usuarios() {
   // Situação vem de um clique num KPI (só um valor por vez, ver alternarStatusFiltro); Papel
   // é multi-select; busca é texto livre debounced — mesmo padrão de SincronizacaoSenior.tsx.
   const [statusFiltro, setStatusFiltro] = useState<string | null>(null);
+  // KPI "Com desktop conectado": liga/desliga o filtro de quem tem computador conectado (combina com a situação).
+  const [soDesktop, setSoDesktop] = useState(false);
+  // Usuário cujo modal de computadores está aberto.
+  const [computadoresDe, setComputadoresDe] = useState<Usuario | null>(null);
   const [roleFiltro, setRoleFiltro] = useState<number[]>([]);
   const [buscaInput, setBuscaInput] = useState("");
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
@@ -77,7 +219,7 @@ export function Usuarios() {
   // Totais por situação da base INTEIRA (não reagem a statusFiltro/roleFiltro/buscaDebounced)
   // — mesma regra de GET /sincronizacao/indicadores: o KPI mostra sempre o todo, só a lista
   // abaixo reage aos filtros.
-  const [indicadores, setIndicadores] = useState({ ativo: 0, pendente: 0 });
+  const [indicadores, setIndicadores] = useState({ ativo: 0, pendente: 0, inativo: 0, comDesktop: 0 });
   const [loadingIndicadores, setLoadingIndicadores] = useState(true);
 
   function carregar() {
@@ -88,6 +230,7 @@ export function Usuarios() {
           busca: buscaDebounced || undefined,
           roleId: roleFiltro.length > 0 ? roleFiltro.join(",") : undefined,
           status: statusFiltro || undefined,
+          desktop: soDesktop ? 1 : undefined,
         },
       }),
       axios.get("/api/users/roles"),
@@ -116,10 +259,18 @@ export function Usuarios() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Padrão do filtro de papel (estrela, 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta. Os papéis vêm junto da lista,
+  // então o padrão só confere o formato; papel que não existir mais simplesmente não traz ninguém.
+  const padroes = usePadroesTela({
+    tela: "admin.usuarios",
+    campos: { papel: { rotulo: "Papel", atual: roleFiltro, aplicar: setRoleFiltro, validar: regras.lista("number"), semOpcoes: true } },
+  });
+
   useEffect(() => {
+    if (!padroes.pronto) return;
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFiltro, roleFiltro, buscaDebounced]);
+  }, [padroes.pronto, statusFiltro, roleFiltro, buscaDebounced, soDesktop]);
 
   function alternarStatusFiltro(status: string) {
     setStatusFiltro((atual) => (atual === status ? null : status));
@@ -202,6 +353,34 @@ export function Usuarios() {
       carregarIndicadores();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao excluir usuário");
+    }
+  }
+
+  // Inativar/reativar mudam a contagem por situação — mesma razão de carregarIndicadores() em
+  // excluir(). Inativar derruba a sessão da pessoa na hora e bloqueia novo login, sem apagar nada.
+  async function inativar(usuario: Usuario) {
+    if (
+      !window.confirm(
+        `Inativar "${usuario.nome}"? A pessoa perde o acesso imediatamente (inclusive se estiver logada agora). Você pode reativar depois.`
+      )
+    )
+      return;
+    try {
+      await axios.post(`/api/users/${usuario.id}/inativar`);
+      carregar();
+      carregarIndicadores();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao inativar usuário");
+    }
+  }
+
+  async function reativar(usuario: Usuario) {
+    try {
+      await axios.post(`/api/users/${usuario.id}/reativar`);
+      carregar();
+      carregarIndicadores();
+    } catch (err: any) {
+      setErro(err.response?.data?.error ?? "Falha ao reativar usuário");
     }
   }
 
@@ -318,8 +497,8 @@ export function Usuarios() {
       </div>
 
       {loadingIndicadores ? (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {Array.from({ length: 2 }).map((_, i) => (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-border bg-surface p-5">
               <Skeleton className="mb-2 h-3.5 w-20" />
               <Skeleton className="h-7 w-12" />
@@ -327,7 +506,7 @@ export function Usuarios() {
           ))}
         </div>
       ) : (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {/* Clicáveis: filtram a lista abaixo por situação (mesmo espírito do KPI de
               SincronizacaoSenior.tsx) — o total de cada cartão nunca muda com o clique, só o
               da base inteira. */}
@@ -349,6 +528,25 @@ export function Usuarios() {
             <p className="mb-2 text-[11.5px] text-muted">Convites pendentes</p>
             <span className="block font-mono text-2xl font-semibold tabular-nums text-warning">{indicadores.pendente}</span>
           </button>
+          <button
+            onClick={() => alternarStatusFiltro("inativo")}
+            className={`rounded-lg border p-5 text-left transition ${
+              statusFiltro === "inativo" ? "border-muted ring-2 ring-muted/40" : "border-border hover:bg-surface-2"
+            } ${statusFiltro && statusFiltro !== "inativo" ? "opacity-40" : ""}`}
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Inativos</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-muted">{indicadores.inativo}</span>
+          </button>
+          <button
+            onClick={() => setSoDesktop((atual) => !atual)}
+            title="Usuários com o CaxHub Desktop conectado em algum computador (clique para filtrar a lista)"
+            className={`rounded-lg border p-5 text-left transition ${
+              soDesktop ? "border-primary ring-2 ring-primary/40" : "border-border hover:bg-surface-2"
+            }`}
+          >
+            <p className="mb-2 text-[11.5px] text-muted">Com desktop conectado</p>
+            <span className="block font-mono text-2xl font-semibold tabular-nums text-primary">{indicadores.comDesktop}</span>
+          </button>
         </div>
       )}
 
@@ -365,6 +563,7 @@ export function Usuarios() {
           onChange={setRoleFiltro}
           labelTodos="Todos os papéis"
           labelSufixo="papéis"
+          acessorio={padroes.estrela("papel")}
         />
         {statusFiltro && (
           <button
@@ -382,103 +581,26 @@ export function Usuarios() {
         </p>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Nome
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  E-mail
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Papel
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Status
-                </th>
-                <th className="bg-surface-2 px-5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Ações
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading &&
-                Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i} className="border-t border-border/60">
-                    <td className="px-5 py-3.5">
-                      <Skeleton className="h-4 w-32" />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Skeleton className="h-4 w-40" />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Skeleton className="h-5 w-16 rounded" />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Skeleton className="h-5 w-14 rounded" />
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      <Skeleton className="ml-auto h-4 w-20" />
-                    </td>
-                  </tr>
-                ))}
-              {!loading &&
-                usuarios.map((usuario) => (
-                <tr key={usuario.id} className="border-t border-border/60 transition hover:bg-surface-2">
-                  <td className="px-5 py-3.5 text-sm font-semibold text-foreground">{usuario.nome}</td>
-                  <td className="px-5 py-3.5 text-sm text-muted">{usuario.email}</td>
-                  <td className="px-5 py-3.5">
-                    <span className="inline-block rounded bg-muted/15 px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide text-muted">
-                      {usuario.roleName}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <span
-                      className={`inline-block rounded px-2 py-1 font-mono text-[10.5px] font-medium uppercase tracking-wide ${
-                        statusTone[usuario.status] ?? statusTone.ativo
-                      }`}
-                    >
-                      {usuario.status === "pendente" ? "Pendente" : "Ativo"}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    {usuario.status === "pendente" && (
-                      <button onClick={() => reenviarConvite(usuario)} className="mr-3 text-sm text-primary hover:underline">
-                        Copiar link
-                      </button>
-                    )}
-                    {usuario.roleName === "system" && (
-                      <button onClick={() => gerarTokenServico(usuario)} className="mr-3 text-sm text-primary hover:underline">
-                        Gerar token
-                      </button>
-                    )}
-                    <button onClick={() => abrirEditar(usuario)} className="mr-3 text-sm text-primary hover:underline">
-                      Editar
-                    </button>
-                    <button
-                      onClick={() => excluir(usuario)}
-                      disabled={usuario.id === usuarioLogado?.id}
-                      className="text-sm text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Excluir
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {!loading && usuarios.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-5 py-8 text-center text-sm text-muted">
-                    Nenhum usuário encontrado com esses filtros.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <TabelaLocal<Usuario, AcoesUsuario>
+        chave="admin.usuarios"
+        defs={COLUNAS_USUARIOS}
+        colunas={COLUNAS_LOCAIS}
+        linhas={usuarios}
+        ler={lerUsuario}
+        chaveLinha={(u) => String(u.id)}
+        loading={loading}
+        vazio="Nenhum usuário encontrado com esses filtros."
+        ctx={{
+          logadoId: usuarioLogado?.id,
+          computadores: setComputadoresDe,
+          reenviarConvite,
+          inativar,
+          reativar,
+          gerarToken: gerarTokenServico,
+          editar: abrirEditar,
+          excluir,
+        }}
+      />
 
       {modalAberto && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4">
@@ -665,6 +787,20 @@ export function Usuarios() {
             </div>
           </div>
         </div>
+      )}
+
+      {computadoresDe && (
+        <ModalComputadoresUsuario
+          usuario={computadoresDe}
+          onFechar={() => setComputadoresDe(null)}
+          onAlterado={(restantes) => {
+            // Atualiza a coluna e o KPI sem recarregar (e sem piscar o esqueleto dos cartões).
+            setUsuarios((lista) => lista.map((u) => (u.id === computadoresDe.id ? { ...u, desktopConectados: restantes } : u)));
+            axios.get("/api/users/indicadores").then(({ data }) => setIndicadores(data)).catch(() => {});
+            // Com o filtro "só desktop" ligado, quem ficou sem computador sai da lista.
+            if (soDesktop && restantes === 0) carregar();
+          }}
+        />
       )}
     </div>
   );

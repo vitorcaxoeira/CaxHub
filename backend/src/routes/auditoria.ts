@@ -1,13 +1,34 @@
 import { NextFunction, Response, Router } from "express";
+import { podeVerViagem } from "../domain/solicitacoesViagem";
+import { podeVerArea } from "../domain/gestao5s";
+import { carregarAcesso5S } from "../domain/gestao5sAcesso";
 import { AuthenticatedRequest, requireAuth } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { ENTIDADES_AUDITORIA } from "../audit/taxonomia";
 import { podeExecutarAcao, resolverContextoConsultor } from "../domain/contextoProjeto";
+import { sitproLabel } from "../domain/propostasDominio";
 import { Prisma } from "@prisma/client";
 
 const INCLUDE_USUARIO = { usuario: { select: { nome: true, fotoUrl: true } } } as const;
 type EventoComUsuario = Prisma.AuditEventoGetPayload<{ include: typeof INCLUDE_USUARIO }>;
 
 export const auditoriaRouter = Router();
+
+// O histórico do participante do Plano de Evolução traz o valor hora dos consultores PJ. Só o admin enxerga, na lista geral, na exportação e
+// na consulta por entidade: o gestor de departamento NÃO (o atalho "gerencia algum departamento" de podeVerEntidade o deixaria ver tudo).
+const ENTIDADES_SO_ADMIN: string[] = [
+  ENTIDADES_AUDITORIA.PLANO_PARTICIPANTE,
+  ENTIDADES_AUDITORIA.PLANO_APURACAO,
+  ENTIDADES_AUDITORIA.META_COMERCIAL,
+  ENTIDADES_AUDITORIA.DESCONTO_TIPO,
+  ENTIDADES_AUDITORIA.DESCONTO_PROCESSO,
+  ENTIDADES_AUDITORIA.DESCONTO_PARCELA,
+];
+function esconderEntidadesSoAdmin(req: AuthenticatedRequest, where: Prisma.AuditEventoWhereInput): void {
+  if (req.user!.role === "admin") return;
+  const ja = where.AND == null ? [] : Array.isArray(where.AND) ? where.AND : [where.AND];
+  where.AND = [...ja, { entidadeTipo: { notIn: ENTIDADES_SO_ADMIN } }];
+}
 
 // admin sempre vê; qualquer papel com departamentosGerenciados.length > 0 (Líder
 // Técnico/gestor de departamento) também — comercial e consultor comum ficam de fora
@@ -37,13 +58,59 @@ async function requireAcessoAuditoria(req: AuthenticatedRequest, res: Response, 
 // AtividadeDetalhe.tsx) — mesmo recorte de "visualizar" já usado em atividades.ts/
 // alocacao.ts (podeExecutarAcao). Proposta/proposta_item continuam só pra admin/gestor,
 // mesmo via /entidade/:tipo/:id — "próprias atividades" no pedido original não inclui
-// a proposta inteira.
+// a proposta inteira. RAT (13/09/2026) ganhou regra própria, mais estrita que o atalho de
+// gestor usado pelas demais — ver o ramo dedicado dentro da função.
 async function podeVerEntidade(req: AuthenticatedRequest, entidadeTipo: string, entidadeId: string): Promise<boolean> {
   if (req.user!.role === "admin") return true;
 
   const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
   if (!user) return false;
   const contexto = await resolverContextoConsultor(user.email);
+
+  // RAT tem regra PRÓPRIA, checada ANTES do atalho genérico abaixo (de propósito: RAT é dado
+  // sensível por consultor, mesmo motivo já documentado em ratVisualizacao.ts — "gerencia
+  // QUALQUER departamento" seria mais frouxo que a regra que já vale pra abrir a página da RAT
+  // em si). Mesma condição de podeVerRat (rats.ts/ratVisualizacao.ts): dono, gestor do depexe
+  // ESPECÍFICO da RAT, ou admin (já tratado acima).
+  if (entidadeTipo === "rat") {
+    const ratId = Number(entidadeId);
+    if (!Number.isFinite(ratId)) return false;
+    const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+    if (!rat) return false;
+    if (contexto.consultor?.codfor === rat.codfor) return true;
+    return rat.depexe != null && contexto.departamentosGerenciados.includes(rat.depexe);
+  }
+
+  // Solicitação de Viagem: quem pode ver a solicitação vê o histórico dela (solicitante,
+  // atendimento e o gestor do departamento gravado no snapshot) — sem isto o solicitante e o
+  // administrativo, que não são gestores, receberiam 403 no próprio histórico.
+  if (entidadeTipo === "solicitacao_viagem") {
+    const viagemId = Number(entidadeId);
+    if (!Number.isInteger(viagemId)) return false;
+    const viagem = await prisma.solicitacaoViagem.findUnique({
+      where: { id: viagemId },
+      select: { solicitanteId: true, aprovacaoCodemp: true, aprovacaoDepexe: true, status: true, tipo: true, viajantes: { select: { userId: true } } },
+    });
+    if (!viagem) return false;
+    return podeVerViagem({ userId: user.id, role: req.user!.role, contexto }, viagem);
+  }
+
+  // Avaliação 5S: quem enxerga a área da avaliação enxerga o histórico dela (regra do módulo,
+  // independente de gestor de departamento).
+  if (entidadeTipo === "avaliacao_5s") {
+    const avaliacaoId = Number(entidadeId);
+    if (!Number.isInteger(avaliacaoId)) return false;
+    const avaliacao = await prisma.avaliacao5S.findUnique({
+      where: { id: avaliacaoId },
+      select: { area: { select: { id: true, tipo: true, setorVinculadoId: true, ambientes: { where: { ativo: true }, select: { id: true }, take: 1 } } } },
+    });
+    if (!avaliacao) return false;
+    return podeVerArea(await carregarAcesso5S(req.user!.userId, req.user!.role), avaliacao.area);
+  }
+
+  // Valor hora dos PJ: checado ANTES do atalho de gestor abaixo (o admin já retornou true no topo).
+  if (ENTIDADES_SO_ADMIN.includes(entidadeTipo)) return false;
+
   if (contexto.departamentosGerenciados.length > 0) return true;
 
   if (!["atividade", "alocacao", "kanban_card"].includes(entidadeTipo)) return false;
@@ -187,6 +254,7 @@ async function buscarPagina(filtros: FiltrosAuditoria) {
 auditoriaRouter.get("/", requireAcessoAuditoria, async (req: AuthenticatedRequest, res) => {
   try {
     const filtros = montarFiltros(req.query);
+    esconderEntidadesSoAdmin(req, filtros.where);
     const resultado = await buscarPagina(filtros);
     res.json(resultado);
   } catch (error) {
@@ -209,6 +277,7 @@ function csvEscape(valor: unknown): string {
 auditoriaRouter.get("/export", requireAcessoAuditoria, async (req: AuthenticatedRequest, res) => {
   try {
     const filtros = montarFiltros(req.query);
+    esconderEntidadesSoAdmin(req, filtros.where);
     const linhas = await prisma.auditEvento.findMany({
       where: filtros.where,
       orderBy: [{ ocorridoEm: "desc" }, { id: "desc" }],
@@ -257,6 +326,52 @@ auditoriaRouter.get("/export", requireAcessoAuditoria, async (req: Authenticated
     res.send(`﻿${csv}`); // BOM: Excel no Windows abre UTF-8 corretamente com acentos
   } catch (error) {
     handleError(res, error, "export");
+  }
+});
+
+// Typeahead de proposta da tela de Auditoria. Não reaproveita GET /alocacao/propostas: aquele
+// só lista propostas Aprovada/Em Execução com item e dentro dos departamentos de quem pergunta,
+// e a auditoria de uma proposta existe em qualquer situação (ex.: a 8890 está "Enviada p/
+// Cliente" e tem histórico, mas nunca aparecia na sugestão). Os eventos já são visíveis a quem
+// passa por requireAcessoAuditoria sem recorte de departamento, então buscar todas as propostas
+// aqui não amplia o que a pessoa já enxerga.
+auditoriaRouter.get("/propostas", requireAcessoAuditoria, async (req: AuthenticatedRequest, res) => {
+  try {
+    const busca = typeof req.query.busca === "string" ? req.query.busca.trim() : "";
+    if (busca.length < 2) {
+      res.json({ rows: [] });
+      return;
+    }
+
+    const filtros: Prisma.PropostaWhereInput[] = [{ cliente: { nomcli: { contains: busca, mode: "insensitive" } } }];
+    // Código digitado vale como PREFIXO ("889" acha 8890): faixas [n·10^k, (n+1)·10^k) pra
+    // k = 0..3 — k=0 é o código exato. Int não aceita `contains`, e as faixas dispensam raw SQL.
+    // Até 6 dígitos: n·1000 precisa caber no Int de 32 bits do Postgres.
+    if (/^\d{1,6}$/.test(busca)) {
+      const n = Number(busca);
+      for (let k = 0; k <= 3; k++) {
+        const passo = 10 ** k;
+        filtros.push({ codpro: { gte: n * passo, lt: (n + 1) * passo } });
+      }
+    }
+
+    const propostas = await prisma.proposta.findMany({
+      where: { OR: filtros },
+      orderBy: { codpro: "desc" },
+      take: 8,
+      select: { codemp: true, codpro: true, sitpro: true, cliente: { select: { nomcli: true } } },
+    });
+
+    res.json({
+      rows: propostas.map((p) => ({
+        codemp: p.codemp,
+        codpro: p.codpro,
+        cliente: p.cliente.nomcli,
+        sitproLabel: sitproLabel(p.sitpro),
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "propostas");
   }
 });
 

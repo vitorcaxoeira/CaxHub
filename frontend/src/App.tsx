@@ -1,7 +1,18 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { ReactNode } from "react";
+import { estaNoApp } from "./lib/desktop";
 import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { RequireRole } from "./auth/RequireRole";
+import { DEPEXE_COMERCIAL } from "./auth/acessoComercial";
+import { DEPEXE_DHO } from "./auth/acessoRh";
+import { DEPEXES_PLANO_EVOLUCAO } from "./auth/acessoPlanoEvolucao";
+import { Require5S } from "./auth/Require5S";
+import { RequireGestorOuAdmin } from "./auth/RequireGestorOuAdmin";
+import { DescontosLancamentos } from "./pages/projetos/descontos/DescontosLancamentos";
+import { DescontosParcelas } from "./pages/projetos/descontos/DescontosParcelas";
+import { DescontosFechamentos } from "./pages/projetos/descontos/DescontosFechamentos";
+import { DescontosTipos } from "./pages/projetos/descontos/DescontosTipos";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
@@ -9,7 +20,7 @@ import { PainelShell } from "./layout/PainelShell";
 import { RedirecionaPainelDaHome, CatchAllPorPapel } from "./auth/RotaPorPapel";
 import { Login } from "./pages/Login";
 import { AceitarConvite } from "./pages/AceitarConvite";
-import { Home } from "./pages/Home";
+import { Inicio } from "./pages/Inicio";
 import { Perfil } from "./pages/Perfil";
 import { ContasReceber } from "./pages/financeiro/ContasReceber";
 import { ContasPagar } from "./pages/financeiro/ContasPagar";
@@ -20,25 +31,92 @@ import { FluxoCaixa } from "./pages/financeiro/FluxoCaixa";
 import { Historico } from "./pages/financeiro/Historico";
 import { ResultadoAnalitico } from "./pages/contabil/ResultadoAnalitico";
 import { Propostas } from "./pages/projetos/Propostas";
+import { MetasPainel } from "./pages/comercial/metas/MetasPainel";
+import { MetasLancamentos } from "./pages/comercial/metas/MetasLancamentos";
+import { MetasPlanejamento } from "./pages/comercial/metas/MetasPlanejamento";
+import { MetasIndicadores } from "./pages/comercial/metas/MetasIndicadores";
 import { Atividades } from "./pages/projetos/Atividades";
 import { Jornadas } from "./pages/projetos/Jornadas";
+import { Calendario } from "./pages/projetos/Calendario";
+import { Ferias as FeriasConsultores } from "./pages/projetos/Ferias";
+import { RelatorioAvisoFerias } from "./pages/projetos/RelatorioAvisoFerias";
 import { Aprovacoes } from "./pages/projetos/Aprovacoes";
 import { MeusApontamentos } from "./pages/projetos/MeusApontamentos";
 import { Alocacao } from "./pages/projetos/Alocacao";
+import { GestaoPropostas } from "./pages/projetos/GestaoPropostas";
+import { Eficiencia } from "./pages/projetos/Eficiencia";
+import { MinhasAcoes } from "./pages/projetos/MinhasAcoes";
+import { MeuPlano } from "./pages/projetos/MeuPlano";
+import { PlanoEvolucao } from "./pages/projetos/PlanoEvolucao";
 import { Auditoria } from "./pages/auditoria/Auditoria";
+import { SolicitacoesViagem } from "./pages/solicitacoes/SolicitacoesViagem";
+import { SolicitacaoViagemForm } from "./pages/solicitacoes/SolicitacaoViagemForm";
+import { SolicitacaoViagemDetalhe } from "./pages/solicitacoes/SolicitacaoViagemDetalhe";
 import { AlocacaoPropostaDetalhe } from "./pages/projetos/AlocacaoPropostaDetalhe";
 import { CronogramaProposta } from "./pages/projetos/CronogramaProposta";
 import { PropostaVisualizacao } from "./pages/projetos/PropostaVisualizacao";
 import { RatVisualizacao } from "./pages/projetos/RatVisualizacao";
+import { RelatorioDespesasRat } from "./pages/projetos/RelatorioDespesasRat";
+import { RelatorioCronograma } from "./pages/projetos/RelatorioCronograma";
+import { RelatorioMemoriaPlano } from "./pages/projetos/RelatorioMemoriaPlano";
+import { RelatorioProdutividade } from "./pages/projetos/RelatorioProdutividade";
+import { RelatorioLista } from "./pages/relatorios/RelatorioLista";
 import { Usuarios } from "./pages/admin/Usuarios";
 import { SincronizacaoSenior } from "./pages/admin/SincronizacaoSenior";
-import { SincronizacaoErp } from "./pages/admin/SincronizacaoErp";
+import { SincronizacaoErp, SincronizacaoHcm } from "./pages/admin/SincronizacaoErp";
+import { QuadroPessoal } from "./pages/rh/QuadroPessoal";
+import { FolhaPagamento } from "./pages/rh/FolhaPagamento";
+import { Rescisoes } from "./pages/rh/Rescisoes";
+import { Reajustes } from "./pages/rh/Reajustes";
+import { Turnover } from "./pages/rh/Turnover";
+import { Absenteismo } from "./pages/rh/Absenteismo";
+import { PontoHoras } from "./pages/rh/PontoHoras";
+import { ConformidadeJornada } from "./pages/rh/ConformidadeJornada";
+import { Ferias } from "./pages/rh/Ferias";
+import { DreRh } from "./pages/rh/DreRh";
+import { SincronizacaoKyria } from "./pages/admin/SincronizacaoKyria";
+import { MapeamentoKyria } from "./pages/admin/MapeamentoKyria";
+import { DadosKyria } from "./pages/admin/DadosKyria";
+import { DadosErp } from "./pages/admin/DadosErp";
 import { DepartamentoGrupoContabil } from "./pages/admin/DepartamentoGrupoContabil";
 import { PaineisTv } from "./pages/admin/PaineisTv";
 import { PainelRotacao } from "./pages/painel/PainelRotacao";
+import { DepartamentoTimeKyria } from "./pages/admin/DepartamentoTimeKyria";
+import { VinculoConsultores } from "./pages/admin/VinculoConsultores";
+import { CustoHora } from "./pages/admin/CustoHora";
+import { IndicadoresRentabilidade } from "./pages/admin/IndicadoresRentabilidade";
+import { RentabilidadePorCC } from "./pages/contabil/RentabilidadePorCC";
+import { Dashboard5S } from "./pages/gestao5s/Dashboard5S";
+import { NovaAvaliacao5S } from "./pages/gestao5s/NovaAvaliacao5S";
+import { Avaliacoes5S } from "./pages/gestao5s/Avaliacoes5S";
+import { Avaliacao5S } from "./pages/gestao5s/Avaliacao5S";
+import { ObservacoesEquipe5S } from "./pages/gestao5s/ObservacoesEquipe5S";
+import { RelatorioResultado5S } from "./pages/gestao5s/RelatorioResultado5S";
+import { Areas5S } from "./pages/gestao5s/admin/Areas5S";
+import { Perguntas5S } from "./pages/gestao5s/admin/Perguntas5S";
+import { Participantes5S } from "./pages/gestao5s/admin/Participantes5S";
 import { ListarPedidos } from "./pages/mercado/ListarPedidos";
 import { PedidoVisualizacao } from "./pages/mercado/PedidoVisualizacao";
 import { AnaliseFaturamento } from "./pages/mercado/AnaliseFaturamento";
+import { FlutuanteShell } from "./layout/FlutuanteShell";
+import { JanelaFlutuante } from "./pages/flutuante/JanelaFlutuante";
+
+// CaxHub Desktop: a janela é só a flutuante. Qualquer outra rota (ex.: link antigo, "voltar") volta
+// pra ela; o sistema completo abre no navegador pelo botão "Abrir completo". Fora do app não faz nada.
+const ROTAS_LIVRES_NO_APP = ["/flutuante", "/login", "/aceitar-convite"];
+function SoFlutuanteNoApp({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  if (estaNoApp() && !ROTAS_LIVRES_NO_APP.includes(pathname)) return <Navigate to="/flutuante" replace />;
+  return <>{children}</>;
+}
+
+// O Plano de Evolução PJ morava em /projetos/eficiencia/plano-evolucao (botão dentro da Eficiência) e virou menu próprio em
+// /projetos/plano-evolucao (20/10/2026). Favorito e link antigo (inclusive a memória de cálculo) caem no endereço novo, com a busca.
+const PREFIXO_ANTIGO_PLANO = "/projetos/eficiencia/plano-evolucao";
+function RedirecionarPlanoEvolucao() {
+  const { pathname, search } = useLocation();
+  return <Navigate to={pathname.replace(PREFIXO_ANTIGO_PLANO, "/projetos/plano-evolucao") + search} replace />;
+}
 
 export default function App() {
   return (
@@ -46,9 +124,101 @@ export default function App() {
       <ToastProvider>
         <AuthProvider>
           <BrowserRouter>
+            <SoFlutuanteNoApp>
             <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/aceitar-convite" element={<AceitarConvite />} />
+            {/* Fora do AppShell de propósito — página de impressão do relatório de despesas de
+                viagem (RDV) de uma RAT, aberta numa aba própria pelo botão "Imprimir" em
+                DespesasRatPainel.tsx. window.print() imprime a aba inteira, então sem
+                Sidebar/Topbar/tema escuro só o relatório vai pro papel. Ainda exige login
+                (ProtectedRoute), mesmo padrão de /login fora do bloco do AppShell abaixo. */}
+            <Route
+              path="/projetos/rats/:ratId/despesas/relatorio"
+              element={
+                <ProtectedRoute>
+                  <RelatorioDespesasRat />
+                </ProtectedRoute>
+              }
+            />
+            {/* Relatório impresso do Cronograma de uma proposta (botão Imprimir da tela do Cronograma) —
+                fora do AppShell pelo mesmo motivo das rotas acima. Sem Require5S: o acesso é o da própria
+                tela do Cronograma, e o backend (GET .../cronograma) decide o que o usuário enxerga. */}
+            <Route
+              path="/projetos/alocacao/:codemp/:codpro/cronograma/relatorio"
+              element={
+                <ProtectedRoute>
+                  <RelatorioCronograma />
+                </ProtectedRoute>
+              }
+            />
+            {/* Relatório "Produtividade por Fornecedor" (botão Imprimir da Home do consultor) — fora do
+                AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o acesso é o da própria Home, e o
+                backend (GET /dashboard/produtividade) decide de quem o usuário pode ver os dados. */}
+            {/* Relatório impresso genérico das listas do padrão de colunas (botão "Imprimir" do ListaServidor, 06/11/2026): fora do AppShell
+                pelo mesmo motivo das rotas acima. O acesso é o da própria lista: o backend (GET <lista>/impressao) aplica o mesmo escopo. */}
+            <Route
+              path="/relatorio/lista/:id"
+              element={
+                <ProtectedRoute>
+                  <RelatorioLista />
+                </ProtectedRoute>
+              }
+            />
+            {/* Aviso de férias do consultor (botão "Aviso" da tela Férias, 13/11/2026) — fora do AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o backend
+                (GET /ferias/gozos/:id/aviso) decide quem vê: gestor do departamento, admin ou o próprio consultor. */}
+            <Route
+              path="/projetos/ferias/aviso/:id"
+              element={
+                <ProtectedRoute>
+                  <RelatorioAvisoFerias />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/relatorio/produtividade"
+              element={
+                <ProtectedRoute>
+                  <RelatorioProdutividade />
+                </ProtectedRoute>
+              }
+            />
+            {/* Memória de cálculo da apuração do Plano de Evolução (botão Imprimir/Baixar PDF da Apuração e do Meu plano) — fora do
+                AppShell pelo mesmo motivo das rotas acima. Sem RequireRole: o backend (GET .../memoria) decide quem enxerga: admin, gestor da
+                Consultoria do time (sem R$) ou o próprio consultor depois da devolutiva. */}
+            <Route path={`${PREFIXO_ANTIGO_PLANO}/memoria/:id`} element={<RedirecionarPlanoEvolucao />} />
+            <Route
+              path="/projetos/plano-evolucao/memoria/:id"
+              element={
+                <ProtectedRoute>
+                  <RelatorioMemoriaPlano />
+                </ProtectedRoute>
+              }
+            />
+            {/* Relatório impresso do Resultado geral 5S (botão Imprimir do dashboard) — fora do
+                AppShell pelo mesmo motivo da rota acima; mantém o login e o acesso ao módulo 5S. */}
+            <Route
+              element={
+                <ProtectedRoute>
+                  <Require5S />
+                </ProtectedRoute>
+              }
+            >
+              <Route path="/5s/relatorio" element={<RelatorioResultado5S />} />
+            </Route>
+            {/* Janela flutuante do CaxHub Desktop — fora do AppShell de propósito: sem Sidebar/Topbar,
+                feita pra uma janela de ~360px que fica sempre à vista. A tela cuida do acesso (403 do
+                backend = usuário sem consultor vinculado); roda também num navegador comum. */}
+            <Route
+              path="/flutuante"
+              element={
+                <ProtectedRoute>
+                  <FlutuanteShell>
+                    <JanelaFlutuante />
+                  </FlutuanteShell>
+                </ProtectedRoute>
+              }
+            />
             <Route
               element={
                 <ProtectedRoute>
@@ -58,14 +228,30 @@ export default function App() {
                 </ProtectedRoute>
               }
             >
-              <Route path="/" element={<Home />} />
+              <Route path="/" element={<Inicio />} />
               <Route path="/perfil" element={<Perfil />} />
               <Route path="/projetos/atividades" element={<Atividades />} />
               <Route path="/projetos/apontamentos" element={<MeusApontamentos />} />
+              {/* Minhas ações: o responsável de uma ação do Plano de ação é consultor do time (não gestor), então a rota fica
+                  fora do RequireGestorOuAdmin; o backend só devolve as ações dele. */}
+              <Route path="/projetos/minhas-acoes" element={<MinhasAcoes />} />
+              {/* Meu plano (Plano de Evolução dos consultores PJ): o consultor vê só o PRÓPRIO andamento, então fica fora do
+                  RequireGestorOuAdmin; o backend devolve 404 a quem não participa do plano. */}
+              <Route path="/projetos/meu-plano" element={<MeuPlano />} />
               <Route path="/projetos/alocacao" element={<Alocacao />} />
               <Route path="/projetos/jornadas" element={<Jornadas />} />
+              <Route path="/projetos/calendario" element={<Calendario />} />
+              <Route path="/projetos/ferias" element={<FeriasConsultores />} />
               <Route path="/projetos/aprovacoes" element={<Aprovacoes />} />
               <Route path="/projetos/auditoria" element={<Auditoria />} />
+              {/* Gestão de Descontos: sem guarda de papel nas telas de leitura (o backend recorta: consultor vê os próprios, gestor o time,
+                  admin/administrativo tudo — domain/descontosAcesso.ts). Os tipos de desconto são só de quem administra. */}
+              <Route path="/projetos/descontos" element={<DescontosLancamentos />} />
+              <Route path="/projetos/descontos/parcelas" element={<DescontosParcelas />} />
+              <Route path="/projetos/descontos/fechamentos" element={<DescontosFechamentos />} />
+              <Route element={<RequireRole roles={["admin", "administrativo"]} />}>
+                <Route path="/projetos/descontos/tipos" element={<DescontosTipos />} />
+              </Route>
               <Route path="/projetos/alocacao/:codemp/:codpro" element={<AlocacaoPropostaDetalhe />} />
               <Route path="/projetos/alocacao/:codemp/:codpro/cronograma" element={<CronogramaProposta />} />
               <Route path="/projetos/proposta/:codemp/:codpro" element={<PropostaVisualizacao />} />
@@ -76,9 +262,85 @@ export default function App() {
                   Aprovações/Jornadas/Auditoria acima. Reaberto em 28/08/2026 (tinha sido
                   movido pra dentro do bloco admin-only abaixo em 26/08/2026, commit 3398f74,
                   enquanto o mapeamento Departamento x Grupo Contábil era configurado). */}
+              {/* Gestão de Solicitações (viagens): admin ou líder de departamento (05/10/2026, pedido do
+                  Vitor). Líder não é Role (vem de DepartamentoGestor), então a guarda é dinâmica. Em
+                  sincronia com o menu (Sidebar, `gestorOuAdmin`) e o exigirAdminOuGestor do router no
+                  backend. Ao mudar quem entra, ampliar as três camadas. */}
+              {/* Painel de Eficiência (Gestão de Projetos): admin ou líder de departamento — mesma guarda
+                  das solicitações. Em sincronia com o item do menu (`gestorOuAdmin`) e o
+                  exigirAdminOuGestor de routes/eficiencia.ts no backend. */}
+              <Route element={<RequireGestorOuAdmin />}>
+                <Route path="/projetos/eficiencia" element={<Eficiencia />} />
+                <Route path={PREFIXO_ANTIGO_PLANO} element={<RedirecionarPlanoEvolucao />} />
+                <Route path="/solicitacoes/nova" element={<SolicitacaoViagemForm />} />
+                <Route path="/solicitacoes/aprovacoes" element={<SolicitacoesViagem escopo="aprovacao" />} />
+                <Route path="/solicitacoes/atendimento" element={<SolicitacoesViagem escopo="atendimento" />} />
+                <Route path="/solicitacoes/:id/editar" element={<SolicitacaoViagemForm />} />
+              </Route>
+              {/* Leitura da própria viagem: além de admin e líder, entra quem VIAJA numa solicitação
+                  reservada/finalizada (07/10/2026). Só estas duas rotas; o backend só libera GET de lista
+                  "minhas", detalhe e download de anexo pra esse perfil. */}
+              <Route element={<RequireGestorOuAdmin permitirViajante />}>
+                <Route path="/solicitacoes/minhas" element={<SolicitacoesViagem escopo="minhas" />} />
+                <Route path="/solicitacoes/:id" element={<SolicitacaoViagemDetalhe />} />
+              </Route>
               <Route path="/contabil/resultado-analitico" element={<ResultadoAnalitico />} />
+              {/* Gestão 5S: acesso pelo cadastro de participantes do módulo (Require5S), não pelo
+                  papel do usuário. Nova avaliação só coordenador/avaliador; cadastros só coordenador —
+                  o backend (/5s) recusa o resto com 403. */}
+              <Route element={<Require5S />}>
+                <Route path="/5s" element={<Dashboard5S />} />
+                <Route path="/5s/avaliacoes" element={<Avaliacoes5S />} />
+                <Route path="/5s/avaliacoes/:id" element={<Avaliacao5S />} />
+                <Route path="/5s/observacoes" element={<ObservacoesEquipe5S />} />
+              </Route>
+              <Route element={<Require5S papeis={["coordenador", "avaliador"]} />}>
+                <Route path="/5s/nova" element={<NovaAvaliacao5S />} />
+              </Route>
+              <Route element={<Require5S papeis={["coordenador"]} />}>
+                <Route path="/5s/cadastros/areas" element={<Areas5S />} />
+                <Route path="/5s/cadastros/perguntas" element={<Perguntas5S />} />
+                <Route path="/5s/cadastros/participantes" element={<Participantes5S />} />
+              </Route>
+              {/* Pessoas (Senior HCM): admin ou gestor do departamento 11 (DHO). Gestor não é Role (vem de
+                  DepartamentoGestor), então a guarda é dinâmica. Em sincronia com o item do menu (Sidebar,
+                  `gestorDho`) e o exigirAdminOuGestorDho de routes/rh/index.ts. Ao mudar quem entra, ampliar
+                  as três camadas. */}
+              <Route element={<RequireGestorOuAdmin depexe={DEPEXE_DHO} />}>
+                <Route path="/rh/quadro" element={<QuadroPessoal />} />
+                <Route path="/rh/folha" element={<FolhaPagamento />} />
+                <Route path="/rh/rescisoes" element={<Rescisoes />} />
+                <Route path="/rh/reajustes" element={<Reajustes />} />
+                <Route path="/rh/turnover" element={<Turnover />} />
+                <Route path="/rh/absenteismo" element={<Absenteismo />} />
+                <Route path="/rh/ponto" element={<PontoHoras />} />
+                <Route path="/rh/jornada" element={<ConformidadeJornada />} />
+                <Route path="/rh/ferias" element={<Ferias />} />
+                <Route path="/rh/dre" element={<DreRh />} />
+              </Route>
               <Route element={<RequireRole roles={["admin", "comercial"]} />}>
                 <Route path="/projetos/propostas" element={<Propostas />} />
+              </Route>
+              {/* Gestão de Projetos › Gestão Propostas (19/11/2026): admin, papel comercial ou qualquer líder de departamento (o líder vê só os
+                  departamentos que gerencia; só o admin tem as ações de situação — ver routes/gestaoPropostas.ts). Em sincronia com o item do menu
+                  (Sidebar, `gestorOuAdmin` + `ouPapeis`) e o exigirAcessoGestaoPropostas do backend. Ao mudar quem entra, ampliar as três camadas. */}
+              <Route element={<RequireGestorOuAdmin papeis={["comercial"]} />}>
+                <Route path="/projetos/gestao-propostas" element={<GestaoPropostas />} />
+              </Route>
+              {/* Comercial › Gestão de Metas: admin ou gestor do departamento 2 (Comercial). Gestor não é Role (vem de
+                  DepartamentoGestor), então a guarda é dinâmica. Em sincronia com o item do menu (Sidebar, `gestorComercial`) e o
+                  exigirAdminOuGestorComercial de routes/metasComercial.ts. Ao mudar quem entra, ampliar as três camadas. */}
+              {/* Gestão de Projetos › Plano de Evolução PJ: admin ou gestor da Consultoria ERP (8) ou HCM (9). Em sincronia com o item do menu
+                  (Sidebar, `gestorConsultoria`) e o carregarAcesso de routes/planoEvolucaoComum.ts. Ao mudar quem entra, ampliar as três camadas.
+                  O consultor acompanha o próprio plano em "Meu plano" (/projetos/meu-plano), fora desta guarda. */}
+              <Route element={<RequireGestorOuAdmin depexe={DEPEXES_PLANO_EVOLUCAO} />}>
+                <Route path="/projetos/plano-evolucao" element={<PlanoEvolucao />} />
+              </Route>
+              <Route element={<RequireGestorOuAdmin depexe={DEPEXE_COMERCIAL} />}>
+                <Route path="/comercial/metas" element={<MetasPainel />} />
+                <Route path="/comercial/metas/lancamentos" element={<MetasLancamentos />} />
+                <Route path="/comercial/metas/planejamento" element={<MetasPlanejamento />} />
+                <Route path="/comercial/metas/indicadores" element={<MetasIndicadores />} />
               </Route>
               <Route element={<RequireRole roles={["admin"]} />}>
                 <Route path="/financeiro/contas-a-receber" element={<ContasReceber />} />
@@ -91,8 +353,21 @@ export default function App() {
                 <Route path="/admin/usuarios" element={<Usuarios />} />
                 <Route path="/admin/sincronizacao" element={<SincronizacaoSenior />} />
                 <Route path="/admin/sincronizacao-erp" element={<SincronizacaoErp />} />
+                <Route path="/admin/sincronizacao-erp/dados/:jobName" element={<DadosErp />} />
+                <Route path="/admin/sincronizacao-erp/removidos/:jobName" element={<DadosErp />} />
+                <Route path="/admin/sincronizacao-hcm" element={<SincronizacaoHcm />} />
+                <Route path="/admin/sincronizacao-hcm/dados/:jobName" element={<DadosErp />} />
+                <Route path="/admin/sincronizacao-hcm/removidos/:jobName" element={<DadosErp />} />
+                <Route path="/admin/sincronizacao-kyria" element={<SincronizacaoKyria />} />
+                <Route path="/admin/mapeamento-kyria" element={<MapeamentoKyria />} />
+                <Route path="/admin/sincronizacao-kyria/dados/:jobName" element={<DadosKyria />} />
+                <Route path="/admin/departamento-time-kyria" element={<DepartamentoTimeKyria />} />
                 <Route path="/admin/departamento-grupo-contabil" element={<DepartamentoGrupoContabil />} />
                 <Route path="/admin/paineis-tv" element={<PaineisTv />} />
+                <Route path="/admin/indicadores-rentabilidade" element={<IndicadoresRentabilidade />} />
+                <Route path="/admin/vinculo-consultores" element={<VinculoConsultores />} />
+                <Route path="/admin/custo-hora" element={<CustoHora />} />
+                <Route path="/contabil/rentabilidade" element={<RentabilidadePorCC />} />
                 <Route path="/mercado/pedidos" element={<ListarPedidos />} />
                 <Route path="/mercado/pedido/:codemp/:codfil/:numped" element={<PedidoVisualizacao />} />
                 <Route path="/mercado/analise-faturamento" element={<AnaliseFaturamento />} />
@@ -114,6 +389,7 @@ export default function App() {
             </Route>
             <Route path="*" element={<CatchAllPorPapel />} />
           </Routes>
+            </SoFlutuanteNoApp>
         </BrowserRouter>
       </AuthProvider>
       </ToastProvider>

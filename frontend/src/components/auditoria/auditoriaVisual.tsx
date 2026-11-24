@@ -121,11 +121,213 @@ function rotuloEntidade(evento: EventoAuditoria): string {
   return evento.entidadeRotulo ?? `${evento.entidadeTipo} ${evento.entidadeId}`;
 }
 
+// O pedido "Outros" (material, equipamento) usa os mesmos eventos VIAGEM_*, mas o backend grava o rótulo da
+// entidade como "Pedido #N" (routes/solicitacoesViagem.ts, auditar). É por ele que o texto troca "a viagem" por
+// "o pedido" — vale também pros eventos já gravados, sem migrar nada.
+export function ehPedido(evento: EventoAuditoria): boolean {
+  return evento.entidadeRotulo?.startsWith("Pedido ") ?? false;
+}
+
+// Selo com o código do evento. No pedido "Outros" o código da viagem (VIAGEM_*) não faz sentido, então o selo
+// mostra o equivalente do pedido; o código gravado no banco continua o mesmo.
+const TAG_PEDIDO: Record<string, string> = {
+  VIAGEM_SOLICITADA: "PEDIDO_ABERTO",
+  VIAGEM_ALTERADA: "PEDIDO_ALTERADO",
+  VIAGEM_ASSUMIDA: "PEDIDO_ASSUMIDO",
+  VIAGEM_FINALIZADA: "PEDIDO_CONCLUIDO",
+  VIAGEM_CANCELADA: "PEDIDO_CANCELADO",
+};
+
+export function tagEvento(evento: EventoAuditoria): string {
+  if (!ehPedido(evento) || !evento.eventoTipo.startsWith("VIAGEM_")) return evento.eventoTipo;
+  return TAG_PEDIDO[evento.eventoTipo] ?? evento.eventoTipo.replace("VIAGEM_", "PEDIDO_");
+}
+
 function contarAlteracoes(evento: EventoAuditoria): number {
   return evento.alteracoes ? Object.keys(evento.alteracoes).length : 0;
 }
 
+// Domínio "USU_LSITRAT" do Senior — espelha backend/src/domain/ratDominio.ts (SITRAT_LABELS).
+// Só pro resumo de RAT_SITUACAO_ALTERADA_SENIOR; `de`/`para` chegam como `unknown` (JSON de
+// `alteracoes`), por isso `Number(valor)` antes de indexar o mapa.
+const SITRAT_LABELS_CURTO: Record<number, string> = {
+  9: "Digitado",
+  8: "Impresso",
+  6: "Aprovado",
+  5: "Cancelado",
+  4: "Faturado",
+  2: "Faturado Parcial",
+  1: "Fechado",
+};
+function sitratLabelCurto(valor: unknown): string {
+  const n = Number(valor);
+  if (valor == null || !Number.isFinite(n)) return "—";
+  return SITRAT_LABELS_CURTO[n] ?? `Situação ${n}`;
+}
+
 export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
+  VIAGEM_SOLICITADA: {
+    tone: "success",
+    rotuloGrupo: "Viagem",
+    icone: IconeCriacao,
+    resumo: (e) => (ehPedido(e) ? `Abriu o ${rotuloEntidade(e)}` : `Solicitou a viagem — ${rotuloEntidade(e)}`),
+  },
+  VIAGEM_ALTERADA: {
+    tone: "neutral",
+    rotuloGrupo: "Viagem",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou ${ehPedido(e) ? "o" : "a"} ${rotuloEntidade(e)}`,
+  },
+  VIAGEM_ASSUMIDA: {
+    tone: "primary",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => (ehPedido(e) ? `Assumiu o atendimento do ${rotuloEntidade(e)}` : `Assumiu a cotação da ${rotuloEntidade(e)}`),
+  },
+  VIAGEM_COTACAO_ADICIONADA: {
+    tone: "neutral",
+    rotuloGrupo: "Viagem",
+    icone: IconeCriacao,
+    resumo: (e) => `Adicionou cotação de ${e.metadata?.fornecedor ?? "—"} (R$ ${e.metadata?.valor ?? "—"})`,
+  },
+  VIAGEM_COTACAO_REMOVIDA: {
+    tone: "neutral",
+    rotuloGrupo: "Viagem",
+    icone: IconeRemocao,
+    resumo: (e) => `Removeu cotação de ${e.metadata?.fornecedor ?? "—"}`,
+  },
+  VIAGEM_COTACAO_SELECIONADA: {
+    tone: "neutral",
+    rotuloGrupo: "Viagem",
+    icone: IconeEdicao,
+    resumo: (e) => `${e.metadata?.selecionada === false ? "Desmarcou" : "Escolheu"} a cotação de ${e.metadata?.fornecedor ?? "—"}`,
+  },
+  VIAGEM_ENVIADA_APROVACAO: {
+    tone: "warning",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Enviou a ${rotuloEntidade(e)} para aprovação (cotado: R$ ${e.metadata?.valorProposto ?? "—"})`,
+  },
+  VIAGEM_APROVADA: {
+    tone: "success",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Aprovou a ${rotuloEntidade(e)} (R$ ${e.metadata?.valorAprovado ?? "—"})`,
+  },
+  VIAGEM_REPROVADA: {
+    tone: "destructive",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Reprovou a ${rotuloEntidade(e)}: ${e.metadata?.observacao ?? "—"}`,
+  },
+  VIAGEM_ENVIADA_ACEITE: {
+    tone: "warning",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Enviou a cotação da ${rotuloEntidade(e)} para o solicitante confirmar (R$ ${e.metadata?.valorProposto ?? "—"})`,
+  },
+  VIAGEM_ACEITA_SOLICITANTE: {
+    tone: "success",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Aceitou a cotação da ${rotuloEntidade(e)}${e.metadata?.observacao ? `: ${e.metadata.observacao}` : ""}`,
+  },
+  VIAGEM_RECUSADA_SOLICITANTE: {
+    tone: "warning",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Recusou a cotação da ${rotuloEntidade(e)}: ${e.metadata?.observacao ?? "—"}`,
+  },
+  VIAGEM_DEVOLVIDA: {
+    tone: "warning",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Devolveu a ${rotuloEntidade(e)} para nova cotação: ${e.metadata?.observacao ?? "—"}`,
+  },
+  VIAGEM_RESERVA_REGISTRADA: {
+    tone: "neutral",
+    rotuloGrupo: "Viagem",
+    icone: IconeEdicao,
+    resumo: (e) => `Registrou reserva (${e.metadata?.tipo ?? "item"}) — localizador ${e.metadata?.localizador ?? "—"}`,
+  },
+  VIAGEM_RESERVADA: {
+    tone: "success",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Concluiu a reserva da ${rotuloEntidade(e)}`,
+  },
+  VIAGEM_REVALIDACAO_EXIGIDA: {
+    tone: "warning",
+    rotuloGrupo: "Viagem",
+    icone: IconeBloqueio,
+    resumo: (e) => `Valor reservado acima do aprovado — ${rotuloEntidade(e)} voltou para aprovação`,
+  },
+  VIAGEM_FINALIZADA: {
+    tone: "success",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => (ehPedido(e) ? `Concluiu o ${rotuloEntidade(e)}` : `Finalizou a ${rotuloEntidade(e)}`),
+  },
+  VIAGEM_CANCELADA: {
+    tone: "destructive",
+    rotuloGrupo: "Viagem",
+    icone: IconeStatus,
+    resumo: (e) => `Cancelou ${ehPedido(e) ? "o" : "a"} ${rotuloEntidade(e)}: ${e.metadata?.motivo ?? "—"}`,
+  },
+  VIAGEM_ANEXO_ADICIONADO: {
+    tone: "neutral",
+    rotuloGrupo: "Viagem",
+    icone: IconeCriacao,
+    resumo: (e) => `Anexou ${e.metadata?.nomeArquivo ?? "arquivo"}`,
+  },
+  VIAGEM_ANEXO_REMOVIDO: {
+    tone: "neutral",
+    rotuloGrupo: "Viagem",
+    icone: IconeRemocao,
+    resumo: (e) => `Removeu o anexo ${e.metadata?.nomeArquivo ?? ""}`,
+  },
+  AVALIACAO_5S_CRIADA: {
+    tone: "success",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeCriacao,
+    resumo: (e) => `Iniciou a ${rotuloEntidade(e)}`,
+  },
+  AVALIACAO_5S_NOTA_ALTERADA: {
+    tone: "neutral",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou a resposta "${e.metadata?.pergunta ?? "—"}" (${contarAlteracoes(e)} campo(s))`,
+  },
+  AVALIACAO_5S_FINALIZADA: {
+    tone: "success",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeStatus,
+    resumo: (e) => `Finalizou a ${rotuloEntidade(e)}`,
+  },
+  AVALIACAO_5S_REABERTA: {
+    tone: "warning",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeStatus,
+    resumo: (e) => `Reabriu a ${rotuloEntidade(e)} para edição`,
+  },
+  AVALIACAO_5S_EXCLUIDA: {
+    tone: "destructive",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeRemocao,
+    resumo: (e) => `Excluiu a ${rotuloEntidade(e)}`,
+  },
+  AVALIACAO_5S_IMAGEM_ADICIONADA: {
+    tone: "neutral",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeCriacao,
+    resumo: () => "Adicionou uma foto",
+  },
+  AVALIACAO_5S_IMAGEM_REMOVIDA: {
+    tone: "neutral",
+    rotuloGrupo: "Gestão 5S",
+    icone: IconeRemocao,
+    resumo: (e) => `Removeu a foto ${e.metadata?.nomeArquivo ?? ""}`,
+  },
   PROPOSTA_CRIADA: {
     tone: "success",
     rotuloGrupo: "Proposta",
@@ -144,6 +346,15 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeStatus,
     resumo: (e) =>
       `Mudou a situação da ${rotuloEntidade(e)} de "${e.metadata?.status_de ?? "—"}" para "${e.metadata?.status_para ?? "—"}"`,
+  },
+  PROPOSTA_SITUACAO_SOLICITADA: {
+    tone: "warning",
+    rotuloGrupo: "Proposta",
+    icone: IconeStatus,
+    resumo: (e) =>
+      e.metadata?.sucesso === false
+        ? `Falhou ao mudar a situação da ${rotuloEntidade(e)} para "${e.metadata?.para ?? "—"}": ${e.metadata?.erro ?? "erro no ERP"}`
+        : `Pediu para mudar a situação da ${rotuloEntidade(e)} de "${e.metadata?.de ?? "—"}" para "${e.metadata?.para ?? "—"}" (aguarda o ERP)`,
   },
   PROPOSTA_ITEM_CRIADO: {
     tone: "success",
@@ -287,6 +498,22 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeRemocao,
     resumo: (e) => `Reprovou o ajuste de horário — ${rotuloEntidade(e)}`,
   },
+  // Líder/admin liberou (ou fechou) dias retroativos pra um consultor pedir apontamento/ajuste —
+  // exceção à ordem da Diretoria, por isso aparece com tom de atenção. O de/para vai em `alteracoes`.
+  APONTAMENTO_RETROATIVO_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Apontamento retroativo",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou os dias retroativos permitidos — ${rotuloEntidade(e)}`,
+  },
+  // Líder/admin mudou a tolerância do teto na confirmação de sessões de um consultor. De/para em
+  // `alteracoes`. Mesmo tom do evento de retroatividade: ambos afrouxam uma trava.
+  APONTAMENTO_TOLERANCIA_TETO_ALTERADA: {
+    tone: "warning",
+    rotuloGrupo: "Tolerância do teto",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou a tolerância do teto na confirmação — ${rotuloEntidade(e)}`,
+  },
   // Pedido de mudança nas 3 flags de configuração da proposta (Cronograma) e a decisão de
   // quem tem alçada — mesmo tom das outras 3 famílias de solicitação (warning/success/
   // destructive). A mudança da flag em si (aprovada) ainda gera o evento PRÓPRIO dela
@@ -357,6 +584,27 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
     icone: IconeSenior,
     resumo: (e) => `Enviou ${rotuloEntidade(e)} ao Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
   },
+  // Envio de despesa ao Senior (inclusão/edição/exclusão) — mesmo estilo de
+  // ATIVIDADE_ENVIADA_SENIOR acima. Ganharam entrada própria em 13/09/2026 porque passaram a
+  // aparecer também como companheiro sob a RAT (ver outboxSeniorDespesa.ts), não só sob Despesa.
+  DESPESA_ENVIADA_SENIOR: {
+    tone: "primary",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `Enviou ${rotuloEntidade(e)} ao Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
+  },
+  DESPESA_EDITADA_SENIOR: {
+    tone: "primary",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `Editou ${rotuloEntidade(e)} no Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
+  },
+  DESPESA_EXCLUIDA_SENIOR: {
+    tone: "primary",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `Excluiu ${rotuloEntidade(e)} no Senior — ${e.metadata?.sucesso ? "sucesso" : "falha"}`,
+  },
   RAT_ITEM_DESVINCULADO_SENIOR: {
     tone: "warning",
     rotuloGrupo: "Integração Senior",
@@ -367,7 +615,256 @@ export const CONFIG_EVENTO_AUDITORIA: Record<string, ConfigEvento> = {
       return `${quantos} apontamento(s) apagado(s) no Senior — vínculo removido pra reintegrar (${rotuloEntidade(e)})`;
     },
   },
+  // Mesma lógica do evento acima, mas pra item com origemCaxHub=false (nunca teve sessão
+  // local) — não há o que reintegrar, o registro foi excluído de vez na origem. Mesmo espírito
+  // de RAT_EXCLUIDA_SENIOR (cabeçalho), aplicado ao item. 14/09/2026.
+  RAT_ITEM_EXCLUIDO_SENIOR: {
+    tone: "destructive",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => {
+      const seqrats = Array.isArray(e.metadata?.seqratsExcluidos) ? e.metadata.seqratsExcluidos : [];
+      const quantos = seqrats.length;
+      return `${quantos} item(ns) excluído(s) no Senior — não existem mais na origem (${rotuloEntidade(e)})`;
+    },
+  },
+  // Mesmo cabeçalho acima, mas o documento inteiro (não só um item) não voltou mais na
+  // consulta ao Senior — Rat.numrat foi limpo pra permitir reintegrar.
+  RAT_DESVINCULADA_SENIOR: {
+    tone: "warning",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `RAT ${e.alteracoes?.numrat?.de ?? "?"} não existe mais no Senior — vínculo removido (${rotuloEntidade(e)})`,
+  },
+  // RAT com origemCaxHub=false (nasceu no Senior, nunca teve rascunho local) cujo documento
+  // foi excluído de vez na origem — diferente do evento acima, aqui não há o que reintegrar;
+  // a RAT passa a aparecer com situação "Excluída" na tela. 14/09/2026.
+  RAT_EXCLUIDA_SENIOR: {
+    tone: "destructive",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) => `RAT excluída no Senior — não existe mais na origem (${rotuloEntidade(e)})`,
+  },
+  // Situação (sitrat) mudou direto no Senior, numa RAT que já existia localmente — achado real
+  // 13/09/2026 (mudar pra "Digitado" de novo depois de fechada e sincronizar não deixava
+  // rastro). Rótulos espelham backend/src/domain/ratDominio.ts (SITRAT_LABELS).
+  RAT_SITUACAO_ALTERADA_SENIOR: {
+    tone: "primary",
+    rotuloGrupo: "Integração Senior",
+    icone: IconeSenior,
+    resumo: (e) =>
+      `Situação alterada no Senior: "${sitratLabelCurto(e.alteracoes?.sitrat?.de)}" → "${sitratLabelCurto(e.alteracoes?.sitrat?.para)}" (${rotuloEntidade(e)})`,
+  },
+  // Criação do cabeçalho/item/despesa — `metadata.origemCriacao` ("caxhub" | "senior") diz de
+  // onde veio, um evento só pros dois casos (13/09/2026).
+  RAT_CRIADA: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeCriacao,
+    resumo: (e) => (e.metadata?.origemCriacao === "senior" ? `RAT importada do Senior — ${rotuloEntidade(e)}` : `RAT criada no CaxHub — ${rotuloEntidade(e)}`),
+  },
+  RAT_ITEM_CRIADO: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeCriacao,
+    resumo: (e) =>
+      e.metadata?.origemCriacao === "senior"
+        ? `Item de atividade importado do Senior — ${rotuloEntidade(e)}`
+        : `Item de atividade incluído no CaxHub — ${rotuloEntidade(e)}`,
+  },
+  DESPESA_CRIADA: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeCriacao,
+    resumo: (e) =>
+      e.metadata?.origemCriacao === "senior"
+        ? `Despesa de viagem importada do Senior — ${rotuloEntidade(e)}`
+        : `Despesa de viagem lançada no CaxHub — ${rotuloEntidade(e)}`,
+  },
+  RAT_APROVADA: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeStatus,
+    resumo: (e) => `Aprovou a RAT — ${rotuloEntidade(e)}`,
+  },
+  // Nasce no clique (origem "tela") — o fechamento em si só se confirma depois, quando o
+  // Senior responder (ver RAT_FECHADA abaixo, origem "job"). Os dois aparecem em momentos
+  // diferentes da linha do tempo, nunca no mesmo grupo/correlationId.
+  RAT_FECHAMENTO_SOLICITADO: {
+    tone: "warning",
+    rotuloGrupo: "RAT",
+    icone: IconeStatus,
+    resumo: (e) => `Solicitou o fechamento da RAT — ${rotuloEntidade(e)}`,
+  },
+  RAT_FECHADA: {
+    tone: "success",
+    rotuloGrupo: "RAT",
+    icone: IconeStatus,
+    resumo: (e) => `RAT fechada no Senior — ${rotuloEntidade(e)}`,
+  },
+  COMPROVANTE_RAT_ADICIONADO: {
+    tone: "neutral",
+    rotuloGrupo: "RAT",
+    icone: IconeCriacao,
+    resumo: (e) =>
+      e.metadata?.despesaId != null
+        ? `Anexou o comprovante ${e.metadata?.nomeArquivo ?? ""} à despesa ${e.metadata.despesaId}`
+        : `Anexou o comprovante ${e.metadata?.nomeArquivo ?? ""} à RAT`,
+  },
+  COMPROVANTE_RAT_VINCULADO: {
+    tone: "neutral",
+    rotuloGrupo: "RAT",
+    icone: IconeEdicao,
+    resumo: (e) =>
+      e.metadata?.despesaIdNovo != null
+        ? `Vinculou o comprovante ${e.metadata?.nomeArquivo ?? ""} à despesa ${e.metadata.despesaIdNovo}`
+        : `Desvinculou o comprovante ${e.metadata?.nomeArquivo ?? ""} da despesa ${e.metadata?.despesaIdAnterior ?? ""}`,
+  },
+  COMPROVANTE_RAT_REMOVIDO: {
+    tone: "neutral",
+    rotuloGrupo: "RAT",
+    icone: IconeRemocao,
+    resumo: (e) => `Removeu o comprovante ${e.metadata?.nomeArquivo ?? ""}`,
+  },
+
+  // Painel de Eficiência (Gestão de Projetos › Eficiência). A exclusão vale só no painel: RAT e teto não mudam.
+  EFICIENCIA_APONTAMENTO_EXCLUIDO: {
+    tone: "warning",
+    rotuloGrupo: "Eficiência",
+    icone: IconeRemocao,
+    resumo: (e) =>
+      `Tirou do cálculo do painel o apontamento de ${horasDoMetadata(e.metadata?.minutos)} — ${rotuloEntidade(e)}. Motivo: ${e.metadata?.motivoRotulo ?? e.metadata?.motivo ?? "—"}${
+        e.metadata?.observacao ? ` (${e.metadata.observacao})` : ""
+      }`,
+  },
+  EFICIENCIA_APONTAMENTO_RESTAURADO: {
+    tone: "success",
+    rotuloGrupo: "Eficiência",
+    icone: IconeStatus,
+    resumo: (e) => `Devolveu ao cálculo do painel o apontamento de ${horasDoMetadata(e.metadata?.minutos)} — ${rotuloEntidade(e)}`,
+  },
+  EFICIENCIA_ACAO_CRIADA: {
+    tone: "success",
+    rotuloGrupo: "Eficiência",
+    icone: IconeCriacao,
+    resumo: (e) => `Criou a ação do plano de ação — ${rotuloEntidade(e)}${e.metadata?.responsavel ? ` (responsável: ${e.metadata.responsavel})` : ""}`,
+  },
+  EFICIENCIA_ACAO_ALTERADA: {
+    tone: "neutral",
+    rotuloGrupo: "Eficiência",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou a ação do plano de ação — ${rotuloEntidade(e)}`,
+  },
+  EFICIENCIA_ACAO_STATUS_ALTERADO: {
+    tone: "primary",
+    rotuloGrupo: "Eficiência",
+    icone: IconeStatus,
+    resumo: (e) => `Mudou o status da ação para ${e.metadata?.statusRotulo ?? e.metadata?.status ?? "—"} — ${rotuloEntidade(e)}`,
+  },
+  EFICIENCIA_ACAO_EXCLUIDA: {
+    tone: "destructive",
+    rotuloGrupo: "Eficiência",
+    icone: IconeRemocao,
+    resumo: (e) => `Excluiu a ação do plano de ação — ${rotuloEntidade(e)}`,
+  },
+  PLANO_CICLO_CRIADO: {
+    tone: "success",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeCriacao,
+    resumo: (e) => `Criou o ciclo do Plano de Evolução — ${rotuloEntidade(e)}`,
+  },
+  PLANO_CICLO_ALTERADO: {
+    tone: "neutral",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Alterou os parâmetros do ciclo — ${rotuloEntidade(e)}`,
+  },
+  PLANO_CICLO_PUBLICADO: {
+    tone: "primary",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Publicou o ciclo (parâmetros travados) — ${rotuloEntidade(e)}`,
+  },
+  PLANO_CICLO_ENCERRADO: {
+    tone: "neutral",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Encerrou o ciclo — ${rotuloEntidade(e)}`,
+  },
+  PLANO_PARTICIPANTE_ADERIU: {
+    tone: "success",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeCriacao,
+    resumo: (e) => `Registrou a adesão ao Plano de Evolução — ${rotuloEntidade(e)}`,
+  },
+  PLANO_PARTICIPANTE_VALOR_BASE_ALTERADO: {
+    tone: "warning",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Lançou novo Valor Hora Base${e.metadata?.motivoRotulo ? ` (${e.metadata.motivoRotulo})` : ""} — ${rotuloEntidade(e)}`,
+  },
+  PLANO_PARTICIPANTE_ENCERRADO: {
+    tone: "destructive",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeRemocao,
+    resumo: (e) => `Encerrou a participação no Plano de Evolução — ${rotuloEntidade(e)}`,
+  },
+  PLANO_GLOBAL_FECHADO: {
+    tone: "primary",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Fechou o índice global do ciclo — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_LANCADA: {
+    tone: "neutral",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Registrou lançamentos da apuração — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_APURADA: {
+    tone: "primary",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Apurou o ciclo (resultado congelado) — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_DEVOLUTIVA: {
+    tone: "success",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Registrou a devolutiva — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_CONTESTADA: {
+    tone: "warning",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Registrou contestação da apuração — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_DESFECHO: {
+    tone: "neutral",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Registrou o desfecho da contestação — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_REABERTA: {
+    tone: "warning",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeEdicao,
+    resumo: (e) => `Reabriu a apuração (contestação procedente) — ${rotuloEntidade(e)}`,
+  },
+  PLANO_APURACAO_ENCERRADA: {
+    tone: "success",
+    rotuloGrupo: "Plano de Evolução",
+    icone: IconeStatus,
+    resumo: (e) => `Encerrou a apuração — ${rotuloEntidade(e)}`,
+  },
 };
+
+// "3:30 h" a partir dos minutos gravados no metadata do evento (qualquer coisa que não seja número vira "—").
+function horasDoMetadata(minutos: unknown): string {
+  if (typeof minutos !== "number" || !Number.isFinite(minutos)) return "—";
+  const total = Math.round(Math.abs(minutos));
+  return `${Math.trunc(total / 60)}:${String(total % 60).padStart(2, "0")} h`;
+}
 
 const CONFIG_PADRAO: ConfigEvento = {
   tone: "neutral",

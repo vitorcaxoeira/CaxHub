@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { verifyToken, talvezRenovar, TokenPayload } from "./jwt";
+import { usuarioInativo } from "./statusUsuario";
 
 export interface AuthenticatedRequest extends Request {
   // Sempre Required (iat/exp inclusos) na prática — vem só de verifyToken, que já devolve assim.
@@ -9,7 +10,7 @@ export interface AuthenticatedRequest extends Request {
   correlationId?: string;
 }
 
-export function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
+export async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
 
@@ -26,6 +27,18 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
     req.user = verifyToken(token);
   } catch {
     res.status(401).json({ error: "Token inválido ou expirado" });
+    return;
+  }
+
+  // Usuário inativado por um admin perde o acesso na hora, mesmo com token ainda válido. 401 (não
+  // 403) de propósito: o interceptor do frontend (AuthContext.tsx) só desloga em 401.
+  try {
+    if (await usuarioInativo(req.user.userId)) {
+      res.status(401).json({ error: "Usuário inativo — procure um administrador" });
+      return;
+    }
+  } catch (error) {
+    next(error);
     return;
   }
 

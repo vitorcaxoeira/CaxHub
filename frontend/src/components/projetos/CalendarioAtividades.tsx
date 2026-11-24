@@ -104,6 +104,8 @@ export function CalendarioAtividades({ atividades, onAbrirDetalhe }: CalendarioA
                         itemRealizado: a.itemRealizado,
                         horasRealizadas: a.horasRealizadas,
                         estruturaPercentual: a.estruturaPercentual,
+                        estruturaAtividadeId: a.estruturaAtividadeId,
+                        depexeLabel: a.depexeLabel,
                         podeVerCronograma: a.podeVerCronograma,
                                                 qtdhorPrevisto: a.qtdhorPrevisto,
                                                 horasExcedentes: a.horasExcedentes,

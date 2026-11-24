@@ -20,6 +20,12 @@ interface SelectBuscavelProps<T extends string | number> {
   placeholderBusca?: string;
   desabilitado?: boolean;
   className?: string;
+  /**
+   * Grupos expansíveis (18/11/2026, lista de recursos do Mapeamento Kyria): cada abertura da lista começa com TODOS os grupos contraídos e o
+   * cabeçalho do grupo vira um botão que expande/contrai. Com texto na busca os grupos que têm resultado ficam abertos (senão a busca esconderia o
+   * que achou). Desligado por padrão: as demais telas continuam com os grupos sempre abertos.
+   */
+  gruposRecolhiveis?: boolean;
 }
 
 // Normaliza pra busca: sem acento e sem diferença de maiúscula. Sem isso, procurar por
@@ -49,10 +55,13 @@ export function SelectBuscavel<T extends string | number>({
   placeholderBusca = "Buscar por proposta, cliente ou descrição...",
   desabilitado = false,
   className = "",
+  gruposRecolhiveis = false,
 }: SelectBuscavelProps<T>) {
   const [open, setOpen] = useState(false);
   const [busca, setBusca] = useState("");
   const [indiceAtivo, setIndiceAtivo] = useState(0);
+  // Grupos que a pessoa expandiu (só vale com `gruposRecolhiveis`).
+  const [abertos, setAbertos] = useState<Set<string>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
   const buscaRef = useRef<HTMLInputElement>(null);
   const listaRef = useRef<HTMLDivElement>(null);
@@ -70,6 +79,7 @@ export function SelectBuscavel<T extends string | number>({
     if (open) {
       setBusca("");
       setIndiceAtivo(0);
+      setAbertos(new Set());
       buscaRef.current?.focus();
     }
   }, [open]);
@@ -93,6 +103,21 @@ export function SelectBuscavel<T extends string | number>({
     return [...mapa.entries()];
   }, [filtradas]);
 
+  // Com busca digitada, todo grupo que ainda tem resultado aparece aberto.
+  const grupoAberto = (grupo: string) => !gruposRecolhiveis || busca.trim() !== "" || abertos.has(grupo);
+  // O que está à vista, na ordem da tela: é por aqui que o teclado anda (item de grupo contraído não existe pra ele).
+  const visiveis = useMemo(() => grupos.filter(([g]) => grupoAberto(g)).flatMap(([, itens]) => itens), [grupos, gruposRecolhiveis, busca, abertos]);
+
+  function alternarGrupo(grupo: string) {
+    setAbertos((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(grupo)) novo.delete(grupo);
+      else novo.add(grupo);
+      return novo;
+    });
+    setIndiceAtivo(0);
+  }
+
   const selecionada = opcoes.find((o) => o.value === valor) ?? null;
 
   function escolher(opcao: OpcaoBuscavel<T>) {
@@ -108,7 +133,7 @@ export function SelectBuscavel<T extends string | number>({
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const proximo = e.key === "ArrowDown" ? indiceAtivo + 1 : indiceAtivo - 1;
-      const limitado = Math.max(0, Math.min(filtradas.length - 1, proximo));
+      const limitado = Math.max(0, Math.min(visiveis.length - 1, proximo));
       setIndiceAtivo(limitado);
       // Mantém a opção ativa visível — sem isso a navegação por teclado "some" da tela
       // assim que passa da parte visível da lista.
@@ -117,7 +142,7 @@ export function SelectBuscavel<T extends string | number>({
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      const escolhida = filtradas[indiceAtivo];
+      const escolhida = visiveis[indiceAtivo];
       if (escolhida) escolher(escolhida);
     }
   }
@@ -178,10 +203,35 @@ export function SelectBuscavel<T extends string | number>({
               <div key={grupo}>
                 {/* sticky: rolando uma proposta longa, o cabeçalho continua à vista —
                     senão perde-se a referência de qual proposta se está olhando. */}
-                <p className="sticky top-0 z-10 bg-surface-2 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-muted">
-                  {grupo}
-                </p>
-                {itens.map((o) => {
+                {gruposRecolhiveis ? (
+                  <button
+                    type="button"
+                    onClick={() => alternarGrupo(grupo)}
+                    aria-expanded={grupoAberto(grupo)}
+                    className="sticky top-0 z-10 flex w-full items-center gap-1.5 bg-surface-2 px-3 py-1 text-left font-mono text-[10px] uppercase tracking-wider text-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  >
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                      className={`shrink-0 transition-transform ${grupoAberto(grupo) ? "rotate-90" : ""}`}
+                    >
+                      <polyline points="9 6 15 12 9 18" />
+                    </svg>
+                    <span className="flex-1">{grupo}</span>
+                    <span className="tabular-nums">{itens.length}</span>
+                  </button>
+                ) : (
+                  <p className="sticky top-0 z-10 bg-surface-2 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-muted">{grupo}</p>
+                )}
+                {grupoAberto(grupo) &&
+                  itens.map((o) => {
                   indiceCorrente += 1;
                   const indice = indiceCorrente;
                   const ativa = indice === indiceAtivo;

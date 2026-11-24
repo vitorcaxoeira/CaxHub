@@ -3,6 +3,7 @@ import express from "express";
 import { garantirDiretorioUploads, AVATARS_DIR } from "./config/uploads";
 import { authRouter } from "./auth/routes";
 import { perfilRouter } from "./routes/perfil";
+import { desktopRouter } from "./routes/desktop";
 import { dashboardRouter } from "./routes/dashboard";
 import { financeiroRouter } from "./routes/financeiro";
 import { recebimentosRouter } from "./routes/recebimentos";
@@ -11,7 +12,12 @@ import { clientesFinanceiroRouter } from "./routes/clientesFinanceiro";
 import { fluxoCaixaRouter } from "./routes/fluxoCaixa";
 import { historicoFinanceiroRouter } from "./routes/historicoFinanceiro";
 import { contabilRouter } from "./routes/contabil";
+import { rentabilidadeIndicadoresRouter } from "./routes/rentabilidadeIndicadores";
+import { consultoresVinculosRouter } from "./routes/consultoresVinculos";
+import { custoHoraRouter } from "./routes/custoHora";
+import { scheduleCustoHoraJob } from "./domain/custoHoraJob";
 import { projetosRouter } from "./routes/projetos";
+import { gestaoPropostasRouter } from "./routes/gestaoPropostas";
 import { atividadesRouter } from "./routes/atividades";
 import { apontamentosRouter } from "./routes/apontamentos";
 import { ratsRouter } from "./routes/rats";
@@ -22,16 +28,38 @@ import { ratVisualizacaoRouter } from "./routes/ratVisualizacao";
 import { notificacoesRouter } from "./routes/notificacoes";
 import { usersRouter } from "./routes/users";
 import { sincronizacaoRouter } from "./routes/sincronizacao";
-import { syncErpRouter } from "./routes/syncErp";
+import { syncErpRouter, syncHcmRouter } from "./routes/syncErp";
+import { rhRouter } from "./routes/rh";
+import { syncKyriaRouter } from "./routes/syncKyria";
+import { syncKyriaMappingRouter } from "./routes/syncKyriaMapping";
+import { syncKyriaDadosRouter } from "./routes/syncKyriaDados";
+import { syncKyriaDepartamentosRouter } from "./routes/syncKyriaDepartamentos";
+import { scheduleKyriaTeamsSync } from "./kyria/teamsSync";
+import { scheduleKyriaMembersSync } from "./kyria/membersSync";
+import { scheduleKyriaCustomersSync } from "./kyria/customersSync";
+import { scheduleKyriaTicketStatusesSync } from "./kyria/ticketStatusesSync";
+import { scheduleKyriaLabelsSync } from "./kyria/labelsSync";
+import { scheduleKyriaLabelGroupsSync } from "./kyria/labelGroupsSync";
+import { scheduleKyriaTicketsSync } from "./kyria/ticketsSync";
+import { scheduleKyriaTicketHoursSync } from "./kyria/ticketHoursSync";
+import { scheduleKyriaCustomerHoursSync } from "./kyria/customerHoursSync";
+import { scheduleKyriaTimeEntriesSync } from "./kyria/timeEntriesSync";
 import { alocacaoRouter } from "./routes/alocacao";
+import { eficienciaRouter } from "./routes/eficiencia";
+import { planoEvolucaoRouter } from "./routes/planoEvolucao";
 import { solicitacoesExcedenteRouter } from "./routes/solicitacoesExcedente";
 import { solicitacoesApontamentoRouter } from "./routes/solicitacoesApontamento";
 import { solicitacoesAjusteRouter } from "./routes/solicitacoesAjuste";
 import { solicitacoesConfigPropostaRouter } from "./routes/solicitacoesConfigProposta";
+import { solicitacoesViagemRouter } from "./routes/solicitacoesViagem";
 import { jornadasRouter } from "./routes/jornadas";
+import { calendarioRouter } from "./routes/calendario";
+import { feriasRouter } from "./routes/ferias";
 import { propostaVisualizacaoRouter } from "./routes/propostaVisualizacao";
 import { auditoriaRouter } from "./routes/auditoria";
 import { painelTvRouter } from "./routes/painelTv";
+import { metasComercialRouter } from "./routes/metasComercial";
+import { gestao5sRouter } from "./routes/gestao5s";
 import { attachCorrelationId } from "./audit/correlationId";
 import { scheduleEmpresaSync } from "./sync/empresaSync";
 import { scheduleFilialSync } from "./sync/filialSync";
@@ -42,6 +70,10 @@ import { scheduleMovimentoTituloReceberSync } from "./sync/movimentoTituloRecebe
 import { scheduleRepresentanteSync } from "./sync/representanteSync";
 import { scheduleCentroCustoSync } from "./sync/centroCustoSync";
 import { scheduleMovimentoContaSync } from "./sync/movimentoContaSync";
+import { scheduleFornecedorSync } from "./sync/fornecedorSync";
+import { scheduleTituloPagarSync } from "./sync/tituloPagarSync";
+import { scheduleMovimentoTituloPagarSync } from "./sync/movimentoTituloPagarSync";
+import { scheduleRateioTituloPagarSync } from "./sync/rateioTituloPagarSync";
 import { scheduleNaturezaFinanceiraSync } from "./sync/naturezaFinanceiraSync";
 import { schedulePortadorSync } from "./sync/portadorSync";
 import { scheduleMoedaSync } from "./sync/moedaSync";
@@ -64,6 +96,11 @@ import { schedulePlanoContabilSync } from "./sync/planoContabilSync";
 import { scheduleLancamentoContabilSync } from "./sync/lancamentoContabilSync";
 import { scheduleRateioLancamentoSync } from "./sync/rateioLancamentoSync";
 import { scheduleHistoricoPadraoSync } from "./sync/historicoPadraoSync";
+import { scheduleModeloPlanoSync } from "./sync/modeloPlanoSync";
+import { scheduleProjetoSync } from "./sync/projetoSync";
+import { scheduleContratoCompraSync } from "./sync/contratoCompraSync";
+import { scheduleContratoCompraServicoSync } from "./sync/contratoCompraServicoSync";
+import { scheduleContratoCompraReajusteSync } from "./sync/contratoCompraReajusteSync";
 import { scheduleOrcamentoContabilSync } from "./sync/orcamentoContabilSync";
 import { scheduleRegistroDespesaViagemSync } from "./sync/registroDespesaViagemSync";
 import { scheduleRotaViagemSync } from "./sync/rotaViagemSync";
@@ -77,11 +114,24 @@ import { scheduleItemServicoNfVendaSync } from "./sync/itemServicoNfVendaSync";
 import { scheduleItemProdutoNfVendaSync } from "./sync/itemProdutoNfVendaSync";
 import { scheduleRateioNfVendaSync } from "./sync/rateioNfVendaSync";
 import { scheduleMetaAnualSync } from "./sync/metaAnualSync";
-import { scheduleOutboxSeniorSync } from "./sync/outboxSenior";
+import { scheduleContratoVendaSync } from "./sync/contratoVendaSync";
+import { scheduleContratoVendaServicoSync } from "./sync/contratoVendaServicoSync";
+import { scheduleContratoVendaReajusteSync } from "./sync/contratoVendaReajusteSync";
+import { schedulePedidoItemServicoSync } from "./sync/pedidoItemServicoSync";
+import { schedulePedidoRateioSync } from "./sync/pedidoRateioSync";
+import { recuperarEnviosInterrompidos, scheduleOutboxSeniorSync } from "./sync/outboxSenior";
+import { recuperarEnviosDespesaInterrompidos, scheduleOutboxSeniorDespesaSync } from "./sync/outboxSeniorDespesa";
+import { recuperarEnviosSituacaoInterrompidos, scheduleOutboxSeniorPropostaSync } from "./sync/outboxSeniorProposta";
 import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
+import { agendarAcoesVencidas } from "./sync/acoesEficienciaVencidas";
+import { agendarFechamentoDescontos } from "./sync/fechamentoDescontos";
+import { descontosRouter } from "./routes/descontos";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
-import { SYNC_JOBS } from "./sync/registry";
+import { carregarModosVarreduraAtivos } from "./sync/politicaVarredura";
+import { carregarTamanhosLoteAtivos } from "./sync/politicaLote";
+import { TODOS_OS_SYNC_JOBS } from "./sync/registry";
+import { agendarSyncHcm } from "./sync/agendamentoHcm";
 
 garantirDiretorioUploads();
 
@@ -116,6 +166,7 @@ app.use((_req, res, next) => {
 
 app.use("/auth", authRouter);
 app.use("/perfil", perfilRouter);
+app.use("/desktop", desktopRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/financeiro", financeiroRouter);
 app.use("/financeiro/recebimentos", recebimentosRouter);
@@ -124,7 +175,11 @@ app.use("/financeiro/clientes", clientesFinanceiroRouter);
 app.use("/financeiro/fluxo-caixa", fluxoCaixaRouter);
 app.use("/financeiro/historico", historicoFinanceiroRouter);
 app.use("/contabil", contabilRouter);
+app.use("/rentabilidade", rentabilidadeIndicadoresRouter);
+app.use("/consultores-vinculos", consultoresVinculosRouter);
+app.use("/custo-hora", custoHoraRouter);
 app.use("/projetos", projetosRouter);
+app.use("/gestao-propostas", gestaoPropostasRouter);
 app.use("/atividades", atividadesRouter);
 app.use("/apontamentos", apontamentosRouter);
 app.use("/rats", ratsRouter);
@@ -136,15 +191,33 @@ app.use("/notificacoes", notificacoesRouter);
 app.use("/users", usersRouter);
 app.use("/sincronizacao", sincronizacaoRouter);
 app.use("/sync-erp", syncErpRouter);
+app.use("/sync-hcm", syncHcmRouter);
+app.use("/rh", rhRouter);
+// Montado ANTES de "/sync-kyria" de propósito: como "/sync-kyria" é prefixo de
+// "/sync-kyria/mapping", o Express dá a primeira chance ao mount registrado primeiro — se fosse
+// ao contrário, toda requisição pra /sync-kyria/mapping/* passaria (sem bater rota nenhuma) por
+// dentro do syncKyriaRouter antes de cair aqui, um fallthrough correto mas frágil de manter.
+app.use("/sync-kyria/mapping", syncKyriaMappingRouter);
+app.use("/sync-kyria/dados", syncKyriaDadosRouter);
+app.use("/sync-kyria/departamentos-times", syncKyriaDepartamentosRouter);
+app.use("/sync-kyria", syncKyriaRouter);
 app.use("/alocacao", alocacaoRouter);
+app.use("/eficiencia", eficienciaRouter);
+app.use("/plano-evolucao", planoEvolucaoRouter);
 app.use("/solicitacoes-excedente", solicitacoesExcedenteRouter);
 app.use("/solicitacoes-apontamento", solicitacoesApontamentoRouter);
 app.use("/solicitacoes-ajuste", solicitacoesAjusteRouter);
 app.use("/solicitacoes-config-proposta", solicitacoesConfigPropostaRouter);
+app.use("/solicitacoes-viagem", solicitacoesViagemRouter);
 app.use("/jornadas", jornadasRouter);
+app.use("/calendario", calendarioRouter);
+app.use("/ferias", feriasRouter);
 app.use("/proposta-visualizacao", propostaVisualizacaoRouter);
 app.use("/auditoria", auditoriaRouter);
 app.use("/painel-tv", painelTvRouter);
+app.use("/5s", gestao5sRouter);
+app.use("/metas-comercial", metasComercialRouter);
+app.use("/descontos", descontosRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 
@@ -156,9 +229,39 @@ const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 // seguro (espelho completo), travar o boot por causa disso seria pior que o problema.
 async function iniciar() {
   try {
-    await carregarFiltrosAtivos(SYNC_JOBS);
+    await carregarFiltrosAtivos(TODOS_OS_SYNC_JOBS);
   } catch (error) {
     console.error("[boot] falhou ao carregar filtros ativos — subindo sem filtro nenhum:", error instanceof Error ? error.message : error);
+  }
+
+  // Mesmo cuidado do carregamento de filtros acima: carregar ANTES de aceitar requisição ou
+  // agendar cron, senão a primeira sincronização rodaria com o modo de varredura errado até
+  // o carregamento terminar. Falha aqui sobe sem varredura nenhuma (default "desligada" do
+  // Map vazio) — estado seguro, nunca marca nada sozinho.
+  try {
+    await carregarModosVarreduraAtivos();
+  } catch (error) {
+    console.error("[boot] falhou ao carregar modos de varredura — subindo com varredura desligada em tudo:", error instanceof Error ? error.message : error);
+  }
+
+  try {
+    await carregarTamanhosLoteAtivos();
+  } catch (error) {
+    console.error(
+      "[boot] falhou ao carregar tamanhos de lote configurados — subindo com o default (1000) em tudo:",
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  // Envio ao Senior que estava em voo quando o processo anterior morreu fica preso em "enviando"
+  // pra sempre (a varredura só lê "pendente"). Recuperar ANTES de aceitar requisição e de agendar
+  // o cron; falha aqui sobe do mesmo jeito, só deixa a pendência presa como antes.
+  try {
+    await recuperarEnviosInterrompidos();
+    await recuperarEnviosDespesaInterrompidos();
+    await recuperarEnviosSituacaoInterrompidos();
+  } catch (error) {
+    console.error("[boot] falhou ao recuperar envios interrompidos ao Senior:", error instanceof Error ? error.message : error);
   }
 
   app.listen(port, () => {
@@ -174,8 +277,12 @@ async function iniciar() {
     scheduleTituloReceberSync();
     scheduleMovimentoTituloReceberSync();
     scheduleRepresentanteSync();
+    scheduleFornecedorSync();
     scheduleCentroCustoSync();
     scheduleMovimentoContaSync();
+    scheduleTituloPagarSync();
+    scheduleMovimentoTituloPagarSync();
+    scheduleRateioTituloPagarSync();
     scheduleNaturezaFinanceiraSync();
     scheduleMoedaSync();
     scheduleContaCorrenteSync();
@@ -196,6 +303,12 @@ async function iniciar() {
     scheduleLancamentoContabilSync();
     scheduleRateioLancamentoSync();
     scheduleHistoricoPadraoSync();
+    scheduleModeloPlanoSync();
+    scheduleProjetoSync();
+    scheduleContratoCompraSync();
+    scheduleContratoCompraServicoSync();
+    scheduleContratoCompraReajusteSync();
+    scheduleCustoHoraJob();
     scheduleOrcamentoContabilSync();
     scheduleRotaViagemSync();
     schedulePercursoViagemSync();
@@ -212,12 +325,36 @@ async function iniciar() {
     scheduleItemProdutoNfVendaSync();
     scheduleRateioNfVendaSync();
     scheduleMetaAnualSync();
+    scheduleContratoVendaSync();
+    scheduleContratoVendaServicoSync();
+    scheduleContratoVendaReajusteSync();
+    schedulePedidoItemServicoSync();
+    schedulePedidoRateioSync();
+    // Senior HCM (módulo RH): 27 tabelas encadeadas num cron só, só se o canal do HCM estiver configurado.
+    agendarSyncHcm();
     scheduleOutboxSeniorSync();
+    scheduleOutboxSeniorDespesaSync();
+    scheduleOutboxSeniorPropostaSync();
     // Não é sync com o Senior: fecha sessão de execução que passou do teto de horas ou do
     // fim do expediente (5 em 5 min), e a que ficou sem resposta depois de a aba fechar
     // (15 em 15s — cadência bem mais curta, ver o comentário no arquivo).
     agendarParadaAutomatica();
     agendarParadaPorFechamento();
+    // Plano de ação do Painel de Eficiência: avisa pelo sino a ação que passou do prazo (de hora em hora, dias úteis).
+    agendarAcoesVencidas();
+    // Gestão de Descontos: fecha a competência que acabou (reparte a nota do consultor entre as parcelas), todo dia 03:10, idempotente.
+    agendarFechamentoDescontos();
+    // Kyria — segunda origem de dados, ao lado do Senior (ver src/kyria/).
+    scheduleKyriaTeamsSync();
+    scheduleKyriaMembersSync();
+    scheduleKyriaCustomersSync();
+    scheduleKyriaTicketStatusesSync();
+    scheduleKyriaLabelGroupsSync();
+    scheduleKyriaLabelsSync();
+    scheduleKyriaTicketsSync();
+    scheduleKyriaTicketHoursSync();
+    scheduleKyriaCustomerHoursSync();
+    scheduleKyriaTimeEntriesSync();
   });
 }
 

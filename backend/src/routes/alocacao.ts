@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { registrarListaEmMemoria } from "./listaEmMemoria";
+import type { ColunaMemoria } from "../consultas/listaEmMemoria";
+import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { depexeLabel, modproLabel, sitproLabel, sitproTone, SITPRO_ALOCAVEL } from "../domain/propostasDominio";
 import {
   resolverContextoConsultor,
@@ -12,15 +15,30 @@ import {
   podeAprovarConfiguracaoProposta,
 } from "../domain/contextoProjeto";
 import { truncarNomeEstrutura } from "../domain/estruturaAtividadeDominio";
+import {
+  AlocacaoReajustada,
+  carregarArvoreDatas,
+  chaveItem,
+  chaveNo,
+  limitesHerdados,
+  montarOperacoesAjuste,
+  normalizarDataEntrada,
+  paraDate,
+  paraIso,
+  planejarAlteracao,
+  validarNaFaixa,
+} from "../domain/datasCronograma";
+import { gerarPdfDaPagina, RelatorioPdfError } from "../lib/relatorioPdf";
 import { enfileirar, processarFilaSincronizacao, reprocessar } from "../sync/outboxSenior";
 import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
 import { runPropostaItemSyncPorCodpro } from "../sync/propostaItemSync";
+import { runAtividadeConsultorSyncPorCodpro } from "../sync/atividadeConsultorSync";
 import { TIP_EVE_ALTERAR, TIP_EVE_EXCLUIR, TIP_EVE_INCLUIR } from "../soap/client";
 import { criarEventoAuditoria, criarEventosDeData, diffCampos, paraDiff } from "../audit/registrarEvento";
 import { CAMPOS_AUDITADOS_ALOCACAO, CAMPOS_AUDITADOS_ATIVIDADE_DATAS } from "../audit/camposAuditados";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade, entidadeIdProposta } from "../audit/identidadeEntidade";
-import { SITRAT_CANCELADO, calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone, type IntegracaoErpStatus } from "../domain/ratDominio";
+import { filtroRatItemRealizado, calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone, type IntegracaoErpStatus } from "../domain/ratDominio";
 import {
   configBloqueioProposta,
   configBloqueioPropostasEmLote,
@@ -58,6 +76,42 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
   return { user, contexto, role: req.user!.role as string };
 }
 
+// Datas de uma alocação mudaram porque as da atividade mudaram (edição direta ou ajuste em
+// cascata de um pai): audita cada mudança e reenvia ao Senior. Sempre DEPOIS do commit — o envio é
+// imediato (ver enfileirar), então só pode sair com o dado já gravado.
+async function auditarEEnviarDatasAlocacoes(alocacoes: AlocacaoReajustada[], usuarioId: number, correlationId: string) {
+  for (const { antes, inicio, fim } of alocacoes) {
+    await Promise.all(
+      criarEventosDeData(
+        CAMPOS_AUDITADOS_ATIVIDADE_DATAS,
+        { dataPrevistaInicio: antes.dataPrevistaInicio, dataPrevistaFim: antes.dataPrevistaFim },
+        { dataPrevistaInicio: inicio, dataPrevistaFim: fim },
+        {
+          origem: "tela",
+          usuarioId,
+          codemp: antes.codemp,
+          codpro: antes.codpro,
+          entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+          entidadeId: entidadeIdAtividade(antes.id),
+          entidadeRotulo: `Alocação — Item ${antes.seqite} da Proposta ${antes.codemp}/${antes.codpro}`,
+          correlationId,
+        }
+      )
+    );
+    await enfileirar(antes.id, "editar_atividade", {
+      codemp: antes.codemp,
+      codpro: antes.codpro,
+      seqite: antes.seqite,
+      codfor: antes.codfor,
+      qtdhor: antes.qtdhor,
+      fasid: antes.fasid,
+      dataPrevistaInicio: inicio?.toISOString() ?? null,
+      dataPrevistaFim: fim?.toISOString() ?? null,
+      tipEve: TIP_EVE_ALTERAR,
+    });
+  }
+}
+
 // Departamentos que o usuário pode gerenciar nesta área — Líder Técnico só os que
 // gerencia; qualquer outro papel, nenhum. Admin recebe a união dos depexe distintos das
 // DUAS tabelas: o escopo padrão da tela olha Proposta.depexe e o de compartilhadas olha
@@ -67,9 +121,11 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
 // admin enxerga. Função à parte porque tem um segundo consumidor: a exceção do Comercial em
 // departamentosAlocaveisNoItem (ver lá).
 async function departamentosEmUso(): Promise<number[]> {
+  // `groupBy` (DISTINCT no banco) e não `findMany({ distinct })`: o `distinct` do Prisma traz TODAS as linhas
+  // (~10,8 mil itens) e deduplica em memória — ~40 ms em toda requisição de admin desta tela.
   const [deItens, dePropostas] = await Promise.all([
-    prisma.propostaItem.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
-    prisma.proposta.findMany({ where: { depexe: { not: null } }, distinct: ["depexe"], select: { depexe: true } }),
+    prisma.propostaItem.groupBy({ by: ["depexe"], where: { depexe: { not: null } } }),
+    prisma.proposta.groupBy({ by: ["depexe"], where: { depexe: { not: null } } }),
   ]);
   return [...new Set([...deItens, ...dePropostas].map((d) => d.depexe as number))];
 }
@@ -233,19 +289,44 @@ async function codususAlocaveisNoItem(
 // num feed único de itens fica ruim de gerenciar). Esta lista é o ponto de entrada:
 // uma linha por proposta, com Total/Alocado/Saldo agregados sobre a proposta INTEIRA,
 // incluindo itens de outros departamentos (ver o bloco de escopo no topo do arquivo).
-alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
-  try {
+//
+// Desde 03/11/2026 (lista em memória, registrarListaEmMemoria): o escopo de departamento, os KPIs e os filtros do topo continuam todos aqui;
+// funil, ordem, página, resumo do rodapé e colunas calculadas são aplicados sobre as linhas que a rota monta.
+const COLUNAS_PROPOSTAS_ALOCACAO: ColunaMemoria[] = [
+  { nome: "codpro", tipo: "inteiro", obrigatoria: true },
+  { nome: "numprj", tipo: "inteiro" },
+  { nome: "cliente", tipo: "texto", obrigatoria: true },
+  { nome: "despro", tipo: "texto", semValores: true },
+  { nome: "sitproLabel", tipo: "texto", obrigatoria: true },
+  { nome: "datret", tipo: "data", utc: true },
+  { nome: "depexeLabel", tipo: "texto", obrigatoria: true },
+  // Departamentos de Custo/Receita DISTINTOS dos itens da proposta, "A, B" (05/11/2026); texto para filtrar/ordenar, sem aba Valores (lista composta).
+  { nome: "depcusrecLabel", tipo: "texto", semValores: true },
+  { nome: "modproLabel", tipo: "texto", obrigatoria: true },
+  { nome: "totalItens", tipo: "inteiro", obrigatoria: true },
+  { nome: "qtdhorTotal", tipo: "decimal", obrigatoria: true },
+  { nome: "horasAlocadas", tipo: "decimal", obrigatoria: true },
+  { nome: "saldo", tipo: "decimal", obrigatoria: true },
+];
+
+// Dep. Custo/Rec. dos itens de uma proposta: os rótulos dos departamentos distintos, em ordem de código.
+function rotulosDepcusrec(codigos: Iterable<number>): string[] {
+  return [...new Set(codigos)].sort((x, y) => x - y).map((d) => depexeLabel(d));
+}
+function depcusrecDistintos(itens: { depcusrec: number | null }[]): string[] {
+  return rotulosDepcusrec(itens.map((i) => i.depcusrec).filter((d): d is number => d != null));
+}
+
+registrarListaEmMemoria(
+  alocacaoRouter,
+  "/propostas",
+  async (reqBruto) => {
+    const req = reqBruto as AuthenticatedRequest;
     const ctx = await contextoDoUsuario(req);
-    if (!ctx) {
-      res.status(404).json({ error: "Usuário não encontrado" });
-      return;
-    }
+    if (!ctx) throw new ErroEntradaConsulta("Usuário não encontrado", 404);
     const { contexto, role } = ctx;
     const permitidos = await departamentosPermitidos(role, contexto);
-    if (permitidos.length === 0) {
-      res.status(403).json({ error: "Sem departamentos para gerenciar" });
-      return;
-    }
+    if (permitidos.length === 0) throw new ErroEntradaConsulta("Sem departamentos para gerenciar", 403);
 
     const depexeFiltro = parseIdsParam(req.query.depexe);
     const depexesConsultados =
@@ -265,8 +346,6 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     const situacao = situacoesValidas.includes(req.query.situacao as any)
       ? (req.query.situacao as (typeof situacoesValidas)[number])
       : null;
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 25));
 
     // Parte das PROPOSTAS alocáveis, não dos itens: o escopo padrão agora é
     // Proposta.depexe. São ~260 linhas na base inteira, então carregar todas e
@@ -280,11 +359,20 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
 
     // TODOS os itens dessas propostas, sem recorte de departamento: quem decide se a
     // proposta entra é o classificador abaixo; uma vez dentro, ela entra inteira.
-    const itens = propostas.length
+    //
+    // `IN` por codemp/codpro (superconjunto) + filtro exato pela chave em memória, e não um `OR` com uma
+    // cláusula por proposta/item: o planejamento do Postgres explode com centenas de cláusulas (medido em
+    // 07/10/2026: ~325 ms só de planejamento para as 937 trincas de item, contra ~2 ms com `IN`). Mesmo
+    // motivo e mesma solução de `carregarAtividadesVisiveisImpl` (routes/atividades.ts).
+    const itensCandidatos = propostas.length
       ? await prisma.propostaItem.findMany({
-          where: { OR: propostas.map((p) => ({ codemp: p.codemp, codpro: p.codpro })) },
+          where: {
+            codemp: { in: [...new Set(propostas.map((p) => p.codemp))] },
+            codpro: { in: [...new Set(propostas.map((p) => p.codpro))] },
+          },
         })
       : [];
+    const itens = itensCandidatos.filter((i) => propostaPorChave.has(`${i.codemp}-${i.codpro}`));
 
     const depexesPorProposta = new Map<string, Set<number>>();
     for (const item of itens) {
@@ -303,24 +391,39 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
 
     if (origemPorProposta.size === 0) {
       const kpiZerado = { quantidade: 0, horas: 0 };
-      res.json({
-        rows: [],
-        total: 0,
-        kpis: {
+      return {
+        colunas: COLUNAS_PROPOSTAS_ALOCACAO,
+        linhas: [],
+        extras: {
+          kpis: {
           totalNoEscopo: 0,
           semAlocacao: kpiZerado,
           saldoPendente: kpiZerado,
           totalmenteAlocadas: kpiZerado,
           compartilhadasEmAberto: kpiZerado,
           horasDivergentes: kpiZerado,
+          },
         },
-      });
-      return;
+      };
     }
 
-    const alocacoes = await prisma.atividadeConsultor.findMany({
-      where: { sitreg: "A", OR: itens.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })) },
-    });
+    // Alocações e estrutura só das propostas que entraram no escopo de quem está olhando: o gestor do
+    // Administrativo enxerga 1 de 284 e não precisa somar as outras 283. A classificação acima precisou dos
+    // itens de todas as propostas alocáveis (um item meu faz a proposta de outro departamento entrar), mas a
+    // soma abaixo, não.
+    const itensDoEscopo = itens.filter((i) => origemPorProposta.has(`${i.codemp}-${i.codpro}`));
+    const chavesItensDoEscopo = new Set(itensDoEscopo.map((i) => `${i.codemp}-${i.codpro}-${i.seqite}`));
+    const alocacoes = (
+      await prisma.atividadeConsultor.findMany({
+        where: {
+          sitreg: "A",
+          codemp: { in: [...new Set(itensDoEscopo.map((i) => i.codemp))] },
+          codpro: { in: [...new Set(itensDoEscopo.map((i) => i.codpro))] },
+        },
+        // Só o que a soma e o filtro por consultor leem: o `select *` da tabela custava 100–150 ms para 3 mil linhas.
+        select: { codemp: true, codpro: true, seqite: true, qtdhor: true, codfor: true, estruturaAtividadeId: true },
+      })
+    ).filter((a) => chavesItensDoEscopo.has(`${a.codemp}-${a.codpro}-${a.seqite}`));
     const alocadoPorItem = new Map<string, number>();
     const alocadoPorEstrutura = new Map<number, number>();
     for (const a of alocacoes) {
@@ -337,15 +440,18 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
     // sentido contrário quando a fila de saída ainda não confirmou ou quando o Senior recusa a
     // edição. `duracaoHoras == null` fica de fora de propósito (mesma leitura da SQL original:
     // NULL não é "divergente", é "nunca definido").
-    const nosComResponsavel = itens.length
-      ? await prisma.estruturaAtividade.findMany({
-          where: {
-            tipo: "atividade",
-            responsavelCodfor: { not: null },
-            OR: itens.map((i) => ({ codemp: i.codemp, codpro: i.codpro, seqite: i.seqite })),
-          },
-          select: { id: true, codemp: true, codpro: true, duracaoHoras: true },
-        })
+    const nosComResponsavel = itensDoEscopo.length
+      ? (
+          await prisma.estruturaAtividade.findMany({
+            where: {
+              tipo: "atividade",
+              responsavelCodfor: { not: null },
+              codemp: { in: [...new Set(itensDoEscopo.map((i) => i.codemp))] },
+              codpro: { in: [...new Set(itensDoEscopo.map((i) => i.codpro))] },
+            },
+            select: { id: true, codemp: true, codpro: true, seqite: true, duracaoHoras: true },
+          })
+        ).filter((no) => chavesItensDoEscopo.has(`${no.codemp}-${no.codpro}-${no.seqite}`))
       : [];
     const divergenciaSomaPorProposta = new Map<string, number>();
     for (const no of nosComResponsavel) {
@@ -377,6 +483,8 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       // Soma de |duracaoHoras - qtdhor| dos nós divergentes desta proposta — 0 quando não
       // há divergência. Ver comentário acima de `divergenciaSomaPorProposta`.
       horasDivergentesSoma: number;
+      // Departamentos de Custo/Receita distintos dos itens (PropostaItem.depcusrec), como código.
+      depcusrecs: Set<number>;
     }
     // Semeia pelas PROPOSTAS do escopo (não pelos itens) — só assim a proposta existe
     // no mapa antes de se saber se ela tem item, o que torna a exclusão das vazias uma
@@ -399,6 +507,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
         qtdhorTotal: 0,
         horasAlocadas: 0,
         horasDivergentesSoma: divergenciaSomaPorProposta.get(chaveProposta) ?? 0,
+        depcusrecs: new Set<number>(),
       });
     }
     // Sem recorte por item.depexe: se a proposta está no escopo, TODOS os itens dela
@@ -408,6 +517,7 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       const agregado = porProposta.get(`${item.codemp}-${item.codpro}`);
       if (!agregado) continue;
       agregado.totalItens += 1;
+      if (item.depcusrec != null) agregado.depcusrecs.add(item.depcusrec);
       agregado.qtdhorTotal += item.qtdhor ?? 0;
       agregado.horasAlocadas += alocadoPorItem.get(`${item.codemp}-${item.codpro}-${item.seqite}`) ?? 0;
     }
@@ -505,10 +615,14 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       // proposta compartilhada mostrando o depto de quem está vendo, não o real).
       depexeLabel: depexeLabel(a.propostaDepexe),
       modproLabel: modproLabel(a.propostaModpro),
+      // Dep. Custo/Rec. dos ITENS (o do cabeçalho acima é o da proposta): os distintos, em ordem de código, e o mesmo texto para filtro/ordem.
+      depcusrecLista: rotulosDepcusrec(a.depcusrecs),
+      depcusrecLabel: rotulosDepcusrec(a.depcusrecs).join(", "),
       totalItens: a.totalItens,
       qtdhorTotal: a.qtdhorTotal,
       horasAlocadas: a.horasAlocadas,
       saldo: a.qtdhorTotal - a.horasAlocadas,
+      alocavel: true,
     }));
 
     if (busca) {
@@ -528,17 +642,78 @@ alocacaoRouter.get("/propostas", async (req: AuthenticatedRequest, res) => {
       }
       linhas = linhas.filter((l) => propostasComConsultor.has(`${l.codemp}-${l.codpro}`));
     }
+    // Busca por NÚMERO EXATO de uma proposta fora de SITPRO_ALOCAVEL (Executada, Rejeitada,
+    // Cancelada...): a lista normal só carrega 4/7, então ela sumia — e o motivo típico de
+    // procurá-la é justamente a situação ter mudado no Senior e o espelho local estar velho.
+    // Entra marcada `alocavel: false` (o frontend deixa só o Sync. ERP habilitado). Só por
+    // número exato, pra não despejar as milhares de propostas encerradas na lista; respeita o
+    // mesmo escopo de departamento da lista; fica de fora de KPIs e dos filtros de
+    // saldo/situação/modalidade/consultor (descrevem o estado da alocação, que não se aplica).
+    if (/^\d{1,9}$/.test(busca)) {
+      const foraDoRecorte = await prisma.proposta.findMany({
+        where: { codpro: Number(busca), OR: [{ sitpro: null }, { sitpro: { notIn: SITPRO_ALOCAVEL } }] },
+        include: { cliente: true },
+      });
+      if (foraDoRecorte.length > 0) {
+        const chavesForaDoRecorte = new Set(foraDoRecorte.map((p) => `${p.codemp}-${p.codpro}`));
+        const itensFora = (
+          await prisma.propostaItem.findMany({
+            where: {
+              codemp: { in: [...new Set(foraDoRecorte.map((p) => p.codemp))] },
+              codpro: { in: [...new Set(foraDoRecorte.map((p) => p.codpro))] },
+            },
+          })
+        ).filter((i) => chavesForaDoRecorte.has(`${i.codemp}-${i.codpro}`));
+        const chavesItensFora = new Set(itensFora.map((i) => `${i.codemp}-${i.codpro}-${i.seqite}`));
+        const alocacoesFora = itensFora.length
+          ? (
+              await prisma.atividadeConsultor.findMany({
+                where: {
+                  sitreg: "A",
+                  codemp: { in: [...new Set(itensFora.map((i) => i.codemp))] },
+                  codpro: { in: [...new Set(itensFora.map((i) => i.codpro))] },
+                },
+                select: { codemp: true, codpro: true, seqite: true, qtdhor: true },
+              })
+            ).filter((a) => chavesItensFora.has(`${a.codemp}-${a.codpro}-${a.seqite}`))
+          : [];
+        for (const p of foraDoRecorte) {
+          const itensDaProposta = itensFora.filter((i) => i.codemp === p.codemp && i.codpro === p.codpro);
+          const depsItens = new Set(itensDaProposta.map((i) => i.depexe).filter((d): d is number => d != null));
+          if (!origemDaProposta(p.depexe, depsItens, depexesConsultados)) continue;
+          const qtdhorTotal = itensDaProposta.reduce((soma, i) => soma + (i.qtdhor ?? 0), 0);
+          const horasAlocadas = alocacoesFora
+            .filter((a) => a.codemp === p.codemp && a.codpro === p.codpro)
+            .reduce((soma, a) => soma + (a.qtdhor ?? 0), 0);
+          linhas.push({
+            codemp: p.codemp,
+            codpro: p.codpro,
+            numprj: p.numprj,
+            cliente: `${p.cliente.codcli} - ${p.cliente.nomcli}`,
+            despro: p.despro,
+            sitpro: p.sitpro,
+            sitproLabel: sitproLabel(p.sitpro),
+            sitproTone: sitproTone(p.sitpro),
+            datret: p.datret,
+            depexeLabel: depexeLabel(p.depexe),
+            modproLabel: modproLabel(p.modpro),
+            depcusrecLista: depcusrecDistintos(itensDaProposta),
+            depcusrecLabel: depcusrecDistintos(itensDaProposta).join(", "),
+            totalItens: itensDaProposta.length,
+            qtdhorTotal,
+            horasAlocadas,
+            saldo: qtdhorTotal - horasAlocadas,
+            alocavel: false,
+          });
+        }
+      }
+    }
     linhas.sort((a, b) => b.codpro - a.codpro);
 
-    const total = linhas.length;
-    const inicio = (page - 1) * pageSize;
-    const pagina = linhas.slice(inicio, inicio + pageSize);
-
-    res.json({ rows: pagina, total, kpis });
-  } catch (error) {
-    handleError(res, error, "propostas");
-  }
-});
+    return { colunas: COLUNAS_PROPOSTAS_ALOCACAO, linhas, totais: ["qtdhorTotal", "horasAlocadas", "saldo"], pageSizePadrao: 25, extras: { kpis } };
+  },
+  "alocacao-propostas",
+);
 
 // Resumo por consultor de uma proposta — usado no accordion da lista de propostas,
 // pra responder "quanto cada consultor já tem alocado nessa proposta" sem precisar
@@ -567,8 +742,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
 
     // Todos os itens da proposta, sem recorte de departamento: o resumo por consultor do
     // accordion tem que bater com o Alocado da linha, que agora é o da proposta inteira.
+    // `removidoEmSenior: null` — item sumido do Senior não entra na soma (mesmo padrão de
+    // routes/pedidos.ts).
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro },
+      where: { codemp, codpro, removidoEmSenior: null },
       select: { codemp: true, codpro: true, seqite: true },
     });
     if (itens.length === 0) {
@@ -582,9 +759,12 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
 
     // "Horas realizadas" por consultor — mesmo cálculo de horasRealizadasDaAlocacao mais
     // abaixo neste arquivo (árvore do cronograma) e de horasRealizadasDaAtividade em
-    // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
-    // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão), somado por
-    // TODAS as alocações do consultor nesta proposta (pode ter mais de um item).
+    // atividades.ts: sessões de execução ainda não confirmadas (nem excluídas — ver
+    // excluidaEm no schema) + RatItem já confirmados/sincronizados, exceto o de uma RAT
+    // cancelada (nunca as duas fontes ao mesmo tempo pra mesma sessão), somado por TODAS as
+    // alocações do consultor nesta proposta (pode ter mais de um item). Corrigido em
+    // 16/09/2026: as duas exclusões (sessão excluída, RAT cancelada) já valiam na árvore do
+    // cronograma há tempos, mas essa cópia aqui tinha ficado pra trás.
     // `> 0n`, não só `!= null`: seqati=0 não é um seqAti real (AtividadeConsultor.seqati é
     // @unique, então só pode existir 1 linha zerada no sistema inteiro, mas essa 1 linha já
     // basta pra "roubar" a soma de TODO RatItem de seqati=0 do banco pra si — casos reais
@@ -593,7 +773,12 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
     const ratItemsComHoras =
       seqatisValidos.length > 0
         ? await prisma.ratItem.findMany({
-            where: { seqati: { in: seqatisValidos }, horini: { not: null }, horfim: { not: null } },
+            where: {
+              seqati: { in: seqatisValidos },
+              horini: { not: null },
+              horfim: { not: null },
+              ...filtroRatItemRealizado(),
+            },
             select: { seqati: true, horini: true, horfim: true },
           })
         : [];
@@ -605,7 +790,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/consultores", async (req: Authent
     const sessoesNaoConfirmadas =
       alocacoes.length > 0
         ? await prisma.atividadeSessaoExecucao.findMany({
-            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null } },
+            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null }, excluidaEm: null },
             select: { atividadeId: true, inicio: true, fim: true },
           })
         : [];
@@ -693,8 +878,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
       res.status(403).json({ error: "Sem acesso a esta proposta" });
       return;
     }
+    // `removidoEmSenior: null` — item sumido do Senior não aparece na aba (mesmo padrão de
+    // routes/pedidos.ts).
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro },
+      where: { codemp, codpro, removidoEmSenior: null },
       orderBy: { seqite: "asc" },
     });
     if (itens.length === 0) {
@@ -765,12 +952,15 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/itens", async (req: Authenticated
 });
 
 // POST /propostas/:codemp/:codpro/sincronizar — "Sync. ERP": busca de novo no Senior os
-// dados desta proposta e dos itens dela, sem esperar o job noturno. Dois pontos de entrada
-// hoje: a linha já existente na lista de Alocação (proposta já local), e o campo de "Nº da
-// proposta" (28/08/2026) que aceita um número AVULSO, que o CaxHub pode nunca ter visto.
+// dados desta proposta, dos itens dela e das atividades de consultor (quem está alocado, quantas
+// horas — 14/09/2026, antes só atualizava no job noturno) dela, sem esperar o job noturno. Dois
+// pontos de entrada hoje: a linha já existente na lista de Alocação (proposta já local), e o
+// campo de "Nº da proposta" (28/08/2026) que aceita um número AVULSO, que o CaxHub pode nunca
+// ter visto.
 //
-// `runPropostaSyncPorCodpro`/`runPropostaItemSyncPorCodpro` fazem upsert de verdade — criam
-// a proposta/itens se não existirem — então funcionam pros dois casos sem mudança. O que
+// `runPropostaSyncPorCodpro`/`runPropostaItemSyncPorCodpro`/`runAtividadeConsultorSyncPorCodpro`
+// fazem upsert de verdade — criam a proposta/itens/atividades se não existirem — então
+// funcionam pros dois casos sem mudança. O que
 // muda é a ORDEM da checagem de acesso: só dá pra saber o depexe da proposta DEPOIS de
 // trazê-la do Senior (pra uma proposta nova, não tem nada local pra checar antes). Por isso
 // o guard roda depois do sync agora, não antes — bloqueia a RESPOSTA se a proposta não for
@@ -795,9 +985,14 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req: Authen
 
     let encontrada: boolean;
     let totalItens: number;
+    let totalAtividades: number;
     try {
       encontrada = await runPropostaSyncPorCodpro(codemp, codpro);
       totalItens = await runPropostaItemSyncPorCodpro(codemp, codpro);
+      // Atividades dos consultores (quem está alocado em cada item, quantas horas) desta
+      // proposta — antes só atualizava no job noturno; "Sync. ERP" passou a trazer junto
+      // (14/09/2026, pedido do Vitor), sem precisar esperar o job.
+      totalAtividades = await runAtividadeConsultorSyncPorCodpro(codemp, codpro);
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : String(syncError);
       res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
@@ -814,7 +1009,7 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/sincronizar", async (req: Authen
       return;
     }
 
-    res.json({ ok: true, encontrada, totalItens });
+    res.json({ ok: true, encontrada, totalItens, totalAtividades });
   } catch (error) {
     handleError(res, error, "proposta-sincronizar");
   }
@@ -850,6 +1045,11 @@ alocacaoRouter.get("/itens/:codemp/:codpro/:seqite/departamentos-alocaveis", asy
     const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
     if (!item) {
       res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não oferece departamento pra alocar.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível alocar consultor nele" });
       return;
     }
 
@@ -892,6 +1092,11 @@ alocacaoRouter.get("/consultores-elegiveis", async (req: AuthenticatedRequest, r
     const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
     if (!item) {
       res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não lista consultor elegível.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível alocar consultor nele" });
       return;
     }
     const alocaveis = await departamentosAlocaveisNoItem(role, contexto, item.depexe);
@@ -1207,6 +1412,8 @@ async function validarSaldo(
 
   const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
   if (!item) return { ok: false, erro: "Item de proposta não encontrado" };
+  // Item sumido do Senior (ver varrerRemovidos.ts) não recebe alocação nova.
+  if (item.removidoEmSenior != null) return { ok: false, erro: "Este item foi removido do Senior — não é possível alocar horas nele" };
   if (item.qtdhor == null) return { ok: false, erro: "Item sem horas definidas na proposta" };
 
   const existentes = await prisma.atividadeConsultor.findMany({
@@ -1236,7 +1443,10 @@ async function validarSomaEstrutura(
   duracaoNova: number
 ): Promise<{ ok: true } | { ok: false; erro: string }> {
   const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
-  if (!item || item.qtdhor == null) return { ok: false, erro: "Item sem horas definidas na proposta" };
+  if (!item) return { ok: false, erro: "Item de proposta não encontrado" };
+  // Item sumido do Senior (ver varrerRemovidos.ts) não recebe atividade nova na EAP.
+  if (item.removidoEmSenior != null) return { ok: false, erro: "Este item foi removido do Senior — não é possível alocar horas nele" };
+  if (item.qtdhor == null) return { ok: false, erro: "Item sem horas definidas na proposta" };
 
   const folhas = await prisma.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, tipo: "atividade" } });
   const somaAtual = folhas
@@ -1287,8 +1497,13 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
       res.status(403).json({ error: "Sem acesso a esta proposta" });
       return;
     }
+    // `removidoEmSenior: null` — item que sumiu do Senior (ver varrerRemovidos.ts) some
+    // do Cronograma inteiro, subárvore (EstruturaAtividade/AtividadeConsultor) incluída,
+    // já que `seqites` abaixo é a base de tudo que a tela monta. Mesmo padrão de
+    // `routes/pedidos.ts` (registro removido não alimenta lista/soma) — bug real achado
+    // 16-17/09/2026 na Proposta 8659 (itens já excluídos continuavam na árvore).
     const itens = await prisma.propostaItem.findMany({
-      where: { codemp, codpro },
+      where: { codemp, codpro, removidoEmSenior: null },
       orderBy: { seqite: "asc" },
     });
     if (itens.length === 0) {
@@ -1317,6 +1532,9 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     });
     const posicoesItens = await prisma.propostaItemPosicao.findMany({ where: { codemp, codpro, seqite: { in: seqites } } });
     const posicaoPorSeqite = new Map(posicoesItens.map((p) => [p.seqite, p.parentId]));
+    // Período e observação do item (PropostaItem é espelho do Senior, não guarda isso).
+    const planejamentosItens = await prisma.propostaItemPlanejamento.findMany({ where: { codemp, codpro, seqite: { in: seqites } } });
+    const planejamentoPorSeqite = new Map(planejamentosItens.map((p) => [p.seqite, p]));
 
     const todosOsNos = [...nos, ...pastasRaiz];
     const nosIds = todosOsNos.map((n) => n.id);
@@ -1371,9 +1589,10 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     }
 
     // "Horas realizadas" por alocação — mesmo cálculo de carregarAtividadesVisiveis em
-    // atividades.ts: sessões de execução ainda não confirmadas + RatItem já confirmados/
-    // sincronizados (nunca as duas fontes ao mesmo tempo pra mesma sessão), EXCETO o de uma
-    // RAT cancelada (sitrat=5) — RAT cancelada não é trabalho realizado.
+    // atividades.ts: sessões de execução ainda não confirmadas (nem excluídas — ver
+    // excluidaEm no schema) + RatItem já confirmados/sincronizados (nunca as duas fontes ao
+    // mesmo tempo pra mesma sessão), EXCETO o de uma RAT cancelada (sitrat=5) — RAT
+    // cancelada não é trabalho realizado.
     // `> 0n`, não só `!= null`: ver comentário equivalente na rota /consultores, mais acima
     // neste arquivo — seqati=0 não é um seqAti real, e sem essa guarda uma única alocação
     // zerada rouba pra si a soma de todo RatItem de seqati=0 do banco inteiro.
@@ -1385,7 +1604,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
               seqati: { in: seqatisValidos },
               horini: { not: null },
               horfim: { not: null },
-              rat: { sitrat: { not: SITRAT_CANCELADO } },
+              ...filtroRatItemRealizado(),
             },
             select: { seqati: true, horini: true, horfim: true },
           })
@@ -1398,7 +1617,7 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     const sessoesNaoConfirmadas =
       alocacoes.length > 0
         ? await prisma.atividadeSessaoExecucao.findMany({
-            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null } },
+            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, confirmada: false, fim: { not: null }, excluidaEm: null },
             select: { atividadeId: true, inicio: true, fim: true },
           })
         : [];
@@ -1603,11 +1822,68 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
         // Pasta raiz onde este item foi agrupado, ou null se estiver solto (padrão —
         // comportamento de sempre, direto na raiz da árvore da proposta).
         parentId: posicaoPorSeqite.get(item.seqite) ?? null,
+        dataPrevistaInicio: planejamentoPorSeqite.get(item.seqite)?.dataPrevistaInicio ?? null,
+        dataPrevistaFim: planejamentoPorSeqite.get(item.seqite)?.dataPrevistaFim ?? null,
+        observacao: planejamentoPorSeqite.get(item.seqite)?.observacao ?? null,
         nos: (nosPorSeqite.get(item.seqite) ?? []).map(mapNo),
       })),
     });
   } catch (error) {
     handleError(res, error, "cronograma");
+  }
+});
+
+// PDF do relatório impresso do Cronograma: abre a página do próprio frontend num Chromium headless
+// (mesmo mecanismo do PDF do Resultado 5S) com o token de quem pediu, então sai idêntico ao "Imprimir".
+// O acesso é o do GET .../cronograma — o que o usuário não enxerga na tela também não vira PDF.
+alocacaoRouter.post("/propostas/:codemp/:codpro/cronograma/pdf", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    if (!Number.isFinite(codemp) || !Number.isFinite(codpro)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+    const permitidos = await departamentosPermitidos(role, contexto);
+    const proposta = await prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
+    if (!proposta || proposta.sitpro == null || !SITPRO_ALOCAVEL.includes(proposta.sitpro)) {
+      res.status(404).json({ error: "Proposta não encontrada ou não alocável" });
+      return;
+    }
+    if (!(await podeVerProposta(permitidos, codemp, codpro))) {
+      res.status(403).json({ error: "Sem acesso a esta proposta" });
+      return;
+    }
+
+    const b = req.body ?? {};
+    const escolher = <T extends string>(valor: unknown, validos: readonly T[], padrao: T): T => validos.find((v) => v === valor) ?? padrao;
+    const conteudo = escolher(b.conteudo, ["tabela", "gantt", "ambos"] as const, "ambos");
+    const nivel = escolher(b.nivel, ["resumido", "detalhado"] as const, "detalhado");
+    const params = new URLSearchParams({
+      conteudo,
+      nivel,
+      escala: escolher(b.escala, ["auto", "semana", "mes"] as const, "auto"),
+      tema: escolher(b.tema, ["claro", "escuro"] as const, "claro"),
+      orientacao: escolher(b.orientacao, ["retrato", "paisagem"] as const, "paisagem"),
+    });
+    const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    const pdf = await gerarPdfDaPagina(`/projetos/alocacao/${codemp}/${codpro}/cronograma/relatorio?${params.toString()}`, token);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="cronograma-${codpro}-${conteudo}-${nivel}.pdf"`);
+    res.send(pdf);
+  } catch (error) {
+    if (error instanceof RelatorioPdfError) {
+      console.error("[alocacao:cronograma-pdf]", error.message);
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    handleError(res, error, "cronograma-pdf");
   }
 });
 
@@ -1681,6 +1957,11 @@ alocacaoRouter.post("/estrutura", async (req: AuthenticatedRequest, res) => {
       res.status(404).json({ error: "Item de proposta não encontrado" });
       return;
     }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não recebe nó novo na EAP.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível criar atividade nele" });
+      return;
+    }
 
     if (!podeMexerNoItem(role, contexto, "criar", item.depexe, await depexeDaProposta(codemp, codpro))) {
       res.status(403).json({ error: "Sem permissão para editar a estrutura deste departamento" });
@@ -1717,6 +1998,18 @@ alocacaoRouter.post("/estrutura", async (req: AuthenticatedRequest, res) => {
       if (dataPrevistaInicio && dataPrevistaFim && dataPrevistaInicio > dataPrevistaFim) {
         res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
         return;
+      }
+      if (dataPrevistaInicio || dataPrevistaFim) {
+        const arv = await carregarArvoreDatas(codemp, codpro);
+        const erroPeriodo = validarNaFaixa(
+          limitesHerdados(arv, parentId != null ? chaveNo(parentId) : chaveItem(seqite)),
+          paraIso(dataPrevistaInicio),
+          paraIso(dataPrevistaFim)
+        );
+        if (erroPeriodo) {
+          res.status(400).json({ error: erroPeriodo });
+          return;
+        }
       }
       predecessoraId = req.body?.predecessoraId != null ? Number(req.body.predecessoraId) : null;
     }
@@ -1778,6 +2071,12 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
       });
       if (!item || item.depexe == null) {
         res.status(404).json({ error: "Item de proposta não encontrado" });
+        return;
+      }
+      // Item sumido do Senior (ver varrerRemovidos.ts) não recebe mudança na EAP — mesma
+      // trava de POST /estrutura, aqui pro caminho de editar (duração, responsável, etc.).
+      if (item.removidoEmSenior != null) {
+        res.status(400).json({ error: "Este item foi removido do Senior — não é possível editar a atividade" });
         return;
       }
       if (!podeMexerNoItem(role, contexto, "editar", item.depexe, await depexeDaProposta(no.codemp, no.codpro))) {
@@ -1846,12 +2145,39 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
     let status: string | null | undefined;
     let responsavelCodfor: number | null | undefined;
     let observacao: string | null | undefined;
-    // Alocação (AtividadeConsultor) vinculada a este nó — buscada cedo, no bloco de
-    // duracaoHoras abaixo, só quando o responsável NÃO está mudando nesta requisição (é o
-    // caso em que este PATCH escreve o qtdhor dela por cascade, mais abaixo). Guardada aqui
-    // e reaproveitada lá embaixo pra não consultar duas vezes o mesmo registro.
+    // Alocação (AtividadeConsultor) vinculada a este nó — buscada cedo (nome E duracaoHoras
+    // podem precisar dela: nome vira `desAti` no Senior — ver montarPayloadAlocacao em
+    // outboxSenior.ts —, duracaoHoras cascateia pro `qtdhor` dela), só quando o responsável
+    // NÃO está mudando nesta requisição (troca de responsável já cuida da alocação sozinha,
+    // no bloco próprio mais abaixo). Guardada aqui e reaproveitada lá embaixo pra não
+    // consultar duas vezes o mesmo registro.
     let alocacaoVinculada: AtividadeConsultor | null = null;
     let houveMudancaResponsavel = false;
+    let houveMudancaNome = false;
+
+    // Observação e período valem pra qualquer tipo de nó (pasta raiz, pasta e atividade).
+    if (req.body?.observacao !== undefined) {
+      observacao = typeof req.body.observacao === "string" && req.body.observacao.trim() !== "" ? req.body.observacao.trim() : null;
+    }
+    for (const campo of ["dataPrevistaInicio", "dataPrevistaFim"] as const) {
+      const bruto = req.body?.[campo];
+      if (bruto !== undefined && bruto !== null && bruto !== "" && normalizarDataEntrada(bruto) == null) {
+        res.status(400).json({ error: `${campo === "dataPrevistaInicio" ? "Data de início" : "Data de fim"} inválida` });
+        return;
+      }
+    }
+    if (req.body?.dataPrevistaInicio !== undefined) dataPrevistaInicio = paraDate(normalizarDataEntrada(req.body.dataPrevistaInicio));
+    if (req.body?.dataPrevistaFim !== undefined) dataPrevistaFim = paraDate(normalizarDataEntrada(req.body.dataPrevistaFim));
+    if (dataPrevistaInicio && dataPrevistaFim && dataPrevistaInicio > dataPrevistaFim) {
+      res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
+      return;
+    }
+    // Só vale como "edição de datas" o que de fato muda o gravado — o drawer manda as duas datas a
+    // cada salvamento, e não pode barrar o resto da edição por causa de dado antigo.
+    const inicioEfetivo = dataPrevistaInicio !== undefined ? dataPrevistaInicio : no.dataPrevistaInicio;
+    const fimEfetivo = dataPrevistaFim !== undefined ? dataPrevistaFim : no.dataPrevistaFim;
+    const datasMudaram = paraIso(inicioEfetivo) !== paraIso(no.dataPrevistaInicio) || paraIso(fimEfetivo) !== paraIso(no.dataPrevistaFim);
+
     if (no.tipo === "atividade") {
       if (req.body?.status !== undefined) {
         const statusValidos = ["nao_iniciada", "em_curso", "concluida"];
@@ -1885,8 +2211,15 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
         }
       }
       houveMudancaResponsavel = responsavelCodfor !== undefined && responsavelCodfor !== no.responsavelCodfor;
-      if (req.body?.observacao !== undefined) {
-        observacao = typeof req.body.observacao === "string" && req.body.observacao.trim() !== "" ? req.body.observacao.trim() : null;
+      // `nome` vira `desAti` no Senior — mudar só ele (sem duracaoHoras no body) também
+      // precisa da alocação vinculada pra poder reenviar (pedido do Vitor, 14/09/2026: antes
+      // só duracaoHoras/responsável cascateavam pro Senior, nome ficava pra próxima edição que
+      // já disparasse envio — passou a reenviar na hora).
+      houveMudancaNome = nome !== undefined && nome !== no.nome;
+      if (!houveMudancaResponsavel && (houveMudancaNome || datasMudaram || req.body?.duracaoHoras !== undefined)) {
+        alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
+          where: { estruturaAtividadeId: id, sitreg: "A" },
+        });
       }
       if (req.body?.duracaoHoras !== undefined) {
         duracaoHoras = req.body.duracaoHoras != null ? Number(req.body.duracaoHoras) : null;
@@ -1917,9 +2250,7 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
           // outra do zero (branch mais abaixo), então o qtdhor dela nunca é escrito por
           // aqui, e não há o que proteger.
           if (!houveMudancaResponsavel && duracaoHoras !== no.duracaoHoras) {
-            alocacaoVinculada = await prisma.atividadeConsultor.findFirst({
-              where: { estruturaAtividadeId: id, sitreg: "A" },
-            });
+            // Já buscada acima (fetch cedo, reaproveitado) — aqui só valida a redução.
             if (alocacaoVinculada && duracaoHoras < (alocacaoVinculada.qtdhor ?? 0)) {
               const { realizado } = await saldoDaAtividade(alocacaoVinculada);
               const minimoPermitido = Math.max(0, realizado - alocacaoVinculada.horasExcedentes);
@@ -1937,37 +2268,73 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
           }
         }
       }
-      if (req.body?.dataPrevistaInicio !== undefined) {
-        dataPrevistaInicio = req.body.dataPrevistaInicio ? new Date(req.body.dataPrevistaInicio) : null;
-      }
-      if (req.body?.dataPrevistaFim !== undefined) {
-        dataPrevistaFim = req.body.dataPrevistaFim ? new Date(req.body.dataPrevistaFim) : null;
-      }
-      if (dataPrevistaInicio && dataPrevistaFim && dataPrevistaInicio > dataPrevistaFim) {
-        res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
-        return;
-      }
       if (req.body?.predecessoraId !== undefined) {
         predecessoraId = req.body.predecessoraId != null ? Number(req.body.predecessoraId) : null;
       }
     }
 
-    await prisma.estruturaAtividade.update({
-      where: { id },
-      data: {
-        nome,
-        ordem,
-        parentId,
-        percentualConcluido,
-        duracaoHoras,
-        dataPrevistaInicio,
-        dataPrevistaFim,
-        predecessoraId,
-        status,
-        responsavelCodfor,
-        observacao,
-      },
-    });
+    // Hierarquia de datas (pasta raiz → item → pasta → atividade): o nó precisa caber no período do
+    // ancestral mais próximo que tem data, e os descendentes precisam caber no dele. Mexer no período
+    // do pai (ou mover o nó pra outro pai) que deixaria descendente fora devolve 409 com a lista, e o
+    // front reenvia com `ajustarFilhos: true` pra encaixar tudo numa transação só.
+    const mudouDePai = parentId !== undefined && parentId !== no.parentId;
+    let ajustesDatas: Awaited<ReturnType<typeof montarOperacoesAjuste>> | null = null;
+    if (datasMudaram || mudouDePai) {
+      const arvDatas = await carregarArvoreDatas(no.codemp, no.codpro);
+      const chave = chaveNo(no.id);
+      const paiDestino =
+        parentId !== undefined
+          ? parentId != null
+            ? chaveNo(parentId)
+            : no.seqite != null
+              ? chaveItem(no.seqite)
+              : null
+          : arvDatas.nos.get(chave)?.pai ?? null;
+      const plano = planejarAlteracao(arvDatas, chave, {
+        paiDestino,
+        inicio: paraIso(inicioEfetivo),
+        fim: paraIso(fimEfetivo),
+        datasEditadas: datasMudaram,
+      });
+      if (plano.erro) {
+        res.status(400).json({ error: plano.erro });
+        return;
+      }
+      if (plano.impactos.length > 0) {
+        if (req.body?.ajustarFilhos !== true) {
+          res.status(409).json({
+            codigo: "DATAS_FORA_DO_PAI",
+            error: "Há itens abaixo com datas fora do novo período.",
+            impactos: plano.impactos,
+          });
+          return;
+        }
+        ajustesDatas = await montarOperacoesAjuste(no.codemp, no.codpro, plano.impactos, contexto.consultor?.codusu ?? null);
+      }
+    }
+
+    await prisma.$transaction([
+      ...(ajustesDatas?.operacoes ?? []),
+      prisma.estruturaAtividade.update({
+        where: { id },
+        data: {
+          nome,
+          ordem,
+          parentId,
+          percentualConcluido,
+          duracaoHoras,
+          dataPrevistaInicio,
+          dataPrevistaFim,
+          predecessoraId,
+          status,
+          responsavelCodfor,
+          observacao,
+        },
+      }),
+    ]);
+    if (ajustesDatas && ajustesDatas.alocacoes.length > 0) {
+      await auditarEEnviarDatasAlocacoes(ajustesDatas.alocacoes, user.id, req.correlationId!);
+    }
 
     // A alocação que alimenta o Senior (AtividadeConsultor) é criada/atualizada aqui, nunca
     // só pelo campo do nó — editar o nó por aqui nunca propagava pra AtividadeConsultor, e
@@ -2094,24 +2461,56 @@ alocacaoRouter.patch("/estrutura/:id", async (req: AuthenticatedRequest, res) =>
           });
           atividadeConsultorSincronizadaId = novaAlocacao.id;
         }
-      } else if (duracaoHoras != null && duracaoHoras !== no.duracaoHoras) {
-        // alocacaoVinculada já foi buscada acima, na mesma condição (!houveMudancaResponsavel
-        // && duracaoHoras !== no.duracaoHoras) que valida a redução contra o realizado —
-        // reaproveita em vez de buscar de novo.
-        if (alocacaoVinculada && alocacaoVinculada.qtdhor !== duracaoHoras) {
-          await prisma.atividadeConsultor.update({
-            where: { id: alocacaoVinculada.id },
-            data: { qtdhor: duracaoHoras },
-          });
+      } else if (alocacaoVinculada) {
+        // alocacaoVinculada já foi buscada acima (fetch cedo, quando o nome mudou e/ou
+        // duracaoHoras veio no body) — reaproveita em vez de buscar de novo. Reenvia sempre
+        // que a duração de fato mudou OU o nome mudou (nome vira `desAti` no Senior — pedido
+        // do Vitor, 14/09/2026, pra não deixar a descrição desatualizada lá até a próxima
+        // edição de duração/consultor).
+        const duracaoMudou = duracaoHoras != null && duracaoHoras !== no.duracaoHoras && alocacaoVinculada.qtdhor !== duracaoHoras;
+        // A alocação (que vai pro Senior) copia o período da atividade: mudou numa, muda na outra.
+        const datasAlocacaoMudaram =
+          datasMudaram &&
+          (paraIso(alocacaoVinculada.dataPrevistaInicio) !== paraIso(inicioEfetivo) ||
+            paraIso(alocacaoVinculada.dataPrevistaFim) !== paraIso(fimEfetivo));
+        if (duracaoMudou || houveMudancaNome || datasAlocacaoMudaram) {
+          if (duracaoMudou || datasAlocacaoMudaram) {
+            await prisma.atividadeConsultor.update({
+              where: { id: alocacaoVinculada.id },
+              data: {
+                ...(duracaoMudou ? { qtdhor: duracaoHoras! } : {}),
+                ...(datasAlocacaoMudaram ? { dataPrevistaInicio: inicioEfetivo, dataPrevistaFim: fimEfetivo } : {}),
+              },
+            });
+          }
+          if (datasAlocacaoMudaram) {
+            await Promise.all(
+              criarEventosDeData(
+                CAMPOS_AUDITADOS_ATIVIDADE_DATAS,
+                { dataPrevistaInicio: alocacaoVinculada.dataPrevistaInicio, dataPrevistaFim: alocacaoVinculada.dataPrevistaFim },
+                { dataPrevistaInicio: inicioEfetivo, dataPrevistaFim: fimEfetivo },
+                {
+                  origem: "tela",
+                  usuarioId: user.id,
+                  codemp: alocacaoVinculada.codemp,
+                  codpro: alocacaoVinculada.codpro,
+                  entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+                  entidadeId: entidadeIdAtividade(alocacaoVinculada.id),
+                  entidadeRotulo: `Alocação — Item ${alocacaoVinculada.seqite} da Proposta ${alocacaoVinculada.codemp}/${alocacaoVinculada.codpro}`,
+                  correlationId: req.correlationId!,
+                }
+              )
+            );
+          }
           await enfileirar(alocacaoVinculada.id, "editar_atividade", {
             codemp: alocacaoVinculada.codemp,
             codpro: alocacaoVinculada.codpro,
             seqite: alocacaoVinculada.seqite,
             codfor: alocacaoVinculada.codfor,
-            qtdhor: duracaoHoras,
+            qtdhor: duracaoMudou ? duracaoHoras : alocacaoVinculada.qtdhor,
             fasid: alocacaoVinculada.fasid,
-            dataPrevistaInicio: alocacaoVinculada.dataPrevistaInicio?.toISOString() ?? null,
-            dataPrevistaFim: alocacaoVinculada.dataPrevistaFim?.toISOString() ?? null,
+            dataPrevistaInicio: (datasAlocacaoMudaram ? inicioEfetivo : alocacaoVinculada.dataPrevistaInicio)?.toISOString() ?? null,
+            dataPrevistaFim: (datasAlocacaoMudaram ? fimEfetivo : alocacaoVinculada.dataPrevistaFim)?.toISOString() ?? null,
             tipEve: TIP_EVE_ALTERAR,
           });
           atividadeConsultorSincronizadaId = alocacaoVinculada.id;
@@ -2259,6 +2658,115 @@ alocacaoRouter.delete("/estrutura/:id", async (req: AuthenticatedRequest, res) =
 // parentId null = solta o item (volta a ficar direto na raiz da árvore, comportamento
 // de sempre). Permissão é a mesma de editar o próprio item (mesmo depexe), não a da
 // pasta raiz em si (essa foi checada quando a pasta foi criada).
+// Período e observação do ITEM da proposta no Cronograma (ver PropostaItemPlanejamento). Mesma regra
+// de datas de PATCH /estrutura/:id: cabe no ancestral mais próximo com data, e os descendentes
+// precisam caber no item — 409 com a lista quando algum ficaria fora, `ajustarFilhos` aplica.
+alocacaoRouter.patch("/propostas/:codemp/:codpro/itens/:seqite/planejamento", async (req: AuthenticatedRequest, res) => {
+  try {
+    const codemp = Number(req.params.codemp);
+    const codpro = Number(req.params.codpro);
+    const seqite = Number(req.params.seqite);
+    if (![codemp, codpro, seqite].every(Number.isFinite)) {
+      res.status(400).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+    const modo = await resolverModoAlocacao(codemp, codpro);
+    if (modo !== "estrutura") {
+      res.status(400).json({ error: "Esta proposta não está no modo de alocação por estrutura" });
+      return;
+    }
+    const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+    if (!item || item.depexe == null) {
+      res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível editar o período" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role, user } = ctx;
+    if (!podeMexerNoItem(role, contexto, "editar", item.depexe, await depexeDaProposta(codemp, codpro))) {
+      res.status(403).json({ error: "Sem permissão para editar este item" });
+      return;
+    }
+
+    for (const campo of ["dataPrevistaInicio", "dataPrevistaFim"] as const) {
+      const bruto = req.body?.[campo];
+      if (bruto !== undefined && bruto !== null && bruto !== "" && normalizarDataEntrada(bruto) == null) {
+        res.status(400).json({ error: `${campo === "dataPrevistaInicio" ? "Data de início" : "Data de fim"} inválida` });
+        return;
+      }
+    }
+    const atual = await prisma.propostaItemPlanejamento.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
+    const inicio = req.body?.dataPrevistaInicio !== undefined ? normalizarDataEntrada(req.body.dataPrevistaInicio) : paraIso(atual?.dataPrevistaInicio);
+    const fim = req.body?.dataPrevistaFim !== undefined ? normalizarDataEntrada(req.body.dataPrevistaFim) : paraIso(atual?.dataPrevistaFim);
+    if (inicio && fim && inicio > fim) {
+      res.status(400).json({ error: "Data de início não pode ser depois da data de fim" });
+      return;
+    }
+    const observacao =
+      req.body?.observacao === undefined
+        ? undefined
+        : typeof req.body.observacao === "string" && req.body.observacao.trim() !== ""
+          ? req.body.observacao.trim().slice(0, 1000)
+          : null;
+
+    const datasMudaram = inicio !== paraIso(atual?.dataPrevistaInicio) || fim !== paraIso(atual?.dataPrevistaFim);
+    let ajustes: Awaited<ReturnType<typeof montarOperacoesAjuste>> = { operacoes: [], alocacoes: [] };
+    if (datasMudaram) {
+      const arvDatas = await carregarArvoreDatas(codemp, codpro);
+      const plano = planejarAlteracao(arvDatas, chaveItem(seqite), {
+        paiDestino: arvDatas.nos.get(chaveItem(seqite))?.pai ?? null,
+        inicio,
+        fim,
+        datasEditadas: true,
+      });
+      if (plano.erro) {
+        res.status(400).json({ error: plano.erro });
+        return;
+      }
+      if (plano.impactos.length > 0) {
+        if (req.body?.ajustarFilhos !== true) {
+          res.status(409).json({ codigo: "DATAS_FORA_DO_PAI", error: "Há itens abaixo com datas fora do novo período.", impactos: plano.impactos });
+          return;
+        }
+        ajustes = await montarOperacoesAjuste(codemp, codpro, plano.impactos, contexto.consultor?.codusu ?? null);
+      }
+    }
+
+    await prisma.$transaction([
+      ...ajustes.operacoes,
+      prisma.propostaItemPlanejamento.upsert({
+        where: { codemp_codpro_seqite: { codemp, codpro, seqite } },
+        create: {
+          codemp,
+          codpro,
+          seqite,
+          dataPrevistaInicio: paraDate(inicio),
+          dataPrevistaFim: paraDate(fim),
+          observacao: observacao ?? null,
+          atualizadoPor: contexto.consultor?.codusu ?? null,
+        },
+        update: {
+          dataPrevistaInicio: paraDate(inicio),
+          dataPrevistaFim: paraDate(fim),
+          ...(observacao !== undefined ? { observacao } : {}),
+          atualizadoPor: contexto.consultor?.codusu ?? null,
+        },
+      }),
+    ]);
+    if (ajustes.alocacoes.length > 0) await auditarEEnviarDatasAlocacoes(ajustes.alocacoes, user.id, req.correlationId!);
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "item-planejamento");
+  }
+});
+
 alocacaoRouter.post("/propostas/:codemp/:codpro/itens/:seqite/posicao", async (req: AuthenticatedRequest, res) => {
   try {
     const codemp = Number(req.params.codemp);
@@ -2308,11 +2816,37 @@ alocacaoRouter.post("/propostas/:codemp/:codpro/itens/:seqite/posicao", async (r
         res.status(400).json({ error: "Só é possível agrupar um item dentro de uma pasta" });
         return;
       }
-      await prisma.propostaItemPosicao.upsert({
-        where: { codemp_codpro_seqite: { codemp, codpro, seqite } },
-        create: { codemp, codpro, seqite, parentId },
-        update: { parentId },
+      // O item (e tudo abaixo dele) precisa caber no período da pasta raiz de destino — se não
+      // couber, 409 com a lista e o front reenvia com `ajustarFilhos: true`.
+      const arvDatas = await carregarArvoreDatas(codemp, codpro);
+      const itemNaArvore = arvDatas.nos.get(chaveItem(seqite));
+      const plano = planejarAlteracao(arvDatas, chaveItem(seqite), {
+        paiDestino: chaveNo(parentId),
+        inicio: itemNaArvore?.inicio ?? null,
+        fim: itemNaArvore?.fim ?? null,
+        datasEditadas: false,
       });
+      if (plano.impactos.length > 0 && req.body?.ajustarFilhos !== true) {
+        res.status(409).json({
+          codigo: "DATAS_FORA_DO_PAI",
+          error: "Há itens com datas fora do período da pasta de destino.",
+          impactos: plano.impactos,
+        });
+        return;
+      }
+      const ajustes =
+        plano.impactos.length > 0
+          ? await montarOperacoesAjuste(codemp, codpro, plano.impactos, contexto.consultor?.codusu ?? null)
+          : { operacoes: [], alocacoes: [] };
+      await prisma.$transaction([
+        ...ajustes.operacoes,
+        prisma.propostaItemPosicao.upsert({
+          where: { codemp_codpro_seqite: { codemp, codpro, seqite } },
+          create: { codemp, codpro, seqite, parentId },
+          update: { parentId },
+        }),
+      ]);
+      if (ajustes.alocacoes.length > 0) await auditarEEnviarDatasAlocacoes(ajustes.alocacoes, ctx.user.id, req.correlationId!);
     } else {
       await prisma.propostaItemPosicao.deleteMany({ where: { codemp, codpro, seqite } });
     }
@@ -2367,6 +2901,11 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocacoes", async (req: Auth
     const item = await prisma.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
     if (!item || item.depexe == null) {
       res.status(404).json({ error: "Item de proposta não encontrado" });
+      return;
+    }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não recebe alocação nova.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível alocar consultor nele" });
       return;
     }
 
@@ -2561,6 +3100,11 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
       res.status(400).json({ error: "Item sem departamento de execução definido" });
       return;
     }
+    // Item sumido do Senior (ver varrerRemovidos.ts) não recebe alocação em lote nova.
+    if (item.removidoEmSenior != null) {
+      res.status(400).json({ error: "Este item foi removido do Senior — não é possível alocar consultores nele" });
+      return;
+    }
 
     const proposta = await prisma.proposta.findUnique({ where: { codemp_codpro: { codemp, codpro } } });
     if (!proposta || proposta.sitpro == null || !SITPRO_ALOCAVEL.includes(proposta.sitpro)) {
@@ -2594,6 +3138,20 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
         pastaDestinoExistente.tipo !== "pasta"
       ) {
         res.status(400).json({ error: "Pasta de destino não encontrada" });
+        return;
+      }
+    }
+
+    // As datas do lote (copiadas pra cada atividade criada) precisam caber no período do destino.
+    if (dataPrevistaInicio || dataPrevistaFim) {
+      const arvDatas = await carregarArvoreDatas(codemp, codpro);
+      const erroPeriodo = validarNaFaixa(
+        limitesHerdados(arvDatas, destino.tipo === "pasta" ? chaveNo(destino.pastaId) : chaveItem(seqite)),
+        paraIso(dataPrevistaInicio),
+        paraIso(dataPrevistaFim)
+      );
+      if (erroPeriodo) {
+        res.status(400).json({ error: erroPeriodo });
         return;
       }
     }
@@ -2651,7 +3209,13 @@ alocacaoRouter.post("/itens/:codemp/:codpro/:seqite/alocar-lote", async (req: Au
         // consultor (senão o 1º consultor "reservaria" saldo que o 2º acabaria vendo como
         // livre, mesmo os dois cabendo juntos ou os dois estourando juntos).
         const itemAtual = await tx.propostaItem.findUnique({ where: { codemp_codpro_seqite: { codemp, codpro, seqite } } });
-        if (!itemAtual || itemAtual.qtdhor == null) throw new SaldoDivergenteError("Item sem horas definidas na proposta");
+        if (!itemAtual) throw new SaldoDivergenteError("Item de proposta não encontrado");
+        // Revalida de novo aqui dentro (não só no início da rota): o item pode ter sido
+        // removido do Senior no intervalo entre o usuário abrir o modal e confirmar o lote.
+        if (itemAtual.removidoEmSenior != null) {
+          throw new SaldoDivergenteError("Este item foi removido do Senior — não é possível alocar consultores nele");
+        }
+        if (itemAtual.qtdhor == null) throw new SaldoDivergenteError("Item sem horas definidas na proposta");
         const folhasAtuais = await tx.estruturaAtividade.findMany({ where: { codemp, codpro, seqite, tipo: "atividade" } });
         const somaAtual = folhasAtuais.reduce((soma, n) => soma + (n.duracaoHoras ?? 0), 0);
         if (somaAtual + somaLote > itemAtual.qtdhor) {
@@ -2842,6 +3406,21 @@ alocacaoRouter.patch("/alocacoes/:id", async (req: AuthenticatedRequest, res) =>
     if (!podeMexerNoItem(role, contexto, "editar", depexe, resolvido.propostaDepexe, atividade.codfor)) {
       res.status(403).json({ error: "Sem permissão para editar esta alocação" });
       return;
+    }
+
+    // Alocação ligada a uma atividade da EAP copia o período dela: as datas precisam caber nele
+    // (e, se a atividade não tem datas, no ancestral mais próximo que tenha).
+    if (atividade.estruturaAtividadeId != null && (dataPrevistaInicio || dataPrevistaFim)) {
+      const arvDatas = await carregarArvoreDatas(atividade.codemp, atividade.codpro);
+      const erroPeriodo = validarNaFaixa(
+        limitesHerdados(arvDatas, chaveNo(atividade.estruturaAtividadeId)),
+        paraIso(dataPrevistaInicio),
+        paraIso(dataPrevistaFim)
+      );
+      if (erroPeriodo) {
+        res.status(400).json({ error: erroPeriodo });
+        return;
+      }
     }
 
     // Horas excedentes NÃO passam por validarSaldo de propósito: elas são justamente a

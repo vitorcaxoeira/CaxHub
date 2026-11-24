@@ -1,9 +1,31 @@
 import { useEffect, useState } from "react";
-import { carregarHierarquiaAtividade, NoHierarquia } from "../../lib/hierarquiaAtividadeCache";
+import { carregarHierarquiaAtividade, HierarquiaAtividade, NoHierarquia } from "../../lib/hierarquiaAtividadeCache";
 import { IconeStatusAtividade, iniciais } from "./LinhaNo";
 import { Spinner } from "../ui/Spinner";
 
-type Estado = { fase: "carregando" } | { fase: "erro"; mensagem: string } | { fase: "ok"; cadeia: NoHierarquia[] };
+// Mesma linha (pasta 📁 ou atividade com status+avatar) usada nos dois trechos da cadeia —
+// acima do item (pastas raiz da proposta) e dentro dele (pastas/atividade do próprio item).
+// `depth` conta a partir de 0 no topo da árvore inteira; a mesma conta que já existia
+// (8 + nível*18) só passou a incluir os níveis da pasta raiz quando eles existirem.
+function LinhaHierarquia({ no, depth }: { no: NoHierarquia; depth: number }) {
+  return (
+    <div className="flex items-center gap-1.5 whitespace-nowrap bg-surface px-2 py-1.5" style={{ paddingLeft: 8 + depth * 18 }}>
+      <span className="flex-none text-[12px]">{no.tipo === "pasta" ? "📁" : null}</span>
+      {no.tipo === "atividade" && <IconeStatusAtividade status={no.status ?? "nao_iniciada"} />}
+      <span className="text-[12.5px] text-foreground">{no.nome}</span>
+      {no.tipo === "atividade" && (
+        <span
+          className="flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full bg-surface-2 font-mono text-[8.5px] font-medium text-muted"
+          title={no.responsavelNome ?? "Sem responsável"}
+        >
+          {iniciais(no.responsavelNome)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+type Estado = { fase: "carregando" } | { fase: "erro"; mensagem: string } | ({ fase: "ok" } & HierarquiaAtividade);
 
 interface HierarquiaAtividadeTooltipProps {
   atividadeId: number;
@@ -30,8 +52,8 @@ export function HierarquiaAtividadeTooltip({ atividadeId, itemNome, itemDepexeLa
     let cancelado = false;
     setEstado({ fase: "carregando" });
     carregarHierarquiaAtividade(atividadeId)
-      .then((cadeia) => {
-        if (!cancelado) setEstado({ fase: "ok", cadeia });
+      .then(({ cadeia, cadeiaRaiz }) => {
+        if (!cancelado) setEstado({ fase: "ok", cadeia, cadeiaRaiz });
       })
       .catch(() => {
         if (!cancelado) setEstado({ fase: "erro", mensagem: "Não foi possível carregar a hierarquia." });
@@ -52,12 +74,19 @@ export function HierarquiaAtividadeTooltip({ atividadeId, itemNome, itemDepexeLa
     return <div className="max-w-[240px] px-3 py-2 text-[12px] text-destructive">{estado.mensagem}</div>;
   }
 
+  // Item header nasce no nível logo abaixo das pastas raiz da proposta (0 quando não há
+  // nenhuma — comportamento idêntico ao de antes desta mudança).
+  const nivelItem = estado.cadeiaRaiz.length;
+
   return (
     // Sem largura fixa: o painel se ajusta ao nome mais longo da cadeia em vez de reservar
     // espaço pra colunas de números que não existem mais aqui. O teto evita estourar
     // viewport estreito.
     <div className="max-w-[90vw] divide-y divide-border/60">
-      <div className="flex items-center gap-1.5 whitespace-nowrap bg-surface px-2 py-1.5">
+      {estado.cadeiaRaiz.map((no, i) => (
+        <LinhaHierarquia key={no.id} no={no} depth={i} />
+      ))}
+      <div className="flex items-center gap-1.5 whitespace-nowrap bg-surface px-2 py-1.5" style={{ paddingLeft: 8 + nivelItem * 18 }}>
         <span className="flex-none text-[12px]">📦</span>
         <span className="text-[12.5px] font-medium text-foreground">{itemNome}</span>
         {itemDepexeLabel && (
@@ -65,19 +94,7 @@ export function HierarquiaAtividadeTooltip({ atividadeId, itemNome, itemDepexeLa
         )}
       </div>
       {estado.cadeia.map((no, i) => (
-        <div key={no.id} className="flex items-center gap-1.5 whitespace-nowrap bg-surface px-2 py-1.5" style={{ paddingLeft: 8 + (i + 1) * 18 }}>
-          <span className="flex-none text-[12px]">{no.tipo === "pasta" ? "📁" : null}</span>
-          {no.tipo === "atividade" && <IconeStatusAtividade status={no.status ?? "nao_iniciada"} />}
-          <span className="text-[12.5px] text-foreground">{no.nome}</span>
-          {no.tipo === "atividade" && (
-            <span
-              className="flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full bg-surface-2 font-mono text-[8.5px] font-medium text-muted"
-              title={no.responsavelNome ?? "Sem responsável"}
-            >
-              {iniciais(no.responsavelNome)}
-            </span>
-          )}
-        </div>
+        <LinhaHierarquia key={no.id} no={no} depth={nivelItem + 1 + i} />
       ))}
     </div>
   );

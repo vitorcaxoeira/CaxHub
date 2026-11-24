@@ -113,7 +113,7 @@ export interface AlocacaoResumo {
   bloqueadoExcedenteEfetivo: boolean;
 }
 
-interface NoApi {
+export interface NoApi {
   id: number;
   parentId: number | null;
   tipo: "pasta" | "atividade";
@@ -142,7 +142,7 @@ interface NoApi {
   alocacoes?: AlocacaoResumo[];
 }
 
-interface ItemApi {
+export interface ItemApi {
   seqite: number;
   codser: string;
   despro: string | null;
@@ -153,13 +153,55 @@ interface ItemApi {
   // Pasta raiz onde este item foi agrupado, ou null se estiver solto (comportamento de
   // sempre, direto na raiz da árvore da proposta).
   parentId: number | null;
+  // Período e observação do item no Cronograma (PropostaItemPlanejamento).
+  dataPrevistaInicio: string | null;
+  dataPrevistaFim: string | null;
+  observacao: string | null;
   nos: NoApi[];
 }
 
 // Pasta raiz da proposta — organizacional, fora do escopo de qualquer item; mesmo shape
 // de um nó comum (NoApi), só ganha o `podeEditar` que normalmente vem do item dono.
-interface PastaRaizApi extends NoApi {
+export interface PastaRaizApi extends NoApi {
   podeEditar: boolean;
+}
+
+// Um nó dos que ficariam fora do período depois de mexer nas datas de um pai (ou de mover um
+// nó/item pra outro pai) — mesma forma que PATCH /estrutura/:id devolve no 409.
+export interface ImpactoDatas {
+  chave: string;
+  id: number | null;
+  seqite: number | null;
+  tipo: "item" | "pasta" | "atividade";
+  nome: string;
+  // Pastas/item acima, da raiz até o pai.
+  caminho: string;
+  inicio: string | null;
+  fim: string | null;
+  novoInicio: string | null;
+  novoFim: string | null;
+  // true = é o próprio nó mexido (e não um descendente dele).
+  proprio: boolean;
+}
+
+// Lançado por atualizarNo/moverItem quando o backend recusa por deixar descendente fora do período
+// (409 DATAS_FORA_DO_PAI). Quem chama mostra a lista e, se o usuário aceitar, repete a chamada com
+// `ajustarFilhos: true`.
+export class ErroDatasForaDoPai extends Error {
+  constructor(
+    message: string,
+    readonly impactos: ImpactoDatas[]
+  ) {
+    super(message);
+  }
+}
+
+function lerErroDatasForaDoPai(err: unknown): ErroDatasForaDoPai | null {
+  const resposta = (err as { response?: { status?: number; data?: { codigo?: string; error?: string; impactos?: ImpactoDatas[] } } }).response;
+  if (resposta?.status === 409 && resposta.data?.codigo === "DATAS_FORA_DO_PAI") {
+    return new ErroDatasForaDoPai(resposta.data.error ?? "Há itens com datas fora do período.", resposta.data.impactos ?? []);
+  }
+  return null;
 }
 
 // Id sintético do nó "item" (virtual — vem do PropostaItem, nunca é uma linha real em
@@ -193,6 +235,8 @@ export interface PatchNo {
   // estourando o orçamento do item (ver DrawerAtividade/projetarSaldo); sem isso, o
   // backend rejeita a duração que ultrapassar o saldo do item.
   confirmarExcedente?: boolean;
+  // Aceita encaixar nas novas datas os nós que ficariam fora do período (ver ErroDatasForaDoPai).
+  ajustarFilhos?: boolean;
 }
 
 export interface NovoNo {
@@ -202,6 +246,110 @@ export interface NovoNo {
   tipo: "pasta" | "atividade";
   nome: string;
   parentId: number | null;
+}
+
+// Monta a lista achatada de nós a partir da resposta de GET .../cronograma — usada pela árvore (aqui
+// no hook) e pelo relatório impresso, que busca os dados sozinho e precisa da MESMA árvore.
+export function montarNosCronograma(data: { pastasRaiz: PastaRaizApi[]; itens: ItemApi[] }): NoCronogramaCompleto[] {
+  const todosNos: NoCronogramaCompleto[] = [];
+
+  for (const p of data.pastasRaiz as PastaRaizApi[]) {
+    todosNos.push({
+      id: p.id,
+      parentId: p.parentId,
+      tipo: "pasta",
+      nome: p.nome,
+      ordem: p.ordem,
+      horasPrevistas: null,
+      horasRealizadas: 0,
+      responsavelCodfor: null,
+      predecessoraId: null,
+      statusManual: null,
+      dataPrevistaInicio: p.dataPrevistaInicio,
+      dataPrevistaFim: p.dataPrevistaFim,
+      predecessoraNome: null,
+      responsavelNome: null,
+      observacao: p.observacao,
+      horasAlocadas: 0,
+      saldo: null,
+      horasDivergentes: false,
+      horasExcedentes: 0,
+      integracaoErpLabel: null,
+      integracaoErpTone: null,
+      integracaoErpErro: null,
+      seqite: null,
+      podeEditarItem: p.podeEditar,
+      depexe: null,
+      depexeLabel: null,
+      alocacoesResumo: [],
+    });
+  }
+
+  for (const item of data.itens as ItemApi[]) {
+    const itemId = idVirtualItem(item.seqite);
+    todosNos.push({
+      id: itemId,
+      parentId: item.parentId,
+      tipo: "item",
+      nome: item.despro ?? item.codser,
+      ordem: item.seqite,
+      horasPrevistas: item.qtdhorItem,
+      horasRealizadas: 0,
+      responsavelCodfor: null,
+      predecessoraId: null,
+      statusManual: null,
+      dataPrevistaInicio: item.dataPrevistaInicio,
+      dataPrevistaFim: item.dataPrevistaFim,
+      predecessoraNome: null,
+      responsavelNome: null,
+      observacao: item.observacao,
+      horasAlocadas: 0,
+      saldo: null,
+      horasDivergentes: false,
+      horasExcedentes: 0,
+      integracaoErpLabel: null,
+      integracaoErpTone: null,
+      integracaoErpErro: null,
+      seqite: item.seqite,
+      podeEditarItem: item.podeEditar,
+      depexe: item.depexe,
+      depexeLabel: item.depexeLabel,
+      alocacoesResumo: [],
+    });
+
+    for (const n of item.nos) {
+      todosNos.push({
+        id: n.id,
+        parentId: n.parentId ?? itemId,
+        tipo: n.tipo,
+        nome: n.nome,
+        ordem: n.ordem,
+        horasPrevistas: n.duracaoHoras,
+        horasRealizadas: n.horasRealizadas,
+        responsavelCodfor: n.responsavelCodfor,
+        predecessoraId: n.predecessoraId,
+        statusManual: (n.status as Exclude<StatusNo, "bloqueada"> | null) ?? null,
+        dataPrevistaInicio: n.dataPrevistaInicio,
+        dataPrevistaFim: n.dataPrevistaFim,
+        predecessoraNome: n.predecessoraNome,
+        responsavelNome: n.responsavelNome,
+        observacao: n.observacao,
+        horasAlocadas: n.horasAlocadas,
+        saldo: n.saldo,
+        horasDivergentes: n.horasDivergentes,
+        horasExcedentes: n.horasExcedentes,
+        integracaoErpLabel: n.integracaoErpLabel,
+        integracaoErpTone: n.integracaoErpTone,
+        integracaoErpErro: n.integracaoErpErro,
+        seqite: item.seqite,
+        podeEditarItem: item.podeEditar,
+        depexe: item.depexe,
+        depexeLabel: item.depexeLabel,
+        alocacoesResumo: n.alocacoes ?? [],
+      });
+    }
+  }
+  return todosNos;
 }
 
 export function useCronograma(codemp: string | undefined, codpro: string | undefined) {
@@ -226,105 +374,7 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
       .then(({ data }) => {
         setProposta(data.proposta);
 
-        const todosNos: NoCronogramaCompleto[] = [];
-
-        for (const p of data.pastasRaiz as PastaRaizApi[]) {
-          todosNos.push({
-            id: p.id,
-            parentId: p.parentId,
-            tipo: "pasta",
-            nome: p.nome,
-            ordem: p.ordem,
-            horasPrevistas: null,
-            horasRealizadas: 0,
-            responsavelCodfor: null,
-            predecessoraId: null,
-            statusManual: null,
-            dataPrevistaInicio: null,
-            dataPrevistaFim: null,
-            predecessoraNome: null,
-            responsavelNome: null,
-            observacao: null,
-            horasAlocadas: 0,
-            saldo: null,
-            horasDivergentes: false,
-            horasExcedentes: 0,
-            integracaoErpLabel: null,
-            integracaoErpTone: null,
-            integracaoErpErro: null,
-            seqite: null,
-            podeEditarItem: p.podeEditar,
-            depexe: null,
-            depexeLabel: null,
-            alocacoesResumo: [],
-          });
-        }
-
-        for (const item of data.itens as ItemApi[]) {
-          const itemId = idVirtualItem(item.seqite);
-          todosNos.push({
-            id: itemId,
-            parentId: item.parentId,
-            tipo: "item",
-            nome: item.despro ?? item.codser,
-            ordem: item.seqite,
-            horasPrevistas: item.qtdhorItem,
-            horasRealizadas: 0,
-            responsavelCodfor: null,
-            predecessoraId: null,
-            statusManual: null,
-            dataPrevistaInicio: null,
-            dataPrevistaFim: null,
-            predecessoraNome: null,
-            responsavelNome: null,
-            observacao: null,
-            horasAlocadas: 0,
-            saldo: null,
-            horasDivergentes: false,
-            horasExcedentes: 0,
-            integracaoErpLabel: null,
-            integracaoErpTone: null,
-            integracaoErpErro: null,
-            seqite: item.seqite,
-            podeEditarItem: item.podeEditar,
-            depexe: item.depexe,
-            depexeLabel: item.depexeLabel,
-            alocacoesResumo: [],
-          });
-
-          for (const n of item.nos) {
-            todosNos.push({
-              id: n.id,
-              parentId: n.parentId ?? itemId,
-              tipo: n.tipo,
-              nome: n.nome,
-              ordem: n.ordem,
-              horasPrevistas: n.duracaoHoras,
-              horasRealizadas: n.horasRealizadas,
-              responsavelCodfor: n.responsavelCodfor,
-              predecessoraId: n.predecessoraId,
-              statusManual: (n.status as Exclude<StatusNo, "bloqueada"> | null) ?? null,
-              dataPrevistaInicio: n.dataPrevistaInicio,
-              dataPrevistaFim: n.dataPrevistaFim,
-              predecessoraNome: n.predecessoraNome,
-              responsavelNome: n.responsavelNome,
-              observacao: n.observacao,
-              horasAlocadas: n.horasAlocadas,
-              saldo: n.saldo,
-              horasDivergentes: n.horasDivergentes,
-              horasExcedentes: n.horasExcedentes,
-              integracaoErpLabel: n.integracaoErpLabel,
-              integracaoErpTone: n.integracaoErpTone,
-              integracaoErpErro: n.integracaoErpErro,
-              seqite: item.seqite,
-              podeEditarItem: item.podeEditar,
-              depexe: item.depexe,
-              depexeLabel: item.depexeLabel,
-              alocacoesResumo: n.alocacoes ?? [],
-            });
-          }
-        }
-        setNos(todosNos);
+        setNos(montarNosCronograma(data));
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar o cronograma"))
@@ -361,6 +411,17 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
     });
 
     try {
+      // Item da proposta (id virtual, negativo): só período e observação, em endpoint próprio.
+      if (id < 0) {
+        await axios.patch(`/api/alocacao/propostas/${codemp}/${codpro}/itens/${-id}/planejamento`, {
+          ...(patch.dataPrevistaInicio !== undefined ? { dataPrevistaInicio: patch.dataPrevistaInicio } : {}),
+          ...(patch.dataPrevistaFim !== undefined ? { dataPrevistaFim: patch.dataPrevistaFim } : {}),
+          ...(patch.observacao !== undefined ? { observacao: patch.observacao } : {}),
+          ...(patch.ajustarFilhos ? { ajustarFilhos: true } : {}),
+        });
+        if (patch.ajustarFilhos) carregar();
+        return;
+      }
       const { data } = await axios.patch(`/api/alocacao/estrutura/${id}`, {
         ...(patch.nome !== undefined ? { nome: patch.nome } : {}),
         ...(patch.responsavelCodfor !== undefined ? { responsavelCodfor: patch.responsavelCodfor } : {}),
@@ -373,7 +434,10 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
         ...(patch.parentId !== undefined ? { parentId: parentIdReal(patch.parentId) } : {}),
         ...(patch.ordem !== undefined ? { ordem: patch.ordem } : {}),
         ...(patch.confirmarExcedente ? { confirmarExcedente: true } : {}),
+        ...(patch.ajustarFilhos ? { ajustarFilhos: true } : {}),
       });
+      // Descendentes (e a alocação das atividades) mudaram de data no servidor: relê a árvore.
+      if (patch.ajustarFilhos) carregar();
       // PATCH /estrutura/:id devolve o id da AtividadeConsultor criada/editada nesta
       // requisição (troca de responsável ou de horas) — quando existe, algo acabou de ser
       // mandado pro Senior: recarrega na hora (o patch otimista acima não sabe nada sobre
@@ -385,16 +449,18 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
       }
     } catch (err) {
       setNos(snapshot);
+      const conflitoDatas = lerErroDatasForaDoPai(err);
+      if (conflitoDatas) throw conflitoDatas;
       const axiosErr = err as { response?: { data?: { error?: string } } };
       throw new Error(axiosErr.response?.data?.error ?? "Falha ao salvar alteração");
     }
-  }, [carregar]);
+  }, [carregar, codemp, codpro]);
 
   // Agrupa (parentId = id de uma pasta raiz) ou solta (parentId = null) um item da
   // proposta — o item continua virtual, só a posição é persistida no backend
   // (PropostaItemPosicao). Optimistic update no próprio nó virtual do item.
   const moverItem = useCallback(
-    async (seqite: number, parentId: number | null) => {
+    async (seqite: number, parentId: number | null, ajustarFilhos = false) => {
       const itemId = idVirtualItem(seqite);
       let snapshot: NoCronogramaCompleto[] = [];
       setNos((atual) => {
@@ -403,14 +469,20 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
       });
 
       try {
-        await axios.post(`/api/alocacao/propostas/${codemp}/${codpro}/itens/${seqite}/posicao`, { parentId });
+        await axios.post(`/api/alocacao/propostas/${codemp}/${codpro}/itens/${seqite}/posicao`, {
+          parentId,
+          ...(ajustarFilhos ? { ajustarFilhos: true } : {}),
+        });
+        if (ajustarFilhos) carregar();
       } catch (err) {
         setNos(snapshot);
+        const conflitoDatas = lerErroDatasForaDoPai(err);
+        if (conflitoDatas) throw conflitoDatas;
         const axiosErr = err as { response?: { data?: { error?: string } } };
         throw new Error(axiosErr.response?.data?.error ?? "Não foi possível mover o item");
       }
     },
-    [codemp, codpro]
+    [codemp, codpro, carregar]
   );
 
   const criarNo = useCallback(
@@ -549,6 +621,13 @@ export function useCronograma(codemp: string | undefined, codpro: string | undef
             predecessoraId: no.predecessoraId,
             status: no.statusManual,
             responsavelCodfor: no.responsavelCodfor,
+            observacao: no.observacao,
+          });
+        } else if (no.dataPrevistaInicio || no.dataPrevistaFim || no.observacao) {
+          // Pasta também tem período e observação: a cópia leva os dois (mesmo pai, então cabem).
+          await axios.patch(`/api/alocacao/estrutura/${data.id}`, {
+            dataPrevistaInicio: no.dataPrevistaInicio,
+            dataPrevistaFim: no.dataPrevistaFim,
             observacao: no.observacao,
           });
         }

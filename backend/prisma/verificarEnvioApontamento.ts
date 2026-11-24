@@ -68,6 +68,8 @@ async function montarPayload(ratItemId: number): Promise<RegistrarAtividadesPayl
   if (rat.codpro == null) throw new Error(`RAT ${rat.id} sem codpro`);
 
   return {
+    // Mesma âncora de RAT de destino de montarPayloadApontamento (sync/outboxSenior.ts).
+    ...(rat.numrat != null ? { numRat: rat.numrat } : { gerRat: "S" as const }),
     codEmp: rat.codemp,
     codFor: rat.codfor,
     codPro: rat.codpro,

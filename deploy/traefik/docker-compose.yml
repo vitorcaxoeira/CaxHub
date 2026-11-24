@@ -1,0 +1,46 @@
+# Traefik da VPS do CaxHub (Soeltech): dono das portas 80/443, redireciona http -> https e emite o certificado
+# Let's Encrypt (desafio HTTP) para quem se pendurar nele por labels (ver deploy/compose.vps.yml).
+# Roda em /opt/traefik. O e-mail do ACME vem do `.env` desta pasta:  LE_EMAIL=voce@exemplo.com
+#
+# Só suba DEPOIS que o DNS do domínio apontar para a VPS e ANTES de ligar PUBLICO (ativar-publico.sh): sem
+# container com `traefik.enable=true` o Traefik não tenta emitir certificado nenhum.
+#
+# A tag é fixada na série 3.6 (recebe só correção). Docker Engine 29+ recusa clientes de API antigos
+# e derruba versões velhas do Traefik: confira `docker version` antes de mudar a tag.
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=${LE_EMAIL:?defina LE_EMAIL no .env}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --api.dashboard=false
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Somente leitura, mas quem lê o socket enxerga todos os containers: por isso o dashboard
+      # fica desligado e nenhuma porta de administração é publicada.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - proxy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  proxy:
+    name: proxy

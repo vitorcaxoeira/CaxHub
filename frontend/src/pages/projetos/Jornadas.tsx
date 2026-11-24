@@ -19,7 +19,12 @@ interface DiaJornada {
   cadastrado: boolean;
 }
 
-const NOMES_DIA = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+// Mesmos tetos do backend (MAX_DIAS_RETROATIVOS em domain/janelaRetroativa.ts e
+// MAX_TOLERANCIA_TETO_MIN em domain/toleranciaTeto.ts).
+const MAX_DIAS_RETROATIVOS = 30;
+const MAX_TOLERANCIA_TETO_MIN = 15;
+
+const NOMES_DIA =["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 // A jornada é guardada em MINUTOS desde a meia-noite (convenção de RatItem.horini) e o
 // <input type="time"> fala "HH:MM" — estas duas funções são a fronteira entre os dois.
@@ -59,6 +64,16 @@ export function Jornadas() {
   const [carregandoDias, setCarregandoDias] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  // Configuração de apontamento (janela de retroatividade + tolerância do teto). Texto, e não
+  // número, pra o campo poder ficar vazio enquanto se digita; os `*Salvo` são o que está gravado no
+  // servidor. Só admin/líder do departamento recebem esses dados da API (`podeVerConfiguracao`).
+  const [diasRetroativos, setDiasRetroativos] = useState("0");
+  const [diasRetroativosSalvo, setDiasRetroativosSalvo] = useState(0);
+  const [toleranciaTeto, setToleranciaTeto] = useState("5");
+  const [toleranciaTetoSalva, setToleranciaTetoSalva] = useState(5);
+  const [podeVerConfiguracao, setPodeVerConfiguracao] = useState(false);
+  const [podeEditarConfiguracao, setPodeEditarConfiguracao] = useState(false);
+  const [salvandoConfiguracao, setSalvandoConfiguracao] = useState(false);
 
   useEffect(() => {
     axios
@@ -86,6 +101,12 @@ export function Jornadas() {
       .get(`/api/jornadas/${selecionado.codemp}/${selecionado.codfor}`)
       .then(({ data }) => {
         setDias(data.dias);
+        setDiasRetroativos(String(data.diasRetroativos ?? 0));
+        setDiasRetroativosSalvo(data.diasRetroativos ?? 0);
+        setToleranciaTeto(String(data.toleranciaTetoMin ?? 5));
+        setToleranciaTetoSalva(data.toleranciaTetoMin ?? 5);
+        setPodeVerConfiguracao(data.podeVerConfiguracao === true);
+        setPodeEditarConfiguracao(data.podeEditarConfiguracao === true);
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar a jornada"))
@@ -118,6 +139,36 @@ export function Jornadas() {
       setErro(mensagem ?? "Falha ao salvar a jornada");
     } finally {
       setSalvando(false);
+    }
+  }
+
+  async function salvarConfiguracao() {
+    if (!selecionado) return;
+    const dias = Number(diasRetroativos);
+    if (diasRetroativos.trim() === "" || !Number.isInteger(dias) || dias < 0 || dias > MAX_DIAS_RETROATIVOS) {
+      setErro(`Informe um número inteiro de 0 a ${MAX_DIAS_RETROATIVOS} dias úteis.`);
+      return;
+    }
+    const tolerancia = Number(toleranciaTeto);
+    if (toleranciaTeto.trim() === "" || !Number.isInteger(tolerancia) || tolerancia < 0 || tolerancia > MAX_TOLERANCIA_TETO_MIN) {
+      setErro(`Informe uma tolerância inteira de 0 a ${MAX_TOLERANCIA_TETO_MIN} minutos.`);
+      return;
+    }
+    setSalvandoConfiguracao(true);
+    setErro(null);
+    try {
+      await axios.put(`/api/jornadas/${selecionado.codemp}/${selecionado.codfor}/configuracao-apontamento`, {
+        diasRetroativos: dias,
+        toleranciaTetoMin: tolerancia,
+      });
+      setDiasRetroativosSalvo(dias);
+      setToleranciaTetoSalva(tolerancia);
+      toast.mostrar(`Configuração de apontamento de ${selecionado.nome} salva.`, "success");
+    } catch (err) {
+      const mensagem = axios.isAxiosError(err) ? err.response?.data?.error : null;
+      setErro(mensagem ?? "Falha ao salvar a configuração de apontamento");
+    } finally {
+      setSalvandoConfiguracao(false);
     }
   }
 
@@ -238,6 +289,82 @@ export function Jornadas() {
               {salvando ? "Salvando..." : "Salvar jornada"}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Configuração de apontamento: só admin e líder do departamento do consultor VÊEM este card
+          (o backend nem manda os dados pro consultor comum). Dois campos, um botão: (1) janela de
+          retroatividade — por ordem da Diretoria o consultor só pede apontamento/ajuste para hoje e
+          aqui se abre a exceção; (2) tolerância do teto na confirmação de sessão. Independente do
+          "Salvar jornada" acima: são configurações sem relação. Quem vê mas não edita (o próprio
+          líder/admin olhando o próprio registro) fica com os campos desabilitados. */}
+      {selecionado && !carregandoDias && podeVerConfiguracao && (
+        <div className="mt-4 rounded-lg border border-border bg-surface p-4">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Configuração de apontamento</p>
+
+          <div className="mt-3 grid gap-5 md:grid-cols-2">
+            <div>
+              <p className="text-sm font-medium text-foreground">Apontamento retroativo</p>
+              <p className="mt-1 text-sm text-muted">
+                Dias úteis (seg a sex) antes de hoje em que {selecionado.nome} ainda pode pedir apontamento avulso ou ajuste de
+                horário. <span className="text-foreground">0 = só o dia de hoje.</span>
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_DIAS_RETROATIVOS}
+                  step={1}
+                  value={diasRetroativos}
+                  onChange={(e) => setDiasRetroativos(e.target.value)}
+                  disabled={!podeEditarConfiguracao}
+                  aria-label="Dias úteis retroativos permitidos"
+                  className="w-24 rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                />
+                <span className="text-sm text-muted">dias úteis</span>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-sm font-medium text-foreground">Tolerância do teto na confirmação</p>
+              <p className="mt-1 text-sm text-muted">
+                Quanto o realizado da atividade pode passar do teto (alocado + excedentes) na hora de{" "}
+                <span className="text-foreground">confirmar uma sessão já trabalhada</span> de {selecionado.nome}. Absorve a
+                diferença de arredondamento de minutos. <span className="text-foreground">0 = teto exato.</span>
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_TOLERANCIA_TETO_MIN}
+                  step={1}
+                  value={toleranciaTeto}
+                  onChange={(e) => setToleranciaTeto(e.target.value)}
+                  disabled={!podeEditarConfiguracao}
+                  aria-label="Tolerância do teto na confirmação, em minutos"
+                  className="w-24 rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                />
+                <span className="text-sm text-muted">minutos</span>
+              </div>
+            </div>
+          </div>
+
+          {podeEditarConfiguracao ? (
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={salvarConfiguracao}
+                disabled={
+                  salvandoConfiguracao ||
+                  (diasRetroativos === String(diasRetroativosSalvo) && toleranciaTeto === String(toleranciaTetoSalva))
+                }
+                className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {salvandoConfiguracao ? "Salvando..." : "Salvar configuração"}
+              </button>
+            </div>
+          ) : (
+            <p className="mt-3 text-[12px] text-muted">Ninguém altera a própria configuração — peça a outro líder ou a um administrador.</p>
+          )}
         </div>
       )}
     </div>

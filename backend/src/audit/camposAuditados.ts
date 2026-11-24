@@ -25,6 +25,8 @@ export const CAMPOS_AUDITADOS_PROPOSTA_ITEM: Record<string, string> = {
   forfat: "Forma de Faturamento",
   sitprz: "Situação de Prazo",
   depexe: "Departamento Executor",
+  // depcusrec (Departamento de Custo/Receita, 05/11/2026) fica FORA de propósito: a coluna nasceu vazia no espelho, e auditar faria o
+  // 1º sync ver "alteração" nos ~11 mil itens (um evento cada, todos pelo caminho lento). Se for auditar, incluir depois que estiver preenchida.
 };
 
 // Único campo hoje editável em PATCH /alocacao/alocacoes/:id além das datas (ver

@@ -8,6 +8,8 @@
 // validada — nenhuma das duas defesas substitui a outra.
 import { getTableFields, getFieldDomainValues, SeniorField } from "../soap/metadata";
 import { comCache } from "../soap/metadataCache";
+import { literalData } from "./dialetoSenior";
+import type { SistemaSenior } from "../config/sistemaSenior";
 // `import type`: só usado como anotação de tipo abaixo, nunca como valor em runtime — vira
 // `import type` de propósito (e não `import { SyncJobDescriptor }`) porque registry.ts
 // importa os jobs de sync (inclusive pedidoSync.ts, que importa filtrosAtivos.ts, que importa
@@ -83,7 +85,7 @@ export async function validarEMontarPredicado(
     throw new Error(`Nome de campo inválido: "${predicado.campo}".`);
   }
 
-  const fields = await comCache(`campos:${job.tabelaSenior}`, () => getTableFields(job.tabelaSenior));
+  const fields = await comCache(`campos:${job.sistema}:${job.tabelaSenior}`, () => getTableFields(job.tabelaSenior, job.sistema));
   const field = fields.find((f) => f.fldnam.toLowerCase() === predicado.campo.toLowerCase());
   if (!field) {
     throw new Error(`Campo "${predicado.campo}" não existe em "${job.tabelaSenior}" (conferido contra o dicionário do Senior).`);
@@ -93,11 +95,11 @@ export async function validarEMontarPredicado(
   // à toa nos ~9 em cada 10 campos que não têm `enunam`.
   let valoresDominio: Set<string> | null = null;
   if (field.enunam && (field.dattyp === 1 || field.dattyp === 2)) {
-    const dominio = await comCache(`dominio:${field.enunam}`, () => getFieldDomainValues(field.enunam as string));
+    const dominio = await comCache(`dominio:${job.sistema}:${field.enunam}`, () => getFieldDomainValues(field.enunam as string, job.sistema));
     valoresDominio = new Set(dominio.map((d) => d.keynam));
   }
 
-  return validarPredicadoComCampo(field, predicado, valoresDominio);
+  return validarPredicadoComCampo(field, predicado, valoresDominio, job.sistema);
 }
 
 // Núcleo síncrono da validação, separado de `validarEMontarPredicado` só pra poder ser
@@ -107,7 +109,8 @@ export async function validarEMontarPredicado(
 export function validarPredicadoComCampo(
   field: SeniorField,
   predicado: PredicadoFiltro,
-  valoresDominio: Set<string> | null
+  valoresDominio: Set<string> | null,
+  sistema: SistemaSenior = "erp"
 ): PredicadoValidado {
   const categoria = categoriaDoCampo(field);
   if (categoria === null) {
@@ -136,7 +139,7 @@ export function validarPredicadoComCampo(
   validarQuantidadeDeValores(predicado);
 
   const valoresChecados = predicado.valores.map((v) => valorChecado(v, categoria, field, valoresDominio));
-  const fragmentoSql = montarFragmento(field.fldnam, predicado.operador, categoria, valoresChecados);
+  const fragmentoSql = montarFragmento(field.fldnam, predicado.operador, categoria, valoresChecados, sistema);
 
   return { ...predicado, colunaOrigem: field.fldnam, categoria, fragmentoSql };
 }
@@ -252,11 +255,12 @@ function dataValidaISO(v: string): boolean {
   return d.getUTCFullYear() === ano && d.getUTCMonth() === mes - 1 && d.getUTCDate() === dia;
 }
 
-function montarFragmento(origem: string, operador: OperadorFiltro, categoria: CategoriaCampo, valores: string[]): string {
+function montarFragmento(origem: string, operador: OperadorFiltro, categoria: CategoriaCampo, valores: string[], sistema: SistemaSenior = "erp"): string {
   // Número (int/bigint/decimal) já vem pronto pra entrar cru na query; os demais precisam
-  // de aspas simples + escape.
+  // de aspas simples + escape. Data usa o literal do sistema (dialetoSenior.ts): no ERP continua
+  // 'AAAA-MM-DD' entre aspas, no HCM vai dentro de CONVERT(date, ..., 23).
   const numerico = categoria === "int" || categoria === "bigint" || categoria === "decimal";
-  const literal = (v: string) => (numerico ? v : `'${escaparAspas(v)}'`);
+  const literal = (v: string) => (numerico ? v : categoria === "data" ? literalData(v, sistema) : `'${escaparAspas(v)}'`);
 
   switch (operador) {
     case "=":

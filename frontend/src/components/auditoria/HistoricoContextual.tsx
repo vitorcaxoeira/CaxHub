@@ -1,7 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { Avatar } from "../ui/Avatar";
-import { GrupoAuditoria, resumoGrupo, toneBadgeAuditoria, toneGrupo } from "./auditoriaVisual";
+import { GrupoAuditoria, resumoGrupo, tagEvento, toneBadgeAuditoria, toneGrupo } from "./auditoriaVisual";
 import { DrawerAuditoria } from "./DrawerAuditoria";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
@@ -75,7 +75,7 @@ export function HistoricoContextual({ entidadeTipo, entidadeId }: HistoricoConte
                 <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted">
                   {dateTimeFormatter.format(new Date(grupo.ocorridoEm))}
                   <span className={`rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-medium ${toneBadgeAuditoria[tone]}`}>
-                    {primeiro?.eventoTipo}
+                    {primeiro ? tagEvento(primeiro) : null}
                   </span>
                 </p>
               </div>

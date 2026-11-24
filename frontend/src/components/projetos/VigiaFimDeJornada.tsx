@@ -38,6 +38,16 @@ const INTERVALO_CONSULTA_MS = 30_000;
 // vencido, mesmo depois do consultor confirmar que ia trabalhar mais 15 minutos.
 export const EVENTO_SESSAO_ALTERADA = "caxhub:sessao-alterada";
 
+// Disparado quando o vigia abre o alerta de fim de expediente ou o teto de horas estoura. Quem
+// quiser reagir (a janela flutuante do CaxHub Desktop manda uma notificação nativa e traz a
+// janela pra frente) ouve isto; o vigia em si não muda de comportamento por causa dele.
+export const EVENTO_VIGIA_ALERTA = "caxhub:vigia-alerta";
+export interface DetalheVigiaAlerta {
+  codpro: number;
+  motivo: "fim_de_expediente" | "teto_atingido";
+  iniciouForaDoExpediente: boolean;
+}
+
 export function avisarSessaoAlterada() {
   window.dispatchEvent(new CustomEvent(EVENTO_SESSAO_ALTERADA));
 }
@@ -70,10 +80,14 @@ export function VigiaFimDeJornada() {
 
   // O navegador não distingue "fechei a aba" de "dei F5" — os dois disparam `pagehide`.
   // Por isso isto NÃO para a atividade: só avisa o servidor "posso estar fechando"
-  // (POST /:id/agendar-parada). Se a página voltar a perguntar pela sessão dentro de uns
-  // segundos (o polling normal deste mesmo componente, ver `consultar` abaixo), o servidor
-  // cancela sozinho — é isso que tolera o F5. Se ninguém voltar, quem fecha de fato é
-  // sync/pararSessoesAoFecharPagina.ts, no backend.
+  // (POST /:id/agendar-parada). Se ALGUMA página do app voltar a perguntar pela sessão dentro
+  // de 90s (o polling normal deste mesmo componente, ver `consultar` abaixo, ou o disparo
+  // imediato em `pageshow`/`visibilitychange` mais abaixo), o servidor cancela sozinho — é
+  // isso que tolera o F5, o Voltar e uma segunda aba aberta. Se ninguém voltar, quem fecha
+  // de fato é sync/pararSessoesAoFecharPagina.ts, no backend.
+  //
+  // O corpo (persisted/visibilityState/rota) é só EVIDÊNCIA: vai pro metadata do evento de
+  // parada, pra dar pra provar depois o que disparou o `pagehide` (fechar, F5, navegar...).
   //
   // `pagehide` e não `beforeunload`: não dispara em navegação dentro do próprio SPA (trocar
   // de rota não é "a página saindo"), não tira a página do cache de voltar/avançar do
@@ -81,14 +95,15 @@ export function VigiaFimDeJornada() {
   // silencioso. `fetch` com `keepalive` e não `navigator.sendBeacon` porque este projeto
   // autentica por header Authorization (sendBeacon não deixa setar headers).
   useEffect(() => {
-    function aoFechar() {
+    function aoFechar(e: PageTransitionEvent) {
       const atual = sessaoRef.current;
       if (!atual) return;
       const token = localStorage.getItem("token");
       if (!token) return;
       fetch(`/api/atividades/${atual.atividadeId}/agendar-parada`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ persisted: e.persisted, visibilityState: document.visibilityState, rota: location.pathname }),
         keepalive: true,
       }).catch(() => {});
     }
@@ -109,12 +124,25 @@ export function VigiaFimDeJornada() {
   useEffect(() => {
     consultar();
     const intervalo = setInterval(consultar, INTERVALO_CONSULTA_MS);
+    // Cancela o aviso de fechamento na hora, sem esperar os 30s do polling: a página voltou
+    // do cache do navegador (Voltar — o state do React ficou intacto, nada remontou pra
+    // consultar) ou a aba voltou ao primeiro plano (escondida, o Chrome limita os timers a
+    // ~1 consulta/min).
+    function aoVoltar(e: Event) {
+      if (e.type === "pageshow" && !(e as PageTransitionEvent).persisted) return;
+      if (e.type === "visibilitychange" && document.visibilityState !== "visible") return;
+      consultar();
+    }
+    window.addEventListener("pageshow", aoVoltar);
+    document.addEventListener("visibilitychange", aoVoltar);
     // Iniciar uma atividade fora do expediente tem de abrir o alerta NA HORA, nao no
     // proximo tique de 30s: o limite ja nasce vencido e o consultor ficaria olhando um
     // cronometro travado sem entender por que.
     window.addEventListener(EVENTO_SESSAO_ALTERADA, consultar);
     return () => {
       clearInterval(intervalo);
+      window.removeEventListener("pageshow", aoVoltar);
+      document.removeEventListener("visibilitychange", aoVoltar);
       window.removeEventListener(EVENTO_SESSAO_ALTERADA, consultar);
     };
   }, [consultar]);
@@ -138,6 +166,21 @@ export function VigiaFimDeJornada() {
   // qualquer outra tela a sessão ficava correndo até o cron de 5 min. Corrigido em
   // 14/08/2026, junto do clamp que impede gravar além do limite.
   const tetoVencido = sessao?.motivo === "teto_atingido" && limiteMs != null && agora >= limiteMs;
+
+  // Uma vez por sessão+limite: prorrogar muda o limite e, quando o tempo novo vencer, avisa de novo.
+  const alertaEmitido = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessao || !(perguntando || tetoVencido)) return;
+    const chave = `${sessao.atividadeId}-${sessao.inicio}-${sessao.limite}`;
+    if (alertaEmitido.current === chave) return;
+    alertaEmitido.current = chave;
+    const detalhe: DetalheVigiaAlerta = {
+      codpro: sessao.codpro,
+      motivo: tetoVencido ? "teto_atingido" : "fim_de_expediente",
+      iniciouForaDoExpediente: sessao.iniciouForaDoExpediente,
+    };
+    window.dispatchEvent(new CustomEvent(EVENTO_VIGIA_ALERTA, { detail: detalhe }));
+  }, [sessao, perguntando, tetoVencido]);
 
   const encerrar = useCallback(
     async (imediato: boolean, texto?: string) => {

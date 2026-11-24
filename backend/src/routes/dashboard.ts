@@ -3,9 +3,28 @@ import { Consultor } from "@prisma/client";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { depexeLabel } from "../domain/propostasDominio";
+import { temViagemComoViajante } from "../domain/solicitacoesViagem";
 import { resolverContextoConsultor, ContextoConsultor, codforsDoTime, consultoresFiltraveis } from "../domain/contextoProjeto";
-import { diasDoPeriodo, horasRealizadasNoPeriodo, metaDoPeriodo, valorHoraVigente } from "../domain/resumoConsultor";
+import {
+  FATOR_HORA_DESLOCAMENTO,
+  carregarAbonos,
+  deslocamentoNoPeriodo,
+  diasInteirosAbonados,
+  diasDoPeriodo,
+  horasRealizadasNoPeriodo,
+  metaDoPeriodo,
+  rdvDoConsultor,
+  valorHoraVigente,
+} from "../domain/resumoConsultor";
+import { produtividadeDoMes } from "../domain/relatorioProdutividade";
 import { parseIntListParam } from "../lib/queryParams";
+import { diaBrasilComoData } from "../domain/fusoBrasil";
+import { somarReais } from "../domain/descontos";
+import { descontosPorCompetencia } from "../domain/descontosDados";
+import { rdvConsultorEmAndamento, runSincronizacaoRdvConsultor, statusRdvConsultor } from "../sync/rdvConsultorSync";
+import { totalDoContratoFixo } from "../domain/contratoFixo";
+import { feriasPagasNasCompetencias } from "../domain/feriasNota";
+import { diasUteisLiquidos } from "../domain/calendarioTrabalho";
 
 export const dashboardRouter = Router();
 
@@ -32,9 +51,11 @@ dashboardRouter.get("/meu-perfil", requireAuth, async (req: AuthenticatedRequest
 
     const contexto = await resolverContextoConsultor(user.email);
     const { consultor } = contexto;
+    // Viaja em alguma solicitação já reservada/finalizada — libera, só pra leitura, o menu "Minhas Solicitações".
+    const viajante = await temViagemComoViajante(user.id);
 
     if (!consultor) {
-      res.json({ consultor: null, departamentosGerenciados: [] });
+      res.json({ consultor: null, departamentosGerenciados: [], viajante });
       return;
     }
 
@@ -72,6 +93,7 @@ dashboardRouter.get("/meu-perfil", requireAuth, async (req: AuthenticatedRequest
         depexeLabel: depexeLabel(consultor.depexe),
       },
       departamentosGerenciados,
+      viajante,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -118,8 +140,28 @@ async function resolverConsultorAlvo(
   return { alvo };
 }
 
+// Período por `anos`/`meses` (ver comentário de /meu-resumo). Compartilhado entre /meu-resumo
+// e /meu-rdv: o card de RDV fica na mesma tela e tem que ler o filtro do mesmo jeito.
+// Combinações em ordem cronológica (todo mês do ano mais antigo, depois o próximo ano) —
+// mesma ordem de "colunas" em routes/contabil.ts, só que aqui os meses são somados num
+// painel só, não comparados lado a lado numa tabela.
+function periodoDaQuery(
+  req: AuthenticatedRequest,
+  hoje: Date
+): { anos: number[]; meses: number[]; combos: { ano: number; mes: number }[] } | null {
+  // O "hoje" é o dia de BRASÍLIA (produção roda em UTC: depois das 21h o dia UTC já é amanhã, e no último dia do mês a tela abria no mês seguinte).
+  const hojeBr = diaBrasilComoData(hoje);
+  const anos = [...new Set(parseIntListParam(req.query.anos) ?? [hojeBr.getUTCFullYear()])].sort((a, b) => a - b);
+  const meses = [
+    ...new Set((parseIntListParam(req.query.meses) ?? [hojeBr.getUTCMonth() + 1]).filter((m) => m >= 1 && m <= 12)),
+  ].sort((a, b) => a - b);
+  if (anos.length === 0 || meses.length === 0) return null;
+  return { anos, meses, combos: anos.flatMap((ano) => meses.map((mes) => ({ ano, mes }))) };
+}
+
+// Dia de Brasília do instante, como meia-noite UTC (formato de @db.Date): o "hoje" da meta não pode virar amanhã às 21h (produção roda em UTC).
 function inicioDoDiaUtc(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  return diaBrasilComoData(d);
 }
 
 // Anos com pelo menos um dado real (sessão de execução encerrada ou apontamento já
@@ -201,18 +243,12 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
     const { codemp, codfor } = alvo;
 
     const hoje = new Date();
-    const anos = [...new Set(parseIntListParam(req.query.anos) ?? [hoje.getUTCFullYear()])].sort((a, b) => a - b);
-    const meses = [
-      ...new Set((parseIntListParam(req.query.meses) ?? [hoje.getUTCMonth() + 1]).filter((m) => m >= 1 && m <= 12)),
-    ].sort((a, b) => a - b);
-    if (anos.length === 0 || meses.length === 0) {
+    const periodo = periodoDaQuery(req, hoje);
+    if (!periodo) {
       res.status(400).json({ error: "Período inválido" });
       return;
     }
-    // Combinações em ordem cronológica (todo mês do ano mais antigo, depois o próximo ano) —
-    // mesma ordem de "colunas" em routes/contabil.ts, só que aqui os meses são somados num
-    // painel só, não comparados lado a lado numa tabela.
-    const combos = anos.flatMap((ano) => meses.map((mes) => ({ ano, mes })));
+    const { anos, meses, combos } = periodo;
     const hojeUtc = inicioDoDiaUtc(hoje);
 
     // Um combo nunca se sobrepõe a outro (meses diferentes), então concatenar/somar os
@@ -225,17 +261,27 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
         // cobrar meta ainda; o gráfico por dia (porDia) continua indo até `ate` de propósito.
         const ateParaMeta = hojeUtc.getTime() < ate.getTime() ? hojeUtc : ate;
 
-        const [{ porDia, porProjeto, totalMinutos }, realizadoAteHoje, meta] = await Promise.all([
+        // Férias e folgas do calendário do mês inteiro, uma consulta só: a meta (até hoje) e os dias úteis da projeção (mês todo) usam a mesma.
+        const abonos = await carregarAbonos(codemp, codfor, de, ate);
+        const diasAbonados = diasInteirosAbonados(abonos);
+        const [{ porDia, porProjeto, totalMinutos }, realizadoAteHoje, meta, deslocamento] = await Promise.all([
           horasRealizadasNoPeriodo(codemp, codfor, de, ate),
           horasRealizadasNoPeriodo(codemp, codfor, de, ateParaMeta),
-          metaDoPeriodo(codemp, codfor, de, ateParaMeta),
+          metaDoPeriodo(codemp, codfor, de, ateParaMeta, abonos),
+          deslocamentoNoPeriodo(codemp, codfor, de, ate),
         ]);
+        // Férias e folgas marcadas no mês INTEIRO (inclusive os dias que ainda vão chegar): a Home mostra quantas horas ficam fora da meta. Sem dia futuro no mês, é a própria meta.
+        const metaDoMesInteiro = ateParaMeta.getTime() < ate.getTime() ? await metaDoPeriodo(codemp, codfor, de, ate, abonos) : meta;
+        const deslocamentoMinutos = deslocamento.reduce((soma, d) => soma + d.minutos, 0);
+        const deslocamentoAteHojeMinutos = deslocamento
+          .filter((d) => d.data.getTime() <= ateParaMeta.getTime())
+          .reduce((soma, d) => soma + d.minutos, 0);
 
-        return { de, ate, ateParaMeta, porDia, porProjeto, totalMinutos, realizadoAteHoje, meta };
+        return { de, ate, ateParaMeta, porDia, porProjeto, totalMinutos, realizadoAteHoje, meta, metaDoMesInteiro, deslocamentoMinutos, deslocamentoAteHojeMinutos, diasAbonados };
       })
     );
 
-    const [valorHora, sessoesPendentes, ratsPendentes, notificacoesNaoLidas] = await Promise.all([
+    const [valorHora, sessoesPendentes, ratsPendentes, notificacoesNaoLidas, pedidosEmAprovacao, ajustesPendentes] = await Promise.all([
       valorHoraVigente(codemp, codfor),
       // Sem filtro de período — são contagens "agora" (pendências em aberto), nunca foram
       // recortadas pelo mês exibido.
@@ -244,18 +290,62 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       }),
       prisma.rat.count({ where: { codemp, codfor, sitrat: 9 } }),
       prisma.notificacao.count({ where: { userId: user.id, lida: false } }),
+      // "Em Aprovação": apontamentos avulsos (horas não registradas) esperando o gestor. Só
+      // `pendente` — reprovada (e aprovada, que já virou sessão) fica de fora.
+      prisma.solicitacaoApontamento.findMany({
+        where: { status: "pendente", atividade: { codemp, codfor, sitreg: "A" } },
+        select: { inicioSolicitado: true, fimSolicitado: true },
+      }),
+      // "Em Ajuste": pedidos de correção de horário de sessão já confirmada. Sessão excluída
+      // não conta (some da fila, ver AtividadeSessaoExecucao.excluidaEm).
+      prisma.solicitacaoAjusteApontamento.findMany({
+        where: { status: "pendente", sessao: { excluidaEm: null, atividade: { codemp, codfor, sitreg: "A" } } },
+        select: { inicioSolicitado: true, fimSolicitado: true, sessao: { select: { inicio: true, fim: true } } },
+      }),
     ]);
-
-    const diasUteisEntre = (de: Date, ate: Date) =>
-      diasDoPeriodo(de, ate).filter((d) => {
-        const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
-        return dow !== 0 && dow !== 6;
-      }).length;
+    const minutosEntre = (inicio: Date, fim: Date) => (fim.getTime() - inicio.getTime()) / 60000;
+    const emAprovacao = {
+      quantidade: pedidosEmAprovacao.length,
+      minutos: Math.round(pedidosEmAprovacao.reduce((soma, p) => soma + minutosEntre(p.inicioSolicitado, p.fimSolicitado), 0)),
+    };
+    // Diferença líquida: duração pedida − duração atual da sessão (negativa = pedido de reduzir).
+    const emAjuste = {
+      quantidade: ajustesPendentes.length,
+      diferencaMinutos: Math.round(
+        ajustesPendentes.reduce(
+          (soma, a) => soma + minutosEntre(a.inicioSolicitado, a.fimSolicitado) - (a.sessao.fim ? minutosEntre(a.sessao.inicio, a.sessao.fim) : 0),
+          0
+        )
+      ),
+    };
 
     let totalMinutos = 0;
     let realizadoAteHojeTotal = 0;
+    const descontosDoPeriodo = await descontosPorCompetencia(
+      codemp,
+      codfor,
+      combos.map(({ ano, mes }) => new Date(Date.UTC(ano, mes - 1, 1)))
+    );
+    // Férias remuneradas pagas nas competências do período: NÃO entram no ganho/projeção (são horas); a tela soma ao LÍQUIDO da nota em uma linha própria, como os descontos.
+    // No líquido do "ganho até agora" só valem as de competência já iniciada; no da projeção e do valor fixo, todas.
+    const feriasNota = await feriasPagasNasCompetencias(codemp, codfor, combos.map(({ ano, mes }) => new Date(Date.UTC(ano, mes - 1, 1))));
+    const mesDeHoje = `${hojeUtc.getUTCFullYear()}-${String(hojeUtc.getUTCMonth() + 1).padStart(2, "0")}`;
     let metaTotalMinutos = 0;
+    let abonadoFeriasMinutos = 0;
+    let abonadoFolgaMinutos = 0;
+    let abonadoPeriodoFeriasMinutos = 0;
+    let abonadoPeriodoFolgaMinutos = 0;
+    // A conta do cartão Progresso da meta (período inteiro): jornada − férias − folgas = meta; mais o ritmo até hoje.
+    let jornadaPeriodoMinutos = 0;
+    let metaPeriodoMinutos = 0;
+    let diasFeriasPeriodo = 0;
+    let diasFolgaInteiraPeriodo = 0;
+    let diasComJornadaPeriodo = 0;
+    let diasComMetaPeriodo = 0;
+    let diasComMetaAteHoje = 0;
+    let semJornadaMinutos = 0;
     let diasComJornadaTotal = 0;
+    let deslocamentoMinutosTotal = 0;
     let ganhoAteAgora: number | null = valorHora ? 0 : null;
     let projecaoGanho: number | null = valorHora ? 0 : null;
     const porDiaLista: { data: string; minutos: number }[] = [];
@@ -265,7 +355,21 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       totalMinutos += combo.totalMinutos;
       realizadoAteHojeTotal += combo.realizadoAteHoje.totalMinutos;
       metaTotalMinutos += combo.meta.metaTotalMinutos;
+      abonadoFeriasMinutos += combo.meta.abonadoFeriasMinutos;
+      abonadoFolgaMinutos += combo.meta.abonadoFolgaMinutos;
+      abonadoPeriodoFeriasMinutos += combo.metaDoMesInteiro.abonadoFeriasMinutos;
+      abonadoPeriodoFolgaMinutos += combo.metaDoMesInteiro.abonadoFolgaMinutos;
+      jornadaPeriodoMinutos += combo.metaDoMesInteiro.jornadaMinutos;
+      metaPeriodoMinutos += combo.metaDoMesInteiro.metaTotalMinutos;
+      diasFeriasPeriodo += combo.metaDoMesInteiro.diasFerias;
+      diasFolgaInteiraPeriodo += combo.metaDoMesInteiro.diasFolgaInteira;
+      diasComJornadaPeriodo += combo.metaDoMesInteiro.diasComJornada;
+      diasComMetaPeriodo += combo.metaDoMesInteiro.diasComMeta;
+      diasComMetaAteHoje += combo.meta.diasComMeta;
+      // Horas trabalhadas em dia sem jornada (fim de semana): contam no realizado e não têm meta.
+      for (const dia of combo.metaDoMesInteiro.diasSemJornada) semJornadaMinutos += combo.porDia.get(dia) ?? 0;
       diasComJornadaTotal += combo.meta.diasComJornada;
+      deslocamentoMinutosTotal += combo.deslocamentoMinutos;
 
       for (const dia of diasDoPeriodo(combo.de, combo.ate)) {
         porDiaLista.push({ data: dia, minutos: combo.porDia.get(dia) ?? 0 });
@@ -278,12 +382,21 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       // levar feriado em conta) pros dias úteis do mês inteiro daquele combo, e soma entre
       // combos — cada mês projeta o resto de si mesmo, não o período inteiro junto.
       if (valorHora) {
-        const diasUteisPassados = diasUteisEntre(combo.de, combo.ateParaMeta);
-        const diasUteisTotais = diasUteisEntre(combo.de, combo.ate);
+        // Dia inteiro de férias ou de folga não é dia útil de trabalho: sai da média e do total (13/11/2026).
+        const diasUteisPassados = diasUteisLiquidos(combo.de, combo.ateParaMeta, combo.diasAbonados);
+        const diasUteisTotais = diasUteisLiquidos(combo.de, combo.ate, combo.diasAbonados);
         const mediaMinutosPorDiaUtil = diasUteisPassados > 0 ? combo.realizadoAteHoje.totalMinutos / diasUteisPassados : 0;
         const projecaoMinutos = mediaMinutosPorDiaUtil * diasUteisTotais;
-        ganhoAteAgora = (ganhoAteAgora ?? 0) + (valorHora.vlrhor * combo.realizadoAteHoje.totalMinutos) / 60;
-        projecaoGanho = (projecaoGanho ?? 0) + (valorHora.vlrhor * projecaoMinutos) / 60;
+        // Deslocamento vale metade do valor-hora e NÃO é extrapolado na projeção: viagem é
+        // pontual, então entra só o que já foi lançado (até hoje no ganho; o período inteiro
+        // na projeção, que inclui lançamento com data futura dentro do mês).
+        const valorHoraDeslocamento = valorHora.vlrhor * FATOR_HORA_DESLOCAMENTO;
+        ganhoAteAgora =
+          (ganhoAteAgora ?? 0) +
+          (valorHora.vlrhor * combo.realizadoAteHoje.totalMinutos) / 60 +
+          (valorHoraDeslocamento * combo.deslocamentoAteHojeMinutos) / 60;
+        projecaoGanho =
+          (projecaoGanho ?? 0) + (valorHora.vlrhor * projecaoMinutos) / 60 + (valorHoraDeslocamento * combo.deslocamentoMinutos) / 60;
       }
     }
 
@@ -307,15 +420,192 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
       // potencialmente diferentes) não tem uma meta diária única pra mostrar.
       metaDiariaMinutos: combos.length === 1 ? porCombo[0].meta.metaDiariaMinutos : null,
       metaTotalMinutos,
+      // O que as férias (gozos lançados pelo gestor) e as folgas do calendário tiraram da meta, até hoje: a Home mostra "X h abonadas".
+      abonado: { feriasMinutos: abonadoFeriasMinutos, folgaMinutos: abonadoFolgaMinutos },
+      // O mesmo, mas do período INTEIRO (dias que ainda vão chegar inclusive): as horas marcadas que não são contabilizadas na meta.
+      abonadoPeriodo: { feriasMinutos: abonadoPeriodoFeriasMinutos, folgaMinutos: abonadoPeriodoFolgaMinutos },
+      // Férias remuneradas cujo mês de pagamento cai no período. NÃO estão em ganhoAteAgora/projecaoGanho/contratoFixo.total: a tela soma ao líquido da nota (total = período inteiro;
+      // ateAgora = só as de competência já iniciada, para o líquido do ganho até agora).
+      ferias: {
+        total: feriasNota.total,
+        ateAgora: somarReais(feriasNota.itens.filter((f) => f.competencia.slice(0, 7) <= mesDeHoje).map((f) => f.valor)),
+        itens: feriasNota.itens.map((f) => ({ ...f, competenciaIniciada: f.competencia.slice(0, 7) <= mesDeHoje })),
+      },
+      // O cartão Progresso da meta: a conta da meta do período inteiro e o ritmo até hoje. `metaTotalMinutos` (acima) segue sendo a meta ATÉ HOJE.
+      metaPeriodo: {
+        jornadaMinutos: jornadaPeriodoMinutos,
+        feriasMinutos: abonadoPeriodoFeriasMinutos,
+        folgaMinutos: abonadoPeriodoFolgaMinutos,
+        metaMinutos: metaPeriodoMinutos,
+        diasComJornada: diasComJornadaPeriodo,
+        diasFerias: diasFeriasPeriodo,
+        diasFolgaInteira: diasFolgaInteiraPeriodo,
+        metaAteHojeMinutos: metaTotalMinutos,
+        realizadoAteHojeMinutos: realizadoAteHojeTotal,
+        diasComMetaRestantes: Math.max(0, diasComMetaPeriodo - diasComMetaAteHoje),
+        semJornadaMinutos,
+      },
       saldoMinutos: diasComJornadaTotal > 0 ? realizadoAteHojeTotal - metaTotalMinutos : null,
       valorHora: valorHora?.vlrhor ?? null,
+      // Horas de deslocamento do período (minutos) e quanto valem (metade do valor-hora; null
+      // sem contrato de valor-hora). Já estão somadas em ganhoAteAgora/projecaoGanho.
+      deslocamento: {
+        minutos: deslocamentoMinutosTotal,
+        valor: valorHora ? (valorHora.vlrhor * FATOR_HORA_DESLOCAMENTO * deslocamentoMinutosTotal) / 60 : null,
+      },
       ganhoAteAgora,
       projecaoGanho,
+      // Contrato de VALOR FIXO (codmot 12): nota = valor-hora × qtdctr por mês do período, mais o deslocamento lançado (domain/contratoFixo.ts). Null nos contratos
+      // por hora. Os descontos não entram aqui: a tela deduz de `contratoFixo.total`, como faz com o ganho e a projeção.
+      contratoFixo: valorHora?.fixo
+        ? totalDoContratoFixo(valorHora.fixo, combos.length, (valorHora.vlrhor * FATOR_HORA_DESLOCAMENTO * deslocamentoMinutosTotal) / 60)
+        : null,
+      // Gestão de Descontos: o que sai da nota nas competências do período (a tela subtrai de ganhoAteAgora e projecaoGanho e abre o detalhe
+      // por GET /descontos/competencias). Mês aberto = previsto das parcelas pendentes; mês fechado = o que foi descontado de fato.
+      descontos: {
+        total: somarReais(descontosDoPeriodo.map((c) => c.total)),
+        parcial: descontosDoPeriodo.some((c) => c.parcial),
+        competencias: descontosDoPeriodo.map(({ itens, ...c }) => ({ ...c, qtd: itens.length })),
+      },
       sessoesPendentes,
       ratsPendentes,
       notificacoesNaoLidas,
+      emAprovacao,
+      emAjuste,
     });
   } catch (error) {
     handleError(res, error, "meu-resumo");
+  }
+});
+
+// Card "RDV · Despesas de viagem" da Home (23/09/2026): RDV de RATs Digitada/Fechada no
+// período filtrado + títulos a pagar de reembolso em aberto (E501TCP, codtpt='10'), por faixa
+// de vencimento. Rota separada de /meu-resumo pra não pesar o painel principal nem acoplar a
+// falha de uma à outra; as listas vêm junto (são pequenas) pro modal abrir sem nova chamada.
+dashboardRouter.get("/meu-rdv", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const contexto = await resolverContextoConsultor(user.email);
+
+    const resolvido = await resolverConsultorAlvo(req, contexto);
+    if ("negado" in resolvido) {
+      res.status(403).json({ error: "Sem permissão para ver o painel deste consultor" });
+      return;
+    }
+    const alvo = resolvido.alvo;
+    if (!alvo || alvo.codfor == null) {
+      res.json({ semConsultor: true });
+      return;
+    }
+
+    const hoje = new Date();
+    const periodo = periodoDaQuery(req, hoje);
+    if (!periodo) {
+      res.status(400).json({ error: "Período inválido" });
+      return;
+    }
+    const periodos = periodo.combos.map(({ ano, mes }) => ({ de: new Date(Date.UTC(ano, mes - 1, 1)), ate: new Date(Date.UTC(ano, mes, 0)) }));
+
+    res.json(await rdvDoConsultor(alvo.codemp, alvo.codfor, periodos, hoje));
+  } catch (error) {
+    handleError(res, error, "meu-rdv");
+  }
+});
+
+// Relatório "Produtividade por Fornecedor" (botão Imprimir da Home, 05/10/2026): um item por mês do filtro,
+// cada um no formato do FJPO910 do Senior (linhas de RAT, subtotal por semana, deslocamento e totais). Mesma
+// permissão da Home (resolverConsultorAlvo): o próprio consultor, ou gestor/admin vendo alguém do time.
+dashboardRouter.get("/produtividade", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const contexto = await resolverContextoConsultor(user.email);
+
+    const resolvido = await resolverConsultorAlvo(req, contexto);
+    if ("negado" in resolvido) {
+      res.status(403).json({ error: "Sem permissão para ver os dados deste consultor" });
+      return;
+    }
+    const alvo = resolvido.alvo;
+    if (!alvo || alvo.codfor == null) {
+      res.json({ semConsultor: true });
+      return;
+    }
+
+    const periodo = periodoDaQuery(req, new Date());
+    if (!periodo) {
+      res.status(400).json({ error: "Período inválido" });
+      return;
+    }
+
+    const valorHora = (await valorHoraVigente(alvo.codemp, alvo.codfor))?.vlrhor ?? null;
+    const meses = [];
+    for (const { ano, mes } of periodo.combos) meses.push(await produtividadeDoMes(alvo.codemp, alvo.codfor, ano, mes, valorHora));
+
+    res.json({ consultor: { codfor: alvo.codfor, nome: alvo.nomcom ?? alvo.nomfor ?? `Fornecedor ${alvo.codfor}` }, meses });
+  } catch (error) {
+    handleError(res, error, "produtividade");
+  }
+});
+
+// "Atualizar" do card de RDV (25/09/2026): busca no Senior os títulos a pagar de reembolso do
+// consultor exibido no card, no mesmo formato do botão de Resultado Analítico (GET = status,
+// POST = dispara em segundo plano). A permissão é a de VER o card (resolverConsultorAlvo): o
+// consultor atualiza o próprio; gestor/admin, o de quem estão olhando. Só toca nos títulos
+// daquele consultor, então não precisa do "só admin/gestor" da sincronização contábil.
+async function alvoDaSincronizacaoRdv(
+  req: AuthenticatedRequest,
+  res: import("express").Response
+): Promise<number | null> {
+  const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+  if (!user) {
+    res.status(404).json({ error: "Usuário não encontrado" });
+    return null;
+  }
+  const contexto = await resolverContextoConsultor(user.email);
+  const resolvido = await resolverConsultorAlvo(req, contexto);
+  if ("negado" in resolvido) {
+    res.status(403).json({ error: "Sem permissão para atualizar os valores deste consultor" });
+    return null;
+  }
+  if (!resolvido.alvo || resolvido.alvo.codfor == null) {
+    res.status(404).json({ error: "Cadastro de consultor não encontrado" });
+    return null;
+  }
+  return resolvido.alvo.codfor;
+}
+
+dashboardRouter.get("/meu-rdv/sincronizacao", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const codfor = await alvoDaSincronizacaoRdv(req, res);
+    if (codfor == null) return;
+    res.json(await statusRdvConsultor(codfor));
+  } catch (error) {
+    handleError(res, error, "meu-rdv-sincronizacao-status");
+  }
+});
+
+dashboardRouter.post("/meu-rdv/sincronizacao", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const codfor = await alvoDaSincronizacaoRdv(req, res);
+    if (codfor == null) return;
+    if (rdvConsultorEmAndamento(codfor)) {
+      res.status(409).json({ error: "Atualização já em andamento" });
+      return;
+    }
+    // Não espera o ERP: a tela acompanha pelo GET (polling), como em Resultado Analítico.
+    runSincronizacaoRdvConsultor(codfor).catch((error) => {
+      console.error("[meu-rdv-sincronizacao] falhou:", error instanceof Error ? error.message : error);
+    });
+    res.status(202).json({ status: "iniciado" });
+  } catch (error) {
+    handleError(res, error, "meu-rdv-sincronizacao");
   }
 });

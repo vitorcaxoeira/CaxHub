@@ -1,10 +1,18 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
+import multer from "multer";
+import archiver from "archiver";
+import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, codforsDoTime } from "../domain/contextoProjeto";
 import {
   sitratLabel,
   sitratTone,
+  sitratLabelEfetivo,
+  sitratToneEfetivo,
   SITRAT_ORDER,
   calcularIntegracaoErp,
   integracaoErpLabel,
@@ -12,11 +20,23 @@ import {
   type IntegracaoErpStatus,
 } from "../domain/ratDominio";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
-import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
+import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA, type EventoAuditoriaTipo } from "../audit/taxonomia";
+import { COMPROVANTES_RAT_DIR } from "../config/uploads";
+import { montarPdfComprovantes, type ModoPdfComprovantes } from "../domain/pdfComprovantes";
 import { entidadeIdRat } from "../audit/identidadeEntidade";
-import { enfileirar, processarFilaSincronizacao, prepararReenvioItem } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao, prepararReenvioItem, reprocessar } from "../sync/outboxSenior";
+import { motivoBloqueioManutencao } from "../domain/manutencaoSessao";
+import {
+  enfileirarDespesa,
+  enfileirarEdicaoDespesa,
+  enfileirarExclusaoDespesa,
+  pendenciaEmAndamento,
+  processarFilaDespesas,
+  reprocessarDespesa,
+} from "../sync/outboxSeniorDespesa";
 import { runRatSyncPorNumrat } from "../sync/ratSync";
 import { runRatItemSyncPorNumrat } from "../sync/ratItemSync";
+import { runRegistroDespesaViagemSyncPorNumrat } from "../sync/registroDespesaViagemSync";
 import {
   TIPDES_DESPESA_AVULSA,
   TIPDES_DESLOCAMENTO_ROTA,
@@ -26,6 +46,22 @@ import {
   moddesLabel,
   simNaoLabel,
 } from "../domain/rdvDominio";
+import {
+  consultaRatsLista,
+  ORDEM_PADRAO_RATS,
+  precisaCalcularConjunto,
+  ROTULOS_INTEGRACAO,
+  ROTULOS_SITRAT,
+  STATUS_INTEGRACAO,
+  type FiltrosTopoRats,
+  type OpcoesConsultaRats,
+  type VisibilidadeRats,
+} from "../domain/ratsListaSql";
+import { col, linhasFiltradasDaLista, registrarListaConsultavel, type ListaConsultavel } from "./listaConsultavel";
+import { converterHeicSeNecessario, ehHeic } from "../domain/comprovanteHeic";
+import { ErroEntradaConsulta } from "../consultas/consultaColunas";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_RATS } from "../domain/fontesDeCampos";
 
 // Tela "Meus Apontamentos": RATs agrupam os apontamentos (RatItem) de um consultor numa
 // proposta. Visibilidade: consultor vê só as próprias RATs; gestor do departamento
@@ -51,24 +87,176 @@ async function contextoDoUsuario(req: AuthenticatedRequest) {
 
 type Contexto = Awaited<ReturnType<typeof resolverContextoConsultor>>;
 
+// `select` explícito por chamador (14/09/2026, achado real de lentidão em produção): antes
+// `ratsVisiveis` sempre trazia a entidade `Rat` inteira — pra admin, isso significava as
+// 25 mil linhas de `rats` com TODAS as colunas, 3x por carregamento de tela (GET /,
+// GET /opcoes-filtro, GET /elegiveis-fechamento). Os dois presets abaixo cobrem exatamente
+// os campos lidos hoje em cada consumidor (confirmado por grep contra a resposta de cada
+// endpoint) — GET /opcoes-filtro nem usa `ratsVisiveis` mais, ver codforsVisiveis abaixo.
+const RAT_SELECT_LISTA = {
+  id: true,
+  codemp: true,
+  codfor: true,
+  codpro: true,
+  numprj: true,
+  numrat: true,
+  datemi: true,
+  sitrat: true,
+  depexe: true,
+  removidoEmSenior: true,
+} satisfies Prisma.RatSelect;
+
+const RAT_SELECT_LEVE = {
+  id: true,
+  codemp: true,
+  codfor: true,
+  codpro: true,
+  numrat: true,
+  sitrat: true,
+  depexe: true,
+  removidoEmSenior: true,
+} satisfies Prisma.RatSelect;
+
 // RATs que o usuário pode ver: as próprias (por codfor) + as dos departamentos que
 // gerencia (por Rat.depexe) — admin vê tudo, sem filtro.
-async function ratsVisiveis(role: string, contexto: Contexto) {
+//
+// `filtro` (opcional) é somado ao recorte de visibilidade e resolvido no banco: filtrar por consultor ou
+// situação antes trazia as 25 mil RATs do admin só para descartar quase todas em memória.
+async function ratsVisiveis<S extends Prisma.RatSelect>(
+  role: string,
+  contexto: Contexto,
+  select: S,
+  filtro: Prisma.RatWhereInput = {}
+) {
   if (role === "admin") {
-    return prisma.rat.findMany({ orderBy: { id: "desc" } });
+    return prisma.rat.findMany({ where: filtro, orderBy: { id: "desc" }, select });
   }
   const meuCodfor = contexto.consultor?.codfor ?? null;
   const or: Array<Record<string, unknown>> = [];
   if (meuCodfor != null) or.push({ codfor: meuCodfor });
   if (contexto.departamentosGerenciados.length > 0) or.push({ depexe: { in: contexto.departamentosGerenciados } });
   if (or.length === 0) return [];
-  return prisma.rat.findMany({ where: { OR: or }, orderBy: { id: "desc" } });
+  return prisma.rat.findMany({ where: { AND: [{ OR: or }, filtro] }, orderBy: { id: "desc" }, select });
+}
+
+// Lista separada por vírgula ("134,207") dos seletores multi-seleção. Number("") é 0, não NaN, então sem a
+// guarda de zero um filtro ausente viraria [0] e esconderia todas as RATs.
+function listaDeInteirosNaoZero(valor: unknown): number[] {
+  return (typeof valor === "string" ? valor : "")
+    .split(",")
+    .map((v) => Number(v.trim()))
+    .filter((v) => Number.isFinite(v) && v !== 0);
+}
+
+function filtroRatsNoBanco(codfors: number[], sitrats: number[]): Prisma.RatWhereInput {
+  return {
+    ...(codfors.length > 0 ? { codfor: { in: codfors } } : {}),
+    // RAT sem situação (sitrat null) fica de fora sempre que o filtro está ativo — `in` já exclui NULL.
+    ...(sitrats.length > 0 ? { sitrat: { in: sitrats } } : {}),
+  };
+}
+
+// Uma PÁGINA da lista de RATs resolvida no banco (COUNT + ids ordenados com LIMIT/OFFSET), para o caso comum
+// em que nenhum filtro precisa olhar dentro das RATs (busca por cliente/proposta, por item ou por integração).
+// Antes o admin carregava as 25 mil RATs em memória, ordenava e fatiava 20 (~300 ms local, medido em
+// 07/10/2026). A ordem reproduz EXATAMENTE a de GET / (ver o `sort` lá): 1) Digitado (sitrat 9) primeiro,
+// 2) data de emissão mais recente primeiro (sem data por último), 3) número da proposta crescente (sem
+// proposta conta como 0) e, no empate, `id` decrescente — que era a ordem de entrada do sort estável.
+async function paginaDeRatsNoBanco(
+  role: string,
+  contexto: Contexto,
+  filtros: { codfors: number[]; sitrats: number[] },
+  page: number,
+  pageSize: number
+) {
+  const condicoes: Prisma.Sql[] = [];
+  if (role !== "admin") {
+    const meuCodfor = contexto.consultor?.codfor ?? null;
+    const visibilidade: Prisma.Sql[] = [];
+    if (meuCodfor != null) visibilidade.push(Prisma.sql`codfor = ${meuCodfor}`);
+    if (contexto.departamentosGerenciados.length > 0) {
+      visibilidade.push(Prisma.sql`depexe IN (${Prisma.join(contexto.departamentosGerenciados)})`);
+    }
+    if (visibilidade.length === 0) return { rats: [], total: 0 };
+    condicoes.push(Prisma.sql`(${Prisma.join(visibilidade, " OR ")})`);
+  }
+  if (filtros.codfors.length > 0) condicoes.push(Prisma.sql`codfor IN (${Prisma.join(filtros.codfors)})`);
+  if (filtros.sitrats.length > 0) condicoes.push(Prisma.sql`sitrat IN (${Prisma.join(filtros.sitrats)})`);
+  const onde = condicoes.length > 0 ? Prisma.sql`WHERE ${Prisma.join(condicoes, " AND ")}` : Prisma.empty;
+
+  const [contagem, idsDaPagina] = await Promise.all([
+    prisma.$queryRaw<{ n: number }[]>(Prisma.sql`SELECT COUNT(*)::int AS n FROM rats ${onde}`),
+    prisma.$queryRaw<{ id: number }[]>(Prisma.sql`
+      SELECT id FROM rats ${onde}
+      ORDER BY (CASE WHEN sitrat = 9 THEN 0 ELSE 1 END), datemi DESC NULLS LAST, COALESCE(codpro, 0), id DESC
+      LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`),
+  ]);
+  const total = contagem[0]?.n ?? 0;
+  if (idsDaPagina.length === 0) return { rats: [], total };
+
+  const linhas = await prisma.rat.findMany({ where: { id: { in: idsDaPagina.map((r) => r.id) } }, select: RAT_SELECT_LISTA });
+  const porId = new Map(linhas.map((r) => [r.id, r]));
+  return { rats: idsDaPagina.map((r) => porId.get(r.id)).filter((r): r is NonNullable<typeof r> => r != null), total };
+}
+
+// Só os `codfor` distintos entre as RATs visíveis — usado pelo seletor de consultor em
+// GET /opcoes-filtro, que nunca precisou da entidade Rat inteira. `distinct` resolve no
+// próprio Postgres (via índice/scan único), sem trazer as 25 mil linhas pro Node só pra
+// jogar tudo fora e ficar só com um número por linha.
+async function codforsVisiveis(role: string, contexto: Contexto): Promise<number[]> {
+  if (role === "admin") {
+    // `groupBy` (DISTINCT no banco): o `distinct` do Prisma traz as 25 mil linhas e deduplica em memória.
+    const rows = await prisma.rat.groupBy({ by: ["codfor"] });
+    return rows.map((r) => r.codfor);
+  }
+  const meuCodfor = contexto.consultor?.codfor ?? null;
+  const or: Array<Record<string, unknown>> = [];
+  if (meuCodfor != null) or.push({ codfor: meuCodfor });
+  if (contexto.departamentosGerenciados.length > 0) or.push({ depexe: { in: contexto.departamentosGerenciados } });
+  if (or.length === 0) return [];
+  const rows = await prisma.rat.groupBy({ by: ["codfor"], where: { OR: or } });
+  return rows.map((r) => r.codfor);
+}
+
+// Proposta+Cliente de um conjunto de RATs, indexado por "codemp-codpro" — extraído (14/09/2026)
+// pra poder rodar em dois momentos diferentes de GET / conforme `busca` está ativa ou não (ver
+// comentário no handler), mesmo espírito de buscarItensEIntegracao já ser reaproveitada em dois
+// pontos. Também reaproveitado por ratsElegiveisFechamentoFiltradas.
+export async function buscarPropostasPorChave(rats: { codemp: number; codpro: number | null }[]) {
+  const chaves = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
+  // `IN` por codemp/codpro (superconjunto) + filtro exato pela chave, e não um `OR` com uma cláusula por RAT:
+  // com milhares de pares o planejamento do Postgres explode (ver o mesmo ajuste em routes/alocacao.ts).
+  const chavesSet = new Set(chaves);
+  const propostas =
+    chaves.length > 0
+      ? (
+          await prisma.proposta.findMany({
+            where: {
+              codemp: { in: [...new Set(chaves.map((c) => Number(c.split("-")[0])))] },
+              codpro: { in: [...new Set(chaves.map((c) => Number(c.split("-")[1])))] },
+            },
+            include: { cliente: true },
+          })
+        ).filter((p) => chavesSet.has(`${p.codemp}-${p.codpro}`))
+      : [];
+  return new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
 }
 
 function podeVerRat(role: string, contexto: Contexto, rat: { codfor: number; depexe: number | null }): boolean {
   if (role === "admin") return true;
   if (contexto.consultor?.codfor === rat.codfor) return true;
   return rat.depexe != null && contexto.departamentosGerenciados.includes(rat.depexe);
+}
+
+// Quem pode fechar a RAT: a mesma regra de aprovar (admin ou gestor do depexe específico dela)
+// OU o próprio dono (consultor logado === Rat.codfor) — liberado em 13/09/2026, a pedido do
+// Vitor: um consultor cuja RAT pertence a um departamento que ele não gerencia (comum quando
+// atua em projeto de outro time) ficava sem conseguir fechar a própria RAT. Diferente de
+// "aprovar" (PATCH /:id/aprovar), que continua só gestor/admin — fechar e aprovar têm regras
+// próprias de propósito (ver comentário de podeFechar em GET / mais abaixo).
+function podeFecharRat(role: string, contexto: Contexto, rat: { codfor: number; depexe: number | null }): boolean {
+  if (contexto.consultor?.codfor === rat.codfor) return true;
+  return podeExecutarAcao(role, contexto, "aprovar", { depexe: rat.depexe ?? -1, codfor: rat.codfor });
 }
 
 // Itens (campos mínimos) + status agregado de integração com o Senior de um conjunto de RATs.
@@ -79,7 +267,12 @@ function podeVerRat(role: string, contexto: Contexto, rat: { codfor: number; dep
 // inteira nesse volume é o que causava os 3+ segundos medidos antes desta correção — só os
 // campos realmente lidos (numrat/horini/horfim pro total, desati pra "todosComObservacao",
 // atividadeId pra achar a pendência).
-async function buscarItensEIntegracao(ratIds: number[]) {
+//
+// Recebe as RATs inteiras (não só o id) desde 09/09/2026 — precisa de codemp+numrat pra casar
+// com as pendências de despesa (RegistroDespesaViagem não referencia Rat.id, só a chave
+// natural do Senior).
+export async function buscarItensEIntegracao(rats: { id: number; codemp: number; numrat: number | null }[]) {
+  const ratIds = rats.map((r) => r.id);
   const itens =
     ratIds.length > 0
       ? await prisma.ratItem.findMany({
@@ -109,26 +302,75 @@ async function buscarItensEIntegracao(ratIds: number[]) {
   const pendencias =
     atividadeIds.length > 0
       ? await prisma.sincronizacaoPendente.findMany({
-          where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIds } },
-          select: { atividadeId: true, status: true, ultimoErro: true, payload: true },
+          where: { tipo: { in: ["criar_apontamento", "editar_apontamento"] }, atividadeId: { in: atividadeIds } },
+          select: { tipo: true, atividadeId: true, status: true, ultimoErro: true, payload: true },
           orderBy: { id: "desc" },
         })
       : [];
   const pendenciaPorRatItem = new Map<number, { status: string; ultimoErro: string | null }>();
+  // Alteração (tipEve A) ainda não equalizada no Senior: o item já tem numrat, mas NÃO está sincronizado até a edição sair
+  // (mesma ideia das despesas: `confirmado` só vale sem pendência ativa). Pendência de edição já enviada não conta. Mesma regra em SQL: pend_ed em ratsListaSql.ts.
+  const edicaoAtivaPorRatItem = new Map<number, { status: string; ultimoErro: string | null }>();
   for (const pendencia of pendencias) {
     const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
-    if (Number.isFinite(ratItemId) && !pendenciaPorRatItem.has(ratItemId)) {
+    if (!Number.isFinite(ratItemId)) continue;
+    if (pendencia.tipo === "editar_apontamento") {
+      if (["pendente", "enviando", "bloqueado"].includes(pendencia.status) && !edicaoAtivaPorRatItem.has(ratItemId)) {
+        edicaoAtivaPorRatItem.set(ratItemId, { status: pendencia.status, ultimoErro: pendencia.ultimoErro });
+      }
+    } else if (!pendenciaPorRatItem.has(ratItemId)) {
       pendenciaPorRatItem.set(ratItemId, { status: pendencia.status, ultimoErro: pendencia.ultimoErro });
     }
+  }
+
+  // Pendências de DESPESA (RDV) ativas das mesmas RATs — pedido explícito do Vitor (09/09/2026):
+  // uma despesa com erro de envio precisa derrubar o "Sinc. ERP" da RAT inteira pra "falha",
+  // não só o ícone da linha da despesa. Casamento por par (codemp,numrat) — RegistroDespesaViagem
+  // não tem FK pra Rat.id. `OR` de pares exatos (não dois `in` soltos) pra não combinar
+  // codemp/numrat de RATs diferentes entre si.
+  const paresRat = rats.filter((r): r is { id: number; codemp: number; numrat: number } => r.numrat != null);
+  const ratIdPorChave = new Map(paresRat.map((r) => [`${r.codemp}:${r.numrat}`, r.id]));
+  const pendenciasDespesa =
+    paresRat.length > 0
+      ? await prisma.sincronizacaoPendenteDespesa.findMany({
+          where: {
+            status: { in: ["pendente", "enviando", "bloqueado"] },
+            // `IN` e não um `OR` de pares: com as 25 mil RATs do admin o `OR` passava do limite de parâmetros
+            // do Prisma e a lista inteira dava 500 ao filtrar por integração. O `IN` traz um superconjunto de
+            // despesas; o casamento exato por (codemp,numrat) continua em `ratIdPorChave` logo abaixo, que
+            // ignora o que não for de uma RAT da lista.
+            despesa: {
+              codemp: { in: [...new Set(paresRat.map((r) => r.codemp))] },
+              numrat: { in: [...new Set(paresRat.map((r) => r.numrat))] },
+              excluidaEm: null,
+            },
+          },
+          select: { status: true, ultimoErro: true, despesa: { select: { codemp: true, numrat: true } } },
+        })
+      : [];
+  const pendenciasDespesaPorRat = new Map<number, { status: string; ultimoErro: string | null }[]>();
+  for (const p of pendenciasDespesa) {
+    const ratId = ratIdPorChave.get(`${p.despesa.codemp}:${p.despesa.numrat}`);
+    if (ratId == null) continue;
+    const lista = pendenciasDespesaPorRat.get(ratId) ?? [];
+    lista.push({ status: p.status, ultimoErro: p.ultimoErro });
+    pendenciasDespesaPorRat.set(ratId, lista);
   }
 
   const integracaoPorRat = new Map<number, IntegracaoErpStatus>();
   for (const ratId of ratIds) {
     const itensDaRat = itensPorRat.get(ratId) ?? [];
-    integracaoPorRat.set(
-      ratId,
-      calcularIntegracaoErp(itensDaRat.map((item) => ({ confirmado: item.numrat != null, pendencia: pendenciaPorRatItem.get(item.id) })))
-    );
+    const entradasItens = itensDaRat.map((item) => {
+      const edicao = edicaoAtivaPorRatItem.get(item.id);
+      return edicao
+        ? { confirmado: false, pendencia: edicao }
+        : { confirmado: item.numrat != null, pendencia: pendenciaPorRatItem.get(item.id) };
+    });
+    // Cada pendência de despesa ATIVA entra como uma entrada própria, `confirmado: false` —
+    // por definição ainda não terminou (já filtrado no where acima); pior caso entre ela e os
+    // itens de apontamento vence junto, mesmo espírito de calcularIntegracaoErp.
+    const entradasDespesa = (pendenciasDespesaPorRat.get(ratId) ?? []).map((p) => ({ confirmado: false, pendencia: p }));
+    integracaoPorRat.set(ratId, calcularIntegracaoErp([...entradasItens, ...entradasDespesa]));
   }
 
   return { itensPorRat, integracaoPorRat };
@@ -145,52 +387,47 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     }
     const { contexto, role } = ctx;
 
-    let rats = await ratsVisiveis(role, contexto);
+    // Filtros de consultor (codfor) e de situação (sitrat) vão para o banco: a lista de 25 mil RATs do admin
+    // não precisa ser carregada para descartar quase tudo em memória.
+    const codforsFiltro = listaDeInteirosNaoZero(req.query.codfor);
+    const sitratFiltro = listaDeInteirosNaoZero(req.query.sitrat);
 
-    // Lista separada por vírgula ("134,207") — o seletor da tela é multi-seleção. Number("")
-    // é 0, não NaN, então sem a guarda de string vazia um filtro ausente viraria [0] e
-    // esconderia todas as RATs. Mesmo padrão dos filtros de Mercado > Pedidos.
-    const codforsFiltro = (typeof req.query.codfor === "string" ? req.query.codfor : "")
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 30));
+
+    // Caminho rápido: sem busca (cliente/proposta/RAT), sem busca em itens e sem filtro de integração nada
+    // precisa olhar dentro das RATs, então o banco já devolve só a página e o total.
+    const temBusca = typeof req.query.busca === "string" && req.query.busca.trim() !== "";
+    const temBuscaItem = typeof req.query.buscaItem === "string" && req.query.buscaItem.trim() !== "";
+    const temIntegracao = (typeof req.query.integracao === "string" ? req.query.integracao : "")
       .split(",")
-      .map((v) => Number(v.trim()))
-      .filter((v) => Number.isFinite(v) && v !== 0);
-    if (codforsFiltro.length > 0) {
-      rats = rats.filter((r) => codforsFiltro.includes(r.codfor));
-    }
+      .some((v) => ["sincronizado", "enviando", "falha", "pendente"].includes(v));
+    const paginaRapida =
+      !temBusca && !temBuscaItem && !temIntegracao
+        ? await paginaDeRatsNoBanco(role, contexto, { codfors: codforsFiltro, sitrats: sitratFiltro }, page, pageSize)
+        : null;
 
-    // Filtro por situação da RAT (Rat.sitrat) — lista separada por vírgula, mesmo idioma
-    // dos outros filtros multi-seleção. Sem custo nenhum: sitrat já vem no próprio `rat`,
-    // nenhum join/query a mais. RAT sem situação (sitrat null) fica de fora sempre que o
-    // filtro está ativo.
-    const sitratFiltro = (typeof req.query.sitrat === "string" ? req.query.sitrat : "")
-      .split(",")
-      .map((v) => Number(v.trim()))
-      .filter((v) => Number.isFinite(v) && v !== 0);
-    if (sitratFiltro.length > 0) {
-      rats = rats.filter((r) => r.sitrat != null && sitratFiltro.includes(r.sitrat));
-    }
-
-    // Join com Proposta/Cliente precisa vir ANTES da paginação — busca por cliente
-    // depende desse dado pra filtrar o conjunto inteiro, não só a página atual.
-    const chavesPropostaTodas = [...new Set(rats.filter((r) => r.codpro != null).map((r) => `${r.codemp}-${r.codpro}`))];
-    const propostasTodas =
-      chavesPropostaTodas.length > 0
-        ? await prisma.proposta.findMany({
-            where: {
-              OR: chavesPropostaTodas.map((chave) => {
-                const [codemp, codpro] = chave.split("-").map(Number);
-                return { codemp, codpro };
-              }),
-            },
-            include: { cliente: true },
-          })
-        : [];
-    const propostaPorChave = new Map(propostasTodas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
+    let rats = paginaRapida
+      ? paginaRapida.rats
+      : await ratsVisiveis(role, contexto, RAT_SELECT_LISTA, filtroRatsNoBanco(codforsFiltro, sitratFiltro));
 
     // Busca livre: cliente (nome), número da proposta (codpro) ou número da RAT no
     // Senior (numrat) — mesmo padrão de busca por substring já usado em
-    // GET /alocacao/propostas.
+    // GET /alocacao/propostas. Lido ANTES do lookup de Proposta/Cliente abaixo — a guarda
+    // condicional depende de saber se `busca` está ativa.
     const busca = typeof req.query.busca === "string" ? req.query.busca.trim().toLowerCase() : "";
+
+    // Join com Proposta/Cliente (14/09/2026, achado real de lentidão): só busca pro conjunto
+    // INTEIRO (antes da paginação) quando `busca` está de fato ativa — é o único filtro que
+    // depende de nome de cliente pra decidir quem fica de fora do conjunto (mesmo espírito da
+    // guarda já usada por integracaoFiltro mais abaixo,
+    // [[custo-condicional-ao-filtro-nao-ao-request]]). Sem busca (caso comum), fica pra depois
+    // da paginação, só com a página atual — evita o `OR` com milhares de pares (codemp,codpro)
+    // em toda troca de filtro/página que não precisa dele (medido em produção: ~140ms por
+    // chamada, sobre um conjunto que só cresce com o tempo).
+    let propostaPorChave: Awaited<ReturnType<typeof buscarPropostasPorChave>> = busca
+      ? await buscarPropostasPorChave(rats)
+      : new Map();
     if (busca) {
       rats = rats.filter((r) => {
         const proposta = r.codpro != null ? propostaPorChave.get(`${r.codemp}-${r.codpro}`) : undefined;
@@ -203,19 +440,30 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    // Busca na observação dos itens (RatItem.desati) — separada da busca livre acima de
-    // propósito: só dispara a query em RatItem quando o campo vem preenchido (28/08/2026,
-    // mesmo cuidado de [[custo-condicional-ao-filtro-nao-ao-request]]); sem termo, este
-    // bloco inteiro é pulado e GET /rats não ganha custo nenhum a mais. Opera sobre `rats`
-    // já reduzido pelos filtros acima, então o alcance da query já sai proporcional ao que
-    // sobrou, não ao total do sistema.
+    // Busca na observação dos itens (RatItem.desati) ou no id da atividade exibido na coluna
+    // "Id. Ativ." da tela (AtividadeSessaoExecucao.atividadeId, via RatItem.sessoes — é o id
+    // LOCAL do CaxHub, não o seqati do Senior: são números diferentes, e a coluna mostra o
+    // primeiro) — separada da busca livre acima de propósito: só dispara a query em RatItem
+    // quando o campo vem preenchido (28/08/2026, mesmo cuidado de
+    // [[custo-condicional-ao-filtro-nao-ao-request]]); sem termo, este bloco inteiro é pulado
+    // e GET /rats não ganha custo nenhum a mais. Opera sobre `rats` já reduzido pelos filtros
+    // acima, então o alcance da query já sai proporcional ao que sobrou, não ao total do
+    // sistema. atividadeId é Int, então casa por igualdade só quando o termo digitado é
+    // inteiramente numérico (29/09/2026).
     const buscaItem = typeof req.query.buscaItem === "string" ? req.query.buscaItem.trim() : "";
     if (buscaItem) {
       const ratIdsCandidatos = rats.map((r) => r.id);
+      const buscaItemNumerica = /^\d+$/.test(buscaItem) ? Number(buscaItem) : null;
       const itensCorrespondentes =
         ratIdsCandidatos.length > 0
           ? await prisma.ratItem.findMany({
-              where: { ratId: { in: ratIdsCandidatos }, desati: { contains: buscaItem, mode: "insensitive" } },
+              where: {
+                ratId: { in: ratIdsCandidatos },
+                OR: [
+                  { desati: { contains: buscaItem, mode: "insensitive" } },
+                  ...(buscaItemNumerica !== null ? [{ sessoes: { some: { atividadeId: buscaItemNumerica } } }] : []),
+                ],
+              },
               select: { ratId: true },
             })
           : [];
@@ -238,7 +486,7 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     let itensPorRat: Awaited<ReturnType<typeof buscarItensEIntegracao>>["itensPorRat"] = new Map();
     let integracaoPorRat: Awaited<ReturnType<typeof buscarItensEIntegracao>>["integracaoPorRat"] = new Map();
     if (integracaoFiltro.length > 0) {
-      ({ itensPorRat, integracaoPorRat } = await buscarItensEIntegracao(rats.map((r) => r.id)));
+      ({ itensPorRat, integracaoPorRat } = await buscarItensEIntegracao(rats));
       rats = rats.filter((r) => integracaoFiltro.includes(integracaoPorRat.get(r.id)!));
     }
 
@@ -258,11 +506,12 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       return (a.codpro ?? 0) - (b.codpro ?? 0);
     });
 
-    const total = rats.length;
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
-    const inicioPagina = (page - 1) * pageSize;
-    rats = rats.slice(inicioPagina, inicioPagina + pageSize);
+    // No caminho rápido o banco já devolveu a página (e o total); nos demais, fatia aqui.
+    const total = paginaRapida ? paginaRapida.total : rats.length;
+    if (!paginaRapida) {
+      const inicioPagina = (page - 1) * pageSize;
+      rats = rats.slice(inicioPagina, inicioPagina + pageSize);
+    }
 
     if (rats.length === 0) {
       res.json({ rats: [], total });
@@ -272,7 +521,12 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     // Caso comum (sem filtro de integração): a busca de itens/integração ainda não rodou —
     // faz agora, só pros ratIds da página atual (mesmo escopo de antes desta feature existir).
     if (integracaoFiltro.length === 0) {
-      ({ itensPorRat, integracaoPorRat } = await buscarItensEIntegracao(rats.map((r) => r.id)));
+      ({ itensPorRat, integracaoPorRat } = await buscarItensEIntegracao(rats));
+    }
+    // Mesma lógica acima, pro lookup de Proposta/Cliente: sem `busca` ele ainda não rodou —
+    // resolve agora, só pra página atual (≤100 linhas), em vez do conjunto inteiro.
+    if (!busca) {
+      propostaPorChave = await buscarPropostasPorChave(rats);
     }
 
     const codforsUnicos = [...new Set(rats.map((r) => r.codfor))];
@@ -302,12 +556,21 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
           codfor: r.codfor,
           consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${r.codfor}`,
           sitrat: r.sitrat,
-          sitratLabel: sitratLabel(r.sitrat),
-          sitratTone: sitratTone(r.sitrat),
+          sitratLabel: sitratLabelEfetivo(r),
+          sitratTone: sitratToneEfetivo(r),
+          removidoEmSenior: r.removidoEmSenior,
           totalItens: itensDaRat.length,
           totalMinutos,
+          // `removidoEmSenior == null` nas duas: RAT marcada "Excluída" (ver sitratLabelEfetivo)
+          // não tem mais o que aprovar/fechar, mesmo que sitrat ainda esteja congelado em 9
+          // (Digitado) — era a última situação real conhecida antes do documento sumir do Senior.
           podeAprovar:
-            r.sitrat === 9 && podeExecutarAcao(role, contexto, "aprovar", { depexe: r.depexe ?? -1, codfor: r.codfor }),
+            r.sitrat === 9 &&
+            r.removidoEmSenior == null &&
+            podeExecutarAcao(role, contexto, "aprovar", { depexe: r.depexe ?? -1, codfor: r.codfor }),
+          // Fechar aceita mais gente que aprovar (dono da RAT também, não só gestor/admin) —
+          // ver podeFecharRat.
+          podeFechar: r.sitrat === 9 && r.removidoEmSenior == null && podeFecharRat(role, contexto, r),
           todosComObservacao: itensDaRat.length > 0 && itensDaRat.every((item) => !!item.desati?.trim()),
           integracao,
           integracaoLabel: integracaoErpLabel(integracao),
@@ -320,6 +583,79 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// ---------- Lista de RATs com filtro e ordem por coluna (04/11/2026) ----------
+// GET /lista (+ /lista/resumo e /lista/valores): a mesma lista de GET / com o kit de colunas do CaxHub_Dash (funil e ordem por coluna,
+// colunas configuráveis, resumo no rodapé, colunas calculadas), toda resolvida no banco: consulta em domain/ratsListaSql.ts, que calcula
+// também cliente, consultor, minutos e a integração com o Senior (a regra de calcularIntegracaoErp, em SQL). Os filtros do topo continuam
+// os mesmos (consultor, situação, busca, busca em itens, sincronização) e o recorte de visibilidade é o de ratsVisiveis.
+
+const dominioDe = (rotulos: string[]) => rotulos.map((r) => ({ valor: r, rotulo: r }));
+
+const COLUNAS_LISTA_RATS = [
+  col.inteiro("id", { obrigatoria: true }),
+  col.inteiro("numrat"),
+  col.inteiro("codpro"),
+  col.texto("cliente"),
+  col.texto("consultorNome", { obrigatoria: true }),
+  col.data("datemi"),
+  col.texto("sitratLabel", { obrigatoria: true, dominio: dominioDe(ROTULOS_SITRAT) }),
+  col.texto("integracaoLabel", { obrigatoria: true, dominio: dominioDe(ROTULOS_INTEGRACAO) }),
+  col.inteiro("totalItens", { obrigatoria: true }),
+  col.inteiro("totalMinutos", { obrigatoria: true }),
+];
+
+function filtrosTopoRats(query: AuthenticatedRequest["query"]): FiltrosTopoRats {
+  const integracao = (typeof query.integracao === "string" ? query.integracao : "")
+    .split(",")
+    .filter((v): v is IntegracaoErpStatus => (STATUS_INTEGRACAO as string[]).includes(v));
+  return {
+    codfors: listaDeInteirosNaoZero(query.codfor),
+    sitrats: listaDeInteirosNaoZero(query.sitrat),
+    busca: typeof query.busca === "string" ? query.busca : "",
+    buscaItem: typeof query.buscaItem === "string" ? query.buscaItem : "",
+    integracao,
+  };
+}
+
+function visibilidadeRats(role: string, contexto: Contexto): VisibilidadeRats {
+  return { todas: role === "admin", codfor: contexto.consultor?.codfor ?? null, depexes: contexto.departamentosGerenciados };
+}
+
+/** A lista de RATs do usuário da requisição, no formato de registrarListaConsultavel (também usada pelo "Fechar Todos"). */
+async function listaRatsDoUsuario(req: AuthenticatedRequest, opcoes: OpcoesConsultaRats = {}): Promise<ListaConsultavel> {
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) throw new ErroEntradaConsulta("Usuário não encontrado", 404);
+  const { contexto, role } = ctx;
+  const filtros = filtrosTopoRats(req.query);
+  const conjunto = precisaCalcularConjunto(req.query as Record<string, unknown>, filtros);
+  const extras = extrasDaConsulta(FONTES_RATS, req.query as Record<string, unknown>);
+  const { com, interna } = consultaRatsLista(visibilidadeRats(role, contexto), filtros, { ...opcoes, conjunto, extras });
+  return {
+    com,
+    interna,
+    fontes: FONTES_RATS,
+    colunas: [...COLUNAS_LISTA_RATS, ...extras.colunas],
+    ordemPadrao: ORDEM_PADRAO_RATS,
+    pageSizePadrao: 30,
+    // Só exibição (não filtra nem ordena): tons dos selos e se a pessoa pode fechar a RAT.
+    decorar: (linhas) =>
+      linhas.map((l) => {
+        const sitrat = l.sitrat as number | null;
+        const excluida = l.excluida === true;
+        const integracao = l.integracao as IntegracaoErpStatus;
+        return {
+          ...l,
+          sitratTone: sitratToneEfetivo({ sitrat, removidoEmSenior: excluida ? new Date(0) : null }),
+          integracaoTone: integracaoErpTone(integracao),
+          podeFechar:
+            sitrat === 9 && !excluida && podeFecharRat(role, contexto, { codfor: l.codfor as number, depexe: (l.depexe as number | null) ?? null }),
+        };
+      }),
+  };
+}
+
+registrarListaConsultavel(ratsRouter, "/lista", (req) => listaRatsDoUsuario(req as AuthenticatedRequest), "rats-lista");
+
 // GET /opcoes-filtro — consultores distintos entre as RATs visíveis, pro seletor da
 // tela (só faz diferença pra gestor/admin — consultor comum só vê a si mesmo).
 ratsRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
@@ -329,7 +665,7 @@ ratsRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
-    const rats = await ratsVisiveis(ctx.role, ctx.contexto);
+    const codforsDasRats = await codforsVisiveis(ctx.role, ctx.contexto);
 
     // Restringe ao time: `Rat.depexe` é o departamento do ITEM que originou o apontamento
     // (ver buscarOuCriarRatRascunho), não o do consultor — então um consultor de fora do
@@ -338,7 +674,7 @@ ratsRouter.get("/opcoes-filtro", async (req: AuthenticatedRequest, res) => {
     // não muda: como gestor do departamento, ele continua vendo o trabalho feito nos itens
     // dele. `null` = admin, sem restrição.
     const doTime = await codforsDoTime(ctx.role, ctx.contexto);
-    const codforsUnicos = [...new Set(rats.map((r) => r.codfor))].filter((codfor) => doTime == null || doTime.has(codfor));
+    const codforsUnicos = codforsDasRats.filter((codfor) => doTime == null || doTime.has(codfor));
     const consultores =
       codforsUnicos.length > 0 ? await prisma.consultor.findMany({ where: { codfor: { in: codforsUnicos } } }) : [];
 
@@ -376,7 +712,18 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    const itens = await prisma.ratItem.findMany({ where: { ratId: id }, include: { sessoes: true }, orderBy: { id: "asc" } });
+    // Data/hora decrescente (mais recente primeiro) — pedido do Vitor (10/09/2026), mesma
+    // ordem agora usada em "Sessões pendentes de confirmação" (GET /apontamentos/sessoes-
+    // pendentes). `datati`+`horini` porque RatItem não tem um único DateTime combinado (herança
+    // do formato do Senior: data e "minutos desde meia-noite" em colunas separadas — ver
+    // comentário do campo no schema). `nulls: "last"` pra item sem data/hora (raro, mas
+    // possível antes de confirmado no Senior) não pular pra frente da fila por padrão do
+    // Postgres em DESC; `id desc` como desempate final determinístico.
+    const itens = await prisma.ratItem.findMany({
+      where: { ratId: id },
+      include: { sessoes: true },
+      orderBy: [{ datati: { sort: "desc", nulls: "last" } }, { horini: { sort: "desc", nulls: "last" } }, { id: "desc" }],
+    });
 
     const chavesItem = itens
       .filter((i): i is typeof i & { seqite: number } => i.seqite != null && i.codpro != null)
@@ -385,6 +732,13 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
     const itemPorChave = new Map(propostaItens.map((pi) => [`${pi.codemp}-${pi.codpro}-${pi.seqite}`, pi]));
 
     const souDono = contexto.consultor?.codfor === rat.codfor;
+    // Mesma regra que o PATCH /apontamentos/:id/sessao impõe — a tela nunca oferece o que o servidor recusa.
+    const bloqueioManutencao = motivoBloqueioManutencao({
+      souAdmin: role === "admin",
+      temRatItem: true,
+      removidaNoSenior: rat.removidoEmSenior != null,
+      sitrat: rat.sitrat,
+    });
 
     // Estado do envio ao Senior, pra tela conseguir explicar por que um item deixou de
     // ser editável (ver sync/outboxSenior.ts). A fila é indexada por atividade, e o
@@ -403,6 +757,22 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
       // orderBy id desc + "só o primeiro vence" = fica o envio mais recente de cada item.
       if (Number.isFinite(ratItemId) && !envioPorRatItem.has(ratItemId)) {
         envioPorRatItem.set(ratItemId, { status: pendencia.status, erro: pendencia.ultimoErro });
+      }
+    }
+
+    // Alteração do admin (tipEve A) ainda não equalizada no Senior, por item: "enviando" ou "falha".
+    const edicoes =
+      atividadeIds.length > 0
+        ? await prisma.sincronizacaoPendente.findMany({
+            where: { tipo: "editar_apontamento", atividadeId: { in: atividadeIds }, status: { in: ["pendente", "enviando", "bloqueado"] } },
+            orderBy: { id: "desc" },
+          })
+        : [];
+    const edicaoPorRatItem = new Map<number, { status: "enviando" | "falha"; erro: string | null }>();
+    for (const pendencia of edicoes) {
+      const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
+      if (Number.isFinite(ratItemId) && !edicaoPorRatItem.has(ratItemId)) {
+        edicaoPorRatItem.set(ratItemId, { status: pendencia.ultimoErro ? "falha" : "enviando", erro: pendencia.ultimoErro });
       }
     }
 
@@ -425,6 +795,11 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           duracaoMinutos: item.horini != null && item.horfim != null ? item.horfim - item.horini : null,
           desati: item.desati,
           confirmadoNoSenior: item.numrat != null,
+          // Excluído no Senior (ver desvincularItensAusentesNoSenior) — item preserva
+          // numrat/seqrat como histórico, então confirmadoNoSenior continua true; a tela
+          // precisa deste campo pra não misturar "confirmado de verdade" com "confirmado, mas
+          // o registro não existe mais lá".
+          removidoEmSenior: item.removidoEmSenior,
           editavel: souDono && item.numrat == null && rat.sitrat === 9,
           // Identidade atribuída pelo Senior — só existe depois do registro.
           numrat: item.numrat,
@@ -434,6 +809,12 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           // Motivo da última recusa do Senior, quando houve — é o que a tela mostra no
           // hover de "falha no envio".
           envioErro: envioPorRatItem.get(item.id)?.erro ?? null,
+          // Alteração da sessão ainda não equalizada no Senior (null = em dia): "enviando" | "falha".
+          edicaoStatus: edicaoPorRatItem.get(item.id)?.status ?? null,
+          edicaoErro: edicaoPorRatItem.get(item.id)?.erro ?? null,
+          // Manutenção da sessão (só admin, RAT Digitada). `motivoBloqueioManutencao` é o texto que a janela mostra em leitura.
+          podeManterSessao: item.sessoes[0] != null && bloqueioManutencao === null,
+          motivoBloqueioManutencao: item.sessoes[0] != null ? bloqueioManutencao : null,
         };
       }),
     });
@@ -470,6 +851,10 @@ ratsRouter.patch("/:id/aprovar", async (req: AuthenticatedRequest, res) => {
     }
     if (rat.sitrat !== 9) {
       res.status(400).json({ error: "Só é possível aprovar uma RAT que esteja Digitada" });
+      return;
+    }
+    if (rat.removidoEmSenior != null) {
+      res.status(400).json({ error: "Esta RAT foi excluída no Senior — não é possível aprovar" });
       return;
     }
 
@@ -562,7 +947,7 @@ async function desvincularItensAusentesNoSenior(
   rat: { id: number; codemp: number; codpro: number | null; numrat: number | null },
   seqratsNoSenior: number[],
   req: AuthenticatedRequest
-): Promise<number[]> {
+): Promise<{ desvinculados: number[]; excluidos: number[] }> {
   const ausentes = await prisma.ratItem.findMany({
     where: {
       ratId: rat.id,
@@ -571,66 +956,156 @@ async function desvincularItensAusentesNoSenior(
       // notIn só entra quando há algo pra excluir da busca.
       seqrat: seqratsNoSenior.length > 0 ? { not: null, notIn: seqratsNoSenior } : { not: null },
     },
-    select: { id: true, seqrat: true },
+    select: { id: true, seqrat: true, sessoes: { select: { id: true } } },
   });
-  if (ausentes.length === 0) return [];
+  if (ausentes.length === 0) return { desvinculados: [], excluidos: [] };
 
-  const seqrats = ausentes.map((i) => i.seqrat as number);
-  const ids = ausentes.map((i) => i.id);
+  // Mesma ramificação de desvincularRatAusenteNoSenior (cabeçalho, 14/09/2026), mas pelo
+  // vínculo com sessão local (AtividadeSessaoExecucao), não por `origemCaxHub` (achado real,
+  // 23/09/2026, RAT 1861506: a varredura completa noturna de rat-item-sync faz upsert por
+  // (codemp,numrat,seqrat) e esse upsert GRAVA origemCaxHub=false em toda linha, mesmo numa
+  // que já existia local com origemCaxHub=true — assim que um item nascido no CaxHub é
+  // registrado no Senior e volta na consulta seguinte, a flag vira false e o item passa a
+  // colidir com este branch como se nunca tivesse tido sessão, ficando "Excluído no Senior"
+  // sem nenhuma ação possível mesmo tendo apontamento real por trás). Ter sessão é o sinal
+  // que não pode ser sobrescrito por sync nenhum: item com sessão representa trabalho real —
+  // desvincula (limpa numrat/seqrat/datreg, e `removidoEmSenior` se já tiver sido marcado por
+  // engano antes desta correção) pra permitir reenviar. Sem sessão, nasceu no Senior via
+  // ratItemSync — não há nada pra reenviar, o registro foi excluído de verdade na origem:
+  // marca `removidoEmSenior` e PRESERVA numrat/seqrat/datreg como histórico, permitindo a
+  // "ressurreição" automática já existente em varrerRemovidos/carimbo() se o item um dia
+  // voltar a existir lá.
+  const nativosCaxHub = ausentes.filter((i) => i.sessoes.length > 0);
+  const nativosSenior = ausentes.filter((i) => i.sessoes.length === 0);
 
-  await prisma.$transaction([
-    prisma.ratItem.updateMany({
-      where: { id: { in: ids } },
-      // datreg também sai: era a data de registro NO SENIOR, e esse registro não existe mais.
-      data: { numrat: null, seqrat: null, datreg: null },
-    }),
-    criarEventoAuditoria({
-      origem: "tela",
-      usuarioId: req.user!.userId,
-      codemp: rat.codemp,
-      codpro: rat.codpro,
-      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
-      entidadeId: entidadeIdRat(rat.id),
-      entidadeRotulo: `RAT ${rat.numrat}`,
-      eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_DESVINCULADO_SENIOR,
-      alteracoes: null,
-      metadata: { seqratsDesvinculados: seqrats, ratItemIds: ids },
-      correlationId: req.correlationId!,
-    }),
-  ]);
+  const operacoes: Prisma.PrismaPromise<unknown>[] = [];
+
+  if (nativosCaxHub.length > 0) {
+    const idsDesvinculados = nativosCaxHub.map((i) => i.id);
+    const seqratsDesvinculados = nativosCaxHub.map((i) => i.seqrat as number);
+    operacoes.push(
+      prisma.ratItem.updateMany({
+        where: { id: { in: idsDesvinculados } },
+        // datreg também sai: era a data de registro NO SENIOR, e esse registro não existe mais.
+        // removidoEmSenior: null limpa a marca "Excluído no Senior" de quem caiu errado nesse
+        // estado antes desta correção (item com sessão, origemCaxHub virado false pelo upsert
+        // da varredura noturna) — sem isso o item ficaria com numrat/seqrat limpos mas
+        // continuaria escondido atrás do badge de excluído.
+        data: { numrat: null, seqrat: null, datreg: null, removidoEmSenior: null },
+      }),
+      criarEventoAuditoria({
+        origem: "tela",
+        usuarioId: req.user!.userId,
+        codemp: rat.codemp,
+        codpro: rat.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+        entidadeId: entidadeIdRat(rat.id),
+        entidadeRotulo: `RAT ${rat.numrat}`,
+        eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_DESVINCULADO_SENIOR,
+        alteracoes: null,
+        metadata: { seqratsDesvinculados, ratItemIds: idsDesvinculados },
+        correlationId: req.correlationId!,
+      })
+    );
+  }
+
+  if (nativosSenior.length > 0) {
+    const idsExcluidos = nativosSenior.map((i) => i.id);
+    const seqratsExcluidos = nativosSenior.map((i) => i.seqrat as number);
+    operacoes.push(
+      prisma.ratItem.updateMany({
+        where: { id: { in: idsExcluidos } },
+        data: { removidoEmSenior: new Date() },
+      }),
+      criarEventoAuditoria({
+        origem: "tela",
+        usuarioId: req.user!.userId,
+        codemp: rat.codemp,
+        codpro: rat.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+        entidadeId: entidadeIdRat(rat.id),
+        entidadeRotulo: `RAT ${rat.numrat}`,
+        eventoTipo: EVENTOS_AUDITORIA.RAT_ITEM_EXCLUIDO_SENIOR,
+        alteracoes: null,
+        metadata: { seqratsExcluidos, ratItemIds: idsExcluidos },
+        correlationId: req.correlationId!,
+      })
+    );
+  }
+
+  await prisma.$transaction(operacoes);
 
   // A pendência de envio antiga ficou obsoleta: ela diz "enviado", mas o registro que ela
   // criou não existe mais no ERP. Removê-la devolve o apontamento ao estado limpo de
   // "confirmado localmente, nunca enviado" — o que também destrava o Excluir, que recusa
-  // desfazer quando existe pendência em qualquer status diferente de "pendente".
-  const atividadesDosItens = await prisma.atividadeSessaoExecucao.findMany({
-    where: { ratItemId: { in: ids } },
-    select: { atividadeId: true, ratItemId: true },
-  });
-  for (const sessao of atividadesDosItens) {
-    const pendencias = await prisma.sincronizacaoPendente.findMany({
-      where: { tipo: "criar_apontamento", atividadeId: sessao.atividadeId },
+  // desfazer quando existe pendência em qualquer status diferente de "pendente". Só pros itens
+  // DESVINCULADOS (com sessão) — item excluído não teve numrat/seqrat limpo, não há
+  // "pendência obsoleta" nele nesse sentido.
+  const idsDesvinculados = nativosCaxHub.map((i) => i.id);
+  if (idsDesvinculados.length > 0) {
+    const atividadesDosItens = await prisma.atividadeSessaoExecucao.findMany({
+      where: { ratItemId: { in: idsDesvinculados } },
+      select: { atividadeId: true, ratItemId: true },
     });
-    const obsoletas = pendencias.filter((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === sessao.ratItemId);
-    if (obsoletas.length > 0) {
-      await prisma.sincronizacaoPendente.deleteMany({ where: { id: { in: obsoletas.map((p) => p.id) } } });
+    for (const sessao of atividadesDosItens) {
+      const pendencias = await prisma.sincronizacaoPendente.findMany({
+        where: { tipo: { in: ["criar_apontamento", "editar_apontamento"] }, atividadeId: sessao.atividadeId },
+      });
+      const obsoletas = pendencias.filter((p) => Number((p.payload as { ratItemId?: number })?.ratItemId) === sessao.ratItemId);
+      if (obsoletas.length > 0) {
+        await prisma.sincronizacaoPendente.deleteMany({ where: { id: { in: obsoletas.map((p) => p.id) } } });
+      }
     }
   }
 
-  return seqrats;
+  return {
+    desvinculados: nativosCaxHub.map((i) => i.seqrat as number),
+    excluidos: nativosSenior.map((i) => i.seqrat as number),
+  };
 }
 
 // Mesma lógica do desvincularItensAusentesNoSenior acima, mas pro CABEÇALHO: quando a RAT
-// inteira não volta mais na consulta ao Senior (documento apagado/cancelado lá), limpar
-// Rat.numrat pra permitir reintegrar — nunca apagar a linha local, ela é o registro do
-// trabalho que aconteceu de verdade. `encontrouNoSenior` vem de runRatSyncPorNumrat (true =
-// a consulta por numrat trouxe pelo menos 1 linha).
+// inteira não volta mais na consulta ao Senior (documento apagado/cancelado lá). `encontrouNoSenior`
+// vem de runRatSyncPorNumrat (true = a consulta por numrat trouxe pelo menos 1 linha).
+//
+// Dois desfechos, conforme a origem da RAT (14/09/2026, pedido do Vitor — achado real:
+// RAT 1833655 ficava com numrat limpo e sitrat=9/"Digitado" congelado pra sempre, parecendo
+// um rascunho ativo quando na verdade tinha sido excluída no ERP):
+//   - origemCaxHub=true (nasceu no CaxHub, o documento representa trabalho real já feito):
+//     limpa Rat.numrat pra permitir REINTEGRAR — nunca apagar a linha local, comportamento
+//     inalterado desde 17/08/2026.
+//   - origemCaxHub=false (nasceu no Senior via ratSync, nunca teve rascunho local): não há o
+//     que reintegrar, o documento foi excluído de verdade na origem — marca
+//     `Rat.removidoEmSenior` (mesma coluna que a varredura completa usa) e PRESERVA numrat
+//     como histórico, pra permitir a "ressurreição" automática de varrerRemovidos/carimbo()
+//     se a RAT um dia voltar a existir lá. A tela passa a mostrar "Excluída" no lugar da
+//     situação (ver sitratLabelEfetivo em ratDominio.ts) em vez de um rascunho fantasma.
 async function desvincularRatAusenteNoSenior(
-  rat: { id: number; codemp: number; codpro: number | null; numrat: number | null },
+  rat: { id: number; codemp: number; codpro: number | null; numrat: number | null; origemCaxHub: boolean },
   encontrouNoSenior: boolean,
   req: AuthenticatedRequest
 ): Promise<boolean> {
   if (encontrouNoSenior || rat.numrat == null) return false;
+
+  if (!rat.origemCaxHub) {
+    await prisma.$transaction([
+      prisma.rat.update({ where: { id: rat.id }, data: { removidoEmSenior: new Date() } }),
+      criarEventoAuditoria({
+        origem: "tela",
+        usuarioId: req.user!.userId,
+        codemp: rat.codemp,
+        codpro: rat.codpro,
+        entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+        entidadeId: entidadeIdRat(rat.id),
+        entidadeRotulo: `RAT ${rat.numrat}`,
+        eventoTipo: EVENTOS_AUDITORIA.RAT_EXCLUIDA_SENIOR,
+        alteracoes: null,
+        metadata: null,
+        correlationId: req.correlationId!,
+      }),
+    ]);
+    return true;
+  }
 
   const numratAnterior = rat.numrat;
   await prisma.$transaction([
@@ -653,24 +1128,112 @@ async function desvincularRatAusenteNoSenior(
   return true;
 }
 
-// POST /:id/sincronizar — "Sinc. ERP": reorganizada (28/08/2026) em duas fases.
+// Fase 2 de "Sinc. ERP": reenvia pro Senior todo item de atividade/despesa desta RAT que ainda
+// não está lá — "falha" (pendência com erro, inclui bloqueado — reseta e tenta de novo) ou
+// "pendente" (nunca enfileirado). Item/despesa "enviando" de verdade (em voo, ou recém-
+// enfileirado sem erro ainda) fica de fora: vai fluir sozinho no próximo ciclo da fila, reenviar
+// aqui não ajudaria em nada. Aguardado (não fire-and-forget), escopado só aos ids desta RAT via
+// `apenasIds` (nunca a fila inteira do sistema, ver comentário em processarFilaSincronizacao).
 //
-// Fase 1 (existente) — puxa de novo o cabeçalho e os itens dessa RAT específica do Senior
-// (filtrado por numrat, ver runRatSyncPorNumrat/runRatItemSyncPorNumrat), pra quando o
-// consultor sabe que algo mudou lá e não quer esperar o job noturno. Só roda se a RAT já
-// tem numrat (documento já confirmado no Senior) — uma RAT onde nenhum item nunca chegou a
-// ser enviado com sucesso ainda não tem o que buscar, e isso deixou de ser erro (400): a
-// fase só é pulada. Se o CABEÇALHO não voltar mais na consulta (RAT inteira apagada/
-// cancelada no Senior), Rat.numrat é desvinculado (ver desvincularRatAusenteNoSenior) —
-// mesmo espírito de desvincularItensAusentesNoSenior, que já cobria só os itens.
+// Extraído (13/09/2026) de dentro de POST /:id/sincronizar pra ser reaproveitado também pelo
+// fechamento de RAT (regra 2: RAT com integração != Sincronizado precisa disso ANTES de poder
+// fechar) — mesmo espírito de prepararReenvioItem já ter sido extraído antes pelo mesmo motivo.
+async function reenviarPendenciasDaRat(
+  rat: { id: number; codemp: number; numrat: number | null }
+): Promise<{ itensReenviados: number; despesasReenviadas: number }> {
+  const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { rat: true, sessoes: true } });
+  const atividadeIdsDaRat = [...new Set(itensDaRat.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
+  const pendenciasDaRat =
+    atividadeIdsDaRat.length > 0
+      ? await prisma.sincronizacaoPendente.findMany({
+          where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIdsDaRat } },
+          orderBy: { id: "desc" },
+        })
+      : [];
+  const pendenciaPorRatItem = new Map<number, (typeof pendenciasDaRat)[number]>();
+  for (const pendencia of pendenciasDaRat) {
+    const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
+    if (Number.isFinite(ratItemId) && !pendenciaPorRatItem.has(ratItemId)) {
+      pendenciaPorRatItem.set(ratItemId, pendencia);
+    }
+  }
+
+  let itensReenviados = 0;
+  const pendenciaIdsParaProcessar: number[] = [];
+  for (const item of itensDaRat) {
+    if (item.numrat != null) continue; // já sincronizado, nada a reenviar
+    const pendencia = pendenciaPorRatItem.get(item.id);
+    if (pendencia && !pendencia.ultimoErro) continue; // enviando de verdade, deixa fluir sozinho
+    const resultado = await prepararReenvioItem(item, pendencia);
+    if (resultado.ok) {
+      pendenciaIdsParaProcessar.push(resultado.pendenciaId);
+      itensReenviados += 1;
+    }
+  }
+  // Alterações de sessão (tipEve A) que não saíram: "bloqueado" é rearmado, "pendente" só entra no lote.
+  const idsDosItens = new Set(itensDaRat.map((i) => i.id));
+  const edicoesParadas =
+    atividadeIdsDaRat.length > 0
+      ? await prisma.sincronizacaoPendente.findMany({
+          where: { tipo: "editar_apontamento", atividadeId: { in: atividadeIdsDaRat }, status: { in: ["pendente", "bloqueado"] } },
+        })
+      : [];
+  for (const edicao of edicoesParadas) {
+    if (!idsDosItens.has(Number((edicao.payload as { ratItemId?: number })?.ratItemId))) continue;
+    if (edicao.status === "bloqueado") await reprocessar(edicao.id);
+    pendenciaIdsParaProcessar.push(edicao.id);
+    itensReenviados += 1;
+  }
+
+  if (pendenciaIdsParaProcessar.length > 0) {
+    await processarFilaSincronizacao({ apenasIds: pendenciaIdsParaProcessar });
+  }
+
+  // Mesma regra acima, na fila própria de despesa (sync/outboxSeniorDespesa.ts): "bloqueado" é
+  // resetado antes (reprocessarDespesa zera tentativas), "pendente" só precisa entrar no
+  // apenasIds. "enviando"/"enviado" ficam de fora.
+  const pendenciasDespesa =
+    rat.numrat != null
+      ? await prisma.sincronizacaoPendenteDespesa.findMany({
+          where: { despesa: { codemp: rat.codemp, numrat: rat.numrat }, status: { in: ["pendente", "bloqueado"] } },
+        })
+      : [];
+  for (const pendencia of pendenciasDespesa) {
+    if (pendencia.status === "bloqueado") await reprocessarDespesa(pendencia.id);
+  }
+  if (pendenciasDespesa.length > 0) {
+    await processarFilaDespesas({ apenasIds: pendenciasDespesa.map((p) => p.id) });
+  }
+
+  return { itensReenviados, despesasReenviadas: pendenciasDespesa.length };
+}
+
+// POST /:id/sincronizar — "Sinc. ERP": reorganizada (28/08/2026) em duas fases; despesas de
+// viagem entraram na dança em 07/09/2026 (pedido do Vitor: "pode ter havido alteração no ERP
+// que precisa vir pro nosso lado", inclusive despesa — mesmas regras do apontamento).
 //
-// Fase 2 (nova) — reenvia pro Senior todo item desta RAT que ainda não está lá: "falha"
+// Fase 1 — puxa de novo o cabeçalho, os itens e as despesas dessa RAT específica do Senior
+// (filtrado por numrat, ver runRatSyncPorNumrat/runRatItemSyncPorNumrat/
+// runRegistroDespesaViagemSyncPorNumrat), pra quando o consultor sabe que algo mudou lá e não
+// quer esperar o job noturno (item às 4h30, despesa às 5h20). Roda sempre que a RAT já tem
+// numrat (documento já confirmado no Senior) — INDEPENDENTE do status de integração local: só
+// porque nossos itens já foram todos confirmados não quer dizer que nada mudou DO LADO DE LÁ
+// (achado real 07/09/2026, RAT 1302077: botão ficava desabilitado com "sincronizado" e nunca
+// dava pra puxar edição feita direto no ERP). Uma RAT onde nenhum item nunca chegou a ser
+// enviado com sucesso ainda não tem o que buscar, e isso não é erro (400): a fase só é pulada.
+// Se o CABEÇALHO não voltar mais na consulta (RAT inteira apagada/cancelada no Senior),
+// Rat.numrat é desvinculado (ver desvincularRatAusenteNoSenior) — mesmo espírito de
+// desvincularItensAusentesNoSenior, que já cobria só os itens. Despesa não tem esse tratamento
+// de ausência ainda (mesma limitação da varredura completa, ver comentário "Sem carimbo" em
+// registroDespesaViagemSync.ts) — só upsert do que a consulta trouxer.
+//
+// Fase 2 — reenvia pro Senior todo item/despesa desta RAT que ainda não está lá: "falha"
 // (pendência com erro, inclui bloqueado — reseta e tenta de novo) ou "pendente" (nunca
-// enfileirado — nunca enviado, ou desvinculado pela fase 1 — enfileira agora). Item
-// "enviando" de verdade (em voo, ou recém-enfileirado sem erro ainda) fica de fora: vai
-// fluir sozinho no próximo ciclo da fila, reenviar aqui não ajudaria em nada. Aguardado
-// (não fire-and-forget como o reenvio por item) — escopado só aos ids desta RAT via
-// `apenasIds`, nunca a fila inteira do sistema (ver comentário em processarFilaSincronizacao).
+// enfileirado — nunca enviado, ou desvinculado pela fase 1 — enfileira agora). Item/despesa
+// "enviando" de verdade (em voo, ou recém-enfileirado sem erro ainda) fica de fora: vai fluir
+// sozinho no próximo ciclo da fila, reenviar aqui não ajudaria em nada. Aguardado (não
+// fire-and-forget como o reenvio por item) — escopado só aos ids desta RAT via `apenasIds`,
+// nunca a fila inteira do sistema (ver comentário em processarFilaSincronizacao).
 //
 // Mesma visibilidade de GET /:id/itens — não fica restrito a gestor/admin.
 ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
@@ -695,12 +1258,14 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
 
     let ratDesvinculada = false;
     let desvinculados: number[] = [];
+    let excluidos: number[] = [];
     if (rat.numrat != null) {
       let encontrouCabecalho: boolean;
       let seqratsNoSenior: number[];
       try {
         encontrouCabecalho = await runRatSyncPorNumrat(rat.codemp, rat.numrat);
         seqratsNoSenior = await runRatItemSyncPorNumrat(rat.codemp, rat.numrat);
+        await runRegistroDespesaViagemSyncPorNumrat(rat.codemp, rat.numrat);
       } catch (syncError) {
         const message = syncError instanceof Error ? syncError.message : String(syncError);
         res.status(502).json({ error: `Falha ao sincronizar com o ERP: ${message}` });
@@ -710,48 +1275,19 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       // Ordem não importa entre as duas (mexem em campos/tabelas diferentes) — cabeçalho
       // primeiro só porque é a checagem "mais grave" (RAT inteira sumiu, não só um item).
       ratDesvinculada = await desvincularRatAusenteNoSenior(rat, encontrouCabecalho, req);
-      desvinculados = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
+      const resultadoItens = await desvincularItensAusentesNoSenior(rat, seqratsNoSenior, req);
+      desvinculados = resultadoItens.desvinculados;
+      excluidos = resultadoItens.excluidos;
     }
 
-    // Fase 2: recarrega os itens (pós fase 1, já refletindo qualquer desvinculação) + a
-    // pendência mais recente de cada um — mesmo casamento em memória de GET /:id/itens.
-    const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { rat: true, sessoes: true } });
-    const atividadeIdsDaRat = [...new Set(itensDaRat.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
-    const pendenciasDaRat =
-      atividadeIdsDaRat.length > 0
-        ? await prisma.sincronizacaoPendente.findMany({
-            where: { tipo: "criar_apontamento", atividadeId: { in: atividadeIdsDaRat } },
-            orderBy: { id: "desc" },
-          })
-        : [];
-    const pendenciaPorRatItem = new Map<number, (typeof pendenciasDaRat)[number]>();
-    for (const pendencia of pendenciasDaRat) {
-      const ratItemId = Number((pendencia.payload as { ratItemId?: number })?.ratItemId);
-      if (Number.isFinite(ratItemId) && !pendenciaPorRatItem.has(ratItemId)) {
-        pendenciaPorRatItem.set(ratItemId, pendencia);
-      }
-    }
-
-    let itensReenviados = 0;
-    const pendenciaIdsParaProcessar: number[] = [];
-    for (const item of itensDaRat) {
-      if (item.numrat != null) continue; // já sincronizado, nada a reenviar
-      const pendencia = pendenciaPorRatItem.get(item.id);
-      if (pendencia && !pendencia.ultimoErro) continue; // enviando de verdade, deixa fluir sozinho
-      const resultado = await prepararReenvioItem(item, pendencia);
-      if (resultado.ok) {
-        pendenciaIdsParaProcessar.push(resultado.pendenciaId);
-        itensReenviados += 1;
-      }
-    }
-    if (pendenciaIdsParaProcessar.length > 0) {
-      await processarFilaSincronizacao({ apenasIds: pendenciaIdsParaProcessar });
-    }
+    // Fase 2: reenvia itens de atividade/despesa pendentes ou com erro (ver
+    // reenviarPendenciasDaRat acima, extraída pra ser reaproveitada pelo fechamento de RAT).
+    const { itensReenviados, despesasReenviadas } = await reenviarPendenciasDaRat(rat);
 
     // Status agregado pós-tentativa, pra tela montar o aviso final sem precisar de mais uma
     // chamada — reaproveita o mesmo helper de GET / (buscarItensEIntegracao), escopado só a
     // esta RAT (conjunto de 1, sem custo de full-set nenhum).
-    const { integracaoPorRat } = await buscarItensEIntegracao([rat.id]);
+    const { integracaoPorRat } = await buscarItensEIntegracao([rat]);
     const integracao = integracaoPorRat.get(rat.id) ?? "pendente";
 
     res.json({
@@ -759,7 +1295,10 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
       ratDesvinculada,
       desvinculados: desvinculados.length,
       seqratsDesvinculados: desvinculados,
+      excluidos: excluidos.length,
+      seqratsExcluidos: excluidos,
       itensReenviados,
+      despesasReenviadas,
       integracao,
       integracaoLabel: integracaoErpLabel(integracao),
       integracaoTone: integracaoErpTone(integracao),
@@ -769,15 +1308,410 @@ ratsRouter.post("/:id/sincronizar", async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Lançamento de despesas de viagem restrito a admin por enquanto — a pedido do Vitor,
-// enquanto o recurso ainda está em validação (nem todo consultor/gestor deve ver a ação
-// ainda). Reavaliar pra abrir a dono/gestor da RAT quando o recurso for liberado geral.
-function podeGerenciarDespesas(role: string): boolean {
-  return role === "admin";
+// ---------------------------------------------------------------------------
+// Fechamento de RAT — POST /:id/fechar, POST /fechar-lote, GET /:id/fechamento, GET
+// /elegiveis-fechamento. Mesma "ideologia" da confirmação de apontamentos
+// (routes/apontamentos.ts, POST /confirmar[-lote]): enfileira no outbox (assíncrono, com
+// retry) e a tela acompanha por polling — não é uma chamada SOAP síncrona dentro do request.
+// Publicada em 13/09/2026 (porta `fecharRAT` do Senior, ver soap/client.ts).
+//
+// Regras de negócio (definidas com o Vitor):
+//   1. Só RAT com sitrat=9 (Digitado) entra no fechamento.
+//   2. RAT com integração != "sincronizado" precisa reenviar itens/despesas pendentes/com erro
+//      ANTES (reenviarPendenciasDaRat, acima) — só segue pro fechamento se, depois do reenvio,
+//      tudo tiver sucesso.
+//   3. Admin, gestor do departamento da RAT, OU o próprio dono (consultor da RAT) — ver
+//      podeFecharRat. Ampliado em 13/09/2026 (antes só admin/gestor, mesma regra de aprovar;
+//      dono de RAT de outro departamento ficava sem conseguir fechar a própria RAT).
+// ---------------------------------------------------------------------------
+
+type ResultadoPreparoFechamento =
+  | { ok: true; pendenciaId: number }
+  | { ok: false; status: 400 | 403 | 409; motivo: string; integracao?: IntegracaoErpStatus };
+
+// Resolve permissão + regras 1/2 acima e enfileira a pendência `fechar_rat`. Compartilhada
+// entre POST /:id/fechar (uma RAT) e POST /fechar-lote (várias) — mesmo espírito de
+// prepararReenvioItem já ser reaproveitado por /:id/sincronizar e pelo reenvio individual de
+// apontamento.
+async function prepararFechamentoRat(
+  rat: import("@prisma/client").Rat,
+  role: string,
+  contexto: Contexto,
+  req: AuthenticatedRequest
+): Promise<ResultadoPreparoFechamento> {
+  if (!podeFecharRat(role, contexto, rat)) {
+    return { ok: false, status: 403, motivo: "Sem permissão para fechar esta RAT" };
+  }
+  if (rat.sitrat !== 9) {
+    return { ok: false, status: 400, motivo: "Só é possível fechar uma RAT que esteja Digitada" };
+  }
+  // Excluída no Senior (ver desvincularRatAusenteNoSenior): sitrat fica congelado em 9, mas
+  // não há mais documento nenhum pra fechar lá — checagem própria, não dá pra confiar só no
+  // `numrat == null` abaixo porque aqui o numrat é preservado como histórico.
+  if (rat.removidoEmSenior != null) {
+    return { ok: false, status: 400, motivo: "Esta RAT foi excluída no Senior — não é possível fechar" };
+  }
+  if (rat.numrat == null) {
+    return { ok: false, status: 400, motivo: "Esta RAT ainda não tem número do ERP — sincronize antes de fechar" };
+  }
+
+  // Pendência já em voo pra esta RAT — o `ratId` mora dentro do payload JSON (a pendência não
+  // tem coluna própria pra ele, mesmo casamento em memória usado no resto do arquivo). Volume
+  // de "fechar_rat" "enviando" ao mesmo tempo no sistema inteiro é sempre pequeno (a ação não é
+  // disparada em massa fora de "Fechar Todos", e mesmo esse é sequencial), então o scan aqui é
+  // barato.
+  const emVoo = await prisma.sincronizacaoPendente.findMany({
+    where: { tipo: "fechar_rat", status: "enviando" },
+    select: { payload: true },
+  });
+  const jaEmAndamento = emVoo.some((p) => Number((p.payload as { ratId?: number })?.ratId) === rat.id);
+  if (jaEmAndamento) {
+    return { ok: false, status: 409, motivo: "Fechamento já em andamento para esta RAT" };
+  }
+
+  let { integracaoPorRat } = await buscarItensEIntegracao([rat]);
+  let integracao = integracaoPorRat.get(rat.id) ?? "pendente";
+  if (integracao !== "sincronizado") {
+    await reenviarPendenciasDaRat(rat);
+    ({ integracaoPorRat } = await buscarItensEIntegracao([rat]));
+    integracao = integracaoPorRat.get(rat.id) ?? "pendente";
+    if (integracao !== "sincronizado") {
+      return {
+        ok: false,
+        status: 409,
+        motivo:
+          "Há item(ns)/despesa(s) pendente(s) ou com falha no envio ao ERP. Foram reenviados agora, mas ainda " +
+          "não terminaram com sucesso — verifique a sincronização desta RAT e tente fechar de novo.",
+        integracao,
+      };
+    }
+  }
+
+  const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { sessoes: true } });
+  if (itensDaRat.length === 0) {
+    return { ok: false, status: 400, motivo: "RAT sem nenhum item — nada a fechar" };
+  }
+
+  // Checagem explícita de confirmação no Senior (14/09/2026, pedido do Vitor) — item sem
+  // `seqrat` ou despesa sem `seqrdv` é o critério de negócio de verdade pra "ainda não pode
+  // fechar", não a presença de sessão de execução (ver comentário do fallback de `atividadeId`
+  // logo abaixo). Reforça, de forma explícita, o que `buscarItensEIntegracao` já cobre pra
+  // item via `numrat`/pendência — e fecha um buraco que aquele agregado tem pra despesa: uma
+  // `RegistroDespesaViagem` sem `seqrdv` e SEM nenhuma pendência ativa (órfã) passaria como
+  // "sincronizado" sem estar de fato confirmada no Senior.
+  const itemSemSeqrat = itensDaRat.find((i) => i.seqrat == null);
+  if (itemSemSeqrat) {
+    return {
+      ok: false,
+      status: 409,
+      motivo: `Item ${itemSemSeqrat.id} ainda não tem confirmação do Senior (sem seqrat) — não é possível fechar`,
+    };
+  }
+  const despesasDaRat = await prisma.registroDespesaViagem.findMany({
+    where: { codemp: rat.codemp, numrat: rat.numrat!, excluidaEm: null },
+    select: { id: true, seqrdv: true },
+  });
+  const despesaSemSeqrdv = despesasDaRat.find((d) => d.seqrdv == null);
+  if (despesaSemSeqrdv) {
+    return {
+      ok: false,
+      status: 409,
+      motivo: `Despesa ${despesaSemSeqrdv.id} ainda não tem confirmação do Senior (sem seqrdv) — não é possível fechar`,
+    };
+  }
+
+  // `atividadeId` aqui é só a âncora TÉCNICA que `enfileirar`/`SincronizacaoPendente` exigem
+  // (FK NOT NULL pra AtividadeConsultor) — não é validação de negócio, essa já aconteceu acima
+  // e no bloco de integração. Prioriza um item com sessão de execução (RAT nascida de
+  // apontamento no CaxHub); quando NENHUM item tem (RAT 100% importada do Senior — achado real,
+  // RAT 1769454/proposta 7371/13/09/2026 — nunca passou por um apontamento feito aqui, então
+  // não tem sessão nenhuma, só a alocação em si), cai pro casamento por `seqati`
+  // (RatItem.seqati <-> AtividadeConsultor.seqati, mesmo vínculo por valor que
+  // domain/tetoAtividade.ts já usa) — a alocação existe localmente (sincronizada do Senior por
+  // atividadeConsultorSync.ts) mesmo sem nunca ter existido uma sessão.
+  let atividadeId = itensDaRat.map((i) => i.sessoes[0]?.atividadeId).find((v): v is number => v != null);
+  if (atividadeId == null) {
+    const seqatis = itensDaRat.map((i) => i.seqati).filter((v): v is bigint => v != null);
+    if (seqatis.length > 0) {
+      const alocacao = await prisma.atividadeConsultor.findFirst({ where: { seqati: { in: seqatis } }, select: { id: true } });
+      atividadeId = alocacao?.id;
+    }
+  }
+  if (atividadeId == null) {
+    return { ok: false, status: 400, motivo: "RAT sem nenhum item vinculado a uma atividade — nada a fechar" };
+  }
+
+  await criarEventoAuditoria({
+    origem: "tela",
+    usuarioId: req.user!.userId,
+    codemp: rat.codemp,
+    codpro: rat.codpro,
+    entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+    entidadeId: entidadeIdRat(rat.id),
+    entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+    eventoTipo: EVENTOS_AUDITORIA.RAT_FECHAMENTO_SOLICITADO,
+    alteracoes: null,
+    metadata: { numrat: rat.numrat },
+    correlationId: req.correlationId!,
+  });
+
+  // Um item representativo basta: a operação `fecharRAT` atua sobre o documento inteiro
+  // (codEmp+numRat), não item por item — diferente de aprovar_rat, que enfileirava um por
+  // RatItem porque não havia (e ainda não há) canal nenhum publicado pra ele.
+  const pendenciaId = await enfileirar(atividadeId, "fechar_rat", { ratId: rat.id, codemp: rat.codemp, numrat: rat.numrat });
+
+  return { ok: true, pendenciaId };
 }
 
-// Resolve a RAT e confere permissão — mesma regra de podeVerRat + a restrição a admin acima
-// — compartilhada pelos 3 endpoints de despesa de viagem abaixo.
+// POST /:id/fechar — fecha uma única RAT.
+ratsRouter.post("/:id/fechar", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    const rat = await prisma.rat.findUnique({ where: { id } });
+    if (!rat || !podeVerRat(role, contexto, rat)) {
+      res.status(404).json({ error: "RAT não encontrada" });
+      return;
+    }
+
+    const resultado = await prepararFechamentoRat(rat, role, contexto, req);
+    if (!resultado.ok) {
+      res.status(resultado.status).json({ error: resultado.motivo, integracao: resultado.integracao });
+      return;
+    }
+
+    res.json({ ok: true, pendenciaId: resultado.pendenciaId });
+  } catch (error) {
+    handleError(res, error, "fechar");
+  }
+});
+
+// GET /:id/fechamento — status da pendência de fechamento mais recente desta RAT, pro
+// acompanhamento por polling da tela (mesma ideia de GET /apontamentos/envio/:ratItemId).
+ratsRouter.get("/:id/fechamento", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const rat = await prisma.rat.findUnique({ where: { id } });
+    if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+      res.status(404).json({ error: "RAT não encontrada" });
+      return;
+    }
+
+    const itensDaRat = await prisma.ratItem.findMany({ where: { ratId: rat.id }, include: { sessoes: true } });
+    const atividadeIds = [...new Set(itensDaRat.map((i) => i.sessoes[0]?.atividadeId).filter((v): v is number => v != null))];
+    const pendencia =
+      atividadeIds.length > 0
+        ? await prisma.sincronizacaoPendente.findFirst({
+            where: { tipo: "fechar_rat", atividadeId: { in: atividadeIds } },
+            orderBy: { id: "desc" },
+          })
+        : null;
+
+    res.json({
+      status: pendencia?.status ?? null,
+      erro: pendencia?.ultimoErro ?? null,
+      // Relido fresco: se o job já processou a pendência, sitrat já reflete o write-back.
+      // sitratTone/podeFechar vêm junto (14/09/2026, pedido do Vitor) pra a tela conseguir
+      // atualizar a linha da RAT inteira, sem precisar de F5 nem de um GET /rats à parte.
+      sitrat: rat.sitrat,
+      sitratLabel: sitratLabelEfetivo(rat),
+      sitratTone: sitratToneEfetivo(rat),
+      podeFechar: rat.sitrat === 9 && rat.removidoEmSenior == null && podeFecharRat(ctx.role, ctx.contexto, rat),
+    });
+  } catch (error) {
+    handleError(res, error, "fechamento");
+  }
+});
+
+// POST /fechar-lote — "Fechar Todos": mesmas regras de POST /:id/fechar, uma RAT por vez.
+// Sequencial (não Promise.all) — mesmo motivo de POST /apontamentos/confirmar-lote.
+ratsRouter.post("/fechar-lote", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    const ratIds: number[] = Array.isArray(req.body?.ratIds)
+      ? req.body.ratIds.map((v: unknown) => Number(v)).filter((v: number) => Number.isFinite(v))
+      : [];
+    if (ratIds.length === 0) {
+      res.status(400).json({ error: "Nenhuma RAT informada" });
+      return;
+    }
+
+    const enfileirados: number[] = [];
+    const falhas: { ratId: number; erro: string }[] = [];
+    for (const ratId of ratIds) {
+      // Cada RAT resolve pro seu próprio resultado — um erro inesperado numa (bug, timeout,
+      // RAT em estado anômalo) não pode abortar o lote inteiro e deixar as RATs seguintes
+      // sem sequer serem tentadas (mesmo espírito de POST /confirmar-lote em
+      // apontamentos.ts: cada item vira falha própria, nunca propaga pro laço). Bug real
+      // encontrado em 13/09/2026: sem este try/catch, a 2ª RAT de um lote de 2 nunca chegava
+      // a ser processada porque uma exceção na 1ª derrubava a requisição inteira antes do
+      // laço continuar.
+      try {
+        const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+        if (!rat || !podeVerRat(role, contexto, rat)) {
+          falhas.push({ ratId, erro: "RAT não encontrada" });
+          continue;
+        }
+        const resultado = await prepararFechamentoRat(rat, role, contexto, req);
+        if (resultado.ok) {
+          enfileirados.push(ratId);
+        } else {
+          falhas.push({ ratId, erro: resultado.motivo });
+        }
+      } catch (erro) {
+        falhas.push({ ratId, erro: erro instanceof Error ? erro.message : String(erro) });
+      }
+    }
+
+    res.json({ enfileirados, falhas });
+  } catch (error) {
+    handleError(res, error, "fechar-lote");
+  }
+});
+
+// Filtra as RATs elegíveis a "Fechar Todos" — sitrat=9 + permissão + os MESMOS filtros já
+// aplicados na tabela da tela (consultor/situação/busca/observação/integração, 14/09/2026),
+// SEM nenhuma etapa que só serve pra exibição (consultor, minutos, proposta/cliente pro
+// rótulo do resumo). Extraído (14/09/2026, achado real de lentidão) pra ser reaproveitado
+// tanto pelo resumo completo (`GET /elegiveis-fechamento`) quanto pelo contador leve
+// (`GET /elegiveis-fechamento/contagem`, chamado a cada troca de filtro/página pelo botão
+// "Fechar Todos (N)") — antes os dois caminhos rodavam o pipeline completo (proposta,
+// consultor, minutos) mesmo quando só o número do botão era necessário.
+//
+// `sitrat` do filtro da tela é uma INTERSEÇÃO com a elegibilidade (sempre 9), não uma
+// substituição — fechar só faz sentido pra Digitado, então filtrar a tela por qualquer outra
+// situação (sem incluir Digitado) zera o resultado de propósito, em vez de ignorar o filtro.
+async function ratsElegiveisFechamentoFiltradas(req: AuthenticatedRequest, role: string, contexto: Contexto) {
+  // Mesma consulta da lista da tela (GET /lista, domain/ratsListaSql.ts), restrita a Digitado (9) e não removida no Senior, com os
+  // filtros do topo E os filtros de coluna (`f=`, 04/11/2026): o botão conta e fecha exatamente o que a pessoa filtrou. `sitrat` do
+  // topo é uma INTERSEÇÃO com a elegibilidade (filtrar por outra situação sem incluir Digitado zera o resultado de propósito).
+  // `removidoEmSenior == null`: RAT excluída no Senior fica com sitrat=9 congelado, mas não é elegível pra fechar (mesma checagem de
+  // prepararFechamentoRat).
+  const lista = await listaRatsDoUsuario(req, { somenteDigitadasAtivas: true });
+  const linhas = await linhasFiltradasDaLista(
+    lista,
+    req.query as Record<string, unknown>,
+    Prisma.sql`x.id, x.codemp, x.codfor, x.codpro, x.numrat, x.sitrat, x.depexe, x.cliente, x."consultorNome", x."totalMinutos"`,
+  );
+  const rats = linhas
+    .map((l) => ({
+      id: l.id as number,
+      codemp: l.codemp as number,
+      codfor: l.codfor as number,
+      codpro: (l.codpro as number | null) ?? null,
+      numrat: (l.numrat as number | null) ?? null,
+      sitrat: (l.sitrat as number | null) ?? null,
+      depexe: (l.depexe as number | null) ?? null,
+      cliente: (l.cliente as string | null) ?? null,
+      consultorNome: l.consultorNome as string,
+      totalMinutos: Number(l.totalMinutos ?? 0),
+    }))
+    .filter((r) => podeFecharRat(role, contexto, r))
+    .sort((a, b) => b.id - a.id);
+  return { rats };
+}
+
+// GET /elegiveis-fechamento — resumo completo (com cliente/consultor/minutos) das RATs
+// elegíveis a "Fechar Todos", SEM paginação (mesmo espírito de GET /opcoes-filtro) — chamado
+// só quando o usuário de fato abre o modal (ver abrirResumoFechamentoLote no frontend); o
+// contador do botão usa o endpoint leve abaixo.
+ratsRouter.get("/elegiveis-fechamento", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { contexto, role } = ctx;
+
+    // Cliente, consultor e minutos já vêm da consulta da lista (ratsElegiveisFechamentoFiltradas).
+    const { rats } = await ratsElegiveisFechamentoFiltradas(req, role, contexto);
+    res.json({
+      rats: rats.map((r) => ({
+        id: r.id,
+        numrat: r.numrat,
+        codpro: r.codpro,
+        cliente: r.cliente,
+        consultorNome: r.consultorNome,
+        totalMinutos: r.totalMinutos,
+      })),
+    });
+  } catch (error) {
+    handleError(res, error, "elegiveis-fechamento");
+  }
+});
+
+// GET /elegiveis-fechamento/contagem — só o número pro botão "Fechar Todos (N)", sem
+// consultor/minutos/proposta moldados pra exibição (14/09/2026, achado real de lentidão): a
+// tela chamava o resumo COMPLETO a cada troca de filtro/página só pra ler `rats.length`,
+// dobrando o custo de varredura por carregamento. Ver comentário de
+// ratsElegiveisFechamentoFiltradas acima.
+ratsRouter.get("/elegiveis-fechamento/contagem", async (req: AuthenticatedRequest, res) => {
+  try {
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const { rats } = await ratsElegiveisFechamentoFiltradas(req, ctx.role, ctx.contexto);
+    res.json({ total: rats.length });
+  } catch (error) {
+    handleError(res, error, "elegiveis-fechamento-contagem");
+  }
+});
+
+// Lançamento de despesas de viagem: admin ou o próprio consultor dono da RAT (mesma regra de
+// "dono" que podeVerRat já usa) — liberado ao dono em 07/09/2026, a pedido do Vitor. Gestor de
+// departamento continua de fora por ora (só visualiza a RAT do time, não lançou a despesa).
+function podeGerenciarDespesas(role: string, contexto: Contexto, rat: { codfor: number }): boolean {
+  if (role === "admin") return true;
+  return contexto.consultor?.codfor === rat.codfor;
+}
+
+// Incluir/editar/excluir despesa (qualquer origem — própria ou vinda do Senior) só é permitido
+// enquanto a RAT está com a situação Digitado (sitrat=9) — liberado em 07/09/2026, a pedido do
+// Vitor, junto com a regra de negócio acima. Uma vez aprovada/fechada no ERP, o documento já
+// foi consolidado lá e despesa deixa de aceitar mudança por aqui (só GET continua liberado).
+function podeAlterarDespesasDaRat(rat: { numrat: number | null; sitrat: number | null }): boolean {
+  return rat.numrat != null && rat.sitrat === 9;
+}
+
+// Mensagem exibida quando podeAlterarDespesasDaRat nega — diferencia "sem numrat ainda" (nunca
+// teve despesa possível) de "situação avançou" (podia, mas não pode mais), senão o consultor
+// não entende por que o botão sumiu de uma hora pra outra.
+function mensagemBloqueioDespesas(rat: { numrat: number | null; sitrat: number | null }): string {
+  if (rat.numrat == null) return "Esta RAT ainda não tem número do ERP — não é possível lançar despesa ainda";
+  return "Despesas só podem ser incluídas, editadas ou excluídas enquanto a RAT está com a situação Digitado";
+}
+
+// Resolve a RAT e confere permissão de ESCRITA — mesma regra de podeVerRat + a restrição de
+// podeGerenciarDespesas acima. Usada só por POST /:id/despesas (07/09/2026: GET passou a usar
+// só podeVerRat — ver comentário do handler — pra abrir leitura pra quem só visualiza a RAT).
 async function ratComPermissao(
   req: AuthenticatedRequest,
   res: import("express").Response,
@@ -788,13 +1722,39 @@ async function ratComPermissao(
     res.status(404).json({ error: "Usuário não encontrado" });
     return null;
   }
-  if (!podeGerenciarDespesas(ctx.role)) {
-    res.status(403).json({ error: "Lançamento de despesas de viagem disponível só para administradores por enquanto" });
-    return null;
-  }
   const rat = await prisma.rat.findUnique({ where: { id: ratId } });
   if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
     res.status(404).json({ error: "RAT não encontrada" });
+    return null;
+  }
+  if (!podeGerenciarDespesas(ctx.role, ctx.contexto, rat)) {
+    res.status(403).json({ error: "Lançamento de despesas de viagem disponível só para o consultor dono da RAT ou administradores" });
+    return null;
+  }
+  return rat;
+}
+
+// Mesma resolução de ratComPermissao, mas a partir de uma despesa já em mãos (PATCH/DELETE
+// recebem :despesaId, não :id de RAT) — casa por codemp+numrat, igual ao DELETE original já
+// fazia. Extraído (07/09/2026) porque agora são 2 endpoints (editar + excluir) repetindo a
+// mesma sequência de checagens.
+async function ratDaDespesaComPermissao(
+  req: AuthenticatedRequest,
+  res: import("express").Response,
+  despesa: { codemp: number; numrat: number }
+): Promise<import("@prisma/client").Rat | null> {
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) {
+    res.status(404).json({ error: "Usuário não encontrado" });
+    return null;
+  }
+  const rat = await prisma.rat.findFirst({ where: { codemp: despesa.codemp, numrat: despesa.numrat } });
+  if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+    res.status(404).json({ error: "RAT não encontrada" });
+    return null;
+  }
+  if (!podeGerenciarDespesas(ctx.role, ctx.contexto, rat)) {
+    res.status(403).json({ error: "Lançamento de despesas de viagem disponível só para o consultor dono da RAT ou administradores" });
     return null;
   }
   return rat;
@@ -802,6 +1762,10 @@ async function ratComPermissao(
 
 // GET /:id/despesas — despesas já lançadas na RAT + o que a tela precisa pra montar o
 // formulário de lançamento (rotas ativas do cliente da RAT, opções de tipo/modalidade).
+// Visibilidade (07/09/2026, pedido do Vitor): igual a GET /:id/itens — `podeVerRat`, não
+// `podeGerenciarDespesas` — a aba "RDVs" do acordeão passou a aparecer pra qualquer um que vê a
+// RAT, em modo leitura pra quem não gerencia (ver `podeGerenciar` na resposta abaixo). Escrita
+// (POST/PATCH/DELETE) continua restrita, sem mudança nenhuma nelas.
 ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
   try {
     const id = Number(req.params.id);
@@ -809,13 +1773,23 @@ ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
       res.status(400).json({ error: "Id inválido" });
       return;
     }
-    const rat = await ratComPermissao(req, res, id);
-    if (!rat) return;
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const rat = await prisma.rat.findUnique({ where: { id } });
+    if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+      res.status(404).json({ error: "RAT não encontrada" });
+      return;
+    }
+    const podeGerenciar = podeGerenciarDespesas(ctx.role, ctx.contexto, rat);
 
+    // Excluída (soft delete confirmado no Senior) some da tela — ver excluidaEm no schema.
     const despesas =
       rat.numrat != null
         ? await prisma.registroDespesaViagem.findMany({
-            where: { codemp: rat.codemp, numrat: rat.numrat },
+            where: { codemp: rat.codemp, numrat: rat.numrat, excluidaEm: null },
             orderBy: [{ datemi: "asc" }, { id: "asc" }],
           })
         : [];
@@ -824,28 +1798,112 @@ ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
         ? await prisma.rotaViagem.findMany({ where: { codcli: rat.codcli, sitreg: "A" }, orderBy: { desrot: "asc" } })
         : [];
 
+    // Pendências ativas de cada despesa listada — decide, por linha, se dá pra editar/excluir
+    // agora (não enquanto um envio anterior está em voo) e se já existe uma exclusão aguardando
+    // confirmação do Senior (indicador visual "Exclusão pendente").
+    const despesaIds = despesas.map((d) => d.id);
+    const pendencias =
+      despesaIds.length > 0
+        ? await prisma.sincronizacaoPendenteDespesa.findMany({
+            where: { despesaId: { in: despesaIds }, status: { in: ["pendente", "enviando", "bloqueado"] } },
+          })
+        : [];
+    const pendenciasPorDespesa = new Map<number, typeof pendencias>();
+    for (const pendencia of pendencias) {
+      const lista = pendenciasPorDespesa.get(pendencia.despesaId) ?? [];
+      lista.push(pendencia);
+      pendenciasPorDespesa.set(pendencia.despesaId, lista);
+    }
+
+    // Comprovantes (ComprovanteRat): quantos cada despesa tem (badge "Sem comprovante") e quantos
+    // estão soltos na RAT, sem despesa — ver seção de comprovantes no fim deste arquivo.
+    const [comprovantesPorDespesa, comprovantesSoltos] = await Promise.all([
+      despesaIds.length > 0
+        ? prisma.comprovanteRat.groupBy({ by: ["despesaId"], where: { despesaId: { in: despesaIds } }, _count: { _all: true } })
+        : Promise.resolve([]),
+      prisma.comprovanteRat.count({ where: { ratId: rat.id, despesaId: null } }),
+    ]);
+    const qtdComprovantesPorDespesa = new Map(comprovantesPorDespesa.map((g) => [g.despesaId, g._count._all]));
+
+    // `podeGerenciar` (permissão de dono/admin) entra na conta: sem ela, `podeLancar` é sempre
+    // false pra quem só visualiza — mesmo quando a RAT em si estaria em condição de receber
+    // despesa (numrat + Digitado). `mensagemBloqueio` só faz sentido pra quem gerencia (avisar
+    // "não dá pra lançar" de uma ação que a pessoa nunca teria acesso mesmo seria ruído).
+    const podeAlterar = podeGerenciar && podeAlterarDespesasDaRat(rat);
+
     res.json({
-      podeLancar: rat.numrat != null,
-      despesas: despesas.map((d) => ({
-        id: d.id,
-        datemi: d.datemi,
-        desrdv: d.desrdv,
-        tipdes: d.tipdes,
-        tipdesLabel: tipdesLabel(d.tipdes),
-        moddesLabel: d.moddes != null ? moddesLabel(d.moddes) : null,
-        qtdrdv: d.qtdrdv,
-        vlrunt: d.vlrunt,
-        vlrtot: d.vlrtot,
-        hordes: d.hordes,
-        fatrdvLabel: simNaoLabel(d.fatrdv),
-        origemCaxHub: d.origemCaxHub,
-        pendenteDeEnvio: d.origemCaxHub && d.enviadoEmSenior == null,
-        podeExcluir: d.origemCaxHub && d.enviadoEmSenior == null,
-      })),
+      podeGerenciar,
+      podeLancar: podeAlterar,
+      mensagemBloqueio: podeGerenciar && !podeAlterar ? mensagemBloqueioDespesas(rat) : null,
+      comprovantesSoltos,
+      numrat: rat.numrat,
+      despesas: despesas.map((d) => {
+        const pendenciasDaDespesa = pendenciasPorDespesa.get(d.id) ?? [];
+        const emAndamento = pendenciasDaDespesa.some((p) => p.status === "enviando");
+        const exclusaoPendente = pendenciasDaDespesa.some((p) => p.tipo === "excluir_despesa");
+        const podeMexer = podeAlterar && !emAndamento && !exclusaoPendente;
+
+        // Status de integração com o Senior — mesma função/filosofia da coluna "Sinc. ERP" de
+        // "Sessões pendentes de confirmação" (routes/apontamentos.ts) e do Cronograma
+        // (routes/alocacao.ts). `confirmado` só entra quando NÃO há pendência ativa — com
+        // pendência ativa, `confirmado: false` deixa o pior caso DELA vencer (enviando/falha),
+        // em vez de "confirmado" (seqrdv de um envio ANTERIOR) mascarar como sincronizado uma
+        // edição/exclusão que ainda está em voo ou falhou. Bug real (09/09/2026): editar uma
+        // despesa já confirmada mostrava o ícone verde (seqrdv da inclusão original) mesmo com
+        // a edição travada — Editar/Excluir sumiam (emAndamento correto) mas o ícone mentia.
+        const integracaoDespesa = calcularIntegracaoErp(
+          pendenciasDaDespesa.length > 0
+            ? pendenciasDaDespesa.map((p) => ({ confirmado: false, pendencia: p }))
+            : [{ confirmado: d.seqrdv != null }]
+        );
+        // "invalido" (dado ausente antes de enfileirar) não existe pra despesa — diferente do
+        // outbox de RAT/alocação, `enfileirarDespesa` sempre recebe um registro já validado
+        // (ver POST/PATCH abaixo), então toda falha real vem com `ultimoErro` preenchido.
+        const integracaoErpErro =
+          integracaoDespesa === "falha" ? pendenciasDaDespesa.find((p) => p.ultimoErro)?.ultimoErro ?? null : null;
+
+        return {
+          id: d.id,
+          seqrdv: d.seqrdv,
+          datemi: d.datemi,
+          desrdv: d.desrdv,
+          tipdes: d.tipdes,
+          tipdesLabel: tipdesLabel(d.tipdes),
+          // moddes só com espaço (o Senior grava assim a despesa avulsa) conta como ausente.
+          moddes: d.moddes?.trim() ? d.moddes : null,
+          moddesLabel: d.moddes?.trim() ? moddesLabel(d.moddes) : null,
+          qtdrdv: d.qtdrdv,
+          // Decimal do Prisma serializa como STRING em JSON (decimal.js por baixo) — sem o
+          // Number(), a soma no frontend (totalLancado) concatena string em vez de somar
+          // ("0" + "150.00" + "10.99" = "0150.0010.99") e vira "R$ NaN" ao formatar. Mesmo
+          // cuidado já usado em ratVisualizacao.ts/pedidos.ts pra Decimal.
+          vlrunt: d.vlrunt != null ? Number(d.vlrunt) : null,
+          vlrtot: d.vlrtot != null ? Number(d.vlrtot) : null,
+          hordes: d.hordes,
+          fatrdv: d.fatrdv,
+          fatrdvLabel: simNaoLabel(d.fatrdv),
+          rotid: d.rotid,
+          origemCaxHub: d.origemCaxHub,
+          // Nunca chegou a existir no Senior (nem enviado por nós, nem veio de lá) — não
+          // depende mais de origemCaxHub: despesa vinda do ERP sempre tem seqrdv, então nunca
+          // cai aqui.
+          pendenteDeEnvio: d.seqrdv == null && d.enviadoEmSenior == null,
+          exclusaoPendente,
+          podeEditar: podeMexer,
+          podeExcluir: podeMexer,
+          // Comprovante não vai pro Senior, então envio em voo não trava; exclusão pendente sim
+          // (o comprovante voltaria pra RAT assim que o Senior confirmasse).
+          podeAnexar: podeAlterar && !exclusaoPendente,
+          qtdComprovantes: qtdComprovantesPorDespesa.get(d.id) ?? 0,
+          integracaoErpLabel: integracaoErpLabel(integracaoDespesa),
+          integracaoErpTone: integracaoErpTone(integracaoDespesa),
+          integracaoErpErro,
+        };
+      }),
       rotas: rotas.map((r) => ({
         id: r.id,
         desrot: r.desrot,
-        kmtrot: r.kmtrot,
+        kmtrot: r.kmtrot != null ? Number(r.kmtrot) : null, // Decimal — mesmo cuidado de vlrunt/vlrtot acima
         horrot: r.horrot,
       })),
       opcoesTipo: TIPDES_DESPESA_AVULSA.map((t) => ({ value: t, label: TIPDES_LABELS[t] })),
@@ -856,11 +1914,203 @@ ratsRouter.get("/:id/despesas", async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// Erro de validação de campo do formulário (despesa avulsa ou deslocamento por rota) — nunca
+// escreve na resposta diretamente porque validarCamposDespesa é usada por 2 rotas (criar/
+// editar) com handlers de erro levemente diferentes.
+class ErroValidacaoDespesa extends Error {
+  constructor(
+    public status: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+/** Campos de conteúdo da despesa — o que POST (criar) e PATCH (editar) têm em comum. */
+interface DadosDespesaValidados {
+  datemi: Date;
+  desrdv: string | null;
+  tipdes: number;
+  moddes: string | null;
+  qtdrdv: number;
+  vlrunt: number;
+  vlrtot: number;
+  hordes: number | null;
+  fatrdv: string;
+  rotid: number | null;
+}
+
+// Valida e normaliza os campos de "Despesa avulsa" ou "Deslocamento por rota" vindos do corpo
+// da requisição. Extraído (07/09/2026) de POST /:id/despesas pra ser reaproveitado por
+// PATCH /despesas/:despesaId — a mesma regra de negócio vale nos dois, só muda o que o
+// chamador faz com o resultado (create vs. update).
+async function validarCamposDespesa(rat: { codcli: number | null }, body: any): Promise<DadosDespesaValidados> {
+  const aba = body?.aba === "deslocamento" ? "deslocamento" : "despesa";
+  const datemi = body?.datemi ? new Date(body.datemi) : null;
+  const vlrunt = Number(body?.vlrunt);
+  if (!datemi || !Number.isFinite(datemi.getTime())) {
+    throw new ErroValidacaoDespesa(400, "Data é obrigatória");
+  }
+  // `qtdrdv` é Int no banco (mesma coluna do Senior) — a Deslocamento pode chegar com o km
+  // fracionado da rota (ex.: 239.1, pré-preenchido a partir de RotaViagem.kmtrot). Arredonda
+  // ANTES de calcular vlrtot, senão o total gravado usaria o valor fracionado enquanto o
+  // qtdrdv persistido seria truncado pelo Postgres — os dois ficariam inconsistentes.
+  const qtdrdv = Math.round(Number(body?.qtdrdv));
+  if (!Number.isFinite(qtdrdv) || qtdrdv <= 0) {
+    throw new ErroValidacaoDespesa(400, "Quantidade precisa ser maior que zero");
+  }
+  if (!Number.isFinite(vlrunt) || vlrunt < 0) {
+    throw new ErroValidacaoDespesa(400, "Valor unitário inválido");
+  }
+  // Nunca confiar no total que vier do corpo — a tela mostra o campo travado, mas quem
+  // grava é o backend. É sempre qtd × unitário, os dois validados acima.
+  const vlrtot = Math.round(qtdrdv * vlrunt * 100) / 100;
+
+  if (aba === "deslocamento") {
+    const rotid = Number(body?.rotid);
+    const moddes = typeof body?.moddes === "string" ? body.moddes.trim() : "";
+    if (!Number.isFinite(rotid)) {
+      throw new ErroValidacaoDespesa(400, "Selecione uma rota");
+    }
+    if (!MODDES_LABELS[moddes]) {
+      throw new ErroValidacaoDespesa(400, "Modalidade inválida");
+    }
+    // A rota tem que pertencer ao cliente da RAT — sem essa checagem, dava pra lançar
+    // deslocamento com o km de uma rota de outro cliente qualquer, só sabendo o id.
+    const rota = await prisma.rotaViagem.findFirst({ where: { id: rotid, codcli: rat.codcli ?? -1, sitreg: "A" } });
+    if (!rota) {
+      throw new ErroValidacaoDespesa(400, "Rota não encontrada para o cliente desta RAT");
+    }
+    const desrdv = typeof body?.desrdv === "string" && body.desrdv.trim() !== "" ? body.desrdv.trim() : rota.desrot;
+    // Horas de deslocamento: só na aba Deslocamento, e só editável por ora — a regra de
+    // cálculo automático (a partir da rota/percursos) ainda não foi definida (ver plano).
+    const hordesBruto = Number(body?.hordes);
+    const hordes = Number.isFinite(hordesBruto) ? hordesBruto : null;
+    return { datemi, desrdv, tipdes: TIPDES_DESLOCAMENTO_ROTA, moddes, qtdrdv, vlrunt, vlrtot, hordes, fatrdv: "S", rotid: rota.id };
+  }
+
+  const tipdes = Number(body?.tipdes);
+  if (!(TIPDES_DESPESA_AVULSA as readonly number[]).includes(tipdes)) {
+    throw new ErroValidacaoDespesa(400, "Tipo de despesa inválido");
+  }
+  const desrdv = typeof body?.desrdv === "string" ? body.desrdv.trim() : "";
+  if (desrdv === "") {
+    throw new ErroValidacaoDespesa(400, "Descrição é obrigatória");
+  }
+  // Default "Sim" — mesma convenção da tela do ERP (a maioria fatura o cliente: 14.260
+  // de 15.034 linhas históricas já vêm com fatrdv='S').
+  const fatrdv = body?.fatrdv === "N" ? "N" : "S";
+  return { datemi, desrdv, tipdes, moddes: null, qtdrdv, vlrunt, vlrtot, hordes: null, fatrdv, rotid: null };
+}
+
+// Categorias fixas do relatório impresso — mesmo agrupamento do modelo já usado dentro do
+// Senior (RELATÓRIO DE DESPESAS DE VIAGEM): sempre as 6, na mesma ordem, mesmo zeradas.
+// "Quilometragem" junta tipdes 1 (Deslocamento/km Rodado, despesa avulsa) e 7 (Deslocamento por
+// Rota) — os dois são km rodado, o modelo do Senior não distingue entre eles.
+const CATEGORIAS_RELATORIO_DESPESA: { categoria: string; tipdes: number[] }[] = [
+  { categoria: "Quilometragem", tipdes: [1, 7] },
+  { categoria: "Estadias/Refeições", tipdes: [2] },
+  { categoria: "Pedágios", tipdes: [3] },
+  { categoria: "Ligações Telefônicas", tipdes: [4] },
+  { categoria: "Táxi/Metrô/Ônibus", tipdes: [5] },
+  { categoria: "Outros", tipdes: [6] },
+];
+
+// Dados do relatório de despesas de UMA RAT — usados pelo relatório de impressão (rota abaixo) e
+// pela capa do PDF de prestação de contas (GET /:id/comprovantes/pdf). Recebe a RAT já resolvida
+// e autorizada; a checagem de permissão fica com quem chama.
+async function dadosRelatorioDespesas(rat: import("@prisma/client").Rat) {
+  const [cliente, consultor, despesas] = await Promise.all([
+    rat.codcli != null ? prisma.cliente.findUnique({ where: { codcli: rat.codcli } }) : null,
+    prisma.consultor.findFirst({ where: { codemp: rat.codemp, codfor: rat.codfor } }),
+    // Excluída (soft delete confirmado no Senior) fica de fora — mesmo filtro de
+    // GET /:id/despesas.
+    rat.numrat != null
+      ? prisma.registroDespesaViagem.findMany({
+          where: { codemp: rat.codemp, numrat: rat.numrat, excluidaEm: null },
+          orderBy: [{ datemi: "asc" }, { id: "asc" }],
+        })
+      : [],
+  ]);
+
+  // Deslocamento por rota (tipdes=7) com qtdrdv=0 é lixo de teste/rascunho (rota selecionada
+  // sem km de verdade) — não é um lançamento real, não entra no relatório impresso nem nos
+  // totais/resumo (pedido explícito do Vitor, 09/09/2026).
+  const despesasImpressas = despesas.filter((d) => !(d.tipdes === TIPDES_DESLOCAMENTO_ROTA && (d.qtdrdv ?? 0) === 0));
+
+  // "Faturar Cliente" não existe como campo agregado da RAT — só por despesa (`fatrdv`).
+  // Deriva como verdadeiro se QUALQUER despesa faturar (decisão explícita do Vitor).
+  const faturaCliente = despesasImpressas.some((d) => d.fatrdv === "S");
+
+  const resumoPorCategoria = CATEGORIAS_RELATORIO_DESPESA.map(({ categoria, tipdes }) => {
+    const doGrupo = despesasImpressas.filter((d) => d.tipdes != null && tipdes.includes(d.tipdes));
+    return {
+      categoria,
+      qtdrdv: doGrupo.reduce((soma, d) => soma + (d.qtdrdv ?? 0), 0),
+      vlrtot: doGrupo.reduce((soma, d) => soma + Number(d.vlrtot ?? 0), 0),
+    };
+  });
+
+  return {
+    rat: {
+      numrat: rat.numrat,
+      datemi: rat.datemi,
+      consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`,
+      cliente: cliente ? `${cliente.codcli} - ${cliente.nomcli}` : null,
+      codpro: rat.codpro,
+      numprj: rat.numprj,
+      codfpj: rat.codfpj,
+      faturaCliente,
+    },
+    despesas: despesasImpressas.map((d) => ({
+      id: d.id,
+      tipdes: d.tipdes,
+      tipdesLabel: tipdesLabel(d.tipdes),
+      desrdv: d.desrdv,
+      qtdrdv: d.qtdrdv,
+      // Decimal do Prisma serializa como string em JSON — mesmo cuidado de GET /:id/despesas.
+      vlrunt: d.vlrunt != null ? Number(d.vlrunt) : null,
+      vlrtot: d.vlrtot != null ? Number(d.vlrtot) : null,
+      datemi: d.datemi,
+    })),
+    resumoPorCategoria,
+    total: despesasImpressas.reduce((soma, d) => soma + Number(d.vlrtot ?? 0), 0),
+  };
+}
+
+// GET /:id/despesas/relatorio — dados pro relatório de impressão da RDV
+// (RelatorioDespesasRat.tsx, frontend, aberto numa aba própria a partir do botão "Imprimir" em
+// DespesasRatPainel.tsx), no modelo já usado dentro do Senior. Mesma visibilidade de
+// GET /:id/despesas (podeVerRat, não podeGerenciarDespesas — pedido explícito do Vitor,
+// 09/09/2026: "Imprimir" é leitura, aparece pra qualquer um que vê a RAT).
+ratsRouter.get("/:id/despesas/relatorio", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const ctx = await contextoDoUsuario(req);
+    if (!ctx) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const rat = await prisma.rat.findUnique({ where: { id } });
+    if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+      res.status(404).json({ error: "RAT não encontrada" });
+      return;
+    }
+
+    res.json(await dadosRelatorioDespesas(rat));
+  } catch (error) {
+    handleError(res, error, "despesas-relatorio");
+  }
+});
+
 // POST /:id/despesas — lança despesa (aba "despesa") ou deslocamento por rota (aba
-// "deslocamento"). Grava sempre local (origemCaxHub=true, seqrdv=null): o Senior não publica
-// operação de gravação de RDV hoje (só alocarAtividades/getData/getPropostaItemDev/
-// registrarAtividades) — quando publicar, um job varre origemCaxHub + enviadoEmSenior IS NULL
-// e envia o acumulado, sem precisar redigitar nada.
+// "deslocamento"). Grava sempre local (origemCaxHub=true, seqrdv=null) e enfileira o envio pro
+// Senior via `ManterItemDespesa` (sync/outboxSeniorDespesa.ts, mesmas regras do outbox de RAT:
+// disparo imediato + cron de 15 min como rede de segurança).
 ratsRouter.post("/:id/despesas", async (req: AuthenticatedRequest, res) => {
   try {
     const id = Number(req.params.id);
@@ -870,117 +2120,177 @@ ratsRouter.post("/:id/despesas", async (req: AuthenticatedRequest, res) => {
     }
     const rat = await ratComPermissao(req, res, id);
     if (!rat) return;
-    if (rat.numrat == null) {
-      res.status(400).json({ error: "Esta RAT ainda não tem número do ERP — não é possível lançar despesa ainda" });
+    if (!podeAlterarDespesasDaRat(rat)) {
+      res.status(400).json({ error: mensagemBloqueioDespesas(rat) });
       return;
     }
 
-    const aba = req.body?.aba === "deslocamento" ? "deslocamento" : "despesa";
-    const datemi = req.body?.datemi ? new Date(req.body.datemi) : null;
-    const vlrunt = Number(req.body?.vlrunt);
-    if (!datemi || !Number.isFinite(datemi.getTime())) {
-      res.status(400).json({ error: "Data é obrigatória" });
-      return;
+    let validado: DadosDespesaValidados;
+    try {
+      validado = await validarCamposDespesa(rat, req.body);
+    } catch (erro) {
+      if (erro instanceof ErroValidacaoDespesa) {
+        res.status(erro.status).json({ error: erro.message });
+        return;
+      }
+      throw erro;
     }
-    // `qtdrdv` é Int no banco (mesma coluna do Senior) — a Deslocamento pode chegar com o km
-    // fracionado da rota (ex.: 239.1, pré-preenchido a partir de RotaViagem.kmtrot). Arredonda
-    // ANTES de calcular vlrtot, senão o total gravado usaria o valor fracionado enquanto o
-    // qtdrdv persistido seria truncado pelo Postgres — os dois ficariam inconsistentes.
-    const qtdrdv = Math.round(Number(req.body?.qtdrdv));
-    if (!Number.isFinite(qtdrdv) || qtdrdv <= 0) {
-      res.status(400).json({ error: "Quantidade precisa ser maior que zero" });
-      return;
-    }
-    if (!Number.isFinite(vlrunt) || vlrunt < 0) {
-      res.status(400).json({ error: "Valor unitário inválido" });
-      return;
-    }
-    // Nunca confiar no total que vier do corpo — a tela mostra o campo travado, mas quem
-    // grava é o backend. É sempre qtd × unitário, os dois validados acima.
-    const vlrtot = Math.round(qtdrdv * vlrunt * 100) / 100;
 
-    let data: Parameters<typeof prisma.registroDespesaViagem.create>[0]["data"];
-
-    if (aba === "deslocamento") {
-      const rotid = Number(req.body?.rotid);
-      const moddes = typeof req.body?.moddes === "string" ? req.body.moddes.trim() : "";
-      if (!Number.isFinite(rotid)) {
-        res.status(400).json({ error: "Selecione uma rota" });
-        return;
-      }
-      if (!MODDES_LABELS[moddes]) {
-        res.status(400).json({ error: "Modalidade inválida" });
-        return;
-      }
-      // A rota tem que pertencer ao cliente da RAT — sem essa checagem, dava pra lançar
-      // deslocamento com o km de uma rota de outro cliente qualquer, só sabendo o id.
-      const rota = await prisma.rotaViagem.findFirst({ where: { id: rotid, codcli: rat.codcli ?? -1, sitreg: "A" } });
-      if (!rota) {
-        res.status(400).json({ error: "Rota não encontrada para o cliente desta RAT" });
-        return;
-      }
-      const desrdv = typeof req.body?.desrdv === "string" && req.body.desrdv.trim() !== "" ? req.body.desrdv.trim() : rota.desrot;
-      // Horas de deslocamento: só na aba Deslocamento, e só editável por ora — a regra de
-      // cálculo automático (a partir da rota/percursos) ainda não foi definida (ver plano).
-      const hordesBruto = Number(req.body?.hordes);
-      const hordes = Number.isFinite(hordesBruto) ? hordesBruto : null;
-      data = {
+    const criada = await prisma.registroDespesaViagem.create({
+      data: {
         codemp: rat.codemp,
-        numrat: rat.numrat,
+        numrat: rat.numrat!,
         seqrdv: null,
-        datemi,
-        desrdv,
-        tipdes: TIPDES_DESLOCAMENTO_ROTA,
-        moddes,
-        qtdrdv,
-        vlrunt,
-        vlrtot,
-        hordes,
-        fatrdv: "S",
-        reerdv: "S",
-        rotid: rota.id,
-        origemCaxHub: true,
-      };
-    } else {
-      const tipdes = Number(req.body?.tipdes);
-      if (!(TIPDES_DESPESA_AVULSA as readonly number[]).includes(tipdes)) {
-        res.status(400).json({ error: "Tipo de despesa inválido" });
-        return;
-      }
-      const desrdv = typeof req.body?.desrdv === "string" ? req.body.desrdv.trim() : "";
-      if (desrdv === "") {
-        res.status(400).json({ error: "Descrição é obrigatória" });
-        return;
-      }
-      // Default "Sim" — mesma convenção da tela do ERP (a maioria fatura o cliente: 14.260
-      // de 15.034 linhas históricas já vêm com fatrdv='S').
-      const fatrdv = req.body?.fatrdv === "N" ? "N" : "S";
-      data = {
-        codemp: rat.codemp,
-        numrat: rat.numrat,
-        seqrdv: null,
-        datemi,
-        desrdv,
-        tipdes,
-        qtdrdv,
-        vlrunt,
-        vlrtot,
-        fatrdv,
         reerdv: "S",
         origemCaxHub: true,
-      };
-    }
+        ...validado,
+      },
+    });
 
-    const criada = await prisma.registroDespesaViagem.create({ data });
+    // DESPESA_CRIADA (13/09/2026) — entra no histórico do CABEÇALHO da RAT (entidadeTipo: rat),
+    // não de uma entidade "despesa" própria — mesma convenção de RAT_ITEM_DESVINCULADO_SENIOR.
+    await criarEventoAuditoria({
+      origem: "tela",
+      usuarioId: req.user!.userId,
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+      eventoTipo: EVENTOS_AUDITORIA.DESPESA_CRIADA,
+      alteracoes: null,
+      metadata: { origemCriacao: "caxhub", despesaId: criada.id, tipdes: criada.tipdes },
+      correlationId: req.correlationId!,
+    });
+
+    await enfileirarDespesa(criada.id);
     res.status(201).json({ id: criada.id });
   } catch (error) {
     handleError(res, error, "despesas-criar");
   }
 });
 
-// DELETE /despesas/:despesaId — só remove o que nasceu no CaxHub e ainda não foi enviado ao
-// Senior. Despesa vinda do ERP (ou já marcada como enviada) não se apaga por aqui: o próximo
-// sync traria ela de volta mesmo assim, e "apagar" daria a falsa impressão de que desapareceu.
+// PATCH /despesas/:despesaId — edita uma despesa já lançada (qualquer origem), enquanto a RAT
+// dela ainda está Digitada (07/09/2026, pedido do Vitor). Os campos são gravados localmente na
+// hora; se a despesa já tinha sido confirmada no Senior (seqrdv preenchido), a edição só chega
+// lá quando a pendência "editar_despesa" (tipEve=A + seqRdv) for processada — daí o `pendente`
+// na resposta. Se nunca tinha sido enviada, os novos valores entram na própria inclusão
+// pendente (enviarInclusaoDespesa relê do banco, nunca confia no payload congelado).
+ratsRouter.patch("/despesas/:despesaId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const despesaId = Number(req.params.despesaId);
+    if (!Number.isFinite(despesaId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const despesa = await prisma.registroDespesaViagem.findUnique({ where: { id: despesaId } });
+    if (!despesa || despesa.excluidaEm != null) {
+      res.status(404).json({ error: "Despesa não encontrada" });
+      return;
+    }
+    const rat = await ratDaDespesaComPermissao(req, res, despesa);
+    if (!rat) return;
+    if (!podeAlterarDespesasDaRat(rat)) {
+      res.status(400).json({ error: mensagemBloqueioDespesas(rat) });
+      return;
+    }
+    if (await pendenciaEmAndamento(despesaId)) {
+      res.status(409).json({ error: "Envio anterior desta despesa ainda em andamento — tente novamente em instantes" });
+      return;
+    }
+
+    let validado: DadosDespesaValidados;
+    try {
+      validado = await validarCamposDespesa(rat, req.body);
+    } catch (erro) {
+      if (erro instanceof ErroValidacaoDespesa) {
+        res.status(erro.status).json({ error: erro.message });
+        return;
+      }
+      throw erro;
+    }
+
+    await prisma.registroDespesaViagem.update({ where: { id: despesaId }, data: validado });
+
+    if (despesa.seqrdv != null) {
+      await enfileirarEdicaoDespesa(despesaId);
+    } else {
+      // Nunca foi enviada — a inclusão pendente já existente vai mandar os valores novos
+      // quando processada. Só reenfileira se por algum motivo não sobrou nenhuma pendência
+      // ativa (ex.: apagada manualmente antes) — caso raro, mas sem isso a edição ficaria
+      // presa sem nunca ser propagada.
+      const semPendenciaAtiva = !(await prisma.sincronizacaoPendenteDespesa.findFirst({
+        where: { despesaId, status: { in: ["pendente", "enviando"] } },
+      }));
+      if (semPendenciaAtiva) await enfileirarDespesa(despesaId);
+    }
+
+    res.json({ ok: true, pendente: true });
+  } catch (error) {
+    handleError(res, error, "despesas-editar");
+  }
+});
+
+// POST /despesas/:despesaId/reenviar — nova tentativa de sincronizar UMA despesa com o Senior,
+// disparada pelo próprio ícone "Sinc. ERP" da linha quando o estado é "falha" ou "pendente"
+// (GET /:id/despesas, ver integracaoErpTone) — mesmo espírito de
+// POST /apontamentos/envio/:ratItemId/reenviar. Não passa por `podeAlterarDespesasDaRat`: não
+// está mudando o conteúdo da despesa, só reenviando o que já existe, então continua liberado
+// mesmo se a RAT saiu de "Digitado" nesse meio-tempo (mesmo raciocínio da Fase 2 de
+// POST /:id/sincronizar, que reprocessa pendências independente do sitrat atual).
+ratsRouter.post("/despesas/:despesaId/reenviar", async (req: AuthenticatedRequest, res) => {
+  try {
+    const despesaId = Number(req.params.despesaId);
+    if (!Number.isFinite(despesaId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const despesa = await prisma.registroDespesaViagem.findUnique({ where: { id: despesaId } });
+    if (!despesa || despesa.excluidaEm != null) {
+      res.status(404).json({ error: "Despesa não encontrada" });
+      return;
+    }
+    const rat = await ratDaDespesaComPermissao(req, res, despesa);
+    if (!rat) return;
+    if (await pendenciaEmAndamento(despesaId)) {
+      res.status(409).json({ error: "Já existe um envio em andamento para esta despesa — tente novamente em instantes" });
+      return;
+    }
+
+    // Reaproveita a pendência existente (preserva `tipo`/tipEve — enviar/editar/excluir) em vez
+    // de criar uma nova; só cria do zero se por algum motivo não sobrou nenhuma (ex.: apagada
+    // manualmente). "bloqueado" precisa resetar tentativas/ultimoErro antes; "pendente" com
+    // ultimoErro (tentativas < MAX) já está apto, só precisa do disparo imediato.
+    const pendencia = await prisma.sincronizacaoPendenteDespesa.findFirst({
+      where: { despesaId, status: { in: ["pendente", "bloqueado"] } },
+      orderBy: { id: "desc" },
+    });
+    let pendenciaId: number;
+    if (pendencia) {
+      if (pendencia.status === "bloqueado") await reprocessarDespesa(pendencia.id);
+      pendenciaId = pendencia.id;
+    } else {
+      pendenciaId = await enfileirarDespesa(despesaId, { adiarEnvio: true });
+    }
+
+    // Disparo em segundo plano — quem chamou não espera o envio terminar, só sabe que entrou
+    // na fila; a tela descobre o resultado no próximo GET /:id/despesas.
+    processarFilaDespesas({ apenasId: pendenciaId }).catch((erro) => {
+      console.error("[despesas] reenvio ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+    });
+
+    res.status(202).json({ status: "reenviando" });
+  } catch (error) {
+    handleError(res, error, "despesas-reenviar");
+  }
+});
+
+// DELETE /despesas/:despesaId — enquanto a RAT ainda está Digitada, exclui qualquer despesa
+// dela (própria origem ou vinda do Senior; 07/09/2026, pedido do Vitor). Nunca tinha ido pro
+// Senior (seqrdv nulo) → apaga a linha na hora, nada a desfazer lá. Já tinha sido confirmada →
+// enfileira a exclusão (tipEve=E + seqRdv) e só vira soft delete (excluidaEm) quando o Senior
+// confirmar, ver processarFilaDespesas em sync/outboxSeniorDespesa.ts — a linha continua
+// visível como "Exclusão pendente" até lá (ver exclusaoPendente em GET /:id/despesas).
 ratsRouter.delete("/despesas/:despesaId", async (req: AuthenticatedRequest, res) => {
   try {
     const despesaId = Number(req.params.despesaId);
@@ -989,32 +2299,454 @@ ratsRouter.delete("/despesas/:despesaId", async (req: AuthenticatedRequest, res)
       return;
     }
     const despesa = await prisma.registroDespesaViagem.findUnique({ where: { id: despesaId } });
-    if (!despesa) {
+    if (!despesa || despesa.excluidaEm != null) {
       res.status(404).json({ error: "Despesa não encontrada" });
       return;
     }
-    const ctx = await contextoDoUsuario(req);
-    if (!ctx) {
-      res.status(404).json({ error: "Usuário não encontrado" });
+    const rat = await ratDaDespesaComPermissao(req, res, despesa);
+    if (!rat) return;
+    if (!podeAlterarDespesasDaRat(rat)) {
+      res.status(400).json({ error: mensagemBloqueioDespesas(rat) });
       return;
     }
-    if (!podeGerenciarDespesas(ctx.role)) {
-      res.status(403).json({ error: "Lançamento de despesas de viagem disponível só para administradores por enquanto" });
+    if (await pendenciaEmAndamento(despesaId)) {
+      res.status(409).json({ error: "Envio anterior desta despesa ainda em andamento — tente novamente em instantes" });
       return;
     }
-    const rat = await prisma.rat.findFirst({ where: { codemp: despesa.codemp, numrat: despesa.numrat } });
-    if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
-      res.status(404).json({ error: "RAT não encontrada" });
-      return;
-    }
-    if (!despesa.origemCaxHub || despesa.enviadoEmSenior != null) {
-      res.status(400).json({ error: "Só é possível excluir despesa lançada aqui e ainda não enviada ao Senior" });
+    const exclusaoJaPendente = await prisma.sincronizacaoPendenteDespesa.findFirst({
+      where: { despesaId, tipo: "excluir_despesa", status: { in: ["pendente", "bloqueado"] } },
+    });
+    if (exclusaoJaPendente) {
+      res.status(400).json({ error: "Exclusão já está pendente de confirmação no Senior" });
       return;
     }
 
-    await prisma.registroDespesaViagem.delete({ where: { id: despesaId } });
-    res.json({ ok: true });
+    if (despesa.seqrdv == null) {
+      // Nunca existiu no Senior — nada a desfazer lá. Cancela qualquer pendência de inclusão
+      // ainda ativa (o usuário desistiu antes dela sair daqui) e apaga a linha de vez.
+      await prisma.$transaction([
+        prisma.sincronizacaoPendenteDespesa.deleteMany({ where: { despesaId, status: { in: ["pendente", "bloqueado"] } } }),
+        prisma.registroDespesaViagem.delete({ where: { id: despesaId } }),
+      ]);
+      res.json({ ok: true, pendente: false });
+      return;
+    }
+
+    await enfileirarExclusaoDespesa(despesaId);
+    res.json({ ok: true, pendente: true });
   } catch (error) {
     handleError(res, error, "despesas-excluir");
+  }
+});
+
+// ---------- comprovantes (foto/PDF) das despesas de viagem ----------
+//
+// ComprovanteRat (25/09/2026, pedido do Vitor): sempre pertence a uma RAT e, opcionalmente, a
+// uma despesa dela — nulo = "solto" na RAT (fotografado na hora, vinculado depois ao lançar a
+// despesa). Arquivo em disco (COMPROVANTES_RAT_DIR, volume Docker), só o metadado no banco;
+// nada vai pro Senior. Mesmas regras das despesas: ver = podeVerRat; anexar/vincular/remover =
+// dono ou admin (podeGerenciarDespesas) com a RAT Digitada (podeAlterarDespesasDaRat).
+
+const MIMES_COMPROVANTE = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
+const TAMANHO_MAX_COMPROVANTE_MB = 15;
+const MAX_COMPROVANTES_POR_RAT = 30;
+
+const uploadComprovante = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      fs.mkdirSync(COMPROVANTES_RAT_DIR, { recursive: true });
+      cb(null, COMPROVANTES_RAT_DIR);
+    },
+    filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: TAMANHO_MAX_COMPROVANTE_MB * 1024 * 1024 },
+  // O multer lê o nome do arquivo como latin1 por padrão — "Separação.pdf" chegava como
+  // "SeparaÃ§Ã£o.pdf". Os navegadores mandam UTF-8.
+  defParamCharset: "utf8",
+  fileFilter: (_req, file, cb) => {
+    // HEIC do iPhone também pela extensão: no Windows o navegador costuma mandá-lo sem tipo (ver domain/comprovanteHeic.ts).
+    if (MIMES_COMPROVANTE.has(file.mimetype) || ehHeic(file.originalname, file.mimetype)) cb(null, true);
+    else cb(new Error("Tipo de arquivo não permitido (use foto, inclusive HEIC do iPhone, ou PDF)"));
+  },
+});
+
+function receberComprovante(req: AuthenticatedRequest, res: import("express").Response, next: import("express").NextFunction) {
+  uploadComprovante.single("arquivo")(req, res, (err: unknown) => {
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      res.status(400).json({ error: `Arquivo maior que ${TAMANHO_MAX_COMPROVANTE_MB} MB` });
+      return;
+    }
+    if (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Falha no upload" });
+      return;
+    }
+    next();
+  });
+}
+
+// Leitura: quem vê a RAT. Escrita: ratComPermissao (dono/admin) + RAT Digitada.
+async function ratDosComprovantes(
+  req: AuthenticatedRequest,
+  res: import("express").Response,
+  ratId: number,
+  acesso: "leitura" | "escrita"
+): Promise<import("@prisma/client").Rat | null> {
+  if (acesso === "escrita") {
+    const rat = await ratComPermissao(req, res, ratId);
+    if (!rat) return null;
+    if (!podeAlterarDespesasDaRat(rat)) {
+      res.status(400).json({ error: mensagemBloqueioDespesas(rat) });
+      return null;
+    }
+    return rat;
+  }
+  const ctx = await contextoDoUsuario(req);
+  if (!ctx) {
+    res.status(404).json({ error: "Usuário não encontrado" });
+    return null;
+  }
+  const rat = await prisma.rat.findUnique({ where: { id: ratId } });
+  if (!rat || !podeVerRat(ctx.role, ctx.contexto, rat)) {
+    res.status(404).json({ error: "RAT não encontrada" });
+    return null;
+  }
+  return rat;
+}
+
+async function comprovanteComRat(req: AuthenticatedRequest, res: import("express").Response, acesso: "leitura" | "escrita") {
+  const id = Number(req.params.comprovanteId);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Id inválido" });
+    return null;
+  }
+  const comprovante = await prisma.comprovanteRat.findUnique({ where: { id } });
+  if (!comprovante) {
+    res.status(404).json({ error: "Comprovante não encontrado" });
+    return null;
+  }
+  const rat = await ratDosComprovantes(req, res, comprovante.ratId, acesso);
+  if (!rat) return null;
+  return { comprovante, rat };
+}
+
+// `despesaId` vindo do corpo (multipart = string, JSON = número/null): ausente/vazio = solto.
+function lerDespesaId(valor: unknown): number | null | "invalido" {
+  if (valor === undefined || valor === null || valor === "") return null;
+  const n = Number(valor);
+  return Number.isInteger(n) && n > 0 ? n : "invalido";
+}
+
+// Despesa não tem FK pra Rat (casa por codemp+numrat), então o vínculo confere a chave natural.
+// Excluída ou com exclusão aguardando o Senior não recebe comprovante — ele voltaria pra RAT
+// assim que a exclusão confirmasse.
+async function erroDespesaDoVinculo(rat: { codemp: number; numrat: number | null }, despesaId: number): Promise<string | null> {
+  const despesa = await prisma.registroDespesaViagem.findUnique({ where: { id: despesaId } });
+  if (!despesa || despesa.excluidaEm != null || despesa.codemp !== rat.codemp || despesa.numrat !== rat.numrat) {
+    return "Despesa não encontrada nesta RAT";
+  }
+  const exclusaoPendente = await prisma.sincronizacaoPendenteDespesa.findFirst({
+    where: { despesaId, tipo: "excluir_despesa", status: { in: ["pendente", "enviando", "bloqueado"] } },
+  });
+  return exclusaoPendente ? "Esta despesa está com exclusão pendente no Senior" : null;
+}
+
+function auditarComprovante(
+  tx: Prisma.TransactionClient,
+  req: AuthenticatedRequest,
+  rat: import("@prisma/client").Rat,
+  eventoTipo: EventoAuditoriaTipo,
+  metadata: Record<string, unknown>
+) {
+  return criarEventoAuditoria(
+    {
+      origem: "tela",
+      usuarioId: req.user!.userId,
+      codemp: rat.codemp,
+      codpro: rat.codpro,
+      entidadeTipo: ENTIDADES_AUDITORIA.RAT,
+      entidadeId: entidadeIdRat(rat.id),
+      entidadeRotulo: `RAT ${rat.id} — Proposta ${rat.codemp}/${rat.codpro ?? "?"}`,
+      eventoTipo,
+      alteracoes: null,
+      metadata,
+      correlationId: req.correlationId!,
+    },
+    tx
+  );
+}
+
+type ComprovanteComAutor = Prisma.ComprovanteRatGetPayload<{ include: { user: { select: { nome: true } } } }>;
+
+function serializarComprovante(c: ComprovanteComAutor) {
+  return {
+    id: c.id,
+    despesaId: c.despesaId,
+    nomeArquivo: c.nomeArquivo,
+    mimeType: c.mimeType,
+    tamanhoBytes: c.tamanhoBytes,
+    autorNome: c.user?.nome ?? null,
+    criadoEm: c.criadoEm,
+  };
+}
+
+// GET /:id/comprovantes — todos os comprovantes da RAT (soltos e vinculados).
+ratsRouter.get("/:id/comprovantes", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const rat = await ratDosComprovantes(req, res, id, "leitura");
+    if (!rat) return;
+    const ctx = await contextoDoUsuario(req);
+    const podeAnexar = !!ctx && podeGerenciarDespesas(ctx.role, ctx.contexto, rat) && podeAlterarDespesasDaRat(rat);
+    const comprovantes = await prisma.comprovanteRat.findMany({
+      where: { ratId: rat.id },
+      include: { user: { select: { nome: true } } },
+      orderBy: { id: "asc" },
+    });
+    res.json({ podeAnexar, comprovantes: comprovantes.map(serializarComprovante) });
+  } catch (error) {
+    handleError(res, error, "comprovantes-listar");
+  }
+});
+
+// GET /:id/comprovantes/zip — baixa todos os comprovantes da RAT num .zip, uma pasta por despesa
+// ("Sem despesa" pros soltos). `store` (sem compressão): foto webp/jpeg e PDF já vêm comprimidos.
+function nomeSeguroZip(texto: string): string {
+  return texto.replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "arquivo";
+}
+
+ratsRouter.get("/:id/comprovantes/zip", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const rat = await ratDosComprovantes(req, res, id, "leitura");
+    if (!rat) return;
+    const comprovantes = await prisma.comprovanteRat.findMany({ where: { ratId: rat.id }, orderBy: { id: "asc" } });
+    if (comprovantes.length === 0) {
+      res.status(404).json({ error: "Esta RAT não tem comprovantes" });
+      return;
+    }
+    const despesaIds = [...new Set(comprovantes.map((c) => c.despesaId).filter((d): d is number => d != null))];
+    const despesas = despesaIds.length
+      ? await prisma.registroDespesaViagem.findMany({ where: { id: { in: despesaIds } }, select: { id: true, desrdv: true } })
+      : [];
+    const pastaDaDespesa = new Map(despesas.map((d) => [d.id, nomeSeguroZip(`Despesa ${d.id} - ${d.desrdv ?? ""}`)]));
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="comprovantes-RAT-${rat.numrat ?? rat.id}.zip"`);
+    const zip = archiver("zip", { store: true });
+    zip.on("error", (err) => {
+      console.error("[rats:comprovantes-zip]", err.message);
+      res.destroy(err);
+    });
+    zip.pipe(res);
+    const usados = new Set<string>();
+    for (const c of comprovantes) {
+      const arquivo = path.join(COMPROVANTES_RAT_DIR, c.caminhoArquivo);
+      if (!fs.existsSync(arquivo)) continue;
+      const pasta = c.despesaId != null ? pastaDaDespesa.get(c.despesaId) ?? `Despesa ${c.despesaId}` : "Sem despesa";
+      const ext = path.extname(c.nomeArquivo);
+      const base = nomeSeguroZip(path.basename(c.nomeArquivo, ext));
+      let nome = `${pasta}/${base}${ext}`;
+      for (let n = 2; usados.has(nome.toLowerCase()); n += 1) nome = `${pasta}/${base} (${n})${ext}`;
+      usados.add(nome.toLowerCase());
+      zip.file(arquivo, { name: nome });
+    }
+    await zip.finalize();
+  } catch (error) {
+    if (res.headersSent) res.destroy();
+    else handleError(res, error, "comprovantes-zip");
+  }
+});
+
+// GET /:id/comprovantes/pdf?modo=prestacao|simples — todos os comprovantes da RAT num PDF único,
+// montado aqui no servidor (domain/pdfComprovantes.ts). "prestacao" = capa com o resumo da RAT e das
+// despesas + faixa de identificação e rodapé numerado em cada página; "simples" = só os anexos em
+// sequência. Mesma permissão (leitura) e mesma regra de 404 do .zip.
+ratsRouter.get("/:id/comprovantes/pdf", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const modo = req.query.modo;
+    if (modo !== "prestacao" && modo !== "simples") {
+      res.status(400).json({ error: "Modo inválido (use prestacao ou simples)" });
+      return;
+    }
+    const rat = await ratDosComprovantes(req, res, id, "leitura");
+    if (!rat) return;
+    const comprovantes = await prisma.comprovanteRat.findMany({ where: { ratId: rat.id }, orderBy: { id: "asc" } });
+    if (comprovantes.length === 0) {
+      res.status(404).json({ error: "Esta RAT não tem comprovantes" });
+      return;
+    }
+    const [relatorio, usuario] = await Promise.all([
+      dadosRelatorioDespesas(rat),
+      prisma.user.findUnique({ where: { id: req.user!.userId }, select: { nome: true } }),
+    ]);
+    const pdf = await montarPdfComprovantes({
+      modo: modo as ModoPdfComprovantes,
+      relatorio,
+      comprovantes: comprovantes.map((c) => ({
+        id: c.id,
+        despesaId: c.despesaId,
+        nomeArquivo: c.nomeArquivo,
+        mimeType: c.mimeType,
+        arquivo: path.join(COMPROVANTES_RAT_DIR, c.caminhoArquivo),
+      })),
+      geradoPor: usuario?.nome ?? "CaxHub",
+    });
+    const prefixo = modo === "prestacao" ? "prestacao-contas" : "comprovantes";
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${prefixo}-RAT-${rat.numrat ?? rat.id}.pdf"`);
+    res.end(Buffer.from(pdf));
+  } catch (error) {
+    handleError(res, error, "comprovantes-pdf");
+  }
+});
+
+// POST /:id/comprovantes — multipart: `arquivo` + `despesaId` opcional.
+ratsRouter.post("/:id/comprovantes", receberComprovante, async (req: AuthenticatedRequest, res) => {
+  const descartar = () => req.file && fs.unlink(req.file.path, () => {});
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      descartar();
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const rat = await ratDosComprovantes(req, res, id, "escrita");
+    if (!rat) return void descartar();
+    if (!req.file) {
+      res.status(400).json({ error: "Arquivo é obrigatório" });
+      return;
+    }
+    const despesaId = lerDespesaId(req.body?.despesaId);
+    if (despesaId === "invalido") {
+      descartar();
+      res.status(400).json({ error: "Despesa inválida" });
+      return;
+    }
+    if (despesaId != null) {
+      const erro = await erroDespesaDoVinculo(rat, despesaId);
+      if (erro) {
+        descartar();
+        res.status(400).json({ error: erro });
+        return;
+      }
+    }
+    if ((await prisma.comprovanteRat.count({ where: { ratId: rat.id } })) >= MAX_COMPROVANTES_POR_RAT) {
+      descartar();
+      res.status(400).json({ error: `Limite de ${MAX_COMPROVANTES_POR_RAT} comprovantes por RAT atingido` });
+      return;
+    }
+    // HEIC (iPhone) vira JPEG antes de gravar: Chrome/Edge não o mostram e o PDF único da RAT não o embute. Atualiza req.file (caminho,
+    // nome, tamanho, tipo), então o `descartar` acima continua apagando o arquivo certo se algo falhar daqui pra frente.
+    await converterHeicSeNecessario(req.file);
+    const criado = await prisma.$transaction(async (tx) => {
+      const c = await tx.comprovanteRat.create({
+        data: {
+          ratId: rat.id,
+          despesaId,
+          userId: req.user!.userId,
+          nomeArquivo: req.file!.originalname.slice(0, 255),
+          caminhoArquivo: req.file!.filename,
+          tamanhoBytes: req.file!.size,
+          mimeType: req.file!.mimetype,
+        },
+        include: { user: { select: { nome: true } } },
+      });
+      await auditarComprovante(tx, req, rat, EVENTOS_AUDITORIA.COMPROVANTE_RAT_ADICIONADO, {
+        comprovanteId: c.id,
+        nomeArquivo: c.nomeArquivo,
+        despesaId,
+      });
+      return c;
+    });
+    res.status(201).json(serializarComprovante(criado));
+  } catch (error) {
+    descartar();
+    handleError(res, error, "comprovantes-criar");
+  }
+});
+
+// PATCH /comprovantes/:comprovanteId — `{ despesaId: number | null }`: vincular, trocar de
+// despesa ou desvincular (volta a ficar solto na RAT), sem reenviar o arquivo.
+ratsRouter.patch("/comprovantes/:comprovanteId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const r = await comprovanteComRat(req, res, "escrita");
+    if (!r) return;
+    const { comprovante, rat } = r;
+    const despesaId = lerDespesaId(req.body?.despesaId);
+    if (despesaId === "invalido") {
+      res.status(400).json({ error: "Despesa inválida" });
+      return;
+    }
+    if (despesaId === comprovante.despesaId) {
+      res.json({ ok: true });
+      return;
+    }
+    if (despesaId != null) {
+      const erro = await erroDespesaDoVinculo(rat, despesaId);
+      if (erro) {
+        res.status(400).json({ error: erro });
+        return;
+      }
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.comprovanteRat.update({ where: { id: comprovante.id }, data: { despesaId } });
+      await auditarComprovante(tx, req, rat, EVENTOS_AUDITORIA.COMPROVANTE_RAT_VINCULADO, {
+        comprovanteId: comprovante.id,
+        nomeArquivo: comprovante.nomeArquivo,
+        despesaIdAnterior: comprovante.despesaId,
+        despesaIdNovo: despesaId,
+      });
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "comprovantes-vincular");
+  }
+});
+
+// GET /comprovantes/:comprovanteId/arquivo — inline (miniatura na tela, PDF em aba nova). Só
+// por rota autenticada: o frontend busca o blob com o header e mostra por objectURL.
+ratsRouter.get("/comprovantes/:comprovanteId/arquivo", async (req: AuthenticatedRequest, res) => {
+  try {
+    const r = await comprovanteComRat(req, res, "leitura");
+    if (!r) return;
+    res.type(r.comprovante.mimeType);
+    res.sendFile(path.join(COMPROVANTES_RAT_DIR, r.comprovante.caminhoArquivo), (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: "Arquivo não encontrado" });
+    });
+  } catch (error) {
+    handleError(res, error, "comprovantes-arquivo");
+  }
+});
+
+ratsRouter.delete("/comprovantes/:comprovanteId", async (req: AuthenticatedRequest, res) => {
+  try {
+    const r = await comprovanteComRat(req, res, "escrita");
+    if (!r) return;
+    const { comprovante, rat } = r;
+    await prisma.$transaction(async (tx) => {
+      await tx.comprovanteRat.delete({ where: { id: comprovante.id } });
+      await auditarComprovante(tx, req, rat, EVENTOS_AUDITORIA.COMPROVANTE_RAT_REMOVIDO, {
+        comprovanteId: comprovante.id,
+        nomeArquivo: comprovante.nomeArquivo,
+        despesaId: comprovante.despesaId,
+      });
+    });
+    fs.unlink(path.join(COMPROVANTES_RAT_DIR, comprovante.caminhoArquivo), () => {});
+    res.status(204).send();
+  } catch (error) {
+    handleError(res, error, "comprovantes-excluir");
   }
 });

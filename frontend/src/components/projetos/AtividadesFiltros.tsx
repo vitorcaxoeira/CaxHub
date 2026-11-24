@@ -1,5 +1,7 @@
 import { ColunaKanban } from "./KanbanBoard";
+import type { ReactNode } from "react";
 import { MultiSelectDropdown } from "../ui/MultiSelectDropdown";
+import { CaixaMarcacaoFiltro } from "../ui/ControlesFiltro";
 import type { SituacaoKpi } from "./IndicadoresProjetos";
 import type { FiltrosAtividades } from "./AtividadesTable";
 
@@ -17,6 +19,17 @@ export function lerCodfors(valor: string): number[] {
     .filter((v) => Number.isFinite(v) && v !== 0);
 }
 
+// Mesma leitura de lerCodfors, mas sem descartar 0 — departamento/prioridade/situação podem
+// ter código 0 válido (só o codfor 0 é "sem consultor").
+function lerLista(valor: string): number[] {
+  return valor
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v !== "")
+    .map(Number)
+    .filter((v) => Number.isFinite(v));
+}
+
 const SITUACAO_KPI_LABEL: Record<SituacaoKpi, string> = {
   backlog: "Backlog",
   atrasadas: "Atrasadas",
@@ -32,6 +45,8 @@ interface AtividadesFiltrosProps {
   situacaoKpi: SituacaoKpi | null;
   onFiltros: (patch: Partial<FiltrosAtividades>) => void;
   onLimparKpi: () => void;
+  /** Estrela de padrão de cada filtro (depexe, colunaId, pripro, codfor, atrasada). */
+  estrela?: (campo: string) => ReactNode;
 }
 
 // Barra de filtros compartilhada entre a Lista (dentro de AtividadesTable) e o Quadro
@@ -46,6 +61,7 @@ export function AtividadesFiltros({
   situacaoKpi,
   onFiltros,
   onLimparKpi,
+  estrela,
 }: AtividadesFiltrosProps) {
   const selectClass =
     "rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -59,38 +75,39 @@ export function AtividadesFiltros({
         onChange={(e) => onFiltros({ busca: e.target.value })}
         className={`${selectClass} w-56`}
       />
-      <select value={filtros.depexe} onChange={(e) => onFiltros({ depexe: e.target.value })} className={selectClass}>
-        <option value="">Todos os departamentos</option>
-        {departamentos.map((d) => (
-          <option key={d.value} value={d.value}>
-            {d.label}
-          </option>
-        ))}
-      </select>
-      <select value={filtros.colunaId} onChange={(e) => onFiltros({ colunaId: e.target.value })} className={selectClass}>
-        <option value="">Todas as situações</option>
-        {colunas.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.nome}
-          </option>
-        ))}
-      </select>
-      <select value={filtros.pripro} onChange={(e) => onFiltros({ pripro: e.target.value })} className={selectClass}>
-        <option value="">Todas as prioridades</option>
-        {prioridades.map((p) => (
-          <option key={p.value} value={p.value}>
-            {p.label}
-          </option>
-        ))}
-      </select>
-      {/* codfor viaja como "134,207" (string) porque é o formato que já vai pra URL e pro
-          backend; a conversão pra lista vive só aqui, na borda do componente. */}
+      {/* Os quatro seletores são multi-seleção e viajam como "1,3" (string), o formato que já
+          vai pra URL e pro backend; a conversão pra lista vive só aqui, na borda. */}
+      <MultiSelectDropdown
+        opcoes={departamentos}
+        selecionados={lerLista(filtros.depexe)}
+        onChange={(valores) => onFiltros({ depexe: valores.join(",") })}
+        labelTodos="Todos os departamentos"
+        labelSufixo="departamentos"
+        acessorio={estrela?.("depexe")}
+      />
+      <MultiSelectDropdown
+        opcoes={colunas.map((c) => ({ value: c.id, label: c.nome }))}
+        selecionados={lerLista(filtros.colunaId)}
+        onChange={(valores) => onFiltros({ colunaId: valores.join(",") })}
+        labelTodos="Todas as situações"
+        labelSufixo="situações"
+        acessorio={estrela?.("colunaId")}
+      />
+      <MultiSelectDropdown
+        opcoes={prioridades}
+        selecionados={lerLista(filtros.pripro)}
+        onChange={(valores) => onFiltros({ pripro: valores.join(",") })}
+        labelTodos="Todas as prioridades"
+        labelSufixo="prioridades"
+        acessorio={estrela?.("pripro")}
+      />
       <MultiSelectDropdown
         opcoes={consultores}
         selecionados={lerCodfors(filtros.codfor)}
         onChange={(valores) => onFiltros({ codfor: valores.join(",") })}
         labelTodos="Todos os consultores"
         labelSufixo="consultores"
+        acessorio={estrela?.("codfor")}
       />
       {situacaoKpi ? (
         <button
@@ -100,10 +117,9 @@ export function AtividadesFiltros({
           Filtro do KPI ativo: {SITUACAO_KPI_LABEL[situacaoKpi]} <span aria-hidden>✕</span>
         </button>
       ) : (
-        <label className="flex items-center gap-2 text-sm text-muted">
-          <input type="checkbox" checked={filtros.atrasada} onChange={(e) => onFiltros({ atrasada: e.target.checked })} />
+        <CaixaMarcacaoFiltro marcado={filtros.atrasada} onChange={(atrasada) => onFiltros({ atrasada })} acessorio={estrela?.("atrasada")}>
           Só atrasadas
-        </label>
+        </CaixaMarcacaoFiltro>
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { X } from "lucide-react";
 import { cn } from "../../lib/cn";
 
 interface ModalProps {
@@ -13,12 +14,16 @@ interface ModalProps {
   // O ✕ do cabeçalho continua fechando: um <dialog> sem nenhuma saída pelo teclado seria
   // uma armadilha de foco.
   fecharPorFora?: boolean;
+  // O conteúdo cuida da própria rolagem (ex.: uma tabela com cabeçalho fixo): o modal não rola, fica limitado a 90% da tela e o corpo vira
+  // uma coluna flexível em que o filho com `min-h-0 flex-1 overflow-auto` ocupa o resto. Sem isso, modal com tabela rolável tinha 3 barras
+  // (a do <dialog>, a do corpo e a da tabela).
+  corpoFixo?: boolean;
 }
 
 // Dialog nativo — foco preso e Esc de graça, sem precisar de lib. `onClose` cobre Esc
 // (evento `close` do <dialog>) e clique no backdrop (clique cujo alvo é o próprio
 // elemento, não um filho — <dialog> ocupa a tela toda quando aberto via showModal()).
-export function Modal({ open, onClose, title, subtitulo, children, className, fecharPorFora = true }: ModalProps) {
+export function Modal({ open, onClose, title, subtitulo, children, className, fecharPorFora = true, corpoFixo = false }: ModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -44,10 +49,12 @@ export function Modal({ open, onClose, title, subtitulo, children, className, fe
         // navegador dá de graça em showModal() (via margin:auto no modo modal).
         "fixed inset-0 m-auto h-fit w-full max-w-lg rounded-lg border border-border bg-surface p-0 text-foreground shadow-lg",
         "backdrop:bg-black/50",
+        // `open:flex` e não `flex`: display fixo deixaria o <dialog> fechado visível (o navegador o esconde com display: none).
+        corpoFixo && "max-h-[90vh] overflow-hidden open:flex open:flex-col",
         className
       )}
     >
-      <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+      <div className="flex flex-none items-start justify-between gap-3 border-b border-border p-4">
         <div className="min-w-0">
           <h2 className="text-base font-semibold text-foreground">{title}</h2>
           {subtitulo && <p className="mt-0.5 truncate text-[12.5px] text-muted">{subtitulo}</p>}
@@ -58,10 +65,10 @@ export function Modal({ open, onClose, title, subtitulo, children, className, fe
           aria-label="Fechar"
           className="flex-none rounded-md p-1 text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          ✕
+          <X size={18} strokeWidth={1.75} aria-hidden="true" />
         </button>
       </div>
-      <div className="max-h-[75vh] overflow-y-auto p-4">{children}</div>
+      <div className={corpoFixo ? "flex min-h-0 flex-1 flex-col p-4" : "max-h-[75vh] overflow-y-auto p-4"}>{children}</div>
     </dialog>
   );
 }

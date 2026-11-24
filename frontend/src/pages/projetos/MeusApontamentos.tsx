@@ -5,19 +5,26 @@ import { formatHoras } from "../../utils/horas";
 import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Spinner } from "../../components/ui/Spinner";
-import { Pagination } from "../../components/ui/Pagination";
 import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { ModalEditarDescricao } from "../../components/projetos/ModalEditarDescricao";
-import { ModalDespesasRat } from "../../components/projetos/ModalDespesasRat";
+import { ModalManutencaoSessao, type DadosManutencaoSessao } from "../../components/projetos/ModalManutencaoSessao";
+import { DespesasRatPainel } from "../../components/projetos/DespesasRatPainel";
+import { Tabs } from "../../components/ui/Tabs";
 import { Modal } from "../../components/ui/Modal";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { IconeIntegracaoErp } from "../../components/ui/IconeIntegracaoErp";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
-import { useAuth } from "../../auth/AuthContext";
-
+import { diaCurtoDaJanela, textoJanelaRetroativa, useJanelaRetroativa } from "../../hooks/useJanelaRetroativa";
+import { useToast } from "../../components/ui/Toast";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
+import { ListaServidor } from "../../components/colunas/ListaServidor";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
+import { formatHoraDoDia, LOCAIS_ATIVIDADES, lerAtividade, rotuloItem } from "./atividadesRat";
 
 // Pedido de correcao de horario aguardando o gestor. Enquanto existe, o envio do
 // apontamento ao Senior fica retido no servidor.
@@ -55,6 +62,9 @@ interface SessaoPendente {
   // Editar descrição, pedir ajuste e excluir são "só o dono" nos respectivos endpoints —
   // controla quais ações do menu "⋯" a tela oferece (Confirmar não depende disto).
   souDono: boolean;
+  // Exclusão também libera pro admin sobre sessão de qualquer consultor — diferente de
+  // editar descrição/pedir ajuste, que continuam "só o dono" (ver souDono acima).
+  podeExcluir: boolean;
   ajustePendente: AjustePendente | null;
   // Previsão de "vai dar erro ao confirmar" (ver GET /sessoes-pendentes) — as duas causas
   // que hoje só o clique em "Confirmar" descobre: status de sincronização da alocação por
@@ -67,6 +77,36 @@ interface SessaoPendente {
   // Mesma previsão acima, agora pro bloqueio de apontamento (ver
   // domain/bloqueioApontamento.ts, backend) — confirmar essa sessão vai recusar 409.
   bloqueadoApontamentoEfetivo: boolean;
+}
+
+// RAT Digitada candidata a receber a sessão confirmada (ver GET /sessoes-pendentes,
+// `ratsDestino`). A descrição dos itens recentes é o que deixa reconhecer qual RAT é qual —
+// ex.: uma RAT por filial do cliente, e a filial só aparece no texto do item.
+interface RatDestinoOpcao {
+  id: number;
+  numrat: number | null;
+  datemi: string | null;
+  qtdItens: number;
+  minutos: number;
+  recentes: { datati: string | null; desati: string | null }[];
+}
+
+// Valor do seletor: id da RAT (como texto) ou "nova".
+const DESTINO_NOVA = "nova";
+
+function chaveGrupoRat(s: { codemp: number; codfor: number; codpro: number }): string {
+  return `${s.codemp}-${s.codfor}-${s.codpro}`;
+}
+
+function ratDestinoDoValor(valor: string | null | undefined): { ratId: number } | { nova: true } | undefined {
+  if (!valor) return undefined;
+  if (valor === DESTINO_NOVA) return { nova: true };
+  const ratId = Number(valor);
+  return Number.isInteger(ratId) && ratId > 0 ? { ratId } : undefined;
+}
+
+function rotuloRatDestino(r: RatDestinoOpcao): string {
+  return `RAT ${r.numrat ?? `local ${r.id}`}${r.datemi ? ` · ${dateFormatter.format(new Date(r.datemi))}` : ""}`;
 }
 
 interface AtividadeResumo {
@@ -114,6 +154,21 @@ interface RatRow {
   integracao: IntegracaoErpStatus;
   integracaoLabel: string;
   integracaoTone: Tone;
+  // Elegível pra fechamento (13/09/2026): sitrat=9 + mesma permissão de aprovar (gestor do
+  // depexe ou admin) — ver GET /rats em backend/src/routes/rats.ts. Campo próprio de
+  // podeAprovar (mesma condição hoje, mas ações distintas).
+  podeFechar: boolean;
+}
+
+// RAT elegível pro resumo de "Fechar Todos" — vem de GET /rats/elegiveis-fechamento, SEM
+// paginação (a tabela principal só tem a página atual em `rats`, ver carregarRats).
+interface RatElegivelFechamento {
+  id: number;
+  numrat: number | null;
+  codpro: number | null;
+  cliente: string | null;
+  consultorNome: string;
+  totalMinutos: number;
 }
 
 interface RatItemRow {
@@ -130,6 +185,10 @@ interface RatItemRow {
   duracaoMinutos: number | null;
   desati: string | null;
   confirmadoNoSenior: boolean;
+  // Preenchido quando o item foi excluído no Senior (origemCaxHub=false, nunca teve sessão
+  // local — ver desvincularItensAusentesNoSenior no backend). numrat/seqrat continuam
+  // preenchidos como histórico, então não dá pra distinguir isso só por confirmadoNoSenior.
+  removidoEmSenior: string | null;
   editavel: boolean;
   // Motivo da última recusa do Senior. Preenchido = a integração falhou e há o que reenviar.
   envioErro: string | null;
@@ -139,6 +198,12 @@ interface RatItemRow {
   seqrat: number | null;
   // Estado do envio ao ERP: pendente | enviando | enviado | bloqueado | null.
   envioStatus: string | null;
+  // Alteração da sessão pelo admin ainda não equalizada no Senior (tipEve A): "enviando" | "falha" | null (em dia).
+  edicaoStatus: "enviando" | "falha" | null;
+  edicaoErro: string | null;
+  // Manutenção da sessão (só admin, RAT Digitada) — decidido pelo servidor, a tela só reflete.
+  podeManterSessao: boolean;
+  motivoBloqueioManutencao: string | null;
 }
 
 interface ConsultorFiltro {
@@ -170,6 +235,8 @@ interface AtividadeDetalheDados {
   itemRealizado: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
+  estruturaAtividadeId: number | null;
+  depexeLabel: string;
   podeVerCronograma: boolean;
   // Opcionais porque esta tela monta o objeto a partir de outra rota, que pode não trazer
   // os dois — o painel trata a ausência como "sem excedente".
@@ -190,17 +257,6 @@ function formatMinutos(minutos: number): string {
   return formatHoras(minutos / 60);
 }
 
-// Item da proposta com a sequência como prefixo ("3 - Automação de indicadores"). Mesma
-// forma de "código - descrição" já usada em cliente (`${codcli} - ${nomcli}`).
-//
-// Assinatura estrutural pra servir às DUAS tabelas da tela (sessões pendentes e itens da
-// RAT): elas mostram o mesmo dado e antes divergiam — aqui era sufixo entre parênteses,
-// lá não havia sequência nenhuma.
-function rotuloItem(item: { seqite: number | null; itemDescricao: string | null }): string {
-  const descricao = item.itemDescricao ?? "—";
-  return item.seqite != null ? `${item.seqite} - ${descricao}` : descricao;
-}
-
 // Quando a observação de um item pode ser alterada: as mesmas condições que o backend
 // valida em PATCH /apontamentos/:id (dono, RAT ainda Digitada, item não registrado no
 // Senior) mais a guarda de envio em voo — nesse instante o job já leu o registro pra
@@ -209,13 +265,159 @@ function podeEditarObservacao(item: RatItemRow): boolean {
   return item.editavel && item.sessaoId != null && item.envioStatus !== "enviando";
 }
 
-function formatHoraDoDia(minutosDesdeMeiaNoite: number): string {
-  const h = Math.floor(minutosDesdeMeiaNoite / 60);
-  const m = minutosDesdeMeiaNoite % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+// Tabela de RATs com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (04/11/2026): ListaServidor
+// sobre GET /rats/lista (backend/src/domain/ratsListaSql.ts, tudo resolvido no banco). Os filtros do topo continuam os mesmos e com a
+// estrela de padrão; a linha abre o acordeão de Atividades/RDVs (várias abertas ao mesmo tempo, como antes).
+const PAGE_SIZE_RATS = 25;
+
+interface AcoesRats {
+  navegar: (rota: string) => void;
+  sincronizar: (rat: RatRow) => void;
+  fechar: (rat: RatRow) => void;
+  sincronizando: number | null;
+  fechando: number | null;
+  avisoSinc: Record<number, string>;
+  expandidas: ReadonlySet<number>;
 }
 
-const PAGE_SIZE_RATS = 30;
+const COLUNAS_RATS: DefColuna<RatRow, AcoesRats>[] = [
+  {
+    nome: "id",
+    titulo: "ID",
+    fixa: true,
+    largura: 90,
+    resumos: ["contagem"],
+    render: (rat, a) => (
+      <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <span className="text-muted">{a.expandidas.has(rat.id) ? "▾" : "▸"}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            a.navegar(`/projetos/rat/${rat.id}`);
+          }}
+          title="Ver detalhes e auditoria desta RAT"
+          className="text-primary hover:underline"
+        >
+          {rat.id}
+        </button>
+      </p>
+    ),
+  },
+  {
+    nome: "numrat",
+    titulo: "RAT",
+    largura: 80,
+    resumos: ["contagem", "distintos", "vazios"],
+    classe: "whitespace-nowrap font-mono text-sm text-muted",
+    render: (rat) => rat.numrat ?? "—",
+  },
+  {
+    nome: "codpro",
+    titulo: "Proposta",
+    largura: 90,
+    resumos: ["contagem", "distintos"],
+    classe: "text-sm text-foreground",
+    render: (rat, a) =>
+      rat.codpro != null ? (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            a.navegar(`/projetos/proposta/${rat.codemp}/${rat.codpro}`);
+          }}
+          className="text-primary hover:underline"
+        >
+          {rat.codpro}
+        </button>
+      ) : (
+        "—"
+      ),
+  },
+  { nome: "cliente", titulo: "Cliente", largura: 220, classe: "text-sm text-muted", texto: (rat) => rat.cliente, render: (rat) => rat.cliente ?? "—" },
+  { nome: "consultorNome", titulo: "Consultor", largura: 150, classe: "text-sm text-muted", texto: (rat) => rat.consultorNome, render: (rat) => rat.consultorNome },
+  {
+    nome: "datemi",
+    titulo: "Emissão",
+    largura: 100,
+    classe: "whitespace-nowrap font-mono text-sm text-muted",
+    render: (rat) => (rat.datemi ? dateFormatter.format(new Date(rat.datemi)) : "—"),
+  },
+  {
+    nome: "sitratLabel",
+    titulo: "Situação",
+    largura: 120,
+    render: (rat, _a, cortar) => (
+      <span className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.sitratTone]} ${cortar ? "max-w-full truncate" : ""}`}>
+        {rat.sitratLabel}
+      </span>
+    ),
+  },
+  {
+    nome: "integracaoLabel",
+    titulo: "Sinc. ERP",
+    largura: 130,
+    // Resultado do último "Sinc. ERP" (itens desvinculados, reenviados etc.) vira tooltip aqui em vez de banner no topo da tela — um
+    // banner fixo continuava mostrando a última RAT sincronizada mesmo depois de sincronizar outra.
+    render: (rat, a, cortar) => (
+      <span
+        className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.integracaoTone]} ${
+          a.avisoSinc[rat.id] ? "cursor-help underline decoration-dotted" : ""
+        } ${cortar ? "max-w-full truncate" : ""}`}
+        title={a.avisoSinc[rat.id]}
+      >
+        {rat.integracaoLabel}
+      </span>
+    ),
+  },
+  { nome: "totalItens", titulo: "Itens", direita: true, largura: 70, classe: "font-mono text-sm tabular-nums text-muted", render: (rat) => rat.totalItens },
+  {
+    nome: "totalMinutos",
+    titulo: "Total",
+    direita: true,
+    largura: 90,
+    classe: "whitespace-nowrap font-mono text-sm tabular-nums text-foreground",
+    formatarResumo: formatMinutos,
+    render: (rat) => formatMinutos(rat.totalMinutos),
+  },
+  {
+    nome: "acoes",
+    titulo: "Ações",
+    semOrdenar: true,
+    direita: true,
+    largura: 60,
+    render: (rat, a) => (
+      <span onClick={(e) => e.stopPropagation()}>
+        <DropdownMenu placement="bottom-end">
+          <DropdownMenu.Trigger>
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Ações"
+            >
+              ⋯
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content>
+            <DropdownMenu.Item
+              onSelect={() => a.sincronizar(rat)}
+              disabled={a.sincronizando === rat.id}
+              title="Busca o que mudou no ERP (itens e despesas) e reenvia o que ainda está pendente/com erro daqui pra lá"
+            >
+              {a.sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
+            </DropdownMenu.Item>
+            {rat.podeFechar && (
+              <DropdownMenu.Item
+                onSelect={() => a.fechar(rat)}
+                disabled={a.fechando === rat.id}
+                title="Reenvia itens/despesas pendentes ou com erro (se houver) e, se tudo sincronizar, fecha a RAT no Senior"
+              >
+                {a.fechando === rat.id ? "Fechando..." : "Fechar RAT"}
+              </DropdownMenu.Item>
+            )}
+          </DropdownMenu.Content>
+        </DropdownMenu>
+      </span>
+    ),
+  },
+];
 
 // Estado da integração daquele apontamento com o Senior, na própria coluna de ação.
 // A ordem vai do mais definitivo pro mais transitório:
@@ -237,6 +439,47 @@ function AcaoIntegracao({
   onExcluir: () => void;
   onVerErro: () => void;
 }) {
+  // Excluído no Senior (ver desvincularItensAusentesNoSenior no backend) — item nascido lá,
+  // nunca teve sessão local: não existe ação possível (nem Enviar, nem Excluir, nem Reenviar).
+  // Checado ANTES de confirmadoNoSenior de propósito: numrat/seqrat continuam preenchidos como
+  // histórico, então sem essa ordem o item cairia no ramo de baixo como se estivesse tudo bem.
+  if (item.removidoEmSenior) {
+    return (
+      <span
+        className="font-mono text-[11px] text-destructive"
+        title={`Este apontamento não existe mais no Senior — foi excluído lá em ${new Date(item.removidoEmSenior).toLocaleDateString("pt-BR")}. Preservado como histórico, sem nenhuma ação possível.`}
+      >
+        Excluído no Senior
+      </span>
+    );
+  }
+
+  // Alteração da sessão (tipEve A) a caminho ou recusada: o item está registrado, mas o Senior ainda não tem os valores novos.
+  if (item.confirmadoNoSenior && (reenviando || item.edicaoStatus === "enviando")) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[11px] text-muted" title="Enviando a alteração da sessão ao Senior">
+        <Spinner className="h-3 w-3" />
+        alterando no Senior...
+      </span>
+    );
+  }
+  if (item.confirmadoNoSenior && item.edicaoStatus === "falha") {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <button
+          onClick={onVerErro}
+          className="text-[11px] text-destructive underline decoration-dotted hover:decoration-solid"
+          title="A alteração não chegou ao Senior. Clique para ver o erro completo"
+        >
+          falha ao alterar
+        </button>
+        <button onClick={onReenviar} className="text-[11px] text-primary hover:underline">
+          Reenviar
+        </button>
+      </span>
+    );
+  }
+
   if (item.confirmadoNoSenior) {
     return (
       <span
@@ -306,6 +549,127 @@ function AcaoIntegracao({
   );
 }
 
+// Tabela "Atividades" da RAT expandida, com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (TabelaLocal,
+// mesmo kit das despesas da RAT). `COLUNAS_ATIVIDADES` e `LOCAIS_ATIVIDADES` (atividadesRat.ts) são constantes do módulo: o kit exige estabilidade,
+// então o que depende da RAT aberta (e das ações) entra pelo `ctx`.
+interface AcoesAtividades {
+  rat: RatRow;
+  reenviando: Set<number>;
+  abrirAtividade: (atividadeId: number) => void;
+  abrirManutencao: (item: RatItemRow, rat: RatRow) => void;
+  editarObservacao: (item: RatItemRow, ratId: number) => void;
+  reenviar: (ratItemId: number, ratId: number) => void;
+  excluir: (sessaoId: number, ratId: number) => void;
+  verErro: (item: RatItemRow) => void;
+}
+
+const COLUNAS_ATIVIDADES: DefColuna<RatItemRow, AcoesAtividades>[] = [
+  {
+    nome: "atividadeId",
+    titulo: "Atividade",
+    fixa: true,
+    direita: true,
+    largura: 90,
+    classe: "font-mono text-[12.5px] tabular-nums",
+    resumos: ["contagem", "distintos"],
+    render: (item, a) =>
+      item.atividadeId != null ? (
+        <button onClick={() => a.abrirAtividade(item.atividadeId!)} className="text-primary hover:underline" title="Abrir a atividade (somente visualização)">
+          {item.atividadeId}
+        </button>
+      ) : (
+        <span className="text-muted">—</span>
+      ),
+  },
+  {
+    nome: "sessaoId",
+    titulo: "Sessão",
+    direita: true,
+    largura: 100,
+    classe: "font-mono text-[12.5px] tabular-nums",
+    resumos: ["contagem", "distintos"],
+    render: (item, a) =>
+      item.sessaoId != null ? (
+        <button
+          onClick={() => a.abrirManutencao(item, a.rat)}
+          className="text-primary hover:underline"
+          title={item.podeManterSessao ? "Manter os dados da sessão" : "Ver os dados da sessão (somente leitura)"}
+        >
+          {item.sessaoId}
+        </button>
+      ) : (
+        <span className="text-muted">—</span>
+      ),
+  },
+  { nome: "codser", titulo: "Serviço", largura: 90, classe: "font-mono text-[12.5px] text-muted", render: (item) => item.codser ?? "—" },
+  {
+    nome: "item",
+    titulo: "Item",
+    largura: 260,
+    classe: "text-[12.5px] text-muted",
+    texto: (item) => rotuloItem(item),
+    render: (item) => <span className="block truncate">{rotuloItem(item)}</span>,
+  },
+  {
+    nome: "datati",
+    titulo: "Data",
+    largura: 95,
+    classe: "whitespace-nowrap font-mono text-[12.5px] tabular-nums text-muted",
+    render: (item) => (item.datati ? dateFormatter.format(new Date(item.datati)) : "—"),
+  },
+  {
+    nome: "horario",
+    titulo: "Horário",
+    largura: 120,
+    classe: "whitespace-nowrap font-mono text-[12.5px] tabular-nums text-muted",
+    render: (item) =>
+      item.horini != null && item.horfim != null ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}` : "—",
+  },
+  {
+    nome: "duracaoMinutos",
+    titulo: "Duração",
+    direita: true,
+    largura: 90,
+    classe: "whitespace-nowrap font-mono text-[12.5px] tabular-nums text-foreground",
+    formatarValor: (v) => (typeof v === "number" ? formatMinutos(v) : String(v ?? "")),
+    formatarResumo: formatMinutos,
+    render: (item) => (item.duracaoMinutos != null ? formatMinutos(item.duracaoMinutos) : "—"),
+  },
+  {
+    // Observação é o que trava a aprovação da RAT (todo item precisa ter) e vai no desAti do Senior — por isso ela mesma é o clique, em vez
+    // de mais uma ação na coluna da direita. Editável abre pra editar; já registrado no ERP abre a MESMA janela em leitura, que é onde se lê o
+    // texto completo sem depender do tooltip.
+    nome: "desati",
+    titulo: "Observação",
+    largura: 320,
+    texto: (item) => item.desati,
+    render: (item, a) => (
+      <button
+        onClick={() => a.editarObservacao(item, a.rat.id)}
+        title={item.desati?.trim() || "Sem observação"}
+        className={`block w-full truncate text-left text-[12.5px] hover:underline ${item.desati?.trim() ? "text-foreground" : "font-medium text-warning"}`}
+      >
+        {item.desati?.trim() || (podeEditarObservacao(item) ? "Sem observação — clique para preencher" : "Sem observação")}
+      </button>
+    ),
+  },
+  {
+    nome: "integracao",
+    titulo: "Integração",
+    direita: true,
+    largura: 190,
+    render: (item, a) => (
+      <AcaoIntegracao
+        item={item}
+        reenviando={a.reenviando.has(item.id)}
+        onReenviar={() => a.reenviar(item.id, a.rat.id)}
+        onExcluir={() => a.excluir(item.sessaoId!, a.rat.id)}
+        onVerErro={() => a.verErro(item)}
+      />
+    ),
+  },
+];
+
 const selectClass =
   "rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -328,17 +692,97 @@ const selectClass =
 const ENVIO_INTERVALO_MS = 1500;
 const ENVIO_MAX_TENTATIVAS = 13;
 
+// Aviso ao excluir um apontamento com pedido de ajuste de horário aguardando o gestor: o pedido é excluído junto (04/11/2026).
+const AVISO_EXCLUIR_COM_AJUSTE =
+  "Este apontamento tem uma solicitação de ajuste de horário aguardando o gestor.\n\n" +
+  "Ao excluir o apontamento, a solicitação também será excluída. Continuar?";
+
+// Lista de RATs de destino como cartões de opção (radio), usada na confirmação individual e
+// no resumo do lote. Não é <select> de propósito: a lista nativa do navegador abre com a
+// largura do texto mais longo e vaza pra fora do modal, e a descrição dos itens (que é o que
+// distingue as RATs, ex.: a filial) é longa.
+function OpcoesRatDestino({
+  nome,
+  opcoes,
+  valor,
+  desabilitado = false,
+  onChange,
+  className = "",
+}: {
+  nome: string;
+  opcoes: RatDestinoOpcao[];
+  valor: string;
+  desabilitado?: boolean;
+  onChange: (valor: string) => void;
+  className?: string;
+}) {
+  const itens: { valor: string; rat: RatDestinoOpcao | null }[] = [
+    ...opcoes.map((r) => ({ valor: String(r.id), rat: r })),
+    { valor: DESTINO_NOVA, rat: null },
+  ];
+  return (
+    <div role="radiogroup" className={`space-y-2 ${className}`}>
+      {itens.map(({ valor: v, rat }) => {
+        const marcado = valor === v;
+        return (
+          <label
+            key={v}
+            className={`flex gap-3 rounded-md border p-3 text-sm transition-colors ${
+              desabilitado ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+            } ${marcado ? "border-primary bg-primary/10" : desabilitado ? "border-border" : "border-border hover:bg-surface-2"}`}
+          >
+            <input
+              type="radio"
+              name={nome}
+              value={v}
+              checked={marcado}
+              disabled={desabilitado}
+              onChange={() => onChange(v)}
+              className="mt-0.5 accent-primary"
+            />
+            {rat ? (
+              <span className="min-w-0 flex-1 space-y-1">
+                <span className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-foreground">{rotuloRatDestino(rat)}</span>
+                  <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
+                    {rat.qtdItens} {rat.qtdItens === 1 ? "item" : "itens"} · {formatMinutos(rat.minutos)}
+                  </span>
+                </span>
+                {rat.recentes.map((i, idx) => (
+                  <span key={idx} className="block truncate text-[12px] text-muted" title={i.desati ?? undefined}>
+                    {i.datati ? `${dateFormatter.format(new Date(i.datati))} · ` : ""}
+                    {i.desati || "(sem descrição)"}
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium text-foreground">Gerar RAT nova</span>
+                <span className="block text-[12px] text-muted">Abre um documento novo no Senior.</span>
+              </span>
+            )}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 export function MeusApontamentos() {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  // Despesas de Viagem: restrito a admin por enquanto, enquanto o recurso está em validação
-  // (mesma regra aplicada no backend, ver podeGerenciarDespesas em routes/rats.ts).
-  const podeGerenciarDespesas = user?.role === "admin";
+  const toast = useToast();
   const [sessoes, setSessoes] = useState<SessaoPendente[]>([]);
   // Admin vê as sessões pendentes de todos os consultores; gestor vê as próprias + as do
   // time que gerencia (ver GET /sessoes-pendentes) — é o que liga a coluna Consultor e a
   // barra de filtros abaixo.
   const [mostrarConsultor, setMostrarConsultor] = useState(false);
+  // Escolha da RAT de destino na confirmação (25/09/2026). O servidor só manda opções pros
+  // grupos consultor+proposta com 2 ou mais RATs Digitadas, e só quando o contrato do Senior
+  // já aceita RAT de destino — sem opções, Confirmar segue direto como sempre.
+  const [ratsDestino, setRatsDestino] = useState<Record<string, RatDestinoOpcao[]>>({});
+  const [escolhaRat, setEscolhaRat] = useState<{ sessaoId: number; titulo: string; opcoes: RatDestinoOpcao[]; valor: string } | null>(
+    null
+  );
   const [buscaSessoesInput, setBuscaSessoesInput] = useState("");
   const buscaSessoesDebounced = useDebouncedValue(buscaSessoesInput, 350);
   const [codforsFiltroSessoes, setCodforsFiltroSessoes] = useState<number[]>([]);
@@ -366,6 +810,8 @@ export function MeusApontamentos() {
     pendente: AjustePendente | null;
   } | null>(null);
   const [ajusteData, setAjusteData] = useState("");
+  // Só o dia corrente, salvo exceção do líder (ver domain/janelaRetroativa.ts no backend).
+  const janela = useJanelaRetroativa();
   const [ajusteInicio, setAjusteInicio] = useState("");
   const [ajusteFim, setAjusteFim] = useState("");
   const [ajusteMotivo, setAjusteMotivo] = useState("");
@@ -374,15 +820,18 @@ export function MeusApontamentos() {
   const [descricoes, setDescricoes] = useState<Record<number, string>>({});
   const [editandoDescricaoId, setEditandoDescricaoId] = useState<number | null>(null);
 
-  const [rats, setRats] = useState<RatRow[]>([]);
-  const [totalRats, setTotalRats] = useState(0);
-  const [pageRats, setPageRats] = useState(1);
-  const [loadingRats, setLoadingRats] = useState(true);
+  // Lista de RATs (ListaServidor, 04/11/2026): a tela só guarda o que muda a consulta (recarga e os filtros de coluna, que o "Fechar Todos"
+  // também respeita) e os ajustes de linha feitos sem recarregar (número da RAT confirmado pelo Senior, situação depois de fechar).
+  const [recargaRats, setRecargaRats] = useState(0);
+  const [consultaColunasRats, setConsultaColunasRats] = useState<{ filtros?: string; calculadas?: string }>({});
+  const [ajustesRat, setAjustesRat] = useState<Record<number, Partial<RatRow>>>({});
   const [opcoesFiltro, setOpcoesFiltro] = useState<ConsultorFiltro[]>([]);
   const [codforsFiltro, setCodforsFiltro] = useState<number[]>([]);
   const [situacoesRat, setSituacoesRat] = useState<SituacaoRatOpcao[]>([]);
   const [sitratFiltro, setSitratFiltro] = useState<number[]>([]);
   const [integracaoFiltro, setIntegracaoFiltro] = useState<IntegracaoErpStatus[]>([]);
+  const [opcoesRatsProntas, setOpcoesRatsProntas] = useState(false);
+  const [opcoesRatsFalharam, setOpcoesRatsFalharam] = useState(false);
   const [buscaInput, setBuscaInput] = useState("");
   const buscaDebounced = useDebouncedValue(buscaInput, 350);
   const [buscaItemInput, setBuscaItemInput] = useState("");
@@ -390,7 +839,29 @@ export function MeusApontamentos() {
   const [ratsExpandidas, setRatsExpandidas] = useState<Set<number>>(new Set());
   const [itensPorRat, setItensPorRat] = useState<Record<number, RatItemRow[] | "carregando" | "erro">>({});
   const [sincronizando, setSincronizando] = useState<number | null>(null);
-  const [despesasRat, setDespesasRat] = useState<RatRow | null>(null);
+  // Fechamento de RAT (13/09/2026) — mesma ideologia de Confirmar/Confirmar Todos: individual
+  // por linha (fechando) e em lote com resumo antes de disparar (resumoFechamentoLote).
+  const [fechando, setFechando] = useState<number | null>(null);
+  const [resumoFechamentoLote, setResumoFechamentoLote] = useState<RatElegivelFechamento[] | null>(null);
+  const [carregandoResumoFechamentoLote, setCarregandoResumoFechamentoLote] = useState(false);
+  const [fechandoLote, setFechandoLote] = useState(false);
+  const [resultadoFechamentoLote, setResultadoFechamentoLote] = useState<{
+    // Só "solicitados" (enfileirados no outbox), não "fechados" de verdade — o fechamento em
+    // si só acontece depois, quando o Senior confirmar (ver acompanharFechamento). Nome
+    // escolhido pra não sugerir uma conclusão que ainda não aconteceu.
+    solicitados: number;
+    falhas: { ratId: number; erro: string }[];
+  } | null>(null);
+  // Contador pro botão "Fechar Todos" (pedido do Vitor, 13/09/2026) — quantidade de RATs
+  // elegíveis SEM depender da página/filtro atual da tabela (mesma fonte do modal de resumo:
+  // GET /rats/elegiveis-fechamento). `null` = ainda não carregado.
+  const [totalElegiveisFechamento, setTotalElegiveisFechamento] = useState<number | null>(null);
+  // Aba ativa do acordeão por RAT — "atividades" quando ausente. `rdvJaAberto` mantém o
+  // DespesasRatPainel montado (só oculto via CSS, não desmontado) depois da 1ª visita à aba
+  // RDVs daquela RAT, pra não refazer o GET /despesas a cada troca de aba — mesmo espírito de
+  // `itensPorRat` já cachear por RAT em vez de buscar de novo a cada expand/collapse.
+  const [abaExpandidaPorRat, setAbaExpandidaPorRat] = useState<Record<number, "atividades" | "rdvs">>({});
+  const [rdvJaAberto, setRdvJaAberto] = useState<Set<number>>(new Set());
 
   const [modalManual, setModalManual] = useState(false);
   // Por quem o apontamento pode ser lançado: o próprio usuário e, se for gestor, o time
@@ -411,11 +882,15 @@ export function MeusApontamentos() {
 
   function carregar() {
     setLoading(true);
-    Promise.all([axios.get("/api/apontamentos/sessoes-pendentes"), axios.get("/api/apontamentos/minhas-atividades")])
-      .then(([sessoesRes, atividadesRes]) => {
+    // As atividades do consultor (`minhas-atividades`) NÃO carregam aqui: só alimentam o seletor do modal de
+    // apontamento manual, que existe só para gestor/admin. Carregam ao abrir o modal (abrirModalManual) —
+    // antes todo consultor pagava a chamada (até 75 KB) em toda abertura e recarga da tela sem usá-la.
+    axios
+      .get("/api/apontamentos/sessoes-pendentes")
+      .then((sessoesRes) => {
         setSessoes(sessoesRes.data.sessoes);
         setMostrarConsultor(Boolean(sessoesRes.data.mostrarConsultor));
-        setAtividades(atividadesRes.data.atividades);
+        setRatsDestino(sessoesRes.data.ratsDestino ?? {});
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar apontamentos"))
@@ -433,6 +908,13 @@ export function MeusApontamentos() {
       .finally(() => setCarregandoAtividadesManual(false));
   }
 
+  function abrirModalManual() {
+    setModalManual(true);
+    // Lista fresca a cada abertura (a alocação de atividades muda ao longo do dia); o consultor escolhido
+    // antes continua valendo se o modal foi fechado sem limpar o formulário.
+    carregarAtividadesManual(manualCodfor);
+  }
+
   function onMudarConsultorManual(codfor: string) {
     setManualCodfor(codfor);
     // Limpa a atividade: a que estava escolhida é de outro consultor e o POST recusaria.
@@ -441,27 +923,24 @@ export function MeusApontamentos() {
     carregarAtividadesManual(codfor);
   }
 
+  // Filtros da tabela de RATs, no formato de query param — usado tanto por GET /rats quanto
+  // por GET /rats/elegiveis-fechamento (14/09/2026: "Fechar Todos" passou a respeitar os MESMOS
+  // filtros aplicados na tela, não só a regra fixa de elegibilidade — sem isso, filtrar por um
+  // consultor mostrava 2 RATs na tabela mas o botão continuava contando/fechando todo mundo).
+  // Sem `page`/`pageSize`: elegiveis-fechamento nunca pagina, de propósito (ver comentário lá).
+  function filtrosRatsParaQuery() {
+    return {
+      codfor: codforsFiltro.length > 0 ? codforsFiltro.join(",") : undefined,
+      sitrat: sitratFiltro.length > 0 ? sitratFiltro.join(",") : undefined,
+      busca: buscaDebounced || undefined,
+      buscaItem: buscaItemDebounced || undefined,
+      integracao: integracaoFiltro.length > 0 ? integracaoFiltro.join(",") : undefined,
+    };
+  }
+
+  // Recarrega a lista de RATs (ListaServidor) e, junto, o contador do "Fechar Todos" (efeito mais abaixo).
   function carregarRats() {
-    setLoadingRats(true);
-    axios
-      .get("/api/rats", {
-        params: {
-          codfor: codforsFiltro.length > 0 ? codforsFiltro.join(",") : undefined,
-          sitrat: sitratFiltro.length > 0 ? sitratFiltro.join(",") : undefined,
-          busca: buscaDebounced || undefined,
-          buscaItem: buscaItemDebounced || undefined,
-          integracao: integracaoFiltro.length > 0 ? integracaoFiltro.join(",") : undefined,
-          page: pageRats,
-          pageSize: PAGE_SIZE_RATS,
-        },
-      })
-      .then(({ data }) => {
-        setRats(data.rats);
-        setTotalRats(data.total);
-        setErro(null);
-      })
-      .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar RATs"))
-      .finally(() => setLoadingRats(false));
+    setRecargaRats((n) => n + 1);
   }
 
   useEffect(() => {
@@ -471,8 +950,9 @@ export function MeusApontamentos() {
       .then(({ data }) => {
         setOpcoesFiltro(data.consultores);
         setSituacoesRat(data.situacoesRat ?? []);
+        setOpcoesRatsProntas(true);
       })
-      .catch(() => {});
+      .catch(() => setOpcoesRatsFalharam(true));
     axios
       .get("/api/apontamentos/consultores")
       .then(({ data }) => {
@@ -483,42 +963,61 @@ export function MeusApontamentos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    carregarRats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [codforsFiltro, sitratFiltro, integracaoFiltro, buscaDebounced, buscaItemDebounced, pageRats]);
+  // Padrão de cada filtro da aba de RATs (estrela, 03/11/2026): aplicado uma vez ao abrir, antes da 1ª consulta das RATs.
+  const padroesRats = usePadroesTela({
+    tela: "projetos.apontamentos.rats",
+    opcoesProntas: opcoesRatsProntas,
+    opcoesFalharam: opcoesRatsFalharam,
+    campos: {
+      sitrat: { rotulo: "Situação", atual: sitratFiltro, aplicar: setSitratFiltro, validar: regras.lista("number", situacoesRat.map((o) => o.sitrat)) },
+      integracao: {
+        rotulo: "Sincronização",
+        atual: integracaoFiltro,
+        aplicar: setIntegracaoFiltro,
+        validar: regras.lista("string", OPCOES_INTEGRACAO.map((o) => o.value)),
+        semOpcoes: true,
+      },
+      codfor: { rotulo: "Consultor", atual: codforsFiltro, aplicar: setCodforsFiltro, validar: regras.lista("number", opcoesFiltro.map((o) => o.codfor)) },
+    },
+  });
 
-  // Digitar reseta pra página 1 (senão a busca poderia "sumir" numa página que não
-  // existe mais no resultado filtrado) — só dispara depois do debounce, pra não
-  // recarregar a cada tecla.
+  // Contador do botão "Fechar Todos": endpoint LEVE (só o número, 14/09/2026, achado real de lentidão) com os MESMOS filtros da tabela,
+  // do topo e de coluna (04/11/2026). Recalcula a cada troca de filtro e depois de qualquer ação que recarrega a lista. Silencioso em erro:
+  // é só um contador auxiliar. O resumo completo (cliente/consultor/minutos) só é buscado quando o modal abre (abrirResumoFechamentoLote).
   useEffect(() => {
-    setPageRats(1);
+    if (!padroesRats.pronto) return;
+    let cancelado = false;
+    axios
+      .get("/api/rats/elegiveis-fechamento/contagem", { params: { ...filtrosRatsParaQuery(), ...consultaColunasRats } })
+      .then(({ data }) => !cancelado && setTotalElegiveisFechamento(data.total ?? 0))
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buscaDebounced, buscaItemDebounced]);
+  }, [padroesRats.pronto, codforsFiltro, sitratFiltro, integracaoFiltro, buscaDebounced, buscaItemDebounced, consultaColunasRats, recargaRats]);
 
   function onMudarFiltroConsultor(codfors: number[]) {
+    // A ListaServidor volta sozinha para a página 1 quando um filtro do topo muda.
     setCodforsFiltro(codfors);
-    // Volta pra página 1: o resultado filtrado pode ter menos páginas que o atual, e a
-    // lista "sumiria" numa página que não existe mais.
-    setPageRats(1);
   }
 
   function onMudarFiltroSitrat(valores: number[]) {
     setSitratFiltro(valores);
-    setPageRats(1);
   }
 
   function onMudarFiltroIntegracao(valores: IntegracaoErpStatus[]) {
     setIntegracaoFiltro(valores);
-    setPageRats(1);
   }
 
   // Apontamentos com reenvio disparado agora — mantém o spinner na linha entre o clique e
   // a primeira resposta do acompanhamento.
   const [reenviando, setReenviando] = useState<Set<number>>(new Set());
-  // Resultado informativo do "Sinc. ERP" (ex.: itens desvinculados). Separado de `erro`
-  // porque não é falha — é o sync tendo encontrado divergência e resolvido.
-  const [avisoSinc, setAvisoSinc] = useState<string | null>(null);
+  // Resultado informativo do "Sinc. ERP" (ex.: itens desvinculados), por RAT. Separado de
+  // `erro` porque não é falha — é o sync tendo encontrado divergência e resolvido. Vira
+  // tooltip no badge de integração da RAT (não banner no topo da tela) pra não competir com
+  // outras RATs sincronizadas na sequência.
+  const [avisoSincPorRat, setAvisoSincPorRat] = useState<Record<number, string>>({});
   // Atividade aberta no painel de detalhe (o mesmo do card do quadro), em modo leitura.
   const [detalheAtividade, setDetalheAtividade] = useState<AtividadeDetalheDados | null>(null);
   // Item da RAT com a observação em edição. Guarda o ratId junto porque depois de salvar é
@@ -528,6 +1027,10 @@ export function MeusApontamentos() {
     ratId: number;
     somenteLeitura: boolean;
   } | null>(null);
+  // Sessão aberta na manutenção (admin edita, os demais leem). Guarda a RAT junto: o contexto do cabeçalho e o recarregamento vêm dela.
+  const [mantendoSessao, setMantendoSessao] = useState<{ item: RatItemRow; rat: RatRow } | null>(null);
+  const [salvandoSessao, setSalvandoSessao] = useState(false);
+  const [erroSessao, setErroSessao] = useState<string | null>(null);
   // Item com "falha no envio" cujo erro completo está sendo visualizado — mesmo modal (só
   // leitura) usado pra ler a observação inteira de um item já confirmado.
   const [erroEnvioItem, setErroEnvioItem] = useState<RatItemRow | null>(null);
@@ -577,7 +1080,7 @@ export function MeusApontamentos() {
     // tivesse um antes e o novo venha diferente (ex.: a RAT foi desvinculada — ver
     // desvincularRatAusenteNoSenior no backend — e o reenvio criou uma RAT NOVA lá).
     if (dados.status === "registrado" && dados.numrat != null) {
-      setRats((atual) => atual.map((r) => (r.id !== ratId ? r : { ...r, numrat: dados.numrat })));
+      setAjustesRat((a) => ({ ...a, [ratId]: { ...a[ratId], numrat: dados.numrat } }));
     }
   }
 
@@ -624,7 +1127,25 @@ export function MeusApontamentos() {
     }
   }
 
-  async function confirmar(sessaoId: number) {
+  // Clique em Confirmar: se o consultor tem 2+ RATs Digitadas nessa proposta, pergunta
+  // antes em qual delas a sessão entra (ou se gera uma nova); senão confirma direto.
+  function confirmar(sessaoId: number) {
+    const sessao = sessoes.find((s) => s.id === sessaoId);
+    const opcoes = sessao ? ratsDestino[chaveGrupoRat(sessao)] : undefined;
+    if (sessao && opcoes && opcoes.length > 0) {
+      setEscolhaRat({
+        sessaoId,
+        titulo: `Proposta ${sessao.codpro} · ${dataCurtaFormatter.format(new Date(sessao.inicio))} ${formatHorario(sessao.inicio, sessao.fim)}`,
+        opcoes,
+        // Primeira = a que a regra automática escolheria (ordem do servidor).
+        valor: String(opcoes[0].id),
+      });
+      return;
+    }
+    void enviarConfirmacao(sessaoId);
+  }
+
+  async function enviarConfirmacao(sessaoId: number, ratDestino?: { ratId: number } | { nova: true }) {
     setConfirmando(sessaoId);
     // Cai pra observacao (pré-preenchida ao sair de "Em Andamento", ver Atividades.tsx)
     // quando o usuário não editou o campo — senão o texto pré-preenchido só aparecia na
@@ -632,7 +1153,11 @@ export function MeusApontamentos() {
     const sessao = sessoes.find((s) => s.id === sessaoId);
     const descricao = descricoes[sessaoId] ?? sessao?.observacao ?? "";
     try {
-      const { data } = await axios.post("/api/apontamentos/confirmar", { sessaoId, descricao: descricao || undefined });
+      const { data } = await axios.post("/api/apontamentos/confirmar", {
+        sessaoId,
+        descricao: descricao || undefined,
+        ...(ratDestino ? { ratDestino } : {}),
+      });
       carregar();
       carregarRats();
       if (data?.ratId != null) expandirEAtualizarRat(data.ratId);
@@ -656,6 +1181,8 @@ export function MeusApontamentos() {
     consultorNome: string | null;
     sessaoIds: number[];
     minutos: number;
+    // RAT de destino do grupo inteiro — null quando o grupo não tem escolha (regra automática).
+    destino: string | null;
   }
   const [resumoLote, setResumoLote] = useState<GrupoResumoLote[] | null>(null);
   const [confirmandoLote, setConfirmandoLote] = useState(false);
@@ -669,7 +1196,15 @@ export function MeusApontamentos() {
       const chave = `${s.codemp}-${s.codfor}-${s.codpro}`;
       let grupo = porGrupo.get(chave);
       if (!grupo) {
-        grupo = { chave, codpro: s.codpro, consultorNome: s.consultorNome, sessaoIds: [], minutos: 0 };
+        const opcoes = ratsDestino[chave];
+        grupo = {
+          chave,
+          codpro: s.codpro,
+          consultorNome: s.consultorNome,
+          sessaoIds: [],
+          minutos: 0,
+          destino: opcoes && opcoes.length > 0 ? String(opcoes[0].id) : null,
+        };
         porGrupo.set(chave, grupo);
       }
       grupo.sessaoIds.push(s.id);
@@ -682,13 +1217,19 @@ export function MeusApontamentos() {
   async function confirmarTodos() {
     if (!resumoLote) return;
     setConfirmandoLote(true);
-    const itens = resumoLote
-      .flatMap((g) => g.sessaoIds)
-      .map((sessaoId) => {
+    const itens = resumoLote.flatMap((g) => {
+      const ratDestino = ratDestinoDoValor(g.destino);
+      return g.sessaoIds.map((sessaoId) => {
         const sessao = sessoes.find((s) => s.id === sessaoId);
         const descricao = descricoes[sessaoId] ?? sessao?.observacao ?? "";
-        return { sessaoId, descricao: descricao || undefined };
+        return {
+          sessaoId,
+          descricao: descricao || undefined,
+          // "grupo" faz o servidor mandar todas as sessões do grupo pra MESMA RAT nova.
+          ...(ratDestino ? { ratDestino: "nova" in ratDestino ? { nova: true, grupo: g.chave } : ratDestino } : {}),
+        };
       });
+    });
     try {
       const { data } = await axios.post("/api/apontamentos/confirmar-lote", { itens });
       setResultadoLote({ confirmados: data.confirmados?.length ?? 0, falhas: data.falhas ?? [] });
@@ -768,6 +1309,69 @@ export function MeusApontamentos() {
     });
   }
 
+  // Conteúdo da linha aberta de uma RAT (ListaServidor `detalhe`): abas Atividades (itens, carregados ao abrir) e RDVs.
+  function renderDetalheRat(rat: RatRow) {
+    const itens = itensPorRat[rat.id];
+    const abaRat = abaExpandidaPorRat[rat.id] ?? "atividades";
+    return (
+      <>
+          <Tabs
+            tabs={[
+              { key: "atividades", label: "Atividades" },
+              { key: "rdvs", label: "RDVs" },
+            ]}
+            activeKey={abaRat}
+            onChange={(key) => selecionarAbaRat(rat.id, key as "atividades" | "rdvs")}
+          />
+          <div className={abaRat === "atividades" ? "" : "hidden"}>
+          {itens === "carregando" && <p className="py-2 text-sm text-muted">Carregando itens...</p>}
+          {itens === "erro" && <p className="py-2 text-sm text-destructive">Falha ao carregar os itens desta RAT.</p>}
+          {Array.isArray(itens) && (
+            <TabelaLocal<RatItemRow, AcoesAtividades>
+              chave="projetos.rat.atividades"
+              defs={COLUNAS_ATIVIDADES}
+              colunas={LOCAIS_ATIVIDADES}
+              linhas={itens}
+              ler={lerAtividade}
+              chaveLinha={(item) => String(item.id)}
+              vazio="Nenhum item nesta RAT."
+              ctx={{
+                rat,
+                reenviando,
+                abrirAtividade: abrirDetalheAtividade,
+                abrirManutencao: abrirManutencaoSessao,
+                editarObservacao: (item, ratId) => setEditandoObservacao({ item, ratId, somenteLeitura: !podeEditarObservacao(item) }),
+                reenviar: reenviarAoSenior,
+                excluir: excluirApontamento,
+                verErro: setErroEnvioItem,
+              }}
+            />
+          )}
+          </div>
+          {rdvJaAberto.has(rat.id) && (
+            <div className={abaRat === "rdvs" ? "" : "hidden"}>
+              <DespesasRatPainel ratId={rat.id} />
+            </div>
+          )}
+      </>
+    );
+  }
+
+  const abertasRats = useMemo(() => new Set([...ratsExpandidas].map(String)), [ratsExpandidas]);
+
+  // Só guarda quando muda de fato (a ListaServidor avisa ao montar, com tudo vazio), para não refazer a contagem do "Fechar Todos" à toa.
+  function mudarConsultaColunasRats(consulta: { filtros?: string; calculadas?: string }) {
+    setConsultaColunasRats((atual) => (atual.filtros === consulta.filtros && atual.calculadas === consulta.calculadas ? atual : consulta));
+  }
+
+  // Troca a aba (Atividades/RDVs) da linha expandida de uma RAT. `rdvJaAberto` só cresce — a
+  // 1ª vez que a aba RDVs é aberta pra uma RAT, `DespesasRatPainel` monta e faz seu próprio
+  // fetch; nas trocas seguintes ele continua montado (só oculto), sem novo fetch.
+  function selecionarAbaRat(ratId: number, aba: "atividades" | "rdvs") {
+    setAbaExpandidaPorRat((atual) => ({ ...atual, [ratId]: aba }));
+    if (aba === "rdvs") setRdvJaAberto((atual) => new Set(atual).add(ratId));
+  }
+
   // Após confirmar um apontamento, abre a RAT que recebeu o item (se ainda não estava
   // expandida) e força a releitura dos itens — senão o item recém-inserido só aparece
   // depois de recolher/reexpandir manualmente.
@@ -824,9 +1428,60 @@ export function MeusApontamentos() {
     }
   }
 
+  // Depois de salvar uma manutenção que vai ao Senior, acompanha os itens da RAT até a alteração sair (ou o tempo acabar).
+  function acompanharEdicao(ratId: number, tentativa = 0) {
+    const timer = window.setTimeout(async () => {
+      let concluido = false;
+      try {
+        const { data } = await axios.get(`/api/rats/${ratId}/itens`);
+        setItensPorRat((i) => ({ ...i, [ratId]: data.itens }));
+        concluido = !data.itens.some((it: RatItemRow) => it.edicaoStatus === "enviando");
+        if (concluido) carregarRats();
+      } catch {
+        // Falha de rede no acompanhamento é transitória — tenta de novo no próximo tick.
+      }
+      if (concluido) return;
+      if (tentativa + 1 < ENVIO_MAX_TENTATIVAS) acompanharEdicao(ratId, tentativa + 1);
+    }, ENVIO_INTERVALO_MS);
+    timersEnvioRef.current.push(timer);
+  }
+
+  function abrirManutencaoSessao(item: RatItemRow, rat: RatRow) {
+    setErroSessao(null);
+    setMantendoSessao({ item, rat });
+  }
+
+  async function salvarManutencaoSessao(dados: DadosManutencaoSessao) {
+    if (!mantendoSessao) return;
+    const { item, rat } = mantendoSessao;
+    setSalvandoSessao(true);
+    setErroSessao(null);
+    try {
+      // Mesma convenção do pedido de ajuste: data + hora local do navegador viram o instante ISO.
+      const { data } = await axios.patch(`/api/apontamentos/${item.sessaoId}/sessao`, {
+        inicio: new Date(`${dados.data}T${dados.inicio}`).toISOString(),
+        fim: new Date(`${dados.data}T${dados.fim}`).toISOString(),
+        descricao: dados.descricao,
+      });
+      setMantendoSessao(null);
+      const { data: itensData } = await axios.get(`/api/rats/${rat.id}/itens`);
+      setItensPorRat((i) => ({ ...i, [rat.id]: itensData.itens }));
+      // Totais (minutos) e "Sinc. ERP" da RAT mudam com a alteração.
+      carregarRats();
+      if (data?.equalizacao === "enfileirada") acompanharEdicao(rat.id);
+    } catch (err: any) {
+      setErroSessao(err.response?.data?.error ?? "Falha ao salvar a sessão");
+    } finally {
+      setSalvandoSessao(false);
+    }
+  }
+
   async function sincronizarErp(rat: RatRow) {
     setSincronizando(rat.id);
-    setAvisoSinc(null);
+    setAvisoSincPorRat((a) => {
+      const { [rat.id]: _remove, ...resto } = a;
+      return resto;
+    });
     try {
       const { data } = await axios.post(`/api/rats/${rat.id}/sincronizar`);
       carregarRats();
@@ -853,6 +1508,15 @@ export function MeusApontamentos() {
             `o vínculo foi removido e eles podem ser enviados de novo pela ação "Enviar".`
         );
       }
+      if (data?.excluidos > 0) {
+        // Item de origem ERP (nunca teve sessão local) que a origem excluiu — diferente do
+        // aviso acima, não há ação de volta nenhuma ("Enviar" não reaparece), é só informativo.
+        const seqrats = (data.seqratsExcluidos ?? []).join(", ");
+        avisos.push(
+          `${data.excluidos} item(ns) desta RAT não existem mais no Senior (sequência ${seqrats}) — ` +
+            `foram marcados como excluídos. Não há nada a fazer: nunca tiveram apontamento local.`
+        );
+      }
       if (data?.itensReenviados > 0) {
         // `integracao` já vem recalculada pós-tentativa — dá pra dizer se resolveu sem
         // precisar de outra chamada.
@@ -863,13 +1527,124 @@ export function MeusApontamentos() {
                 `veja o detalhe na lista de itens.`
         );
       }
+      if (data?.despesasReenviadas > 0) {
+        avisos.push(`${data.despesasReenviadas} despesa(s) pendente(s)/com erro foram reenviadas ao Senior.`);
+      }
       if (avisos.length > 0) {
-        setAvisoSinc(avisos.join(" "));
+        setAvisoSincPorRat((a) => ({ ...a, [rat.id]: avisos.join(" ") }));
       }
     } catch (err: any) {
-      setErro(err.response?.data?.error ?? "Falha ao sincronizar com o ERP");
+      // Mesmo padrão do toast de erro de "Fechar" (acompanharFechamento acima) — não mais o
+      // banner de erro no topo da página, que ficava distante da linha que o usuário estava
+      // olhando e sem dizer de qual RAT era o erro quando mais de uma é sincronizada em
+      // sequência.
+      toast.mostrar(`Falha ao sincronizar a RAT ${rat.id}: ${err.response?.data?.error ?? "Falha ao sincronizar com o ERP"}`, "destructive");
     } finally {
       setSincronizando(null);
+    }
+  }
+
+  // Patch direto na linha da RAT, sem esperar reload da página (14/09/2026, pedido do Vitor)
+  // — mesmo espírito de atualizarEnvioDoItem pro RatItem, agora pro cabeçalho da RAT. De
+  // propósito NÃO dispara um `carregarRats()` completo depois: se o filtro de Situação
+  // estiver em "Digitado", um reload faria a RAT recém-fechada sumir da tabela sem o usuário
+  // entender por quê — o patch garante que a badge de Situação atualiza na hora, e a RAT só
+  // sai da lista no próximo reload natural (troca de filtro, página, outra ação).
+  function atualizarSituacaoDaRat(
+    ratId: number,
+    dados: { sitrat: number | null; sitratLabel: string; sitratTone: Tone; podeFechar: boolean }
+  ) {
+    setAjustesRat((a) => ({ ...a, [ratId]: { ...a[ratId], ...dados } }));
+  }
+
+  // Fechamento de RAT roda em segundo plano (outbox), igual o envio de apontamento — este é o
+  // acompanhamento por polling, clone de acompanharEnvio contra GET /rats/:id/fechamento.
+  // Erro vai pro toast (mesmo padrão já usado em "Sync. ERP" de Alocacao.tsx, 14/09/2026) —
+  // não mais o banner de erro no topo da página, que ficava distante da linha que o usuário
+  // estava olhando. Sucesso patcheia a linha direto (ver atualizarSituacaoDaRat acima).
+  function acompanharFechamento(ratId: number, tentativa = 0) {
+    const timer = window.setTimeout(async () => {
+      let concluido = false;
+      try {
+        const { data } = await axios.get(`/api/rats/${ratId}/fechamento`);
+        concluido = data.status === "enviado" || data.status === "bloqueado" || Boolean(data.erro);
+        if (concluido) {
+          if (data.erro) {
+            toast.mostrar(`Falha ao fechar a RAT ${ratId}: ${data.erro}`, "destructive");
+          } else {
+            atualizarSituacaoDaRat(ratId, {
+              sitrat: data.sitrat,
+              sitratLabel: data.sitratLabel,
+              sitratTone: data.sitratTone,
+              podeFechar: data.podeFechar,
+            });
+          }
+        }
+      } catch {
+        // Falha de rede no acompanhamento é transitória — tenta de novo no próximo tick.
+      }
+
+      if (concluido) return;
+      if (tentativa + 1 < ENVIO_MAX_TENTATIVAS) {
+        acompanharFechamento(ratId, tentativa + 1);
+      }
+      // Estourou o tempo sem desfecho: o cron de 15 min assume; "Sinc. ERP" ou F5 mostra o resultado.
+    }, ENVIO_INTERVALO_MS);
+    timersEnvioRef.current.push(timer);
+  }
+
+  async function fecharRat(rat: RatRow) {
+    setFechando(rat.id);
+    try {
+      await axios.post(`/api/rats/${rat.id}/fechar`);
+      acompanharFechamento(rat.id);
+    } catch (err: any) {
+      toast.mostrar(err.response?.data?.error ?? "Falha ao fechar a RAT", "destructive");
+    } finally {
+      setFechando(null);
+    }
+  }
+
+  // "Fechar Todos" — resumo ANTES de disparar, igual "Confirmar Todos". Busca a lista completa
+  // (sem paginação) de GET /rats/elegiveis-fechamento em vez de usar `rats` do estado, que é só
+  // a página atual da tabela (ver carregarRats) — mas com os MESMOS filtros da tela
+  // (filtrosRatsParaQuery), senão o resumo incluiria RAT de fora do que está sendo mostrado.
+  async function abrirResumoFechamentoLote() {
+    setCarregandoResumoFechamentoLote(true);
+    setResultadoFechamentoLote(null);
+    try {
+      const { data } = await axios.get("/api/rats/elegiveis-fechamento", { params: { ...filtrosRatsParaQuery(), ...consultaColunasRats } });
+      setResumoFechamentoLote(data.rats ?? []);
+    } catch (err: any) {
+      toast.mostrar(err.response?.data?.error ?? "Falha ao carregar as RATs elegíveis para fechamento", "destructive");
+    } finally {
+      setCarregandoResumoFechamentoLote(false);
+    }
+  }
+
+  async function fecharTodos() {
+    if (!resumoFechamentoLote) return;
+    setFechandoLote(true);
+    try {
+      const ratIds = resumoFechamentoLote.map((r) => r.id);
+      const { data } = await axios.post("/api/rats/fechar-lote", { ratIds });
+      setResultadoFechamentoLote({ solicitados: data.enfileirados?.length ?? 0, falhas: data.falhas ?? [] });
+      // Cada RAT enfileirada patcheia a própria linha ao terminar (acompanharFechamento) — não
+      // precisa de um carregarRats() aqui pra "refletir o resultado", só pras que falharam já
+      // de cara em prepararFechamentoRat (nunca chegaram a enfileirar, então nunca vão ter
+      // acompanhamento nenhum rodando).
+      if (data.falhas?.length > 0) carregarRats();
+      for (const ratId of data.enfileirados ?? []) {
+        acompanharFechamento(ratId);
+      }
+      // Mesmo critério de confirmarTodos: só fecha o modal sozinho quando não há falha
+      // parcial, senão o gestor perderia de vista o que travou.
+      if (!data.falhas || data.falhas.length === 0) setResumoFechamentoLote(null);
+    } catch (err: any) {
+      toast.mostrar(err.response?.data?.error ?? "Falha ao fechar RATs em lote", "destructive");
+      setResumoFechamentoLote(null);
+    } finally {
+      setFechandoLote(false);
     }
   }
 
@@ -888,11 +1663,25 @@ export function MeusApontamentos() {
   // Exclusão de sessão ainda NÃO confirmada. Mesma rota do apontamento confirmado — ela
   // marca a sessão como excluída dos dois jeitos; a diferença é que aqui não há RatItem
   // nem RAT pra recarregar.
-  async function excluirSessao(sessaoId: number) {
-    if (!confirm("Excluir este apontamento? Ele sai da lista e deixa de contar nas horas da atividade.")) return;
-    setExcluindoSessao(sessaoId);
+  //
+  // Com pedido de ajuste de horário aguardando o gestor (04/11/2026), o aviso diz que o pedido vai junto e a exclusão manda
+  // `excluirAjuste=1`. Se a tela estiver desatualizada (pedido feito depois de a lista carregar), o servidor responde 409
+  // "ajuste_pendente" sem excluir nada, e o mesmo aviso aparece antes de tentar de novo (ver backend/src/domain/exclusaoApontamento.ts).
+  async function excluirSessao(sessao: SessaoPendente) {
+    const temAjuste = sessao.ajustePendente != null;
+    if (!confirm(temAjuste ? AVISO_EXCLUIR_COM_AJUSTE : "Excluir este apontamento? Ele sai da lista e deixa de contar nas horas da atividade.")) return;
+    setExcluindoSessao(sessao.id);
     try {
-      await axios.delete(`/api/apontamentos/${sessaoId}`);
+      try {
+        await axios.delete(`/api/apontamentos/${sessao.id}`, { params: temAjuste ? { excluirAjuste: 1 } : undefined });
+      } catch (err: any) {
+        if (err.response?.status !== 409 || err.response?.data?.codigo !== "ajuste_pendente") throw err;
+        if (!confirm(AVISO_EXCLUIR_COM_AJUSTE)) {
+          carregar(); // traz o destaque do pedido que a tela ainda não mostrava
+          return;
+        }
+        await axios.delete(`/api/apontamentos/${sessao.id}`, { params: { excluirAjuste: 1 } });
+      }
       carregar();
     } catch (err: any) {
       setErro(err.response?.data?.error ?? "Falha ao excluir o apontamento");
@@ -928,6 +1717,11 @@ export function MeusApontamentos() {
     }
     if (ajusteFim <= ajusteInicio) {
       setErroAjuste("A hora final precisa ser depois da inicial.");
+      return;
+    }
+    // `min` do input não impede digitar uma data antiga à mão; o backend recusaria com o mesmo texto.
+    if (janela && ajusteData < janela.primeiroDiaPermitido) {
+      setErroAjuste(textoJanelaRetroativa(janela));
       return;
     }
     if (ajusteMotivo.trim() === "") {
@@ -1043,6 +1837,19 @@ export function MeusApontamentos() {
   // solicitação NOVA) continua recusado.
   const MOTIVO_BLOQUEIO_APONTAMENTO = "Apontamento bloqueado nesta atividade/proposta pelo gestor.";
 
+  // Por que "Pedir ajuste" está indisponível pra uma sessão, ou undefined se está liberado — texto
+  // único pras duas linhas (plana e agrupada). Além do bloqueio, o ajuste confere o dia da sessão
+  // ORIGINAL contra a janela de retroatividade (o backend confere também o dia novo pedido): sessão
+  // antiga demais não se ajusta nem trazendo pra hoje. Pedido já pendente continua abrindo pra ver.
+  function motivoAjusteIndisponivel(s: SessaoPendente): string | undefined {
+    if (s.ajustePendente) return undefined;
+    if (s.bloqueadoApontamentoEfetivo) return MOTIVO_BLOQUEIO_APONTAMENTO;
+    if (janela && paraInputData(s.inicio) < janela.primeiroDiaPermitido) {
+      return `Este apontamento é anterior a ${diaCurtoDaJanela(janela.primeiroDiaPermitido)}, fora da janela de retroatividade.`;
+    }
+    return undefined;
+  }
+
   // Linha de uma sessão pendente na lista plana (consultor comum, sem acordeon) — mesmas
   // colunas responsivas do <thead> de fora.
   function renderLinhaSessao(s: SessaoPendente) {
@@ -1157,14 +1964,14 @@ export function MeusApontamentos() {
                         s.ajustePendente
                       )
                     }
-                    disabled={s.bloqueadoApontamentoEfetivo && !s.ajustePendente}
-                    title={s.bloqueadoApontamentoEfetivo && !s.ajustePendente ? MOTIVO_BLOQUEIO_APONTAMENTO : undefined}
+                    disabled={motivoAjusteIndisponivel(s) !== undefined}
+                    title={motivoAjusteIndisponivel(s)}
                   >
                     {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
                   </DropdownMenu.Item>
                   {/* Antes daqui não havia como apagar uma sessão rastreada errada — só
                       restava confirmar e desfazer depois. */}
-                  <DropdownMenu.Item onSelect={() => excluirSessao(s.id)} disabled={excluindoSessao === s.id} destructive>
+                  <DropdownMenu.Item onSelect={() => excluirSessao(s)} disabled={excluindoSessao === s.id} destructive>
                     {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
                   </DropdownMenu.Item>
                 </>
@@ -1257,26 +2064,29 @@ export function MeusApontamentos() {
                 {confirmando === s.id ? "Confirmando..." : "Confirmar"}
               </DropdownMenu.Item>
               {s.souDono && (
-                <>
-                  <DropdownMenu.Item
-                    onSelect={() =>
-                      abrirPedidoAjuste(
-                        s.id,
-                        `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
-                        s.inicio,
-                        s.fim,
-                        s.ajustePendente
-                      )
-                    }
-                    disabled={s.bloqueadoApontamentoEfetivo && !s.ajustePendente}
-                    title={s.bloqueadoApontamentoEfetivo && !s.ajustePendente ? MOTIVO_BLOQUEIO_APONTAMENTO : undefined}
-                  >
-                    {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item onSelect={() => excluirSessao(s.id)} disabled={excluindoSessao === s.id} destructive>
-                    {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
-                  </DropdownMenu.Item>
-                </>
+                <DropdownMenu.Item
+                  onSelect={() =>
+                    abrirPedidoAjuste(
+                      s.id,
+                      `Proposta ${s.codpro} · ${formatHorario(s.inicio, s.fim)}`,
+                      s.inicio,
+                      s.fim,
+                      s.ajustePendente
+                    )
+                  }
+                  disabled={motivoAjusteIndisponivel(s) !== undefined}
+                  title={motivoAjusteIndisponivel(s)}
+                >
+                  {s.ajustePendente ? "Ver ajuste pendente" : "Pedir ajuste de horário"}
+                </DropdownMenu.Item>
+              )}
+              {/* Diferente de "Pedir ajuste" acima (só o dono), Excluir aqui também libera
+                  pro admin sobre sessão de qualquer consultor — backend confere de novo em
+                  DELETE /:id, isto só evita oferecer um botão que ele recusaria. */}
+              {s.podeExcluir && (
+                <DropdownMenu.Item onSelect={() => excluirSessao(s)} disabled={excluindoSessao === s.id} destructive>
+                  {excluindoSessao === s.id ? "Excluindo..." : "Excluir"}
+                </DropdownMenu.Item>
               )}
             </DropdownMenu.Content>
           </DropdownMenu>
@@ -1302,7 +2112,7 @@ export function MeusApontamentos() {
             POST) — consultor comum aponta pelo quadro, que gera sessão rastreada. */}
         {podeLancarManual && (
           <button
-            onClick={() => setModalManual(true)}
+            onClick={abrirModalManual}
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           >
             + Apontamento manual
@@ -1316,14 +2126,6 @@ export function MeusApontamentos() {
         </p>
       )}
 
-      {avisoSinc && (
-        <div className="mb-4 flex items-start justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-sm text-foreground">
-          <span>{avisoSinc}</span>
-          <button onClick={() => setAvisoSinc(null)} className="flex-none text-[11px] text-muted hover:text-foreground">
-            fechar
-          </button>
-        </div>
-      )}
 
       <div className="space-y-8">
         <section>
@@ -1576,7 +2378,7 @@ export function MeusApontamentos() {
               />
               <input
                 type="text"
-                placeholder="Buscar na observação dos itens..."
+                placeholder="Buscar na observação ou id da atividade..."
                 value={buscaItemInput}
                 onChange={(e) => setBuscaItemInput(e.target.value)}
                 className={`${selectClass} w-64`}
@@ -1590,6 +2392,7 @@ export function MeusApontamentos() {
                   onChange={onMudarFiltroSitrat}
                   labelTodos="Todas as situações"
                   labelSufixo="situações"
+                  acessorio={padroesRats.estrela("sitrat")}
                 />
               )}
               <MultiSelectDropdown
@@ -1598,6 +2401,7 @@ export function MeusApontamentos() {
                 onChange={onMudarFiltroIntegracao}
                 labelTodos="Todas as sincronizações"
                 labelSufixo="sincronizações"
+                acessorio={padroesRats.estrela("integracao")}
               />
               {opcoesFiltro.length > 1 && (
                 <MultiSelectDropdown
@@ -1606,282 +2410,61 @@ export function MeusApontamentos() {
                   onChange={onMudarFiltroConsultor}
                   labelTodos="Todos os consultores"
                   labelSufixo="consultores"
+                  acessorio={padroesRats.estrela("codfor")}
                 />
               )}
+              {/* Contador vem de GET /rats/elegiveis-fechamento (carregarRats) — não da página
+                  atual de `rats` (que é só 1 página), mas RESPEITA os mesmos filtros da tela
+                  (14/09/2026, ver filtrosRatsParaQuery): filtrar por consultor/busca/situação/
+                  integração aqui muda tanto a tabela quanto o que "Fechar Todos" abrange.
+                  `null` (ainda não carregado) mostra sem número, nunca "(0)" por engano. */}
+              <button
+                onClick={abrirResumoFechamentoLote}
+                disabled={carregandoResumoFechamentoLote || totalElegiveisFechamento === 0}
+                className="flex items-center gap-2 rounded-md border border-primary/40 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+              >
+                {carregandoResumoFechamentoLote && <Spinner className="h-3.5 w-3.5" />}
+                Fechar Todos{totalElegiveisFechamento != null ? ` (${totalElegiveisFechamento})` : ""}
+              </button>
             </div>
           </div>
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      ID
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      RAT
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Proposta
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Cliente
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Consultor
-                    </th>
-                    <th className="hidden bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted md:table-cell">
-                      Emissão
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Situação
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Sinc. ERP
-                    </th>
-                    <th className="hidden bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted sm:table-cell">
-                      Itens
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                      Total
-                    </th>
-                    <th className="bg-surface-2 px-2.5 py-3" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {loadingRats &&
-                    Array.from({ length: 3 }).map((_, i) => (
-                      <tr key={i} className="border-t border-border/60">
-                        <td className="px-2.5 py-3.5" colSpan={11}>
-                          <Skeleton className="h-6 w-full" />
-                        </td>
-                      </tr>
-                    ))}
-                  {!loadingRats &&
-                    rats.map((rat) => {
-                      const expandida = ratsExpandidas.has(rat.id);
-                      const itens = itensPorRat[rat.id];
-                      return (
-                        <Fragment key={rat.id}>
-                          <tr
-                            onClick={() => toggleExpandirRat(rat)}
-                            className={`cursor-pointer transition ${
-                              expandida ? "border-t border-primary bg-primary/5" : "border-t border-border/60 hover:bg-surface-2"
-                            }`}
-                          >
-                            <td className={`px-2.5 py-3.5 ${expandida ? "border-l border-primary" : ""}`}>
-                              <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                                <span className="text-muted">{expandida ? "▾" : "▸"}</span>
-                                {rat.id}
-                              </p>
-                            </td>
-                            <td className="whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted">{rat.numrat ?? "—"}</td>
-                            <td className="px-2.5 py-3.5 text-sm text-foreground">
-                              {rat.codpro != null ? (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigate(`/projetos/proposta/${rat.codemp}/${rat.codpro}`);
-                                  }}
-                                  className="text-primary hover:underline"
-                                >
-                                  {rat.codpro}
-                                </button>
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                            <td className="max-w-[220px] truncate px-2.5 py-3.5 text-sm text-muted" title={rat.cliente ?? undefined}>
-                              {rat.cliente ?? "—"}
-                            </td>
-                            <td className="px-2.5 py-3.5 text-sm text-muted">{rat.consultorNome}</td>
-                            <td className="hidden whitespace-nowrap px-2.5 py-3.5 font-mono text-sm text-muted md:table-cell">
-                              {rat.datemi ? dateFormatter.format(new Date(rat.datemi)) : "—"}
-                            </td>
-                            <td className="px-2.5 py-3.5">
-                              <span className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.sitratTone]}`}>
-                                {rat.sitratLabel}
-                              </span>
-                            </td>
-                            <td className="px-2.5 py-3.5">
-                              <span className={`inline-block rounded-full px-2.5 py-1 font-mono text-[10.5px] font-medium ${toneBadge[rat.integracaoTone]}`}>
-                                {rat.integracaoLabel}
-                              </span>
-                            </td>
-                            <td className="hidden px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-muted sm:table-cell">
-                              {rat.totalItens}
-                            </td>
-                            <td className="whitespace-nowrap px-2.5 py-3.5 text-right font-mono text-sm tabular-nums text-foreground">
-                              {formatMinutos(rat.totalMinutos)}
-                            </td>
-                            <td className={`px-2.5 py-3.5 text-right ${expandida ? "border-r border-primary" : ""}`}>
-                              <DropdownMenu placement="bottom-end">
-                                <DropdownMenu.Trigger>
-                                  <button
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                    aria-label="Ações"
-                                  >
-                                    ⋯
-                                  </button>
-                                </DropdownMenu.Trigger>
-                                <DropdownMenu.Content>
-                                  <DropdownMenu.Item
-                                    onSelect={() => sincronizarErp(rat)}
-                                    disabled={rat.integracao === "sincronizado" || sincronizando === rat.id}
-                                    title={
-                                      rat.integracao === "sincronizado"
-                                        ? "Já sincronizada — nada pendente ou com erro"
-                                        : "Busca o que mudou no ERP e reenvia os itens pendentes/com erro"
-                                    }
-                                  >
-                                    {sincronizando === rat.id ? "Sincronizando..." : "Sinc. ERP"}
-                                  </DropdownMenu.Item>
-                                  {podeGerenciarDespesas && (
-                                    <DropdownMenu.Item
-                                      onSelect={() => setDespesasRat(rat)}
-                                      disabled={rat.numrat == null}
-                                      title={rat.numrat == null ? "Só disponível depois que a RAT tem número do ERP" : undefined}
-                                    >
-                                      Despesas de Viagem
-                                    </DropdownMenu.Item>
-                                  )}
-                                </DropdownMenu.Content>
-                              </DropdownMenu>
-                            </td>
-                          </tr>
-                          {expandida && (
-                            <tr className="border-t border-border/60 bg-surface-2/40">
-                              <td colSpan={11} className="border-b border-l border-r border-primary px-2.5 py-3">
-                                {itens === "carregando" && <p className="py-2 text-sm text-muted">Carregando itens...</p>}
-                                {itens === "erro" && <p className="py-2 text-sm text-destructive">Falha ao carregar os itens desta RAT.</p>}
-                                {Array.isArray(itens) && itens.length === 0 && (
-                                  <p className="py-2 text-sm text-muted">Nenhum item nesta RAT.</p>
-                                )}
-                                {Array.isArray(itens) && itens.length > 0 && (
-                                  <table className="w-full border-collapse">
-                                    <thead>
-                                      <tr>
-                                        <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Id. Ativ.
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Serviço
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Item
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Data
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Horário
-                                        </th>
-                                        <th className="py-1.5 pr-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Duração
-                                        </th>
-                                        <th className="w-2/5 py-1.5 pr-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                                          Observação
-                                        </th>
-                                        <th className="py-1.5" />
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {itens.map((item) => (
-                                        <tr key={item.id} className="border-t border-border/40">
-                                          <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums">
-                                            {item.atividadeId != null ? (
-                                              <button
-                                                onClick={() => abrirDetalheAtividade(item.atividadeId!)}
-                                                className="text-primary hover:underline"
-                                                title="Abrir a atividade (somente visualização)"
-                                              >
-                                                {item.atividadeId}
-                                              </button>
-                                            ) : (
-                                              <span className="text-muted">—</span>
-                                            )}
-                                          </td>
-                                          <td className="py-1.5 pr-3 font-mono text-[12.5px] text-muted">{item.codser ?? "—"}</td>
-                                          <td
-                                            className="max-w-[260px] truncate py-1.5 pr-3 text-[12.5px] text-muted"
-                                            title={rotuloItem(item)}
-                                          >
-                                            {rotuloItem(item)}
-                                          </td>
-                                          <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
-                                            {item.datati ? dateFormatter.format(new Date(item.datati)) : "—"}
-                                          </td>
-                                          <td className="py-1.5 pr-3 font-mono text-[12.5px] tabular-nums text-muted">
-                                            {item.horini != null && item.horfim != null
-                                              ? `${formatHoraDoDia(item.horini)}–${formatHoraDoDia(item.horfim)}`
-                                              : "—"}
-                                          </td>
-                                          <td className="py-1.5 pr-3 text-right font-mono text-[12.5px] tabular-nums text-foreground">
-                                            {item.duracaoMinutos != null ? formatMinutos(item.duracaoMinutos) : "—"}
-                                          </td>
-                                          {/* Observação é o que trava a aprovação da RAT (todo item precisa ter) e
-                                              vai no desAti do Senior — por isso ela mesma é o clique, em vez de
-                                              mais uma ação na coluna da direita. Editável abre pra editar; já
-                                              registrado no ERP abre a MESMA janela em leitura, que é onde se lê o
-                                              texto completo sem depender do tooltip. */}
-                                          <td className="max-w-[320px] py-1.5 pr-3">
-                                            <button
-                                              onClick={() =>
-                                                setEditandoObservacao({
-                                                  item,
-                                                  ratId: rat.id,
-                                                  somenteLeitura: !podeEditarObservacao(item),
-                                                })
-                                              }
-                                              title={item.desati?.trim() || "Sem observação"}
-                                              className={`block w-full truncate text-left text-[12.5px] hover:underline ${
-                                                item.desati?.trim() ? "text-foreground" : "font-medium text-warning"
-                                              }`}
-                                            >
-                                              {item.desati?.trim() ||
-                                                (podeEditarObservacao(item) ? "Sem observação — clique para preencher" : "Sem observação")}
-                                            </button>
-                                          </td>
-                                          <td className="py-1.5 text-right">
-                                            <AcaoIntegracao
-                                              item={item}
-                                              reenviando={reenviando.has(item.id)}
-                                              onReenviar={() => reenviarAoSenior(item.id, rat.id)}
-                                              onExcluir={() => excluirApontamento(item.sessaoId!, rat.id)}
-                                              onVerErro={() => setErroEnvioItem(item)}
-                                            />
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                )}
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                      );
-                    })}
-                  {!loadingRats && rats.length === 0 && (
-                    <tr>
-                      <td colSpan={11} className="px-2.5 py-8 text-center text-sm text-muted">
-                        Nenhuma RAT ainda — confirme uma sessão pendente pra começar.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <Pagination
-              page={pageRats}
+          {/* ListaServidor sobre GET /rats/lista: só monta depois que os padrões dos filtros (estrela) foram aplicados, senão a 1ª consulta
+              sairia sem eles. */}
+          {padroesRats.pronto ? (
+            <ListaServidor<RatRow, AcoesRats>
+              chave="projetos.apontamentos.rats"
+              camposRelacionados
+              url="/api/rats/lista"
+              params={filtrosRatsParaQuery()}
+              defs={COLUNAS_RATS}
+              ctx={{
+                navegar: navigate,
+                sincronizar: sincronizarErp,
+                fechar: fecharRat,
+                sincronizando,
+                fechando,
+                avisoSinc: avisoSincPorRat,
+                expandidas: ratsExpandidas,
+              }}
+              chaveLinha={(rat) => String(rat.id)}
+              rotulo="RATs"
+              vazio="Nenhuma RAT ainda — confirme uma sessão pendente pra começar."
               pageSize={PAGE_SIZE_RATS}
-              total={totalRats}
-              loading={loadingRats}
-              onPageChange={setPageRats}
-              label="RATs"
+              // GET /rats/lista aceita até 100 por página (paginaMaxima no backend).
+              recarga={recargaRats}
+              detalhe={renderDetalheRat}
+              abertas={abertasRats}
+              onAlternarAberta={(rat) => toggleExpandirRat(rat)}
+              ajustarLinha={(rat) => (ajustesRat[rat.id] ? { ...rat, ...ajustesRat[rat.id] } : rat)}
+              aoCarregar={() => setAjustesRat({})}
+              aoMudarConsulta={mudarConsultaColunasRats}
+              aoErro={(_status, mensagem) => setErro(mensagem)}
             />
-          </div>
+          ) : (
+            <div className="rounded-lg border border-border bg-surface p-4">
+              <Skeleton className="h-6 w-full" />
+            </div>
+          )}
         </section>
       </div>
 
@@ -1917,6 +2500,34 @@ export function MeusApontamentos() {
         />
       )}
 
+      {/* Manutenção da sessão (coluna Sessão): admin edita com a RAT Digitada; os demais abrem em leitura com o motivo. */}
+      {mantendoSessao && (
+        <ModalManutencaoSessao
+          titulo={`Sessão ${mantendoSessao.item.sessaoId}`}
+          contexto={[
+            `Consultor: ${mantendoSessao.rat.consultorNome}`,
+            `Proposta ${mantendoSessao.rat.codpro ?? "—"} · ${mantendoSessao.rat.cliente ?? "—"}`,
+            mantendoSessao.item.confirmadoNoSenior
+              ? `Registrado no Senior: RAT ${mantendoSessao.item.numrat}/${mantendoSessao.item.seqrat}`
+              : "Ainda não registrado no Senior",
+            `Item: ${rotuloItem(mantendoSessao.item)}`,
+          ]}
+          inicial={{
+            data: mantendoSessao.item.datati ? mantendoSessao.item.datati.slice(0, 10) : "",
+            inicio: mantendoSessao.item.horini != null ? formatHoraDoDia(mantendoSessao.item.horini) : "",
+            fim: mantendoSessao.item.horfim != null ? formatHoraDoDia(mantendoSessao.item.horfim) : "",
+            descricao: mantendoSessao.item.desati ?? "",
+          }}
+          somenteLeitura={!mantendoSessao.item.podeManterSessao}
+          motivoSomenteLeitura={mantendoSessao.item.motivoBloqueioManutencao}
+          registradoNoSenior={mantendoSessao.item.confirmadoNoSenior}
+          salvando={salvandoSessao}
+          erro={erroSessao}
+          onSalvar={salvarManutencaoSessao}
+          onFechar={() => setMantendoSessao(null)}
+        />
+      )}
+
       {/* Erro completo de "falha no envio" — mesmo modal da observação, só leitura, só
           trocando o título e o texto mostrado (o erro do Senior, não a observação do item). */}
       {erroEnvioItem && (
@@ -1926,10 +2537,54 @@ export function MeusApontamentos() {
           titulo={`Apontamento de ${
             erroEnvioItem.datati ? dateFormatter.format(new Date(erroEnvioItem.datati)) : "—"
           }`}
-          valorInicial={erroEnvioItem.envioErro ?? ""}
+          valorInicial={(erroEnvioItem.edicaoStatus === "falha" ? erroEnvioItem.edicaoErro : erroEnvioItem.envioErro) ?? ""}
           onSalvar={() => {}}
           onFechar={() => setErroEnvioItem(null)}
         />
+      )}
+
+      {/* Escolha da RAT de destino na confirmação individual (25/09/2026) — só abre quando o
+          consultor tem 2+ RATs Digitadas na proposta (ver confirmar). Cada opção mostra as
+          descrições recentes, que é por onde se reconhece a RAT (ex.: filial do cliente). */}
+      {escolhaRat && (
+        <Modal
+          open
+          onClose={() => confirmando !== escolhaRat.sessaoId && setEscolhaRat(null)}
+          fecharPorFora={false}
+          title="Em qual RAT?"
+          subtitulo={escolhaRat.titulo}
+        >
+          <div className="space-y-4 p-4">
+            <OpcoesRatDestino
+              nome="rat-destino"
+              opcoes={escolhaRat.opcoes}
+              valor={escolhaRat.valor}
+              onChange={(valor) => setEscolhaRat((atual) => (atual ? { ...atual, valor } : atual))}
+              className="max-h-80 overflow-y-auto"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setEscolhaRat(null)}
+                disabled={confirmando === escolhaRat.sessaoId}
+                className="rounded-md border border-border px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const { sessaoId, valor } = escolhaRat;
+                  await enviarConfirmacao(sessaoId, ratDestinoDoValor(valor));
+                  setEscolhaRat(null);
+                }}
+                disabled={confirmando === escolhaRat.sessaoId}
+                className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {confirmando === escolhaRat.sessaoId && <Spinner className="h-3.5 w-3.5" />}
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Resumo antes de confirmar em lote — agrupado pela MESMA chave (consultor+proposta)
@@ -1945,15 +2600,30 @@ export function MeusApontamentos() {
           subtitulo={`${resumoLote.reduce((soma, g) => soma + g.sessaoIds.length, 0)} sessões · ${resumoLote.length} RAT${resumoLote.length === 1 ? "" : "s"}`}
         >
           <div className="space-y-4 p-4">
-            <div className="max-h-64 space-y-1.5 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-3">
+            <div className="max-h-[28rem] space-y-3 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-3">
               {resumoLote.map((g) => (
-                <div key={g.chave} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="min-w-0 truncate text-foreground">
-                    Proposta {g.codpro} · {g.consultorNome ?? "eu"}
-                  </span>
-                  <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
-                    {g.sessaoIds.length} apont. · {formatMinutos(g.minutos)}
-                  </span>
+                <div key={g.chave} className="space-y-1">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="min-w-0 truncate text-foreground">
+                      Proposta {g.codpro} · {g.consultorNome ?? "eu"}
+                    </span>
+                    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
+                      {g.sessaoIds.length} apont. · {formatMinutos(g.minutos)}
+                    </span>
+                  </div>
+                  {g.destino != null && (
+                    <OpcoesRatDestino
+                      nome={`rat-destino-${g.chave}`}
+                      opcoes={ratsDestino[g.chave] ?? []}
+                      valor={g.destino}
+                      desabilitado={confirmandoLote || resultadoLote != null}
+                      onChange={(valor) =>
+                        setResumoLote((atual) =>
+                          atual ? atual.map((x) => (x.chave === g.chave ? { ...x, destino: valor } : x)) : atual
+                        )
+                      }
+                    />
+                  )}
                 </div>
               ))}
             </div>
@@ -1997,12 +2667,71 @@ export function MeusApontamentos() {
         </Modal>
       )}
 
-      {despesasRat && (
-        <ModalDespesasRat
-          ratId={despesasRat.id}
-          ratLabel={`RAT ${despesasRat.numrat ?? despesasRat.id} · ${despesasRat.cliente ?? "—"}`}
-          onFechar={() => setDespesasRat(null)}
-        />
+      {/* Resumo do "Fechar Todos" — clone do modal de "Confirmar apontamentos em lote" acima,
+          mesma UX: mostra o que vai ser fechado ANTES de disparar, e falha parcial fica
+          visível no próprio diálogo em vez de fechar sozinho. */}
+      {resumoFechamentoLote && (
+        <Modal
+          open
+          onClose={() => !fechandoLote && setResumoFechamentoLote(null)}
+          fecharPorFora={false}
+          title="Fechar RATs em lote"
+          subtitulo={`${resumoFechamentoLote.length} RAT${resumoFechamentoLote.length === 1 ? "" : "s"}`}
+        >
+          <div className="space-y-4 p-4">
+            {resumoFechamentoLote.length === 0 ? (
+              <p className="text-sm text-muted">Nenhuma RAT Digitada elegível para fechamento agora.</p>
+            ) : (
+              <div className="max-h-64 space-y-1.5 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-3">
+                {resumoFechamentoLote.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="min-w-0 truncate text-foreground">
+                      RAT {r.numrat ?? r.id} · Proposta {r.codpro ?? "—"} · {r.consultorNome}
+                    </span>
+                    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">{formatMinutos(r.totalMinutos)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {resultadoFechamentoLote && resultadoFechamentoLote.falhas.length > 0 && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <p className="mb-1 font-medium">
+                  {resultadoFechamentoLote.solicitados} solicitado{resultadoFechamentoLote.solicitados === 1 ? "" : "s"} (o
+                  fechamento em si acontece em segundo plano),{" "}
+                  {resultadoFechamentoLote.falhas.length} falhou{resultadoFechamentoLote.falhas.length === 1 ? "" : "aram"}:
+                </p>
+                <ul className="list-inside list-disc space-y-0.5">
+                  {resultadoFechamentoLote.falhas.map((f) => (
+                    <li key={f.ratId}>
+                      RAT {f.ratId}: {f.erro}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setResumoFechamentoLote(null)}
+                disabled={fechandoLote}
+                className="rounded-md border border-border px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+              >
+                {resultadoFechamentoLote ? "Fechar" : "Cancelar"}
+              </button>
+              {!resultadoFechamentoLote && resumoFechamentoLote.length > 0 && (
+                <button
+                  onClick={fecharTodos}
+                  disabled={fechandoLote}
+                  className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                >
+                  {fechandoLote && <Spinner className="h-3.5 w-3.5" />}
+                  Fechar {resumoFechamentoLote.length} RATs
+                </button>
+              )}
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Pedido de correção de horário. Não fecha por clique fora nem por Esc — tem texto
@@ -2026,6 +2755,7 @@ export function MeusApontamentos() {
                 O envio deste apontamento ao Senior fica retido até o gestor decidir — o ERP só recebe o horário final.
               </p>
             )}
+            {!pedidoAjuste.pendente && janela && <p className="text-[11.5px] text-muted">{textoJanelaRetroativa(janela)}</p>}
             <div className="flex flex-wrap items-center gap-2">
               <label htmlFor="aj-data" className="text-[12px] text-muted">
                 Data
@@ -2033,6 +2763,7 @@ export function MeusApontamentos() {
               <input
                 id="aj-data"
                 type="date"
+                min={janela?.primeiroDiaPermitido}
                 value={ajusteData}
                 onChange={(e) => setAjusteData(e.target.value)}
                 disabled={pedidoAjuste.pendente != null}
@@ -2112,6 +2843,8 @@ export function MeusApontamentos() {
           itemRealizado={detalheAtividade.itemRealizado}
           estruturaNome={detalheAtividade.estruturaNome}
           estruturaPercentual={detalheAtividade.estruturaPercentual}
+          estruturaAtividadeId={detalheAtividade.estruturaAtividadeId}
+          depexeLabel={detalheAtividade.depexeLabel}
           podeVerCronograma={detalheAtividade.podeVerCronograma}
           qtdhorPrevisto={detalheAtividade.qtdhorPrevisto ?? null}
           horasExcedentes={detalheAtividade.horasExcedentes ?? 0}

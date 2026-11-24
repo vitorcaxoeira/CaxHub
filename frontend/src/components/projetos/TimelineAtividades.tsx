@@ -110,6 +110,8 @@ export function TimelineAtividades({ atividades, onAbrirDetalhe }: TimelineAtivi
                           itemRealizado: atividade.itemRealizado,
                           horasRealizadas: atividade.horasRealizadas,
                           estruturaPercentual: atividade.estruturaPercentual,
+                          estruturaAtividadeId: atividade.estruturaAtividadeId,
+                          depexeLabel: atividade.depexeLabel,
                           podeVerCronograma: atividade.podeVerCronograma,
                                                 qtdhorPrevisto: atividade.qtdhorPrevisto,
                                                 horasExcedentes: atividade.horasExcedentes,

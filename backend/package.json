@@ -9,22 +9,28 @@
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "test": "node --require ts-node/register/transpile-only --test \"src/**/*.test.ts\""
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
+    "@types/archiver": "^6.0.4",
+    "archiver": "^7.0.1",
     "axios": "^1.7.7",
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "express-rate-limit": "^8.6.0",
     "fast-xml-parser": "^4.5.0",
+    "heic-convert": "2.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.2.0",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "pdf-lib": "^1.17.1",
+    "puppeteer-core": "^24.43.1"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",

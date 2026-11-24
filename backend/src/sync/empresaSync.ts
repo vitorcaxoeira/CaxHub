@@ -1,8 +1,12 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "empresa-sync";
 export const CRON_EXPR = "0 3 * * *";
@@ -24,24 +28,72 @@ interface EmpresaRow {
   codmpu?: number;
 }
 
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codemp", cast: "int" },
+  { nome: "nomemp", cast: "text" },
+  { nome: "sigemp", cast: "text" },
+  { nome: "codmpc", cast: "int" },
+  { nome: "codmpu", cast: "int" },
+];
+
+function linhaDe(row: EmpresaRow): LinhaUpsert {
+  return {
+    chave: String(row.codemp),
+    valores: [
+      String(row.codemp),
+      row.nomemp,
+      row.sigemp,
+      row.codmpc != null ? String(row.codmpc) : null,
+      row.codmpu != null ? String(row.codmpu) : null,
+    ],
+  };
+}
+
 export async function runEmpresaSync(): Promise<void> {
   const inicio = new Date();
   // Fase 1 do plano de filtros na importação: predicados vazios hoje, devolve QUERY intacta.
   const query = montarQuerySenior(QUERY, filtroDoJob(JOB_NAME, "todos").predicadosSql);
   try {
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoap(query)) as EmpresaRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { nomemp: row.nomemp, sigemp: row.sigemp, codmpc: row.codmpc, codmpu: row.codmpu };
-      await prisma.empresa.upsert({
-        where: { codemp: row.codemp },
-        update: data,
-        create: { codemp: row.codemp, ...data },
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "empresa",
+      colunas: COLUNAS,
+      colunasPk: ["codemp"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.EmpresaWhereInput>(prisma.empresa, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(QUERY),
+      inicio,
+      linhasProcessadas: resultado.linhasProcessadas,
+    });
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

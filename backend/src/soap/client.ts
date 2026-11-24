@@ -1,5 +1,6 @@
 import axios from "axios";
 import { XMLParser } from "fast-xml-parser";
+import { conexaoSenior, garantirEscritaNoSenior, SistemaSenior } from "../config/sistemaSenior";
 
 const SENIOR_NAMESPACE = "http://services.senior.com.br";
 
@@ -60,6 +61,8 @@ export function mensagemDeFalhaSoap(erro: unknown, operacao: string): string {
 export interface RunSqlOptions {
   limit?: number;
   offSet?: number;
+  /** Sistema Senior que recebe a consulta; omitido = ERP (comportamento de sempre). */
+  sistema?: SistemaSenior;
 }
 
 /**
@@ -71,13 +74,7 @@ export interface RunSqlOptions {
  * A resposta vem com o JSON em base64 dentro de `pmJsonResponse`.
  */
 export async function runSqlViaSoap(query: string, options: RunSqlOptions = {}): Promise<unknown[]> {
-  const soapUrl = process.env.SOAP_URL;
-  const soapUser = process.env.SOAP_USER;
-  const soapPassword = process.env.SOAP_PASSWORD;
-
-  if (!soapUrl || !soapUser || !soapPassword) {
-    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
-  }
+  const { url: soapUrl, usuario: soapUser, senha: soapPassword } = conexaoSenior(options.sistema ?? "erp");
 
   const endpoint = soapUrl.replace(/\?wsdl$/i, "");
 
@@ -180,9 +177,10 @@ export const ideExtItem = (ratItemId: number) => String(ratItemId);
 export const SIS_ORI = process.env.SENIOR_SIS_ORI ?? "CaxHub";
 
 // Domínio de tipEve no Senior: I = Incluir, E = Excluir, A = Alterar.
-// Hoje o CaxHub só inclui — editar e excluir apontamento ficam bloqueados depois do
-// registro (ver routes/apontamentos.ts). Quando esses fluxos existirem, é aqui que "A" e
-// "E" entram.
+// Apontamento usa "I" na confirmação e "A" na manutenção de sessão já registrada (só admin, RAT
+// Digitada — PATCH /apontamentos/:id/sessao; o Senior casa a linha pelo `ideExt` do item + `numRat`,
+// ver enviarEdicaoApontamento em sync/outboxSenior.ts). "E" continua sem uso: excluir apontamento
+// registrado segue bloqueado (ver routes/apontamentos.ts).
 export const TIP_EVE_INCLUIR = "I";
 export const TIP_EVE = process.env.SENIOR_TIP_EVE ?? TIP_EVE_INCLUIR;
 
@@ -217,7 +215,17 @@ export interface RegistrarAtividadesPayload {
   sisOri: string;
   tipEve: string;
   itens: ItemAtividadeSenior[];
+  /**
+   * RAT de destino explícita: anexar os itens NESTA RAT (Digitada) do Senior. Pedido ao
+   * desenvolvedor Senior em 25/09/2026 (publicado em homologação e produção no mesmo dia) —
+   * sem ele é o Senior quem escolhe a RAT aberta, e quem confirma a sessão não consegue
+   * separar o trabalho por filial do cliente (RATs da proposta 7935, uma por filial).
+   */
+  numRat?: number;
+  /** "S" = abrir RAT nova, nunca anexar numa aberta. Mesma origem de `numRat`. */
+  gerRat?: "S";
 }
+
 
 export interface ItemRegistrado {
   ideExt: string | null;
@@ -296,8 +304,11 @@ export function montarEnvelopeRegistrarAtividades(payload: RegistrarAtividadesPa
     `<codEmp>${payload.codEmp}</codEmp>` +
     `<codFor>${payload.codFor}</codFor>` +
     `<codPro>${payload.codPro}</codPro>` +
+    // Ordem alfabética, igual ao XSD (conferido em homologação e produção, 25/09/2026).
+    (payload.gerRat ? `<gerRat>${payload.gerRat}</gerRat>` : "") +
     `<ideExt>${escapeXml(payload.ideExt)}</ideExt>` +
     itensXml +
+    (payload.numRat != null ? `<numRat>${payload.numRat}</numRat>` : "") +
     `<sisOri>${escapeXml(payload.sisOri)}</sisOri>` +
     `<tipEve>${escapeXml(payload.tipEve)}</tipEve>`;
 
@@ -323,6 +334,7 @@ export function montarEnvelopeRegistrarAtividades(payload: RegistrarAtividadesPa
  * quando a chamada em si falha (rede, XML inesperado, erroExecucao preenchido).
  */
 export async function registrarAtividadesViaSoap(payload: RegistrarAtividadesPayload): Promise<RegistrarAtividadesResposta> {
+  garantirEscritaNoSenior("registrarAtividades");
   const soapUrl = process.env.SOAP_URL;
   const soapUser = process.env.SOAP_USER;
   const soapPassword = process.env.SOAP_PASSWORD;
@@ -386,10 +398,17 @@ export async function registrarAtividadesViaSoap(payload: RegistrarAtividadesPay
 // valores fazem sentido de verdade: alocação tem exclusão de fato no Senior, diferente de
 // apontamento (registrarAtividades nunca usa "E", o serviço não tem como desfazer aquele).
 //
-// `qtdHor`/`hrsExc` são string no XSD, sem formato declarado — a hipótese usada aqui é o
-// mesmo "HH:MM" de horIni/horFim (ver formatarHoraSenior), ainda NÃO confirmada contra o
-// serviço real. Primeira chamada de verdade (script manual, antes de ligar o cron pra estes
-// tipos) é o que confirma ou corrige isso.
+// `qtdHor`/`hrsExc` são string no XSD, sem formato declarado — o mesmo "HH:MM" de
+// horIni/horFim (ver formatarHoraSenior), confirmado pelo Vitor (14/09/2026) junto com o
+// publicador do serviço.
+//
+// `desAti` (Descrição da atividade) foi publicado junto com `hrsExc` (14/09/2026) — irmão do
+// `desAti` que `registrarAtividades` já manda, mas com outra fonte: lá vem do que o consultor
+// escreveu (RatItem.desati); aqui vem do nome da atividade no Cronograma
+// (EstruturaAtividade.nome, via AtividadeConsultor.estruturaAtividadeId). Só existe alocação em
+// modo "estrutura" — em modo "item" (aloca direto no item da proposta, sem Cronograma) não há
+// nome de atividade pra mandar, então o campo fica ausente (ver montarPayloadAlocacao em
+// sync/outboxSenior.ts). Sem truncamento: o limite real do campo lá ainda não foi confirmado.
 // ---------------------------------------------------------------------------
 
 /** Identificador externo mandado ao Senior pra alocação: o id local de AtividadeConsultor. */
@@ -407,6 +426,9 @@ export interface ItemAlocacaoSenior {
   qtdHor?: string;
   /** Horas excedentes autorizadas (AtividadeConsultor.horasExcedentes) — só quando > 0. */
   hrsExc?: string;
+  /** Nome da atividade no Cronograma (EstruturaAtividade.nome) — ausente ao EXCLUIR e ausente
+   * quando a alocação é modo "item" (sem nó de Cronograma vinculado). */
+  desAti?: string;
 }
 
 export interface AlocarAtividadesPayload {
@@ -442,6 +464,7 @@ export function montarEnvelopeAlocarAtividades(payload: AlocarAtividadesPayload,
     .map(
       (i) =>
         `<itens>` +
+        (i.desAti != null ? `<desAti>${escapeXml(i.desAti)}</desAti>` : "") +
         (i.hrsExc != null ? `<hrsExc>${escapeXml(i.hrsExc)}</hrsExc>` : "") +
         `<ideExt>${escapeXml(i.ideExt)}</ideExt>` +
         (i.qtdHor != null ? `<qtdHor>${escapeXml(i.qtdHor)}</qtdHor>` : "") +
@@ -482,6 +505,7 @@ export function montarEnvelopeAlocarAtividades(payload: AlocarAtividadesPayload,
  * (sync/outboxSenior.ts).
  */
 export async function alocarAtividadesViaSoap(payload: AlocarAtividadesPayload): Promise<AlocarAtividadesResposta> {
+  garantirEscritaNoSenior("alocarAtividades");
   const soapUrl = process.env.SOAP_URL;
   const soapUser = process.env.SOAP_USER;
   const soapPassword = process.env.SOAP_PASSWORD;
@@ -531,6 +555,368 @@ export async function alocarAtividadesViaSoap(payload: AlocarAtividadesPayload):
   };
 }
 
+// ---------------------------------------------------------------------------
+// Canal de ESCRITA — operação `ManterItemDespesa`, do mesmo serviço. Publicada em 07/09/2026
+// (confirmada baixando o `?wsdl`/`?xsd` reais, mesmo método usado pra descobrir as 3 anteriores).
+//
+// Grava despesa de viagem (RegistroDespesaViagem / USU_TE777RDV) lançada pelo CaxHub. Contrato
+// mais simples que os outros dois: não tem `codFor`/`codPro` (a despesa já pertence a um
+// `numRat` existente, sem a ambiguidade de "a qual RAT isso anexa" que `registrarAtividades`
+// tem) e a resposta é FLAT — `result[]` traz uma linha por despesa direto, sem aninhar um
+// `itens[]` por dentro de um resultado por header como as outras duas.
+//
+// `tipEve` aqui é campo do ITEM (não do envelope como nos outros dois) — domínio ainda não
+// confirmado contra o serviço, mas o operador escreve I/A/E nos outros dois; CaxHub só usa "I"
+// por ora (despesa lançada aqui nunca é editada, só criada ou apagada antes do envio).
+// ---------------------------------------------------------------------------
+
+/** Identificador externo mandado ao Senior pra despesa: o id local de RegistroDespesaViagem. */
+export const ideExtDespesa = (despesaId: number) => String(despesaId);
+
+export interface ItemDespesaSenior {
+  ideExt: string;
+  /** dd/mm/yyyy — mesmo formato de datAti, ver formatarDataSenior. */
+  datRdv: string;
+  desRdv: string;
+  tipDes: number;
+  /** Ausente pra despesa avulsa (só a aba Deslocamento preenche). */
+  modDes?: string;
+  qtdRdv: number;
+  vlrUni: number;
+  fatRdv: string;
+  /** Ausente pra despesa avulsa — só Deslocamento aponta uma rota (RegistroDespesaViagem.rotid). */
+  idRota?: number;
+  /** Ausente ao incluir — o Senior gera e devolve em `seqRdv` na resposta. */
+  seqRdv?: number;
+  tipEve: string;
+}
+
+export interface ManterItemDespesaPayload {
+  codEmp: number;
+  numRat: number;
+  sisOri: string;
+  despesas: ItemDespesaSenior[];
+}
+
+export interface ItemDespesaRegistrado {
+  ideExt: string | null;
+  seqRdv: number | null;
+  status: number | null;
+  msg: string | null;
+  // Valor unitário e quantidade que o Senior confirmou pra esta despesa — podem vir diferentes
+  // do que mandamos (arredondamento/ajuste do lado de lá). O chamador (outboxSeniorDespesa.ts)
+  // grava os dois de volta em RegistroDespesaViagem (vlrunt/qtdrdv) depois da confirmação, e
+  // recalcula vlrtot em cima deles, pra local nunca divergir do que o ERP tem registrado.
+  vlrUni: number | null;
+  qtdRdv: number | null;
+  // Horas de deslocamento (minutos), calculadas pelo Senior — campo publicado por lá em
+  // 09/09/2026, ainda não confirmado contra uma resposta real (mesmo cuidado do nome do
+  // elemento de resposta acima): `horDes` segue o mesmo padrão de casing de vlrUni/qtdRdv, mas
+  // vale reconferir no primeiro Result de verdade que trouxer o campo.
+  horDes: number | null;
+}
+
+export interface ManterItemDespesaResposta {
+  statusProcesso: number | null;
+  mensagemProcesso: string | null;
+  erroExecucao: string | null;
+  /** Flat — cada entrada já é uma despesa, sem nível de header como em registrarAtividades. */
+  resultados: ItemDespesaRegistrado[];
+}
+
+/** Monta o XML que seria enviado, sem enviar — mesmo uso dos irmãos de registrarAtividades/alocarAtividades. */
+export function montarEnvelopeManterItemDespesa(payload: ManterItemDespesaPayload, user: string, password: string): string {
+  const despesasXml = payload.despesas
+    .map(
+      (d) =>
+        `<despesas>` +
+        `<datRdv>${escapeXml(d.datRdv)}</datRdv>` +
+        `<desRdv>${escapeXml(d.desRdv)}</desRdv>` +
+        `<fatRdv>${escapeXml(d.fatRdv)}</fatRdv>` +
+        (d.idRota != null ? `<idRota>${d.idRota}</idRota>` : "") +
+        `<ideExt>${escapeXml(d.ideExt)}</ideExt>` +
+        (d.modDes != null ? `<modDes>${escapeXml(d.modDes)}</modDes>` : "") +
+        `<qtdRdv>${d.qtdRdv}</qtdRdv>` +
+        (d.seqRdv != null ? `<seqRdv>${d.seqRdv}</seqRdv>` : "") +
+        `<tipDes>${d.tipDes}</tipDes>` +
+        `<tipEve>${escapeXml(d.tipEve)}</tipEve>` +
+        `<vlrUni>${d.vlrUni}</vlrUni>` +
+        `</despesas>`
+    )
+    .join("");
+
+  const parametersXml =
+    `<codEmp>${payload.codEmp}</codEmp>` +
+    despesasXml +
+    `<numRat>${payload.numRat}</numRat>` +
+    `<sisOri>${escapeXml(payload.sisOri)}</sisOri>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ser:ManterItemDespesa>
+      <user>${escapeXml(user)}</user>
+      <password>${escapeXml(password)}</password>
+      <encryption>0</encryption>
+      <parameters>${parametersXml}</parameters>
+    </ser:ManterItemDespesa>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+}
+
+/**
+ * Grava despesa(s) de viagem no Senior via `ManterItemDespesa`.
+ *
+ * Mesmo contrato de responsabilidade dos irmãos: não decide sucesso/fracasso de negócio, só
+ * normaliza a resposta — quem decide é o chamador (sync/outboxSeniorDespesa.ts).
+ */
+export async function manterItemDespesaViaSoap(payload: ManterItemDespesaPayload): Promise<ManterItemDespesaResposta> {
+  garantirEscritaNoSenior("ManterItemDespesa");
+  const soapUrl = process.env.SOAP_URL;
+  const soapUser = process.env.SOAP_USER;
+  const soapPassword = process.env.SOAP_PASSWORD;
+
+  if (!soapUrl || !soapUser || !soapPassword) {
+    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
+  }
+
+  const endpoint = soapUrl.replace(/\?wsdl$/i, "");
+  const envelope = montarEnvelopeManterItemDespesa(payload, soapUser, soapPassword);
+
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "ManterItemDespesa"));
+    });
+
+  const parsed = parser.parse(response.data);
+  // Nome do elemento de resposta ("ns2:ManterItemDespesaResponse") segue o padrão das outras 3
+  // operações — AINDA NÃO confirmado contra uma chamada real (ver prisma/verificarEnvioDespesa.ts).
+  const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:ManterItemDespesaResponse"]?.result;
+
+  if (!result) {
+    throw new Error("Resposta SOAP de ManterItemDespesa em formato inesperado — ajustar parsing em soap/client.ts");
+  }
+
+  const erroExecucao = textoOuNulo(result.erroExecucao);
+  if (erroExecucao) {
+    throw new Error(`Erro no serviço Senior (ManterItemDespesa): ${erroExecucao}`);
+  }
+
+  return {
+    statusProcesso: numeroOuNulo(result.statusProcesso),
+    mensagemProcesso: textoOuNulo(result.mensagemProcesso),
+    erroExecucao,
+    resultados: comoArray<Record<string, unknown>>(result.result).map((r) => ({
+      ideExt: ideExtOuNulo(r.ideExt),
+      seqRdv: numeroOuNulo(r.seqRdv),
+      status: numeroOuNulo(r.status),
+      msg: textoOuNulo(r.msg),
+      vlrUni: numeroOuNulo(r.vlrUni),
+      qtdRdv: numeroOuNulo(r.qtdRdv),
+      horDes: numeroOuNulo(r.horDes),
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Canal de ESCRITA — operação `fecharRAT`, do mesmo serviço. Publicada em 13/09/2026.
+//
+// Fecha uma RAT (USU_TE777RAT) diretamente no Senior — muda a situação dela pra "Fechado"
+// (USU_LSITRAT=1) do lado de lá. Contrato mais simples que os outros três: só `codEmp` +
+// `numRat`, sem lista de itens/despesas (a operação atua sobre o documento inteiro, não sobre
+// linhas dele).
+//
+// AINDA NÃO confirmado contra o `?wsdl`/`?xsd` reais (mesmo cuidado já registrado em
+// `ManterItemDespesa` acima) — o que está garantido pelo publicador (Vitor) é só o semântico de
+// `statusProcesso` (0=Erro, 1=Sucesso); nome do elemento de resposta (`ns2:fecharRATResponse`)
+// e o formato exato de `mensagemProcesso`/`erroExecucao` seguem por hipótese o mesmo padrão das
+// outras 3 operações — confirmar no primeiro envio real (ver prisma/verificarEnvioFechamento.ts)
+// e ajustar aqui se vier diferente.
+// ---------------------------------------------------------------------------
+
+export interface FecharRatPayload {
+  codEmp: number;
+  numRat: number;
+}
+
+// Sem `resultados[]`: a operação responde pela RAT inteira, não item por item.
+export interface FecharRatResposta {
+  /** 1 = sucesso (confirmado com o publicador do serviço). */
+  statusProcesso: number | null;
+  mensagemProcesso: string | null;
+  erroExecucao: string | null;
+}
+
+/** Monta o XML que seria enviado, sem enviar — mesmo uso dos irmãos acima. */
+export function montarEnvelopeFecharRat(payload: FecharRatPayload, user: string, password: string): string {
+  const parametersXml = `<codEmp>${payload.codEmp}</codEmp>` + `<numRat>${payload.numRat}</numRat>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ser:fecharRAT>
+      <user>${escapeXml(user)}</user>
+      <password>${escapeXml(password)}</password>
+      <encryption>0</encryption>
+      <parameters>${parametersXml}</parameters>
+    </ser:fecharRAT>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+}
+
+/**
+ * Fecha uma RAT no Senior via `fecharRAT`.
+ *
+ * Mesmo contrato de responsabilidade dos irmãos: não decide sucesso/fracasso de negócio, só
+ * normaliza a resposta — quem decide é o chamador (sync/outboxSenior.ts).
+ */
+export async function fecharRatViaSoap(payload: FecharRatPayload): Promise<FecharRatResposta> {
+  garantirEscritaNoSenior("fecharRAT");
+  const soapUrl = process.env.SOAP_URL;
+  const soapUser = process.env.SOAP_USER;
+  const soapPassword = process.env.SOAP_PASSWORD;
+
+  if (!soapUrl || !soapUser || !soapPassword) {
+    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
+  }
+
+  const endpoint = soapUrl.replace(/\?wsdl$/i, "");
+  const envelope = montarEnvelopeFecharRat(payload, soapUser, soapPassword);
+
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "fecharRAT"));
+    });
+
+  const parsed = parser.parse(response.data);
+  // Nome do elemento de resposta — AINDA NÃO confirmado contra uma chamada real, ver comentário
+  // do bloco acima.
+  const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:fecharRATResponse"]?.result;
+
+  if (!result) {
+    throw new Error("Resposta SOAP de fecharRAT em formato inesperado — ajustar parsing em soap/client.ts");
+  }
+
+  const erroExecucao = textoOuNulo(result.erroExecucao);
+  if (erroExecucao) {
+    throw new Error(`Erro no serviço Senior (fecharRAT): ${erroExecucao}`);
+  }
+
+  return {
+    statusProcesso: numeroOuNulo(result.statusProcesso),
+    mensagemProcesso: textoOuNulo(result.mensagemProcesso),
+    erroExecucao,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Canal de ESCRITA — operação `ManterSituacaoProposta` (tela Gestão Propostas, 09/11/2026). Altera USU_SitPro de USU_TE077PRO (domínio USU_SitPro):
+// Finalizar leva a proposta para 8 (Executada); Em Execução, de 8 ou 4 para 7; Rejeitar/Cancelar/Declinar, de 4 para 5/6/9, com o motivo em obsSit (campo conferido no
+// ?xsd real em 16/11/2026: codEmp, codPro, flowInstanceID, flowName, obsSit, sitPro).
+//
+// OPERAÇÃO PUBLICADA NO SENIOR (nome informado pelo Vitor em 09/11/2026) e CONFERIDA contra o `?wsdl`/`?xsd` reais no mesmo dia: mensagem de entrada
+// `ManterSituacaoProposta` (user, password, encryption, parameters = CaxHubManterSituacaoPropostaIn: codEmp, codPro, sitPro e, opcionais e não usados
+// aqui, flowInstanceID e flowName) e resposta `ManterSituacaoPropostaResponse` (result = CaxHubManterSituacaoPropostaOut: statusProcesso,
+// mensagemProcesso, erroExecucao), o mesmo molde de `fecharRAT`. O significado de `statusProcesso` (0=Erro, 1=Sucesso) segue o das outras operações.
+// AINDA NÃO FOI FEITO UM ENVIO REAL: conferir no primeiro (o prefixo `ns2` do elemento de resposta e o texto de `mensagemProcesso`). O worker
+// (sync/outboxSeniorProposta.ts) envia sempre que a escrita no Senior está ligada (a variável SENIOR_PORTA_SITPRO foi aposentada em 10/11/2026).
+// ---------------------------------------------------------------------------
+
+export interface ManterSituacaoPropostaPayload {
+  codEmp: number;
+  codPro: number;
+  /** Situação nova, domínio USU_SitPro (5 = Rejeitada, 6 = Cancelada, 7 = Em Execução, 8 = Executada, 9 = Declinada). */
+  sitPro: number;
+  /** Motivo da mudança (campo obsSit da operação, string no XSD). Só vai no XML quando preenchido. */
+  obsSit?: string | null;
+}
+
+// Sem `resultados[]`: a operação atua sobre a proposta inteira, como fecharRAT atua sobre a RAT.
+export interface ManterSituacaoPropostaResposta {
+  /** 1 = sucesso (a confirmar com o publicador do serviço). */
+  statusProcesso: number | null;
+  mensagemProcesso: string | null;
+  erroExecucao: string | null;
+}
+
+/** Monta o XML que seria enviado, sem enviar — mesmo uso dos irmãos acima. */
+export function montarEnvelopeManterSituacaoProposta(payload: ManterSituacaoPropostaPayload, user: string, password: string): string {
+  const obsSit = payload.obsSit?.trim();
+  const parametersXml =
+    `<codEmp>${payload.codEmp}</codEmp>` + `<codPro>${payload.codPro}</codPro>` + `<sitPro>${payload.sitPro}</sitPro>` + (obsSit ? `<obsSit>${escapeXml(obsSit)}</obsSit>` : "");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="${SENIOR_NAMESPACE}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ser:ManterSituacaoProposta>
+      <user>${escapeXml(user)}</user>
+      <password>${escapeXml(password)}</password>
+      <encryption>0</encryption>
+      <parameters>${parametersXml}</parameters>
+    </ser:ManterSituacaoProposta>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+}
+
+/**
+ * Altera a situação de uma proposta no Senior via `ManterSituacaoProposta`.
+ *
+ * Mesmo contrato de responsabilidade dos irmãos: não decide sucesso/fracasso de negócio, só normaliza a resposta — quem decide é o chamador
+ * (sync/outboxSeniorProposta.ts).
+ */
+export async function manterSituacaoPropostaViaSoap(payload: ManterSituacaoPropostaPayload): Promise<ManterSituacaoPropostaResposta> {
+  garantirEscritaNoSenior("ManterSituacaoProposta");
+  const soapUrl = process.env.SOAP_URL;
+  const soapUser = process.env.SOAP_USER;
+  const soapPassword = process.env.SOAP_PASSWORD;
+
+  if (!soapUrl || !soapUser || !soapPassword) {
+    throw new Error("SOAP_URL, SOAP_USER e SOAP_PASSWORD precisam estar definidos no .env");
+  }
+
+  const endpoint = soapUrl.replace(/\?wsdl$/i, "");
+  const envelope = montarEnvelopeManterSituacaoProposta(payload, soapUser, soapPassword);
+
+  const response = await axios
+    .post(endpoint, envelope, {
+      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
+      timeout: 20000,
+    })
+    .catch((erro) => {
+      throw new Error(mensagemDeFalhaSoap(erro, "ManterSituacaoProposta"));
+    });
+
+  const parsed = parser.parse(response.data);
+  // Nome do elemento de resposta — AINDA NÃO confirmado contra uma chamada real, ver comentário do bloco acima.
+  const result = parsed?.["S:Envelope"]?.["S:Body"]?.["ns2:ManterSituacaoPropostaResponse"]?.result;
+
+  if (!result) {
+    throw new Error("Resposta SOAP de ManterSituacaoProposta em formato inesperado — ajustar parsing em soap/client.ts");
+  }
+
+  const erroExecucao = textoOuNulo(result.erroExecucao);
+  if (erroExecucao) {
+    throw new Error(`Erro no serviço Senior (ManterSituacaoProposta): ${erroExecucao}`);
+  }
+
+  return {
+    statusProcesso: numeroOuNulo(result.statusProcesso),
+    mensagemProcesso: textoOuNulo(result.mensagemProcesso),
+    erroExecucao,
+  };
+}
+
 const PAGE_SIZE = 10000;
 
 /**
@@ -545,14 +931,15 @@ const PAGE_SIZE = 10000;
 export async function runSqlViaSoapPaginated(
   query: string,
   orderByColumns: string[],
-  pageSize: number = PAGE_SIZE
+  pageSize: number = PAGE_SIZE,
+  sistema: SistemaSenior = "erp"
 ): Promise<unknown[]> {
   const orderedQuery = `${query} ORDER BY ${orderByColumns.join(", ")}`;
   const allRows: unknown[] = [];
   let offSet = 0;
 
   while (true) {
-    const page = await runSqlViaSoap(orderedQuery, { limit: pageSize, offSet });
+    const page = await runSqlViaSoap(orderedQuery, { limit: pageSize, offSet, sistema });
     allRows.push(...page);
     if (page.length < pageSize) break;
     offSet += pageSize;

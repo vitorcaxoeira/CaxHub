@@ -6,6 +6,8 @@ import { Avatar } from "../components/ui/Avatar";
 import { Skeleton } from "../components/ui/Skeleton";
 import { useToast } from "../components/ui/Toast";
 import { ModalCropAvatar } from "../components/perfil/ModalCropAvatar";
+import { JanelaFlutuanteConfig } from "../components/perfil/JanelaFlutuanteConfig";
+import { PreferenciasConfig } from "../components/perfil/PreferenciasConfig";
 import { recortarERedimensionar } from "../lib/cropImage";
 
 const TIPOS_ACEITOS = ["image/jpeg", "image/png", "image/webp"];
@@ -335,6 +337,10 @@ export function Perfil() {
               </button>
             </div>
           </section>
+
+          <PreferenciasConfig />
+
+          <JanelaFlutuanteConfig />
         </div>
       )}
 

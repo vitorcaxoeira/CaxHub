@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { RECUO_ATE_ICONE_PX, RECUO_BASE_PX, RECUO_NIVEL_PX } from "./LinhaNo";
 
 interface LinhaNovaAtividadeProps {
   pastaNome: string;
@@ -14,7 +15,9 @@ export function LinhaNovaAtividade({ pastaNome, profundidade, onCriar, abrirAuto
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const paddingEsquerda = 14 + (profundidade + 1) * 24;
+  // Mesmo recuo das atividades filhas (profundidade + 1) mais a seta de expandir, de modo que o "＋"
+  // fica na vertical do círculo de status das atividades irmãs, e não do chevron.
+  const paddingEsquerda = RECUO_BASE_PX + (profundidade + 1) * RECUO_NIVEL_PX + RECUO_ATE_ICONE_PX;
 
   useEffect(() => {
     if (abrirAutomaticamente) {

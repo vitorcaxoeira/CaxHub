@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Comandos nativos liberados para a janela flutuante, local (tela de conexão) e remota (o CaxHub do servidor).",
+  "windows": ["flutuante"],
+  "local": true,
+  "remote": {
+    "urls": [
+      "http://179.197.67.226:8080/*",
+      "https://*.caxhub.com.br/*",
+      "https://caxhub.com.br/*",
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*"
+    ]
+  },
+  "permissions": [
+    "allow-definir-modo",
+    "allow-aplicar-preferencias",
+    "allow-notificar",
+    "allow-trazer-para-frente",
+    "allow-esconder-janela",
+    "allow-abrir-no-navegador"
+  ]
+}

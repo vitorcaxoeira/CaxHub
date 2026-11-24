@@ -9,6 +9,27 @@ export const ENTIDADES_AUDITORIA = {
   KANBAN_CARD: "kanban_card",
   USUARIO: "usuario",
   RAT: "rat",
+  DESPESA: "despesa",
+  SOLICITACAO_VIAGEM: "solicitacao_viagem",
+  AVALIACAO_5S: "avaliacao_5s",
+  CONSULTOR: "consultor",
+  // Painel de Eficiência (Gestão de Projetos › Eficiência): apontamento tirado do cálculo do painel e ação do plano de ação.
+  EFICIENCIA_APONTAMENTO: "eficiencia_apontamento",
+  EFICIENCIA_ACAO: "eficiencia_acao",
+  // Plano de Evolução Profissional e Eficiência (consultores PJ). PLANO_PARTICIPANTE carrega valor hora: SÓ ADMIN enxerga o histórico
+  // (ver routes/auditoria.ts: podeVerEntidade e esconderEntidadesSoAdmin).
+  PLANO_CICLO: "plano_ciclo",
+  PLANO_PARTICIPANTE: "plano_participante",
+  // Apuração do ciclo: traz o valor hora do resultado, então também é SÓ do admin no histórico geral.
+  PLANO_APURACAO: "plano_apuracao",
+  // Gestão de Metas do Comercial: o ano de metas (entidadeId = ano) e os indicadores (entidadeId = "indicador:<id>"). Metas individuais de
+  // pessoas: SÓ ADMIN no histórico geral (routes/auditoria.ts esconderEntidadesSoAdmin).
+  META_COMERCIAL: "meta_comercial",
+  // Gestão de Descontos (Gestão de Projetos): o tipo, o processo (entidadeId = id) e a parcela (entidadeId = id; metadata.processoId liga ao
+  // processo). Trazem valores de consultores: SÓ ADMIN no histórico geral (routes/auditoria.ts); o histórico do processo vai pela própria tela.
+  DESCONTO_TIPO: "desconto_tipo",
+  DESCONTO_PROCESSO: "desconto_processo",
+  DESCONTO_PARCELA: "desconto_parcela",
 } as const;
 export type EntidadeAuditoriaTipo = (typeof ENTIDADES_AUDITORIA)[keyof typeof ENTIDADES_AUDITORIA];
 
@@ -16,6 +37,9 @@ export const EVENTOS_AUDITORIA = {
   PROPOSTA_CRIADA: "PROPOSTA_CRIADA",
   PROPOSTA_ALTERADA: "PROPOSTA_ALTERADA",
   PROPOSTA_STATUS_ALTERADO: "PROPOSTA_STATUS_ALTERADO",
+  // Pedido de mudança de SITUAÇÃO feito na tela Gestão Propostas (Finalizar / Em Execução), gravado na hora do clique. A mudança em si só vale
+  // quando o Senior confirma: aí sai o PROPOSTA_STATUS_ALTERADO acima, o mesmo que o sync de entrada emite (origem "job" em vez de "integracao_senior").
+  PROPOSTA_SITUACAO_SOLICITADA: "PROPOSTA_SITUACAO_SOLICITADA",
   PROPOSTA_ITEM_CRIADO: "PROPOSTA_ITEM_CRIADO",
   PROPOSTA_ITEM_ALTERADO: "PROPOSTA_ITEM_ALTERADO",
 
@@ -81,9 +105,42 @@ export const EVENTOS_AUDITORIA = {
   // Exclusão lógica do apontamento pelo próprio consultor (ação direta, sem aprovação), e
   // o pedido de correção de horário, que passa pelo gestor.
   APONTAMENTO_EXCLUIDO: "APONTAMENTO_EXCLUIDO",
+  // Manutenção, pelo admin, de uma sessão já confirmada (data, horário, descrição) com a RAT Digitada. O envio
+  // ao Senior (tipEve A) é registrado à parte por ATIVIDADE_ENVIADA_SENIOR. Ver PATCH /apontamentos/:id/sessao.
+  APONTAMENTO_SESSAO_ALTERADA: "APONTAMENTO_SESSAO_ALTERADA",
   AJUSTE_SOLICITADO: "AJUSTE_SOLICITADO",
   AJUSTE_APROVADO: "AJUSTE_APROVADO",
   AJUSTE_REPROVADO: "AJUSTE_REPROVADO",
+  // Exceção à ordem da Diretoria (05/10/2026): quantos dias úteis antes de hoje o consultor ainda
+  // pode pedir apontamento/ajuste. Entidade CONSULTOR (id `codemp:codfor`); `alteracoes` guarda
+  // de/para pra ficar rastreável quem liberou e quanto. Ver domain/janelaRetroativa.ts.
+  APONTAMENTO_RETROATIVO_ALTERADO: "APONTAMENTO_RETROATIVO_ALTERADO",
+  // Tolerância (minutos) do teto na confirmação de sessões, por consultor. Mesma entidade e mesmo
+  // de/para do evento acima. Ver domain/toleranciaTeto.ts.
+  APONTAMENTO_TOLERANCIA_TETO_ALTERADA: "APONTAMENTO_TOLERANCIA_TETO_ALTERADA",
+
+  // Módulo Gestão de Solicitações — Solicitações de Viagem. Entidade própria (SOLICITACAO_VIAGEM);
+  // quando há proposta vinculada o evento também leva codemp/codpro e aparece no histórico dela.
+  VIAGEM_SOLICITADA: "VIAGEM_SOLICITADA",
+  VIAGEM_ALTERADA: "VIAGEM_ALTERADA",
+  VIAGEM_ASSUMIDA: "VIAGEM_ASSUMIDA",
+  VIAGEM_COTACAO_ADICIONADA: "VIAGEM_COTACAO_ADICIONADA",
+  VIAGEM_COTACAO_REMOVIDA: "VIAGEM_COTACAO_REMOVIDA",
+  VIAGEM_COTACAO_SELECIONADA: "VIAGEM_COTACAO_SELECIONADA",
+  VIAGEM_ENVIADA_ACEITE: "VIAGEM_ENVIADA_ACEITE",
+  VIAGEM_ACEITA_SOLICITANTE: "VIAGEM_ACEITA_SOLICITANTE",
+  VIAGEM_RECUSADA_SOLICITANTE: "VIAGEM_RECUSADA_SOLICITANTE",
+  VIAGEM_ENVIADA_APROVACAO: "VIAGEM_ENVIADA_APROVACAO",
+  VIAGEM_APROVADA: "VIAGEM_APROVADA",
+  VIAGEM_REPROVADA: "VIAGEM_REPROVADA",
+  VIAGEM_DEVOLVIDA: "VIAGEM_DEVOLVIDA",
+  VIAGEM_RESERVA_REGISTRADA: "VIAGEM_RESERVA_REGISTRADA",
+  VIAGEM_RESERVADA: "VIAGEM_RESERVADA",
+  VIAGEM_REVALIDACAO_EXIGIDA: "VIAGEM_REVALIDACAO_EXIGIDA",
+  VIAGEM_FINALIZADA: "VIAGEM_FINALIZADA",
+  VIAGEM_CANCELADA: "VIAGEM_CANCELADA",
+  VIAGEM_ANEXO_ADICIONADO: "VIAGEM_ANEXO_ADICIONADO",
+  VIAGEM_ANEXO_REMOVIDO: "VIAGEM_ANEXO_REMOVIDO",
 
   KANBAN_RAIA_ALTERADA: "KANBAN_RAIA_ALTERADA",
 
@@ -101,24 +158,82 @@ export const EVENTOS_AUDITORIA = {
   // Autoatendimento de perfil (backend/src/routes/perfil.ts) — nunca carrega dado
   // sensível em `alteracoes`/`metadata` (nem hash, nem senha em texto puro).
   USUARIO_PERFIL_ALTERADO: "USUARIO_PERFIL_ALTERADO",
+
+  // Módulo Gestão 5S — entidade própria (AVALIACAO_5S). Só as avaliações são auditadas;
+  // os cadastros (áreas, perguntas, participantes) não geram evento.
+  AVALIACAO_5S_CRIADA: "AVALIACAO_5S_CRIADA",
+  AVALIACAO_5S_NOTA_ALTERADA: "AVALIACAO_5S_NOTA_ALTERADA",
+  AVALIACAO_5S_FINALIZADA: "AVALIACAO_5S_FINALIZADA",
+  AVALIACAO_5S_REABERTA: "AVALIACAO_5S_REABERTA",
+  AVALIACAO_5S_EXCLUIDA: "AVALIACAO_5S_EXCLUIDA",
+  AVALIACAO_5S_IMAGEM_ADICIONADA: "AVALIACAO_5S_IMAGEM_ADICIONADA",
+  AVALIACAO_5S_IMAGEM_REMOVIDA: "AVALIACAO_5S_IMAGEM_REMOVIDA",
   USUARIO_SENHA_ALTERADA: "USUARIO_SENHA_ALTERADA",
   USUARIO_AVATAR_ALTERADO: "USUARIO_AVATAR_ALTERADO",
   USUARIO_AVATAR_REMOVIDO: "USUARIO_AVATAR_REMOVIDO",
+
+  // Criação do cabeçalho da RAT e de item de atividade/RDV dentro dela — `metadata.origemCriacao`
+  // ("caxhub" | "senior") diz de onde veio, sem precisar de dois eventos por conceito. CaxHub
+  // nasce no clique (confirmar apontamento / lançar despesa); Senior nasce na sincronização
+  // (job noturno ou "Sinc. ERP" manual), só quando a linha é GENUINAMENTE nova — nunca em
+  // atualização de uma linha já existente. Publicados em 13/09/2026.
+  RAT_CRIADA: "RAT_CRIADA",
+  RAT_ITEM_CRIADO: "RAT_ITEM_CRIADO",
+  DESPESA_CRIADA: "DESPESA_CRIADA",
+
+  // Situação (Rat.sitrat) mudou na sincronização com o Senior, numa RAT que já existia
+  // localmente (achado real 13/09/2026: mudar a situação direto no ERP e sincronizar não
+  // deixava rastro nenhum — só RAT_CRIADA existia, e essa só cobre linha NOVA). Escopo
+  // deliberadamente estreito a só este campo, não todo campo espelhado da RAT (como
+  // PROPOSTA_ALTERADA faz pra Proposta) — é o único que já mostrou caso de uso real até agora.
+  RAT_SITUACAO_ALTERADA_SENIOR: "RAT_SITUACAO_ALTERADA_SENIOR",
 
   // Aprovação de RAT (backend/src/routes/rats.ts) — só muda sitrat dentro do CaxHub. O
   // canal de escrita pro Senior hoje só registra apontamento (`registrarAtividades`, ver
   // soap/client.ts); não há operação de aprovação de RAT, então isso não reflete lá.
   RAT_APROVADA: "RAT_APROVADA",
 
+  // Fechamento de RAT (backend/src/routes/rats.ts, POST /:id/fechar e /fechar-lote) — dois
+  // eventos, com origem diferente. SOLICITADO nasce no clique do usuário (enfileira a
+  // pendência `fechar_rat`, ver prepararFechamentoRat); FECHADA nasce depois, no processamento
+  // assíncrono do outbox (sync/outboxSenior.ts), só quando o Senior confirma de verdade
+  // (statusProcesso=1) — é aí que Rat.sitrat vira 1. Publicada em 13/09/2026.
+  RAT_FECHAMENTO_SOLICITADO: "RAT_FECHAMENTO_SOLICITADO",
+  RAT_FECHADA: "RAT_FECHADA",
+
+  // Comprovantes (foto/PDF) das despesas de viagem — ComprovanteRat, sempre de uma RAT e
+  // opcionalmente ligado a uma despesa dela (routes/rats.ts). Só existem no CaxHub, nada vai
+  // pro Senior. VINCULADO cobre vincular, trocar e desvincular (metadata.despesaIdAnterior/Novo).
+  COMPROVANTE_RAT_ADICIONADO: "COMPROVANTE_RAT_ADICIONADO",
+  COMPROVANTE_RAT_VINCULADO: "COMPROVANTE_RAT_VINCULADO",
+  COMPROVANTE_RAT_REMOVIDO: "COMPROVANTE_RAT_REMOVIDO",
+
   // Apontamento que existia no Senior e não voltou mais na consulta (foi apagado lá): o
   // vínculo numrat/seqrat é limpo pra permitir reintegrar. Ver
   // desvincularItensAusentesNoSenior em backend/src/routes/rats.ts.
   RAT_ITEM_DESVINCULADO_SENIOR: "RAT_ITEM_DESVINCULADO_SENIOR",
 
+  // Mesma lógica do evento acima, mas pra item com origemCaxHub=false (nasceu no Senior via
+  // ratItemSync, nunca teve sessão local) — não existe rascunho nenhum pra reintegrar, o
+  // registro foi excluído de verdade na origem: RatItem.removidoEmSenior é marcado e
+  // numrat/seqrat/datreg são PRESERVADOS como histórico. Ver desvincularItensAusentesNoSenior
+  // em backend/src/routes/rats.ts. Pedido do Vitor (14/09/2026), mesmo espírito de
+  // RAT_EXCLUIDA_SENIOR (cabeçalho), aplicado ao item.
+  RAT_ITEM_EXCLUIDO_SENIOR: "RAT_ITEM_EXCLUIDO_SENIOR",
+
   // Mesma lógica do evento acima, mas no CABEÇALHO da RAT: o documento inteiro (não só um
   // item) não voltou mais na consulta ao Senior — Rat.numrat é limpo. Ver
   // desvincularRatAusenteNoSenior em backend/src/routes/rats.ts. 17/08/2026.
   RAT_DESVINCULADA_SENIOR: "RAT_DESVINCULADA_SENIOR",
+
+  // RAT com origemCaxHub=false (nasceu no Senior, nunca teve rascunho local) cujo cabeçalho
+  // não voltou mais na consulta ao Senior — diferente de RAT_DESVINCULADA_SENIOR (que limpa
+  // numrat pra permitir REINTEGRAR um rascunho que representa trabalho real feito no CaxHub),
+  // aqui não existe rascunho nenhum pra reintegrar: o documento foi excluído de verdade na
+  // origem, então Rat.removidoEmSenior é marcado (numrat é preservado como histórico) e a
+  // tela passa a mostrar "Excluída" no lugar da situação. Ver desvincularRatAusenteNoSenior
+  // em backend/src/routes/rats.ts. Pedido do Vitor (14/09/2026), achado real: RAT 1833655.
+  RAT_EXCLUIDA_SENIOR: "RAT_EXCLUIDA_SENIOR",
 
   // Correção retroativa de RatItem.seqati="0" (congelado de antes do fix de 17/08/2026 que
   // passou a gravar o valor real vindo de AtividadeConsultor.seqati em confirmarSessao) —
@@ -126,5 +241,67 @@ export const EVENTOS_AUDITORIA = {
   // via AtividadeSessaoExecucao.ratItemId -> atividadeId -> AtividadeConsultor.seqati, nunca
   // por codemp+codpro+seqite+codfor (colide quando há mais de uma alocação pro mesmo item).
   RAT_ITEM_SEQATI_CORRIGIDO: "RAT_ITEM_SEQATI_CORRIGIDO",
+
+  // Nasce no processamento assíncrono da fila outbox de despesa (outboxSeniorDespesa.ts), não
+  // no clique do usuário — mesmo espírito de ATIVIDADE_ENVIADA_SENIOR, canal `ManterItemDespesa`
+  // (publicado em 07/09/2026).
+  DESPESA_ENVIADA_SENIOR: "DESPESA_ENVIADA_SENIOR",
+
+  // Editar/excluir despesa já registrada no Senior (tipEve A/E + seqRdv) — liberado em
+  // 07/09/2026 enquanto Rat.sitrat = Digitado (ver podeAlterarDespesasDaRat em routes/rats.ts).
+  // Mesmo espírito de DESPESA_ENVIADA_SENIOR: nasce no processamento da fila, não no clique.
+  DESPESA_EDITADA_SENIOR: "DESPESA_EDITADA_SENIOR",
+  DESPESA_EXCLUIDA_SENIOR: "DESPESA_EXCLUIDA_SENIOR",
+
+  // Painel de Eficiência: um gestor tira (ou devolve) UM apontamento do cálculo do PAINEL, com motivo. Não altera a
+  // RAT nem o teto da Alocação (ver domain/eficienciaExclusoes.ts). entidadeId = id do RatItem.
+  EFICIENCIA_APONTAMENTO_EXCLUIDO: "EFICIENCIA_APONTAMENTO_EXCLUIDO",
+  EFICIENCIA_APONTAMENTO_RESTAURADO: "EFICIENCIA_APONTAMENTO_RESTAURADO",
+
+  // Painel de Eficiência: plano de ação. entidadeId = id da ação.
+  EFICIENCIA_ACAO_CRIADA: "EFICIENCIA_ACAO_CRIADA",
+  EFICIENCIA_ACAO_ALTERADA: "EFICIENCIA_ACAO_ALTERADA",
+  EFICIENCIA_ACAO_STATUS_ALTERADO: "EFICIENCIA_ACAO_STATUS_ALTERADO",
+  EFICIENCIA_ACAO_EXCLUIDA: "EFICIENCIA_ACAO_EXCLUIDA",
+
+  // Plano de Evolução: ciclo (entidadeId = id do ciclo) e participante (entidadeId = id do participante).
+  PLANO_CICLO_CRIADO: "PLANO_CICLO_CRIADO",
+  PLANO_CICLO_ALTERADO: "PLANO_CICLO_ALTERADO",
+  PLANO_CICLO_PUBLICADO: "PLANO_CICLO_PUBLICADO",
+  PLANO_CICLO_ENCERRADO: "PLANO_CICLO_ENCERRADO",
+  PLANO_PARTICIPANTE_ADERIU: "PLANO_PARTICIPANTE_ADERIU",
+  PLANO_PARTICIPANTE_VALOR_BASE_ALTERADO: "PLANO_PARTICIPANTE_VALOR_BASE_ALTERADO",
+  PLANO_PARTICIPANTE_ENCERRADO: "PLANO_PARTICIPANTE_ENCERRADO",
+
+  // Plano de Evolução, Fase 2: índice global do ciclo e apuração (entidadeId = id da apuração).
+  PLANO_GLOBAL_FECHADO: "PLANO_GLOBAL_FECHADO",
+  PLANO_APURACAO_LANCADA: "PLANO_APURACAO_LANCADA",
+  PLANO_APURACAO_APURADA: "PLANO_APURACAO_APURADA",
+  PLANO_APURACAO_DEVOLUTIVA: "PLANO_APURACAO_DEVOLUTIVA",
+  PLANO_APURACAO_CONTESTADA: "PLANO_APURACAO_CONTESTADA",
+  PLANO_APURACAO_DESFECHO: "PLANO_APURACAO_DESFECHO",
+  PLANO_APURACAO_REABERTA: "PLANO_APURACAO_REABERTA",
+  PLANO_APURACAO_ENCERRADA: "PLANO_APURACAO_ENCERRADA",
+
+  // Gestão de Metas do Comercial.
+  META_COMERCIAL_ANO_CRIADO: "META_COMERCIAL_ANO_CRIADO",
+  META_COMERCIAL_PLANEJAMENTO_ALTERADO: "META_COMERCIAL_PLANEJAMENTO_ALTERADO",
+  META_COMERCIAL_LANCAMENTO: "META_COMERCIAL_LANCAMENTO",
+  META_COMERCIAL_INDICADOR_CRIADO: "META_COMERCIAL_INDICADOR_CRIADO",
+  META_COMERCIAL_INDICADOR_ALTERADO: "META_COMERCIAL_INDICADOR_ALTERADO",
+
+  // Gestão de Descontos.
+  DESCONTO_TIPO_CRIADO: "DESCONTO_TIPO_CRIADO",
+  DESCONTO_TIPO_ALTERADO: "DESCONTO_TIPO_ALTERADO",
+  DESCONTO_TIPO_EXCLUIDO: "DESCONTO_TIPO_EXCLUIDO",
+  DESCONTO_PROCESSO_CRIADO: "DESCONTO_PROCESSO_CRIADO",
+  DESCONTO_PROCESSO_ALTERADO: "DESCONTO_PROCESSO_ALTERADO",
+  DESCONTO_PROCESSO_CANCELADO: "DESCONTO_PROCESSO_CANCELADO",
+  DESCONTO_PROCESSO_QUITADO: "DESCONTO_PROCESSO_QUITADO",
+  DESCONTO_PARCELA_CANCELADA: "DESCONTO_PARCELA_CANCELADA",
+  DESCONTO_PARCELA_ESTORNADA: "DESCONTO_PARCELA_ESTORNADA",
+  DESCONTO_PARCELA_DESCONTADA: "DESCONTO_PARCELA_DESCONTADA",
+  DESCONTO_PARCELA_PARCIAL: "DESCONTO_PARCELA_PARCIAL",
+  DESCONTO_PARCELA_TRANSPORTADA: "DESCONTO_PARCELA_TRANSPORTADA",
 } as const;
 export type EventoAuditoriaTipo = (typeof EVENTOS_AUDITORIA)[keyof typeof EVENTOS_AUDITORIA];

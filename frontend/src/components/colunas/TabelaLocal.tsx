@@ -1,0 +1,103 @@
+import { useEffect, useMemo, useState } from "react";
+import { cn } from "../../lib/cn";
+import { Pagination } from "../ui/Pagination";
+import { usePorPagina } from "../ui/padroesFiltros/usePorPagina";
+import { SkeletonLinhas } from "../ui/Skeleton";
+import type { ColunaLocal, LeitorDeValor } from "./aplicarLocal";
+import { type DefColuna, titulosDe } from "./useColunasConfiguraveis";
+import { useTabelaLocalConfiguravel } from "./useTabelaLocalConfiguravel";
+
+/**
+ * Tabela que já está inteira na tela (itens de uma nota, movimentos de um produto...) com colunas configuráveis, filtro e ordem por coluna,
+ * resumo no rodapé (soma, média...) e colunas calculadas por fórmula (29/10/2026). Só declara as colunas (`defs`) e como filtrá-las
+ * (`colunas`); `defs`, `colunas` e `linhas` precisam ser estáveis (constante do módulo ou useMemo). Para uma lista paginada no servidor, ListaServidor.
+ */
+interface Props<T, C> {
+  /** Chave da arrumação das colunas e das calculadas (ex.: "mercado.pedido.itens-produto"). */
+  chave: string;
+  defs: DefColuna<T, C>[];
+  /** Como cada coluna filtra e ordena (tipo do valor). */
+  colunas: ColunaLocal[];
+  linhas: T[];
+  chaveLinha: (linha: T, indice: number) => string;
+  vazio: string;
+  /** Texto das colunas cujo valor na tela difere do campo (ex.: "código — descrição"). */
+  ler?: LeitorDeValor<T>;
+  ctx?: C;
+  loading?: boolean;
+  alturaMax?: string;
+  classeLinha?: (linha: T) => string | undefined;
+  onLinha?: (linha: T) => void;
+  /**
+   * Linha de total que NÃO é soma das linhas (24/11/2026, Rentabilidade por CC: razões e percentuais calculados sobre o recorte inteiro): é uma linha
+   * `T` como as outras, desenhada no rodapé com as mesmas colunas visíveis e na mesma ordem do usuário, acima do resumo (Σ). Aparece quando há linhas.
+   */
+  linhaDeTotal?: T;
+  /**
+   * Paginação NO NAVEGADOR (18/11/2026, Vínculo de Consultores): as linhas que passam nos filtros/ordem são divididas em páginas, com o seletor
+   * "Por página" (e a estrela de padrão, chave = `chave`). Sem isto a tabela mostra tudo, como sempre. O resumo do rodapé continua sobre TODAS as
+   * linhas filtradas, não só as da página.
+   */
+  paginacao?: { inicial: number; rotulo?: string };
+}
+
+export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, chaveLinha, vazio, ler, ctx, loading = false, alturaMax, classeLinha, onLinha, linhaDeTotal, paginacao }: Props<T, C>) {
+  const titulos = useMemo(() => titulosDe(defs), [defs]);
+  const { t, tc } = useTabelaLocalConfiguravel(chave, defs, linhas, colunas, { ler, titulos });
+
+  const pp = usePorPagina({ tela: chave, inicial: paginacao?.inicial ?? 10, ativo: !!paginacao });
+  const [pagina, setPagina] = useState(1);
+  // Mudou o filtro, a ordem ou o tamanho da página: volta para a primeira (senão a pessoa fica numa página que já não existe).
+  const chaveConsulta = JSON.stringify([t.estado.filtros, t.estado.ordem, pp.porPagina]);
+  useEffect(() => setPagina(1), [chaveConsulta]);
+  const total = t.linhas.length;
+  const totalPaginas = Math.max(1, Math.ceil(total / pp.porPagina));
+  // Recarregar os dados (ex.: depois de salvar um vínculo) não tira a pessoa da página; só encolhe se a lista encolheu.
+  const paginaAtual = Math.min(pagina, totalPaginas);
+  const linhasDaPagina = useMemo(() => (paginacao ? t.linhas.slice((paginaAtual - 1) * pp.porPagina, paginaAtual * pp.porPagina) : t.linhas), [paginacao, t.linhas, paginaAtual, pp.porPagina]);
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-surface">
+      {t.barra}
+      {/* Sem altura máxima por padrão (04/11/2026): a tabela cresce com a página, como antes do kit de colunas. */}
+      <div className={cn(alturaMax ? "overflow-auto" : "overflow-x-auto", alturaMax)}>
+        <table className={tc.classeTabela} style={tc.estiloTabela} aria-busy={loading}>
+          {tc.colgroup}
+          <thead className="sticky top-0 z-10">{tc.cabecalho({ colunas: t.colunas, estado: t.estado, valores: t.valores })}</thead>
+          <tbody>
+            {loading && <SkeletonLinhas linhas={4} colunas={tc.nColunas} />}
+            {!loading &&
+              linhasDaPagina.map((l, i) => (
+                <tr key={chaveLinha(l, i)} className={cn("border-t border-border/60", tc.temCongelada && "bg-surface", onLinha && "cursor-pointer hover:bg-surface-2", classeLinha?.(l))} onClick={onLinha ? () => onLinha(l) : undefined}>
+                  {tc.celulas(l, ctx as C)}
+                </tr>
+              ))}
+            {!loading && t.linhas.length === 0 && (
+              <tr>
+                <td colSpan={tc.nColunas} className="px-4 py-6 text-center text-sm text-muted">
+                  {linhas.length === 0 ? vazio : "Nada encontrado com esses filtros."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+          <tfoot className="sticky bottom-0 z-10">
+            {!loading && linhaDeTotal && t.linhas.length > 0 && <tr className="border-t-2 border-border bg-surface-2 font-semibold text-foreground">{tc.celulas(linhaDeTotal, ctx as C)}</tr>}
+            {!loading && tc.rodape({ colunas: t.colunas, resultado: t.resumir(tc.pedidosResumo) })}
+          </tfoot>
+        </table>
+      </div>
+      {paginacao && (
+        <Pagination
+          page={paginaAtual}
+          pageSize={pp.porPagina}
+          total={total}
+          loading={loading}
+          onPageChange={setPagina}
+          label={paginacao.rotulo ?? "registros"}
+          onPageSizeChange={pp.mudar}
+          acessorioPorPagina={pp.estrela}
+        />
+      )}
+    </div>
+  );
+}
+

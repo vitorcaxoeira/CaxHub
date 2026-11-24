@@ -4,7 +4,7 @@ import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, gerenciaDepartamento, gestorNomePorDepartamento } from "../domain/contextoProjeto";
 import { conflitosDoIntervalo, mensagemDeConflito } from "../domain/conflitoApontamento";
-import { formatarMinutos } from "../domain/tetoAtividade";
+import { formatarMinutos, minutosReservadosPendentes, realizadoDasAtividades, tetoDaAtividade } from "../domain/tetoAtividade";
 import { paraHoraBrasil } from "../domain/fusoBrasil";
 import { notificarConsultorDaAtividade, notificarGestoresDoDepartamento } from "../domain/notificacoes";
 import { criarEventoAuditoria } from "../audit/registrarEvento";
@@ -12,6 +12,7 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { criarSessaoManualPendente, recusarSeEstourarTeto } from "./apontamentos";
 import { depexeLabel, modproLabel } from "../domain/propostasDominio";
+import { recusarSeForaDaJanela } from "../domain/janelaRetroativa";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
 
 // Apontamento avulso: o consultor trabalhou e esqueceu de mover o card, então pede o tempo
@@ -158,6 +159,13 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
       return;
     }
 
+    // Só o dia corrente, salvo exceção do líder pro consultor — ver domain/janelaRetroativa.ts.
+    const foraDaJanela = await recusarSeForaDaJanela(atividade.codemp, meuCodfor, [inicio]);
+    if (foraDaJanela) {
+      res.status(foraDaJanela.status).json(foraDaJanela.body);
+      return;
+    }
+
     // Bloqueio de apontamento (proposta ou atividade) — ver domain/bloqueioApontamento.ts.
     const bloqueio = await resolverBloqueioApontamento(atividade);
     if (bloqueio.bloqueadoApontamento) {
@@ -179,7 +187,12 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
     // Não deixa nem registrar o pedido se ele já estoura o teto (alocado + excedentes) —
     // antes disso só era recusado na hora do gestor aprovar (criarSessaoManualPendente),
     // deixando o consultor pedir algo que nunca poderia ser concedido como pediu.
-    const recusaTeto = await recusarSeEstourarTeto(atividade, inicio, fim);
+    // Na criação o pedido também exige teto (atividade sem alocação não tem contra o que
+    // conferir) e respeita o que outros pedidos pendentes já reservam do saldo.
+    const recusaTeto = await recusarSeEstourarTeto(atividade, inicio, fim, 0, {
+      exigirTeto: true,
+      reservadoPendente: await minutosReservadosPendentes(atividade.id),
+    });
     if (recusaTeto) {
       res.status(recusaTeto.status).json(recusaTeto.body);
       return;
@@ -240,6 +253,8 @@ const INCLUDE_LISTA = {
   decididoPor: { select: { nome: true } },
   atividade: {
     select: {
+      id: true,
+      seqati: true,
       codemp: true,
       codpro: true,
       seqite: true,
@@ -260,7 +275,8 @@ function serializar(
   gestorNome: string | null,
   podeDecidir: boolean,
   bloqueadoApontamentoEfetivo: boolean,
-  propostaInfo?: PropostaInfo
+  propostaInfo?: PropostaInfo,
+  consumo?: { teto: number; realizado: number }
 ) {
   return {
     id: s.id,
@@ -292,6 +308,10 @@ function serializar(
     // apontamento bloqueado (ver domain/bloqueioApontamento.ts) — a tela desabilita só
     // "Aprovar", "Reprovar" continua sempre disponível.
     bloqueadoApontamentoEfetivo,
+    // Minutos. Só nos pendentes (a tela projeta o efeito de aprovar em cima disto); nos
+    // decididos não há projeção a mostrar.
+    teto: consumo?.teto ?? null,
+    realizado: consumo?.realizado ?? null,
   };
 }
 
@@ -316,7 +336,7 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
       orderBy: [{ status: "asc" }, { criadoEm: "desc" }],
     });
 
-    const mapaDepexe = await depexePorAtividade(todas.map((s) => ({ id: s.atividadeId, ...s.atividade })));
+    const mapaDepexe = await depexePorAtividade(todas.map((s) => s.atividade));
     const mapaProposta = await propostaInfoPorAtividades(todas.map((s) => s.atividade));
     const mapaGestor = await gestorNomePorDepartamento(
       todas
@@ -328,6 +348,13 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
     // abaixo) — ver domain/bloqueioApontamento.ts.
     const cfgBloqueioPorProposta = await configBloqueioPropostasEmLote(
       todas.map((s) => ({ codemp: s.atividade.codemp, codpro: s.atividade.codpro }))
+    );
+
+    // Realizado em lote (2 queries no total) só das atividades com pedido PENDENTE — é o
+    // único caso em que a tela mostra a barra de consumo.
+    const pendentes = todas.filter((s) => s.status === "pendente").map((s) => s.atividade);
+    const realizadoPorAtividade = await realizadoDasAtividades(
+      [...new Map(pendentes.map((a) => [a.id, a])).values()]
     );
 
     const visiveis = todas
@@ -343,7 +370,11 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
           bloqueiaExcedente: true,
         };
         const bloqueadoApontamentoEfetivo = resolverBloqueioComConfig(cfg, s.atividade).bloqueadoApontamento;
-        return serializar(s, depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo);
+        const consumo =
+          s.status === "pendente"
+            ? { teto: tetoDaAtividade(s.atividade), realizado: realizadoPorAtividade.get(s.atividadeId) ?? 0 }
+            : undefined;
+        return serializar(s, depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo, consumo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 

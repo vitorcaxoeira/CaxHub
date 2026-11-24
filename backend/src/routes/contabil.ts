@@ -1,7 +1,10 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
+import { casoSql, col, registrarListaConsultavel } from "./listaConsultavel";
+import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { SITRAT_CONTABILIZADO, defgruBucket, debcreLabel, orilctLabel, sitlotLabel } from "../domain/contabilDominio";
+import { FORMULA_VALOR_REALIZADO, SITRAT_CONTABILIZADO, DEBCRE_LABELS, ORILCT_LABELS, defgruBucket, debcreLabel, orilctLabel, sitlotLabel } from "../domain/contabilDominio";
 import { formatarHistorico } from "../domain/historicoPadrao";
 import { resolverContextoConsultor, gestorNomePorDepartamento, type ContextoConsultor } from "../domain/contextoProjeto";
 import { depexeLabel } from "../domain/propostasDominio";
@@ -13,6 +16,8 @@ import {
   type CentroCustoParaMatriz,
 } from "../domain/matrizContabil";
 import { runSincronizacaoContabil, sincronizacaoContabilEmAndamento } from "../sync/contabilSyncOrchestrator";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_LANCAMENTOS_RESULTADO, FONTES_ORCAMENTO_CONTABIL } from "../domain/fontesDeCampos";
 
 export const contabilRouter = Router();
 // Só autenticado — quem vê O QUÊ é decidido rota a rota por gruposPermitidos/gruposConsultados
@@ -43,24 +48,6 @@ function parseBoolParam(value: unknown): boolean {
 function parseCriterioOrdenacao(value: unknown): "clacta" | "ctared" {
   return value === "ctared" ? "ctared" : "clacta";
 }
-
-// Sinal do realizado — tradução da medida DAX "Valor_Contabil" (Power BI) fornecida pelo Vitor
-// em 27/08/2026. Regra geral: crédito soma, débito subtrai — EXCETO contas de despesa (defgru=D)
-// com natureza Credora (natcta=C, ex. "Ganho Tributário Faturamento Senior" 762/763/776), que
-// sempre somam (é um ganho/redução de despesa, independente do lado do lançamento no Senior).
-// `Grupo`/`Natureza` na DAX são da CONTA-FOLHA que recebeu o lançamento (confirmado no SQL base
-// do BI: `Conta_Contabil.Grupo/Natureza` casam por `a.ctared = Fato.Conta` com `a.anasin='A'`),
-// nunca de um ancestral — por isso não precisa do nível sintético Receitas/Despesas removido em
-// 26/08/2026, `pc.defgru`/`pc.natcta` da própria conta já bastam. Validado célula a célula: só
-// essas 3 contas divergem da fórmula antiga (só debcre); nenhuma outra combinação muda de sinal.
-// Usada como template literal em toda query que soma `rateios_lancamento.vlrrat` (join com
-// `plano_contabil pc` obrigatório).
-const FORMULA_VALOR_REALIZADO = `CASE
-    WHEN pc.defgru = 'R' AND r.debcre = 'D' THEN -r.vlrrat
-    WHEN pc.defgru = 'D' AND pc.natcta = 'C' AND r.debcre = 'C' THEN r.vlrrat
-    WHEN pc.defgru = 'D' AND pc.natcta = 'D' AND r.debcre = 'D' THEN -r.vlrrat
-    ELSE r.vlrrat
-  END`;
 
 function handleError(res: import("express").Response, error: unknown, label: string) {
   const message = error instanceof Error ? error.message : String(error);
@@ -333,126 +320,136 @@ contabilRouter.get("/resultado", async (req: AuthenticatedRequest, res) => {
 // nível onde a folha de verdade mora, um nó "aparenta" ser folha e na real soma mais de uma
 // conta — por isso o filtro aqui é sempre `ctared = ANY(...)`, nunca um valor singular, pra
 // bater exatamente com o que a matriz mostrou em QUALQUER configuração de filtro.
-contabilRouter.get("/resultado/lancamentos", async (req: AuthenticatedRequest, res) => {
-  try {
-    const ctx = await contextoDoUsuario(req);
-    if (!ctx) {
-      res.status(404).json({ error: "Usuário não encontrado" });
-      return;
-    }
+// Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts, trazido do CaxHub_Dash em 03/11/2026): a consulta
+// é a da tela, vira subconsulta. O recorte de grupos do usuário (gestor) continua aqui dentro, igual à matriz. Histórico: a coluna filtra e
+// ordena pelo complemento (cpllct); o texto com o template do histórico padrão é montado só para a página (`decorar`).
+/** Acrescenta `historico` (o complemento do lançamento com o template do histórico padrão) às linhas que trazem `cpllct` e `codhpd`. Templates em lote (nunca por linha — N+1). */
+export async function comHistoricoPadrao<T extends Record<string, unknown>>(linhas: T[]): Promise<(T & { historico: string | null })[]> {
+  const codhpds = [...new Set(linhas.map((l) => l.codhpd).filter((c): c is number => typeof c === "number"))];
+  const templates = codhpds.length > 0 ? await prisma.historicoPadrao.findMany({ where: { codhpd: { in: codhpds } } }) : [];
+  const templatePorCodhpd = new Map(templates.map((t) => [t.codhpd, t.deshpd]));
+  return linhas.map((l) => ({
+    ...l,
+    historico: formatarHistorico((l.cpllct as string | null) ?? null, typeof l.codhpd === "number" ? templatePorCodhpd.get(l.codhpd) : null),
+  }));
+}
+
+registrarListaConsultavel(
+  contabilRouter,
+  "/resultado/lancamentos",
+  async (req) => {
+    const ctx = await contextoDoUsuario(req as AuthenticatedRequest);
+    if (!ctx) throw new ErroEntradaConsulta("Usuário não encontrado", 404);
     const { contexto, role } = ctx;
     const permitidos = await gruposPermitidos(role, contexto);
-    if (permitidos != null && permitidos.length === 0) {
-      res.status(403).json({ error: MENSAGEM_SEM_GRUPOS });
-      return;
-    }
+    if (permitidos != null && permitidos.length === 0) throw new ErroEntradaConsulta(MENSAGEM_SEM_GRUPOS, 403);
 
     const ctareds = parseIntListParam(req.query.ctareds);
-    if (!ctareds) {
-      res.status(400).json({ error: "Parâmetro ctareds é obrigatório" });
-      return;
-    }
+    if (!ctareds) throw new ErroEntradaConsulta("Parâmetro ctareds é obrigatório");
     const mesReferencia = typeof req.query.mesReferencia === "string" ? req.query.mesReferencia : "";
-    if (!/^\d{4}-\d{2}$/.test(mesReferencia)) {
-      res.status(400).json({ error: "Parâmetro mesReferencia é obrigatório no formato AAAA-MM" });
-      return;
-    }
+    if (!/^\d{4}-\d{2}$/.test(mesReferencia)) throw new ErroEntradaConsulta("Parâmetro mesReferencia é obrigatório no formato AAAA-MM");
     const [ano, mes] = mesReferencia.split("-").map(Number);
     const inicio = `${mesReferencia}-01`;
     const fim = mes === 12 ? `${ano + 1}-01-01` : `${ano}-${String(mes + 1).padStart(2, "0")}-01`;
-
     const codccu = parseStringListParam(req.query.codccu);
-    // Nunca confia no ctared cru do cliente: o mesmo recorte de grupo que decide o que ele vê
-    // na matriz decide o que ele pode detalhar aqui — sem `?grupo=` próprio nesta rota, o
-    // recorte É o total que ele pode ver (gestor) ou nenhum (admin, sem filtro).
+    // Nunca confia no ctared cru do cliente: o mesmo recorte de grupo que decide o que ele vê na matriz decide o que ele pode detalhar.
     const grupos = gruposConsultados(permitidos, null);
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+    const extras = extrasDaConsulta(FONTES_LANCAMENTOS_RESULTADO, req.query as Record<string, unknown>);
+    return {
+      fontes: FONTES_LANCAMENTOS_RESULTADO,
+      totais: ["valor"],
+      interna: Prisma.sql`
+        SELECT b.*,
+               ${casoSql(Prisma.raw("b.orilct"), Object.keys(ORILCT_LABELS), orilctLabel, Prisma.sql`COALESCE(NULLIF(b.orilct, ''), '—')`)} AS origem,
+               ${casoSql(Prisma.raw("b.debcre"), Object.keys(DEBCRE_LABELS), debcreLabel, Prisma.sql`COALESCE(NULLIF(b.debcre, ''), '—')`)} AS debcre_label
+        FROM (
+          SELECT r.numlct::text AS numlct, r.ctared AS ctared, (r.ctared || ' - ' || pc.descta) AS conta, r.datlct AS datlct,
+                 (CASE WHEN cc.desccu IS NOT NULL THEN r.codccu || ' - ' || cc.desccu ELSE r.codccu END) AS centro_custo,
+                 r.debcre AS debcre, r.vlrrat::float8 AS vlrrat, (${Prisma.raw(FORMULA_VALOR_REALIZADO)})::float8 AS valor,
+                 l.cpllct AS cpllct, l.orilct AS orilct, l.sitlct AS sitlct, l.codhpd AS codhpd${extras.selecao}
+          FROM rateios_lancamento r
+          JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
+          LEFT JOIN centros_custo cc ON cc.codemp = r.codemp AND cc.codccu = r.codccu
+          LEFT JOIN lancamentos_contabeis l ON l.codemp = r.codemp AND l.numlct = r.numlct
+          WHERE r.sitrat = ${SITRAT_CONTABILIZADO}
+            AND r.removido_em_senior IS NULL
+            AND r.ctared = ANY(${ctareds}::int[])
+            AND r.datlct >= ${inicio}::date AND r.datlct < ${fim}::date
+            AND (${codccu}::text[] IS NULL OR r.codccu = ANY(${codccu}::text[]))
+            AND (${grupos}::text[] IS NULL OR btrim(pc.despar) = ANY(${grupos}::text[]))
+        ) b`,
+      colunas: [
+        col.data("datlct", { obrigatoria: true }),
+        col.texto("numlct", { obrigatoria: true }),
+        col.texto("conta", { obrigatoria: true }),
+        col.texto("origem"),
+        col.texto("cpllct"),
+        col.texto("centro_custo"),
+        col.texto("debcre_label"),
+        col.decimal("valor", { obrigatoria: true }),
+        ...extras.colunas,
+      ],
+      ordemPadrao: Prisma.sql`x."datlct" ASC, x."numlct" ASC`,
+      // Templates de Histórico em lote (nunca por linha — N+1). Catálogo GLOBAL, join só por codhpd.
+      decorar: async (linhas) =>
+        (await comHistoricoPadrao(linhas)).map((l) => ({ ...l, sitlctLabel: sitlotLabel((l.sitlct as number | null) ?? null) })),
+    };
+  },
+  "contabil-lancamentos",
+);
 
-    const linhasQuery = `
-      SELECT r.numlct::text AS numlct, r.ctared AS ctared, pc.descta AS descta, r.datlct AS datlct,
-             r.codccu AS codccu, cc.desccu AS desccu, r.debcre AS debcre, r.vlrrat::float8 AS vlrrat,
-             (${FORMULA_VALOR_REALIZADO})::float8 AS valor,
-             l.cpllct AS cpllct, l.orilct AS orilct, l.sitlct AS sitlct, l.codhpd AS codhpd
-      FROM rateios_lancamento r
-      JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
-      LEFT JOIN centros_custo cc ON cc.codemp = r.codemp AND cc.codccu = r.codccu
-      LEFT JOIN lancamentos_contabeis l ON l.codemp = r.codemp AND l.numlct = r.numlct
-      WHERE r.sitrat = $1
-        AND r.removido_em_senior IS NULL
-        AND r.ctared = ANY($2::int[])
-        AND r.datlct >= $3::date AND r.datlct < $4::date
-        AND ($5::text[] IS NULL OR r.codccu = ANY($5::text[]))
-        AND ($6::text[] IS NULL OR btrim(pc.despar) = ANY($6::text[]))
-      ORDER BY r.datlct ASC, r.numlct ASC
-      LIMIT $7 OFFSET $8
-    `;
-    const totalQuery = `
-      SELECT COUNT(*)::int AS total, COALESCE(SUM(${FORMULA_VALOR_REALIZADO}), 0)::float8 AS "valorTotal"
-      FROM rateios_lancamento r
-      JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
-      WHERE r.sitrat = $1
-        AND r.removido_em_senior IS NULL
-        AND r.ctared = ANY($2::int[])
-        AND r.datlct >= $3::date AND r.datlct < $4::date
-        AND ($5::text[] IS NULL OR r.codccu = ANY($5::text[]))
-        AND ($6::text[] IS NULL OR btrim(pc.despar) = ANY($6::text[]))
-    `;
+// ---------- Drilldown: linhas do orçamento que compõem uma célula de Orçado (Orçado x Realizado) ----------
+// O par do drilldown de lançamentos acima, para a coluna Orçado (23/11/2026): as linhas de `orcamentos_contabeis` da conta e do mês, com o
+// MESMO sinal e os MESMOS filtros da matriz (`-vlrrat`, centro de custo, recorte de grupos do usuário). Sem filtro por coluna, o total bate
+// com a célula clicada.
+registrarListaConsultavel(
+  contabilRouter,
+  "/orcado-realizado/orcamentos",
+  async (req) => {
+    const ctx = await contextoDoUsuario(req as AuthenticatedRequest);
+    if (!ctx) throw new ErroEntradaConsulta("Usuário não encontrado", 404);
+    const { contexto, role } = ctx;
+    const permitidos = await gruposPermitidos(role, contexto);
+    if (permitidos != null && permitidos.length === 0) throw new ErroEntradaConsulta(MENSAGEM_SEM_GRUPOS, 403);
 
-    const [linhas, totais] = await Promise.all([
-      prisma.$queryRawUnsafe<
-        {
-          numlct: string;
-          ctared: number;
-          descta: string;
-          datlct: Date;
-          codccu: string;
-          desccu: string | null;
-          debcre: string | null;
-          vlrrat: number;
-          valor: number;
-          cpllct: string | null;
-          orilct: string | null;
-          sitlct: number | null;
-          codhpd: number | null;
-        }[]
-      >(linhasQuery, SITRAT_CONTABILIZADO, ctareds, inicio, fim, codccu, grupos, pageSize, (page - 1) * pageSize),
-      prisma.$queryRawUnsafe<{ total: number; valorTotal: number }[]>(totalQuery, SITRAT_CONTABILIZADO, ctareds, inicio, fim, codccu, grupos),
-    ]);
-
-    // Templates de Histórico em lote (nunca por linha no loop, senão vira N+1). Join é só por
-    // `codhpd` — E046HPD/HistoricoPadrao é catálogo GLOBAL do Senior, sem `codemp` (confirmado
-    // ao vivo contra o dicionário de dados: PK de lá é só CodHpd).
-    const codhpds = [...new Set(linhas.map((l) => l.codhpd).filter((c): c is number => c != null))];
-    const templates = codhpds.length > 0 ? await prisma.historicoPadrao.findMany({ where: { codhpd: { in: codhpds } } }) : [];
-    const templatePorCodhpd = new Map(templates.map((t) => [t.codhpd, t.deshpd]));
-
-    res.json({
-      lancamentos: linhas.map((l) => ({
-        numlct: l.numlct,
-        ctared: l.ctared,
-        contaRotulo: `${l.ctared} - ${l.descta}`,
-        datlct: l.datlct,
-        codccu: l.codccu,
-        codccuRotulo: l.desccu ? `${l.codccu} - ${l.desccu}` : l.codccu,
-        debcre: l.debcre,
-        debcreLabel: debcreLabel(l.debcre),
-        vlrrat: l.vlrrat,
-        valor: l.valor,
-        cpllct: l.cpllct,
-        historico: formatarHistorico(l.cpllct, l.codhpd != null ? templatePorCodhpd.get(l.codhpd) : null),
-        orilctLabel: orilctLabel(l.orilct),
-        sitlctLabel: sitlotLabel(l.sitlct),
-      })),
-      total: totais[0]?.total ?? 0,
-      valorTotal: totais[0]?.valorTotal ?? 0,
-      page,
-      pageSize,
-    });
-  } catch (error) {
-    handleError(res, error, "resultado/lancamentos");
-  }
-});
+    const ctareds = parseIntListParam(req.query.ctareds);
+    if (!ctareds) throw new ErroEntradaConsulta("Parâmetro ctareds é obrigatório");
+    const mesReferencia = typeof req.query.mesReferencia === "string" ? req.query.mesReferencia : "";
+    if (!/^\d{4}-\d{2}$/.test(mesReferencia)) throw new ErroEntradaConsulta("Parâmetro mesReferencia é obrigatório no formato AAAA-MM");
+    const codccu = parseStringListParam(req.query.codccu);
+    const grupos = gruposConsultados(permitidos, null);
+    const extras = extrasDaConsulta(FONTES_ORCAMENTO_CONTABIL, req.query as Record<string, unknown>);
+    return {
+      fontes: FONTES_ORCAMENTO_CONTABIL,
+      totais: ["valor"],
+      interna: Prisma.sql`
+        SELECT o.mesano AS mesano, o.ctared AS ctared, (o.ctared || ' - ' || pc.descta) AS conta,
+               (CASE WHEN f.nomfil IS NOT NULL THEN o.codfil || ' - ' || f.nomfil ELSE o.codfil::text END) AS filial,
+               (CASE WHEN cc.desccu IS NOT NULL THEN o.codccu || ' - ' || cc.desccu ELSE o.codccu END) AS centro_custo,
+               (CASE WHEN o.ctafin = 0 THEN NULL WHEN nf.descta IS NOT NULL THEN o.ctafin || ' - ' || nf.descta ELSE o.ctafin::text END) AS conta_financeira,
+               (-o.vlrrat)::float8 AS valor${extras.selecao}
+        FROM orcamentos_contabeis o
+        JOIN plano_contabil pc ON pc.codemp = o.codemp AND pc.ctared = o.ctared
+        LEFT JOIN filial f ON f.codemp = o.codemp AND f.codfil = o.codfil
+        LEFT JOIN centros_custo cc ON cc.codemp = o.codemp AND cc.codccu = o.codccu
+        LEFT JOIN naturezas_financeiras nf ON nf.codemp = o.codemp AND nf.ctafin = o.ctafin
+        WHERE o.ctared = ANY(${ctareds}::int[])
+          AND date_trunc('month', o.mesano)::date = ${`${mesReferencia}-01`}::date
+          AND (${codccu}::text[] IS NULL OR o.codccu = ANY(${codccu}::text[]))
+          AND (${grupos}::text[] IS NULL OR btrim(pc.despar) = ANY(${grupos}::text[]))`,
+      colunas: [
+        col.texto("conta", { obrigatoria: true }),
+        col.texto("filial"),
+        col.texto("centro_custo"),
+        col.texto("conta_financeira"),
+        col.decimal("valor", { obrigatoria: true }),
+        ...extras.colunas,
+      ],
+      ordemPadrao: Prisma.sql`x."conta" ASC, x."centro_custo" ASC`,
+    };
+  },
+  "contabil-orcamentos",
+);
 
 // ---------- Orçado x Realizado ----------
 // Mesma árvore da Matriz, mas cada nó carrega DOIS vetores em vez de um — monta-se um só

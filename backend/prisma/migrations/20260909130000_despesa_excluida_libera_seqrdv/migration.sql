@@ -1,0 +1,13 @@
+-- Backfill de dado ficado errado antes da correção de código em sync/outboxSeniorDespesa.ts
+-- (mesma sessão, 09/09/2026): o Senior APAGA de verdade a despesa quando confirma a exclusão
+-- (tipEve=E) — não é soft delete do lado dele, o seqrdv fica livre pra ele reatribuir a
+-- qualquer despesa futura. Nosso lado, até agora, mantinha `seqrdv` na linha excluída mesmo
+-- assim; @@unique([codemp,numrat,seqrdv]) então recusava a PRÓXIMA despesa que o Senior
+-- confirmasse reaproveitando o mesmo número — achado real: RDV local 285760 excluída segurando
+-- seqrdv=1, e o write-back da despesa seguinte (que o Senior também confirmou como seqrdv=1)
+-- falhou na constraint.
+--
+-- Zera `seqrdv` só de quem já está excluído — `excluidaEm`/`desrdv`/`vlrtot`/`datemi` continuam
+-- intactos pra rastreabilidade do valor faturado/reembolsado; só o vínculo com um número do
+-- Senior que já não existe mais é que some.
+UPDATE "registros_despesa_viagem" SET "seqrdv" = NULL WHERE "excluida_em" IS NOT NULL AND "seqrdv" IS NOT NULL;

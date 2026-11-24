@@ -1,10 +1,12 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
 import { reconciliarAlocacoesOrfas, resumirReconciliacao } from "../domain/reconciliarEstrutura";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
 import { montarQuerySenior } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { varrerRemovidos } from "./varrerRemovidos";
 
 export const JOB_NAME = "atividades_consultor-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -118,6 +120,7 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
       tabela: "atividades_consultor",
       colunas: COLUNAS,
       colunasPk: ["seqati"],
+      carimbo: inicio,
     });
     const msEscrita = Date.now() - inicioEscrita;
 
@@ -127,6 +130,28 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
     // pra não existir janela entre a órfã nascer e ganhar seu nó.
     const reconciliacao = await reconciliarAlocacoesOrfas();
 
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // MÃO DUPLA: chamada MANUAL (não `executarVarreduraDoJob`, que só sabe escopar pelo
+    // filtro salvo) porque o escopo aqui SEMPRE precisa excluir `seqati: null` — alocação
+    // criada no CaxHub e ainda sem confirmação do Senior — além do filtro salvo, se houver
+    // (ver comentário do model AtividadeConsultor em schema.prisma).
+    const filtro = filtroDoJob(JOB_NAME, "todos");
+    const filtroNaoEscopavel = filtro.predicadosSql.length > 0 && filtro.escopoLocal === null;
+    const varredura =
+      desde || filtroNaoEscopavel
+        ? null
+        : await varrerRemovidos<Prisma.AtividadeConsultorWhereInput>(prisma.atividadeConsultor, {
+            jobName: JOB_NAME,
+            inicio,
+            linhasProcessadas: resultado.linhasProcessadas,
+            escopo: { seqati: { not: null }, ...(filtro.escopoLocal ?? {}) } as Prisma.AtividadeConsultorWhereInput,
+            queryContagemOrigem: montarQuerySenior(
+              `SELECT COUNT(*) AS total FROM USU_TE077ATI WHERE USU_SeqIte > 0`,
+              filtro.predicadosSql
+            ),
+          });
+
     await prisma.syncLog.create({
       data: {
         jobName: JOB_NAME,
@@ -134,7 +159,11 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
         status: "success",
         message:
           `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
-          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes) — ${resumirReconciliacao(reconciliacao)}`,
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes) — ${resumirReconciliacao(reconciliacao)}` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
         duracaoMs: Date.now() - inicio.getTime(),
       },
     });
@@ -145,6 +174,34 @@ export async function runAtividadeConsultorSync(desde?: Date): Promise<void> {
     });
     console.error(`[${JOB_NAME}] falhou:`, message);
   }
+}
+
+// Sincroniza só as atividades de consultor (AtividadeConsultor) desta proposta — usado pela
+// ação manual "Sync. ERP" em Alocação (ver POST /alocacao/propostas/:codemp/:codpro/
+// sincronizar), mesmo espírito de runRatSyncPorNumrat/runPropostaSyncPorCodpro: consulta
+// filtrada, sem varredura de removidos (escopo de 1 proposta só marcaria a tabela inteira como
+// suspeita — mesmo raciocínio de runRegistroDespesaViagemSyncPorNumrat), erro propaga pro
+// chamador em vez de só logar (é assim que o botão sabe reportar falha). `AND`, não `WHERE`,
+// porque BASE_QUERY já termina em `WHERE USU_SeqIte > 0`.
+export async function runAtividadeConsultorSyncPorCodpro(codemp: number, codpro: number): Promise<number> {
+  const query = `${BASE_QUERY} AND USU_CodEmp = ${codemp} AND USU_CodPro = ${codpro}`;
+  const rows = (await runSqlViaSoapPaginated(query, ["seqati"])) as AtividadeConsultorRow[];
+  const validas = rows.filter((row) => row.seqite !== 0);
+
+  const resultado = await upsertEmLote(validas.map(linhaDe), {
+    tabela: "atividades_consultor",
+    colunas: COLUNAS,
+    colunasPk: ["seqati"],
+    carimbo: new Date(),
+  });
+
+  // Mesma reconciliação da sync completa (linha ~131 acima) — alocação recém-trazida do
+  // Senior nasce sem nó na EAP, rodar colada no import evita a janela em que ela fica
+  // invisível no cronograma.
+  await reconciliarAlocacoesOrfas();
+
+  await prisma.syncLog.create({ data: { jobName: JOB_NAME, query, status: "success" } });
+  return resultado.linhasProcessadas;
 }
 
 // O agendamento automático sempre roda completo (sem "desde") — o modo incremental

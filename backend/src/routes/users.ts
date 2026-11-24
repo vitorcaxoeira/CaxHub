@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { signToken } from "../auth/jwt";
+import { invalidarStatusUsuario } from "../auth/statusUsuario";
 import { prisma } from "../db/prisma";
 import { papelSugeridoPorTipusurat } from "../domain/usuariosDominio";
 import { parseIntListParam } from "../lib/queryParams";
@@ -16,17 +17,28 @@ const CONVITE_VALIDADE_DIAS = 7;
 
 // Situações possíveis de User.status (ver model no schema.prisma) — mesmo estilo de
 // STATUS_VALIDOS em routes/sincronizacao.ts.
-const STATUS_VALIDOS = ["ativo", "pendente"] as const;
+const STATUS_VALIDOS = ["ativo", "pendente", "inativo"] as const;
 
-function toPublicUser(user: {
-  id: number;
-  email: string;
-  nome: string;
-  fotoUrl: string | null;
-  roleId: number;
-  status: string;
-  role: { id: number; name: string };
-}) {
+// "Conectado" no CaxHub Desktop = computador autorizado (não revogado e dentro dos 30 dias de validade,
+// que deslizam a cada uso — ver routes/desktop.ts) de um usuário ATIVO: inativo ou pendente não
+// consegue trocar o token do computador por uma sessão, então o computador dele não está conectado
+// de verdade. Mesma definição da lista do próprio usuário em Meu perfil (GET /desktop/dispositivos).
+function dispositivoAtivo(agora: Date): Prisma.DispositivoDesktopWhereInput {
+  return { revogadoEm: null, expiraEm: { gt: agora } };
+}
+
+function toPublicUser(
+  user: {
+    id: number;
+    email: string;
+    nome: string;
+    fotoUrl: string | null;
+    roleId: number;
+    status: string;
+    role: { id: number; name: string };
+  },
+  desktopConectados = 0
+) {
   return {
     id: user.id,
     email: user.email,
@@ -35,6 +47,7 @@ function toPublicUser(user: {
     roleId: user.roleId,
     roleName: user.role.name,
     status: user.status,
+    desktopConectados,
   };
 }
 
@@ -59,12 +72,16 @@ usersRouter.get("/roles", async (_req, res) => {
 // filtros. Carregado uma vez pela tela, não a cada mudança de filtro.
 usersRouter.get("/indicadores", async (_req, res) => {
   try {
-    const grupos = await prisma.user.groupBy({ by: ["status"], _count: true });
-    const totais: Record<string, number> = { ativo: 0, pendente: 0 };
+    const [grupos, comDesktop] = await Promise.all([
+      prisma.user.groupBy({ by: ["status"], _count: true }),
+      // Usuários DISTINTOS (não computadores): quem tem 2 PCs conta uma vez.
+      prisma.user.count({ where: { status: "ativo", dispositivosDesktop: { some: dispositivoAtivo(new Date()) } } }),
+    ]);
+    const totais: Record<string, number> = { ativo: 0, pendente: 0, inativo: 0 };
     for (const g of grupos) {
       if (g.status in totais) totais[g.status] = g._count;
     }
-    res.json(totais);
+    res.json({ ...totais, comDesktop });
   } catch (error) {
     handleError(res, error, "indicadores");
   }
@@ -187,6 +204,82 @@ usersRouter.post("/:id/convites/reenviar", async (req, res) => {
   }
 });
 
+// ---------- Inativar / reativar ----------
+// Inativar bloqueia login E derruba a sessão já aberta (requireAuth consulta o status, ver
+// auth/statusUsuario.ts) sem apagar nada — o histórico (auditoria, atividades, RATs) continua
+// ligado ao usuário, o que a exclusão não garante. Só "ativo" pode ser inativado: convite
+// pendente se cancela (excluir), e um inativo sempre já teve senha, então reativar volta direto
+// pra "ativo".
+usersRouter.post("/:id/inativar", async (req: AuthenticatedRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    if (id === req.user!.userId) {
+      res.status(400).json({ error: "Você não pode inativar seu próprio usuário" });
+      return;
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id }, include: { role: true } });
+    if (!existing) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (existing.status === "inativo") {
+      res.status(400).json({ error: "Esse usuário já está inativo" });
+      return;
+    }
+    if (existing.status !== "ativo") {
+      res.status(400).json({ error: "Convite pendente não pode ser inativado — cancele o convite" });
+      return;
+    }
+
+    if (existing.role.name === "admin") {
+      const outrosAdminsAtivos = await prisma.user.count({
+        where: { role: { name: "admin" }, status: "ativo", id: { not: id } },
+      });
+      if (outrosAdminsAtivos === 0) {
+        res.status(400).json({ error: "Não é possível inativar o único administrador ativo restante" });
+        return;
+      }
+    }
+
+    const user = await prisma.user.update({ where: { id }, data: { status: "inativo" }, include: { role: true } });
+    invalidarStatusUsuario(id);
+    res.json({ user: toPublicUser(user) });
+  } catch (error) {
+    handleError(res, error, "inativar");
+  }
+});
+
+usersRouter.post("/:id/reativar", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    if (existing.status !== "inativo") {
+      res.status(400).json({ error: "Só é possível reativar um usuário inativo" });
+      return;
+    }
+
+    const user = await prisma.user.update({ where: { id }, data: { status: "ativo" }, include: { role: true } });
+    invalidarStatusUsuario(id);
+    res.json({ user: toPublicUser(user) });
+  } catch (error) {
+    handleError(res, error, "reativar");
+  }
+});
+
 // ---------- Gerar token de API de longa duração pra conta de serviço (papel "system") ----------
 usersRouter.post("/:id/token-servico", async (req, res) => {
   try {
@@ -234,11 +327,75 @@ usersRouter.get("/", async (req, res) => {
     }
     if (roleIds) where.roleId = { in: roleIds };
     if (status) where.status = status;
+    const agora = new Date();
+    // AND com o filtro de situação: "só com desktop" + "inativos" dá lista vazia, como o KPI diz.
+    if (req.query.desktop === "1") {
+      where.AND = [{ status: "ativo" }, { dispositivosDesktop: { some: dispositivoAtivo(agora) } }];
+    }
 
     const users = await prisma.user.findMany({ where, include: { role: true }, orderBy: { nome: "asc" } });
-    res.json({ users: users.map(toPublicUser) });
+
+    // Uma consulta só pra contagem de todos os usuários da página (nada de N+1).
+    const idsAtivos = users.filter((u) => u.status === "ativo").map((u) => u.id);
+    const contagens = idsAtivos.length
+      ? await prisma.dispositivoDesktop.groupBy({
+          by: ["userId"],
+          where: { userId: { in: idsAtivos }, ...dispositivoAtivo(agora) },
+          _count: true,
+        })
+      : [];
+    const porUsuario = new Map(contagens.map((c) => [c.userId, c._count]));
+    res.json({ users: users.map((u) => toPublicUser(u, porUsuario.get(u.id) ?? 0)) });
   } catch (error) {
     handleError(res, error, "list");
+  }
+});
+
+// ---------- Computadores conectados (CaxHub Desktop) ----------
+usersRouter.get("/:id/desktop", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const user = await prisma.user.findUnique({ where: { id }, select: { id: true } });
+    if (!user) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const dispositivos = await prisma.dispositivoDesktop.findMany({
+      where: { userId: id, ...dispositivoAtivo(new Date()) },
+      orderBy: { ultimoUsoEm: "desc" },
+      select: { id: true, nome: true, criadoEm: true, ultimoUsoEm: true },
+    });
+    res.json({ dispositivos });
+  } catch (error) {
+    handleError(res, error, "desktop-list");
+  }
+});
+
+// Revoga o computador de OUTRO usuário (PC perdido, colaborador que saiu): o app dele cai no login na
+// próxima troca de token. O dono refaz o login pelo app se for o caso.
+usersRouter.delete("/:id/desktop/:dispositivoId", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const dispositivoId = Number(req.params.dispositivoId);
+    if (!Number.isInteger(id) || !Number.isInteger(dispositivoId)) {
+      res.status(400).json({ error: "Id inválido" });
+      return;
+    }
+    const r = await prisma.dispositivoDesktop.updateMany({
+      where: { id: dispositivoId, userId: id, revogadoEm: null },
+      data: { revogadoEm: new Date() },
+    });
+    if (r.count === 0) {
+      res.status(404).json({ error: "Computador não encontrado" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "desktop-delete");
   }
 });
 
@@ -350,7 +507,9 @@ usersRouter.put("/:id", async (req, res) => {
     if (existing.role.name === "admin" && roleIdNum !== undefined) {
       const novoRole = await prisma.role.findUnique({ where: { id: roleIdNum } });
       if (novoRole?.name !== "admin") {
-        const outrosAdmins = await prisma.user.count({ where: { role: { name: "admin" }, id: { not: id } } });
+        // Só admin ATIVO conta: com o outro admin inativo, tirar o papel deste deixaria o sistema
+        // sem ninguém que consiga entrar.
+        const outrosAdmins = await prisma.user.count({ where: { role: { name: "admin" }, status: "ativo", id: { not: id } } });
         if (outrosAdmins === 0) {
           res.status(400).json({ error: "Não é possível remover o papel de administrador do único admin restante" });
           return;
@@ -408,7 +567,7 @@ usersRouter.delete("/:id", async (req: AuthenticatedRequest, res) => {
     }
 
     if (existing.role.name === "admin") {
-      const outrosAdmins = await prisma.user.count({ where: { role: { name: "admin" }, id: { not: id } } });
+      const outrosAdmins = await prisma.user.count({ where: { role: { name: "admin" }, status: "ativo", id: { not: id } } });
       if (outrosAdmins === 0) {
         res.status(400).json({ error: "Não é possível excluir o único administrador restante" });
         return;

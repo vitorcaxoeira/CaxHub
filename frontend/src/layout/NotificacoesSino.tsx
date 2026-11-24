@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 interface Notificacao {
   id: number;
@@ -7,6 +8,55 @@ interface Notificacao {
   mensagem: string;
   lida: boolean;
   criadoEm: string;
+  solicitacaoViagemId?: number | null;
+  atividadeId?: number | null;
+}
+
+// Para onde o clique leva. Roteia por `tipo` (e não por uma URL gravada no banco) pra que
+// notificações antigas também naveguem. Os pedidos de aprovação vão pra aba certa de
+// Aprovações com a linha da atividade destacada; o que é só da atividade abre o painel dela.
+function destinoDaNotificacao(n: Notificacao): string | null {
+  if (n.solicitacaoViagemId) return `/solicitacoes/${n.solicitacaoViagemId}`;
+
+  const aprovacoes = (aba: string, status: string) => {
+    const params = new URLSearchParams({ aba, status });
+    if (n.atividadeId) params.set("atividade", String(n.atividadeId));
+    return `/projetos/aprovacoes?${params}`;
+  };
+
+  switch (n.tipo) {
+    case "excedente_solicitado":
+      return aprovacoes("excedentes", "pendente");
+    case "excedente_decidido":
+      return aprovacoes("excedentes", "");
+    case "apontamento_solicitado":
+      return aprovacoes("apontamentos", "pendente");
+    // Aprovado, o consultor ainda precisa confirmar em Meus Apontamentos — é lá que ele age.
+    case "apontamento_decidido":
+      return "/projetos/apontamentos";
+    case "ajuste_solicitado":
+      return aprovacoes("ajustes", "pendente");
+    case "ajuste_decidido":
+      return aprovacoes("ajustes", "");
+    case "config_proposta_solicitada":
+      return aprovacoes("config-proposta", "pendente");
+    case "config_proposta_decidida":
+      return aprovacoes("config-proposta", "");
+    // Plano de ação do Painel de Eficiência: o responsável (consultor) vai pra "Minhas ações"; o gestor que criou, pra aba do painel.
+    case "acao_eficiencia_atribuida":
+    case "acao_eficiencia_vencida":
+      return "/projetos/minhas-acoes";
+    case "acao_eficiencia_vencida_gestor":
+      return "/projetos/eficiencia?aba=acoes&filtro=atrasadas";
+    // Plano de Evolução: ciclo publicado e resultado devolvido levam o consultor ao Meu plano.
+    case "plano_ciclo_publicado":
+    case "plano_resultado_disponivel":
+      return "/projetos/meu-plano";
+  }
+
+  // atividade_movida, novo_comentario, horas_excedentes e qualquer tipo futuro com atividade.
+  if (n.atividadeId) return `/projetos/atividades?atividade=${n.atividadeId}`;
+  return null;
 }
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
@@ -16,6 +66,7 @@ const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short",
 const INTERVALO_POLLING_MS = 45000;
 
 export function NotificacoesSino() {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [notificacoes, setNotificacoes] = useState<Notificacao[]>([]);
   const [naoLidas, setNaoLidas] = useState(0);
@@ -88,7 +139,14 @@ export function NotificacoesSino() {
             {notificacoes.map((n) => (
               <button
                 key={n.id}
-                onClick={() => !n.lida && marcarLida(n.id)}
+                onClick={() => {
+                  if (!n.lida) marcarLida(n.id);
+                  const destino = destinoDaNotificacao(n);
+                  if (destino) {
+                    setOpen(false);
+                    navigate(destino);
+                  }
+                }}
                 className={`block w-full border-b border-border/60 px-3 py-2 text-left text-sm transition hover:bg-surface-2 ${
                   n.lida ? "text-muted" : "text-foreground"
                 }`}

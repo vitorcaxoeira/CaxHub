@@ -1,4 +1,5 @@
 import { runSqlViaSoap } from "./client";
+import { nomeSemPrefixo, prefixoDoSistema, SistemaSenior } from "../config/sistemaSenior";
 
 /**
  * Objetos customizados pelo cliente no Senior (tabelas, campos e domínios com
@@ -33,21 +34,25 @@ export interface SeniorDomainValue {
 }
 
 /** Busca os campos reais de uma tabela do Senior via o dicionário de dados (r996fld). */
-export async function getTableFields(tblnam: string): Promise<SeniorField[]> {
+export async function getTableFields(tblnam: string, sistema: SistemaSenior = "erp"): Promise<SeniorField[]> {
+  tblnam = nomeSemPrefixo(tblnam);
   const rows = await runSqlViaSoap(
     `SELECT fldnam AS fldnam, fldord AS fldord, dattyp AS dattyp, lenfld AS lenfld,
             prefld AS prefld, cannul AS cannul, reqfld AS reqfld, enunam AS enunam, desfld AS desfld
-     FROM r${metadataPrefix(tblnam)}fld
+     FROM ${prefixoDoSistema(sistema)}r${metadataPrefix(tblnam)}fld
      WHERE tblnam = '${tblnam.toUpperCase()}'
-     ORDER BY fldord`
+     ORDER BY fldord`,
+    { sistema }
   );
   return rows as SeniorField[];
 }
 
 /** Busca a descrição e os campos de chave primária de uma tabela (r996tbl). `pkflds` é separado por ";". */
-export async function getTableInfo(tblnam: string): Promise<SeniorTableInfo> {
+export async function getTableInfo(tblnam: string, sistema: SistemaSenior = "erp"): Promise<SeniorTableInfo> {
+  tblnam = nomeSemPrefixo(tblnam);
   const rows = (await runSqlViaSoap(
-    `SELECT destbl AS destbl, pkflds AS pkflds FROM r${metadataPrefix(tblnam)}tbl WHERE tblnam = '${tblnam.toUpperCase()}'`
+    `SELECT destbl AS destbl, pkflds AS pkflds FROM ${prefixoDoSistema(sistema)}r${metadataPrefix(tblnam)}tbl WHERE tblnam = '${tblnam.toUpperCase()}'`,
+    { sistema }
   )) as { destbl: string | null; pkflds: string | null }[];
 
   const row = rows[0];
@@ -62,9 +67,10 @@ export async function getTableInfo(tblnam: string): Promise<SeniorTableInfo> {
 }
 
 /** Busca os valores válidos (domínio) de um campo, ex. lstnam="LJurFis" -> [{keynam:"J",...}, {keynam:"F",...}]. */
-export async function getFieldDomainValues(lstnam: string): Promise<SeniorDomainValue[]> {
+export async function getFieldDomainValues(lstnam: string, sistema: SistemaSenior = "erp"): Promise<SeniorDomainValue[]> {
   const rows = await runSqlViaSoap(
-    `SELECT keynam AS keynam, valkey AS valkey, keyord AS keyord FROM r${metadataPrefix(lstnam)}lsf WHERE lstnam = '${lstnam}' ORDER BY keyord`
+    `SELECT keynam AS keynam, valkey AS valkey, keyord AS keyord FROM ${prefixoDoSistema(sistema)}r${metadataPrefix(lstnam)}lsf WHERE lstnam = '${lstnam}' ORDER BY keyord`,
+    { sistema }
   );
   return rows as SeniorDomainValue[];
 }

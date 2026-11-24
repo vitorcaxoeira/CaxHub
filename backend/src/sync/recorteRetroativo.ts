@@ -12,29 +12,47 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import type { SyncJobDescriptor } from "./registry";
 
-// Acesso dinâmico ao model Prisma certo a partir de `job.tabelaLocal` (o `@@map`, já usado
-// pelo catálogo de campos da Fase 2) — sem isso, precisaria de mais um mapa de 35 entradas
+// Acesso dinâmico ao model Prisma certo a partir da tabela LOCAL (o `@@map`, já usado
+// pelo catálogo de campos da Fase 2) — sem isso, precisaria de mais um mapa de 44 entradas
 // mantido à mão (mesmo argumento da Fase 4 pra preferir derivar de `Prisma.dmmf` a duplicar).
 // `as unknown as Record<string, ...>`: TypeScript não tem como tipar "uma propriedade cujo
-// nome só existe em runtime" — o preço de generalizar pros 35 models é perder o tipo exato
+// nome só existe em runtime" — o preço de generalizar pros 44 models é perder o tipo exato
 // do `where` aqui (mesma troca que `varrerRemovidos<T>` evita fazendo o CALLER informar T;
-// aqui o call site não sabe qual job vai chegar, então não tem T pra informar).
-function delegateDoJob(job: SyncJobDescriptor): {
+// aqui o call site não sabe qual job vai chegar, então não tem T pra informar). Exportada
+// (10/09/2026) porque `sync/registry.ts` passou a precisar do mesmo truque pra
+// `contarRemovidos`/`listarRemovidos` genéricos — reaproveitada, não duplicada.
+export function delegatePorTabelaLocal(tabelaLocal: string): {
   count: (args: { where: unknown }) => Promise<number>;
   updateMany: (args: { where: unknown; data: unknown }) => Promise<{ count: number }>;
+  findMany: (args: { where: unknown; orderBy?: unknown; take?: number }) => Promise<Record<string, unknown>[]>;
 } {
-  const model = Prisma.dmmf.datamodel.models.find((m) => m.dbName === job.tabelaLocal);
-  if (!model) throw new Error(`Model Prisma não encontrado pra tabela local "${job.tabelaLocal}".`);
+  const model = Prisma.dmmf.datamodel.models.find((m) => m.dbName === tabelaLocal);
+  if (!model) throw new Error(`Model Prisma não encontrado pra tabela local "${tabelaLocal}".`);
   const nomeDelegate = model.name.charAt(0).toLowerCase() + model.name.slice(1);
   const delegate = (prisma as unknown as Record<string, unknown>)[nomeDelegate];
-  if (!delegate) throw new Error(`prisma.${nomeDelegate} não existe (esperado pra tabela "${job.tabelaLocal}").`);
-  return delegate as ReturnType<typeof delegateDoJob>;
+  if (!delegate) throw new Error(`prisma.${nomeDelegate} não existe (esperado pra tabela "${tabelaLocal}").`);
+  return delegate as ReturnType<typeof delegatePorTabelaLocal>;
 }
 
-/** true só nos poucos models que têm a coluna `removidoEmSenior` (carimbo de
- * varrerRemovidos.ts) — hoje ContratoConsultor, Pedido, PlanoContabil, LancamentoContabil,
- * RateioLancamento, OrcamentoContabil. Nos outros 29 jobs, "marcar" não é uma opção possível
- * (não existe coluna pra escrever) — só "deixar". */
+/** Nomes das colunas de PK (simples ou composta) do model Prisma da tabela local, via
+ * `Prisma.dmmf` — mesmo mecanismo de `delegatePorTabelaLocal`. Usado por
+ * `listarRemovidosGenerico` (registry.ts) pra montar uma `chave` legível sem mapa mantido à
+ * mão por tabela. */
+export function pkFieldsDoModel(tabelaLocal: string): string[] {
+  const model = Prisma.dmmf.datamodel.models.find((m) => m.dbName === tabelaLocal);
+  if (!model) throw new Error(`Model Prisma não encontrado pra tabela local "${tabelaLocal}".`);
+  if (model.primaryKey?.fields?.length) return [...model.primaryKey.fields];
+  return model.fields.filter((f) => f.isId).map((f) => f.name);
+}
+
+function delegateDoJob(job: SyncJobDescriptor): ReturnType<typeof delegatePorTabelaLocal> {
+  return delegatePorTabelaLocal(job.tabelaLocal);
+}
+
+/** true só nos models que têm a coluna `removidoEmSenior` (carimbo de varrerRemovidos.ts) —
+ * depois da leva de 10/09/2026, todas as 44 tabelas espelho do Senior. Continua exportada e
+ * checada em vez de assumir "sempre true": é o que impede o seletor de modo na tela de
+ * aparecer disponível numa tabela cuja coluna, por algum motivo futuro, não exista. */
 export function suportaMarcarRemovido(job: SyncJobDescriptor): boolean {
   const model = Prisma.dmmf.datamodel.models.find((m) => m.dbName === job.tabelaLocal);
   return !!model?.fields.some((f) => f.name === "removidoEmSenior");

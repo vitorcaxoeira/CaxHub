@@ -1,8 +1,12 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoapPaginated } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
 
 export const JOB_NAME = "departamento_time-sync";
 export const CRON_EXPR = "0 4 * * *";
@@ -33,6 +37,35 @@ interface DepartamentoTimeRow {
   sitreg: string;
 }
 
+// schema.prisma (DepartamentoTime): codusu/usuger BigInt, datger Date.
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "depexe", cast: "int" },
+  { nome: "codemp", cast: "int" },
+  { nome: "codusu", cast: "bigint" },
+  { nome: "usuger", cast: "bigint" },
+  { nome: "datger", cast: "date" },
+  { nome: "horger", cast: "int" },
+  { nome: "sitreg", cast: "text" },
+];
+
+// `String(...).slice(0,10)` pra data, nunca `new Date(v)` — "2025-03-14" é UTC mas
+// "2025-03-14T00:00:00" é local, e em America/Sao_Paulo isso desloca o dia (mesmo cuidado de
+// rateioLancamentoSync.ts).
+function linhaDe(row: DepartamentoTimeRow): LinhaUpsert {
+  return {
+    chave: `${row.codemp}-${row.depexe}-${row.codusu}`,
+    valores: [
+      String(row.depexe),
+      String(row.codemp),
+      String(row.codusu),
+      row.usuger != null ? String(row.usuger) : null,
+      row.datger != null ? String(row.datger).slice(0, 10) : null,
+      row.horger != null ? String(row.horger) : null,
+      row.sitreg,
+    ],
+  };
+}
+
 export async function runDepartamentoTimeSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
@@ -40,19 +73,47 @@ export async function runDepartamentoTimeSync(desde?: Date): Promise<void> {
     // Consultas grandes (>~30 mil linhas) fazem o serviço do Senior devolver
     // uma resposta vazia/truncada — por isso sempre paginamos com ORDER BY
     // pela chave primária.
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoapPaginated(query, ["codemp", "depexe", "codusu"])) as DepartamentoTimeRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { depexe: row.depexe, codemp: row.codemp, codusu: BigInt(row.codusu), usuger: row.usuger != null ? BigInt(row.usuger) : null, datger: row.datger != null ? new Date(row.datger) : null, horger: row.horger, sitreg: row.sitreg };
-      await prisma.departamentoTime.upsert({
-        where: { codemp_depexe_codusu: { codemp: row.codemp, depexe: row.depexe, codusu: BigInt(row.codusu) } },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "departamento_time",
+      colunas: COLUNAS,
+      colunasPk: ["codemp", "depexe", "codusu"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.DepartamentoTimeWhereInput>(prisma.departamentoTime, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(BASE_QUERY),
+      inicio,
+      linhasProcessadas: resultado.linhasProcessadas,
+      desde,
+    });
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes)` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

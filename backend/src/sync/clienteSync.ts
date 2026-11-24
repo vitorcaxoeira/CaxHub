@@ -1,8 +1,13 @@
 import cron from "node-cron";
+import { Prisma } from "@prisma/client";
 import { runSqlViaSoap } from "../soap/client";
 import { prisma } from "../db/prisma";
-import { montarQuerySenior } from "./consultaSenior";
+import { montarQuerySenior, extrairTabela } from "./consultaSenior";
 import { filtroDoJob } from "./filtrosAtivos";
+import { executarVarreduraDoJob } from "./varrerRemovidos";
+import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "./upsertEmLote";
+import { tamanhoLoteConfigurado } from "./politicaLote";
+import { sincronizarCentroCustoDosClientes } from "./clienteCentroCusto";
 
 export const JOB_NAME = "cliente-sync";
 export const CRON_EXPR = "20 3 * * *";
@@ -51,23 +56,104 @@ interface ClienteRow {
   codpai: string;
 }
 
+// Colunas do INSERT em lote, na ordem usada em LinhaUpsert.valores. Sem campo opcional nesta
+// tabela — todos NOT NULL no schema (Cliente).
+const COLUNAS: ColunaUpsert[] = [
+  { nome: "codcli", cast: "int" },
+  { nome: "nomcli", cast: "text" },
+  { nome: "apecli", cast: "text" },
+  { nome: "sencli", cast: "text" },
+  { nome: "tipcli", cast: "text" },
+  { nome: "tipmer", cast: "text" },
+  { nome: "tipemc", cast: "int" },
+  { nome: "codram", cast: "text" },
+  { nome: "insest", cast: "text" },
+  { nome: "cgccpf", cast: "bigint" },
+  { nome: "endcli", cast: "text" },
+  { nome: "cplend", cast: "text" },
+  { nome: "cepcli", cast: "int" },
+  { nome: "baicli", cast: "text" },
+  { nome: "cidcli", cast: "text" },
+  { nome: "sigufs", cast: "text" },
+  { nome: "codpai", cast: "text" },
+];
+
+function linhaDe(row: ClienteRow): LinhaUpsert {
+  return {
+    chave: String(row.codcli),
+    valores: [
+      String(row.codcli),
+      row.nomcli,
+      row.apecli,
+      row.sencli,
+      row.tipcli,
+      row.tipmer,
+      String(row.tipemc),
+      row.codram,
+      row.insest,
+      String(row.cgccpf),
+      row.endcli,
+      row.cplend,
+      String(row.cepcli),
+      row.baicli,
+      row.cidcli,
+      row.sigufs,
+      row.codpai,
+    ],
+  };
+}
+
 export async function runClienteSync(desde?: Date): Promise<void> {
   const query = montarQuery(desde);
   const inicio = new Date();
   try {
+    const inicioFetch = Date.now();
     const rows = (await runSqlViaSoap(query)) as ClienteRow[];
+    const msFetch = Date.now() - inicioFetch;
 
-    for (const row of rows) {
-      const data = { ...row, cgccpf: BigInt(row.cgccpf) };
-      await prisma.cliente.upsert({
-        where: { codcli: row.codcli },
-        update: data,
-        create: data,
-      });
-    }
+    const inicioEscrita = Date.now();
+    const resultado = await upsertEmLote(rows.map(linhaDe), {
+      tabela: "clientes",
+      colunas: COLUNAS,
+      colunasPk: ["codcli"],
+      carimbo: inicio,
+      tamanhoLote: tamanhoLoteConfigurado(JOB_NAME),
+    });
+    const msEscrita = Date.now() - inicioEscrita;
+
+    // Centro de custo do cliente (E085RAT, maior codccu) — fora do upsert acima porque não é
+    // coluna de E085CLI. Roda sempre completo (query de ~150 linhas), mesmo no modo "alterados".
+    // Dentro do try de propósito: se falhar, o job aparece com erro na tela de administração em
+    // vez de deixar o codccu desatualizado em silêncio (o upsert dos clientes já foi gravado).
+    const resumoCentroCusto = await sincronizarCentroCustoDosClientes();
+
+    // DETECÇÃO DE EXCLUSÃO NO SENIOR (src/sync/varrerRemovidos.ts) — ligada em 10/09/2026
+    // (porte do CaxHub_Atlas, convenção nova: sempre completo desde a criação da tabela).
+    // Escopo `{}`: espelho só-leitura, sem registro "nascido no CaxHub" pra excluir do
+    // escopo. Começa em "desligada" (default do model ConfiguracaoVarredura) — promoção pela
+    // tela é decisão manual, não desta leva.
+    const varredura = await executarVarreduraDoJob<Prisma.ClienteWhereInput>(prisma.cliente, {
+      jobName: JOB_NAME,
+      tabelaSenior: extrairTabela(BASE_QUERY),
+      inicio,
+      linhasProcessadas: resultado.linhasProcessadas,
+      desde,
+    });
 
     await prisma.syncLog.create({
-      data: { jobName: JOB_NAME, query, status: "success", duracaoMs: Date.now() - inicio.getTime() },
+      data: {
+        jobName: JOB_NAME,
+        query,
+        status: "success",
+        message:
+          `${resultado.linhasProcessadas} linhas em ${((msFetch + msEscrita) / 1000).toFixed(1)}s ` +
+          `(fetch ${(msFetch / 1000).toFixed(1)}s, escrita ${(msEscrita / 1000).toFixed(1)}s, ${resultado.lotes} lotes) — ${resumoCentroCusto}` +
+          (varredura ? ` — ${varredura.resumo}` : ""),
+        varreduraModo: varredura?.modo ?? null,
+        varreduraDetectados: varredura?.candidatos ?? null,
+        varreduraInicio: varredura ? inicio : null,
+        duracaoMs: Date.now() - inicio.getTime(),
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

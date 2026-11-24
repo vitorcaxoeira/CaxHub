@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { DndContext, DragEndEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { formatHorasCompacto } from "../../lib/cronograma";
 import { tomConsumo } from "../../lib/consumoHoras";
@@ -6,6 +7,8 @@ import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { toneBadge, priproTone } from "../ui/badges";
 import { IconePlay, IconeStop, IconeLapis } from "../ui/iconesExecucao";
 import { Spinner } from "../ui/Spinner";
+import { Tooltip } from "../ui/Tooltip";
+import { HierarquiaAtividadeTooltip } from "../cronograma/HierarquiaAtividadeTooltip";
 import { useCronometro } from "../../hooks/useCronometro";
 import {
   EXIBIR_AMBOS_BOTOES,
@@ -104,6 +107,12 @@ export interface DetalheInfo {
   horasRealizadas: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
+  // Id do nó da EAP (não só o nome) — dá pra tela de Detalhe montar a mesma tooltip rica de
+  // hierarquia da Lista/Kanban (ver HierarquiaAtividadeTooltip), em vez de só o nome da folha.
+  estruturaAtividadeId: number | null;
+  // Departamento executor do ITEM — precisa aqui pelo mesmo motivo (badge do cabeçalho da
+  // hierarquia, igual ao card/tooltip).
+  depexeLabel: string;
   podeVerCronograma: boolean;
   qtdhorPrevisto: number | null;
   horasExcedentes: number;
@@ -124,6 +133,13 @@ interface KanbanBoardProps {
   onEditarNota: (atividadeId: number) => void;
   // Ids com uma requisição de iniciar/parar em andamento — controla spinner + disabled.
   processando: Set<number>;
+  // Quantas atividades cada raia tem NO SERVIDOR (depois dos filtros), por id de coluna. O quadro carrega só
+  // as primeiras de cada raia; sem isto o contador do cabeçalho mostraria só o que foi baixado.
+  totaisPorRaia?: Record<string, number>;
+  // Pede mais cards de uma raia: uma quantidade, ou "todos" os que faltam.
+  onCarregarMais?: (colunaId: number, quantidade: number | "todos") => void;
+  // Raia com um "carregar mais" em andamento.
+  carregandoRaia?: number | null;
 }
 
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
@@ -201,6 +217,8 @@ function DraggableCard({
       horasRealizadas: atividade.horasRealizadas,
       estruturaNome: atividade.estruturaNome,
       estruturaPercentual: atividade.estruturaPercentual,
+      estruturaAtividadeId: atividade.estruturaAtividadeId,
+      depexeLabel: atividade.depexeLabel,
       podeVerCronograma: atividade.podeVerCronograma,
       qtdhorPrevisto: atividade.qtdhorPrevisto,
       horasExcedentes: atividade.horasExcedentes,
@@ -247,23 +265,37 @@ function DraggableCard({
           tem o mesmo nome do item o texto aparecia duplicado no card. Trunca porque a
           descrição do item é bem mais longa que um nome de nó. */}
       {contexto && (
-        <span
-          // Duas linhas SEMPRE ocupadas: `line-clamp-2` corta na segunda com reticências e
-          // o `min-h` garante o espaço mesmo com texto curto, então a caixa tem a mesma
-          // altura em todos os cards e as colunas do quadro ficam alinhadas. A conta do
-          // min-h: 2 linhas de 13px + py-0.5 (2px em cima e embaixo), porque o
-          // box-sizing border-box do Tailwind faz o min-h incluir o padding.
-          //
-          // Classes escritas à mão em vez de `toneBadge.neutral` de propósito: aquele token
-          // é compartilhado com os badges de prioridade e com as situações de pedido em
-          // Mercado, e o fundo aqui é mais suave (bg-muted/8) que o dos badges. Também não
-          // daria pra sobrepor a classe depois do token — com a mesma especificidade quem
-          // vence é a ordem no CSS gerado, não a ordem no atributo class.
-          className="mt-1 line-clamp-2 min-h-[30px] rounded bg-muted/8 px-1.5 py-0.5 font-mono text-[9.5px] leading-[13px] text-muted"
-          title={contexto}
+        // Mesma tooltip rica da Lista de Atividades (item → pasta(s) → atividade, ver
+        // HierarquiaAtividadeTooltip) — só quando há nó de estrutura pra mostrar
+        // (estruturaAtividadeId), senão fica só o `title` nativo de sempre.
+        <Tooltip
+          disabled={atividade.estruturaAtividadeId == null}
+          content={
+            <HierarquiaAtividadeTooltip
+              atividadeId={atividade.id}
+              itemNome={atividade.itemDescricao ?? "—"}
+              itemDepexeLabel={atividade.depexeLabel}
+            />
+          }
         >
-          {contexto}
-        </span>
+          <span
+            // Duas linhas SEMPRE ocupadas: `line-clamp-2` corta na segunda com reticências e
+            // o `min-h` garante o espaço mesmo com texto curto, então a caixa tem a mesma
+            // altura em todos os cards e as colunas do quadro ficam alinhadas. A conta do
+            // min-h: 2 linhas de 13px + py-0.5 (2px em cima e embaixo), porque o
+            // box-sizing border-box do Tailwind faz o min-h incluir o padding.
+            //
+            // Classes escritas à mão em vez de `toneBadge.neutral` de propósito: aquele token
+            // é compartilhado com os badges de prioridade e com as situações de pedido em
+            // Mercado, e o fundo aqui é mais suave (bg-muted/8) que o dos badges. Também não
+            // daria pra sobrepor a classe depois do token — com a mesma especificidade quem
+            // vence é a ordem no CSS gerado, não a ordem no atributo class.
+            className="mt-1 line-clamp-2 min-h-[30px] rounded bg-muted/8 px-1.5 py-0.5 font-mono text-[9.5px] leading-[13px] text-muted"
+            title={contexto}
+          >
+            {contexto}
+          </span>
+        </Tooltip>
       )}
       <div className="mt-2 flex items-center gap-1.5">
         {emAndamento && (
@@ -378,9 +410,72 @@ function DraggableCard({
   );
 }
 
+const PASSO_CARREGAR_MAIS = 10;
+
+// Rodapé da raia quando há cards no servidor que ainda não foram baixados: "+10", uma quantidade à escolha
+// ou todos os que faltam.
+function RodapeCarregarMais({
+  faltam,
+  carregando,
+  onCarregarMais,
+}: {
+  faltam: number;
+  carregando: boolean;
+  onCarregarMais: (quantidade: number | "todos") => void;
+}) {
+  const [quantidade, setQuantidade] = useState("");
+  const n = Number(quantidade);
+  const valida = quantidade !== "" && Number.isInteger(n) && n > 0;
+  const botao =
+    "whitespace-nowrap rounded border border-border bg-surface px-2 py-1 font-mono text-[10.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";
+
+  return (
+    <div className="space-y-1.5 pt-1">
+      <p className="flex items-center justify-center gap-1.5 text-center text-[10.5px] text-muted">
+        {carregando && <Spinner className="h-3 w-3" />}
+        {faltam.toLocaleString("pt-BR")} {faltam === 1 ? "card não carregado" : "cards não carregados"}
+      </p>
+      {/* Uma linha só em qualquer largura de raia: sem quebra, e o total que falta já está no texto acima. */}
+      <div className="flex flex-nowrap items-center justify-center gap-1">
+        <button type="button" disabled={carregando} className={botao} onClick={() => onCarregarMais(PASSO_CARREGAR_MAIS)}>
+          +{PASSO_CARREGAR_MAIS}
+        </button>
+        <form
+          className="flex items-center gap-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!valida || carregando) return;
+            onCarregarMais(n);
+            setQuantidade("");
+          }}
+        >
+          <input
+            type="number"
+            min={1}
+            value={quantidade}
+            onChange={(e) => setQuantidade(e.target.value)}
+            placeholder="Qtd"
+            aria-label="Quantidade de cards a carregar"
+            className="w-12 rounded border border-border bg-surface px-1.5 py-1 font-mono text-[10.5px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <button type="submit" disabled={carregando || !valida} className={botao}>
+            Carregar
+          </button>
+        </form>
+        <button type="button" disabled={carregando} className={botao} onClick={() => onCarregarMais("todos")}>
+          Todos
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DroppableColuna({
   coluna,
   atividades,
+  total,
+  carregando,
+  onCarregarMais,
   onAbrirDetalhe,
   onIniciar,
   onParar,
@@ -389,6 +484,10 @@ function DroppableColuna({
 }: {
   coluna: ColunaKanban;
   atividades: AtividadeKanban[];
+  // Total da raia no servidor; sem ele (uso sem paginação) vale o que está na tela.
+  total: number;
+  carregando: boolean;
+  onCarregarMais?: (quantidade: number | "todos") => void;
   onAbrirDetalhe: (id: number, info: DetalheInfo) => void;
   onIniciar: (id: number) => void;
   onParar: (id: number) => void;
@@ -396,6 +495,7 @@ function DroppableColuna({
   processando: Set<number>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `coluna-${coluna.id}` });
+  const faltam = Math.max(0, total - atividades.length);
 
   return (
     <div
@@ -406,7 +506,9 @@ function DroppableColuna({
     >
       <div className="flex items-center justify-between px-3 py-2.5">
         <p className="font-mono text-[11px] font-semibold uppercase tracking-wide text-foreground">{coluna.nome}</p>
-        <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-muted">{atividades.length}</span>
+        <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-muted">
+          {faltam > 0 ? `${atividades.length.toLocaleString("pt-BR")}/${total.toLocaleString("pt-BR")}` : atividades.length}
+        </span>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto px-2 pb-3">
         {atividades.map((a) => (
@@ -421,6 +523,11 @@ function DroppableColuna({
           />
         ))}
         {atividades.length === 0 && <p className="px-2 py-4 text-center text-[11.5px] text-muted">Sem atividades</p>}
+        {/* Logo depois do último card da raia (e não no fundo da coluna, que estica até a altura da raia
+            mais alta e deixava um vão entre os cards e os controles). */}
+        {faltam > 0 && onCarregarMais && (
+          <RodapeCarregarMais faltam={faltam} carregando={carregando} onCarregarMais={onCarregarMais} />
+        )}
       </div>
     </div>
   );
@@ -435,6 +542,9 @@ export function KanbanBoard({
   onParar,
   onEditarNota,
   processando,
+  totaisPorRaia,
+  onCarregarMais,
+  carregandoRaia = null,
 }: KanbanBoardProps) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -467,6 +577,9 @@ export function KanbanBoard({
             key={coluna.id}
             coluna={coluna}
             atividades={atividadesPorColuna.get(coluna.id) ?? []}
+            total={totaisPorRaia?.[String(coluna.id)] ?? (atividadesPorColuna.get(coluna.id) ?? []).length}
+            carregando={carregandoRaia === coluna.id}
+            onCarregarMais={onCarregarMais ? (quantidade) => onCarregarMais(coluna.id, quantidade) : undefined}
             onAbrirDetalhe={onAbrirDetalhe}
             onIniciar={onIniciar}
             onParar={onParar}

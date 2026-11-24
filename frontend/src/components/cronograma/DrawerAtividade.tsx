@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { HorasAgregadas, StatusNo, formatHorasCompacto, formatarAlocacoes, projetarSaldo } from "../../lib/cronograma";
+import {
+  HorasAgregadas,
+  StatusNo,
+  formatHorasCompacto,
+  formatarAlocacoes,
+  formatarDataBr,
+  limitesDatasDoNo,
+  minimoAlocavel,
+  projetarSaldo,
+} from "../../lib/cronograma";
 import { NoCronogramaCompleto, PatchNo } from "../../hooks/useCronograma";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 
@@ -70,6 +79,16 @@ export function DrawerAtividade({
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
+  // Período permitido: o do ancestral mais próximo que tem data (cada lado separado). O servidor é
+  // quem barra de verdade — aqui só limita o calendário e explica de onde vem o limite.
+  const limites = limitesDatasDoNo(no, porId);
+  const textoLimites = [
+    limites.inicio && `início a partir de ${formatarDataBr(limites.inicio)} (${limites.origemInicio})`,
+    limites.fim && `fim até ${formatarDataBr(limites.fim)} (${limites.origemFim})`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   // Projeção em tempo real do saldo do item (roda a cada tecla, é O(1) — ver
   // projetarSaldo) — feedback antes de salvar, não depois. Só existe pra atividade
   // (pasta não tem horasPrevistas editável nem item dono no mesmo sentido).
@@ -81,16 +100,19 @@ export function DrawerAtividade({
   // igual ao ModalAlocarConsultores (que nunca teve esse bypass).
   const excedenteTravado = estouraOrcamento && bloqueiaExcedenteEstrutura;
 
-  // Nunca pode reduzir as horas previstas abaixo do que já foi realizado nesta atividade —
-  // o backend recusa com 409 (ver PATCH /alocacao/estrutura/:id e PATCH
-  // /alocacao/alocacoes/:id); isto aqui só adianta o aviso antes de bater no servidor. Sem
+  // Nunca pode reduzir as horas previstas a ponto de "alocado + excedente" ficar abaixo do
+  // realizado nesta atividade — o backend recusa com 409 (ver PATCH /alocacao/estrutura/:id e
+  // PATCH /alocacao/alocacoes/:id); isto aqui só adianta o aviso antes de bater no servidor.
+  // O excedente já autorizado (no.horasExcedentes) cobre parte do realizado, por isso o
+  // mínimo alocável não é o realizado cheio (ver minimoAlocavel em lib/cronograma.ts). Sem
   // bypass — diferente de estouraOrcamento, aqui não existe "confirmar mesmo assim" (é
   // integridade de dado, não autorização).
+  const minimoHorasPrevistas = no.tipo === "atividade" ? minimoAlocavel(no.horasRealizadas, no.horasExcedentes) : 0;
   const abaixoDoRealizado =
     no.tipo === "atividade" &&
     horasPrevistasProjetadas != null &&
-    no.horasRealizadas > 0 &&
-    horasPrevistasProjetadas < no.horasRealizadas;
+    minimoHorasPrevistas > 0 &&
+    horasPrevistasProjetadas < minimoHorasPrevistas;
 
   // Uma vez confirmada pelo Senior (seqati preenchido), o responsável não pode mais trocar
   // por aqui — trocar de verdade soft-deleta essa alocação e cria outra do zero (ver
@@ -153,7 +175,15 @@ export function DrawerAtividade({
     }
     setSalvando(true);
     setErro(null);
-    const patch: PatchNo = { nome: nome.trim() };
+    if (inicio !== "" && fim !== "" && inicio > fim) {
+      setErro("Data de início não pode ser depois da data de fim");
+      setSalvando(false);
+      return;
+    }
+    const patch: PatchNo = no.tipo === "item" ? {} : { nome: nome.trim() };
+    patch.dataPrevistaInicio = inicio === "" ? null : inicio;
+    patch.dataPrevistaFim = fim === "" ? null : fim;
+    patch.observacao = observacao.trim() === "" ? null : observacao.trim();
     if (no.tipo === "atividade") {
       const horasPrevistas = horasParaMinutos(horasTexto);
       if (horasTexto.trim() !== "" && horasPrevistas == null) {
@@ -165,11 +195,8 @@ export function DrawerAtividade({
       patch.responsavelCodfor = responsavelCodfor === "" ? null : responsavelCodfor;
       patch.responsavelNome = responsavelCodfor === "" ? null : consultorSelecionado?.nome ?? null;
       patch.horasPrevistas = horasPrevistas;
-      patch.dataPrevistaInicio = inicio === "" ? null : inicio;
-      patch.dataPrevistaFim = fim === "" ? null : fim;
       patch.predecessoraId = predecessoraId === "" ? null : predecessoraId;
       patch.statusManual = status;
-      patch.observacao = observacao.trim() === "" ? null : observacao.trim();
       // Distribuição pode ser provisória — não bloqueia o salvamento quando estoura o
       // orçamento do item, só avisa (ver saldoProjetado acima) e manda essa confirmação
       // "leve" junto (o rótulo do botão já é o aviso; não pede um segundo clique). Exceto
@@ -200,6 +227,58 @@ export function DrawerAtividade({
     }
   }
 
+  const blocoPeriodo = (
+    <div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label htmlFor="drawer-inicio" className="mb-1 block text-[12.5px] font-medium text-muted">
+            Início previsto
+          </label>
+          <input
+            id="drawer-inicio"
+            type="date"
+            value={inicio}
+            min={limites.inicio ?? undefined}
+            max={fim || limites.fim || undefined}
+            onChange={(e) => setInicio(e.target.value)}
+            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+        <div>
+          <label htmlFor="drawer-fim" className="mb-1 block text-[12.5px] font-medium text-muted">
+            Fim previsto
+          </label>
+          <input
+            id="drawer-fim"
+            type="date"
+            value={fim}
+            min={inicio || limites.inicio || undefined}
+            max={limites.fim ?? undefined}
+            onChange={(e) => setFim(e.target.value)}
+            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+      </div>
+      {textoLimites && <p className="mt-1 text-[11.5px] text-muted">Limite do nível acima: {textoLimites}.</p>}
+    </div>
+  );
+
+  const blocoObservacao = (
+    <div>
+      <label htmlFor="drawer-observacao" className="mb-1 block text-[12.5px] font-medium text-muted">
+        Observação
+      </label>
+      <textarea
+        id="drawer-observacao"
+        value={observacao}
+        onChange={(e) => setObservacao(e.target.value)}
+        rows={3}
+        maxLength={1000}
+        className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-foreground/20" onClick={onFechar} />
@@ -207,7 +286,7 @@ export function DrawerAtividade({
         <div className="mb-4 flex items-start justify-between">
           <div>
             <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-              {no.tipo === "pasta" ? "Pasta" : "Atividade"}
+              {no.tipo === "pasta" ? "Pasta" : no.tipo === "item" ? "Item da proposta" : "Atividade"}
             </p>
             {/* Ids técnicos — EstruturaAtividade (o nó em si), AtividadeConsultor (a
                 alocação vinculada) e o seqati dela (identidade que o Senior atribui à
@@ -243,10 +322,20 @@ export function DrawerAtividade({
               id="drawer-nome"
               type="text"
               value={nome}
+              readOnly={no.tipo === "item"}
               onChange={(e) => setNome(e.target.value)}
-              className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring read-only:cursor-not-allowed read-only:bg-surface-2 read-only:text-muted"
             />
+            {no.tipo === "item" && <p className="mt-1 text-[11.5px] text-muted">A descrição do item vem do Senior — aqui só o período e a observação.</p>}
           </div>
+
+          {/* Pasta e item: só período e observação (atividade tem os dois mais abaixo, no lugar de sempre). */}
+          {no.tipo !== "atividade" && (
+            <>
+              {blocoPeriodo}
+              {blocoObservacao}
+            </>
+          )}
 
           {no.tipo === "atividade" && (
             <>
@@ -292,8 +381,10 @@ export function DrawerAtividade({
                 />
                 {abaixoDoRealizado && (
                   <p className="mt-1 text-[11px] text-destructive">
-                    Já foram realizadas {formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade — não é
-                    possível alocar menos do que isso.
+                    Já foram realizadas {formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade
+                    {no.horasExcedentes > 0 &&
+                      ` (considerando ${formatHorasCompacto(no.horasExcedentes, larguraHoras)} de horas excedentes já autorizadas)`}{" "}
+                    — não é possível alocar menos do que {formatHorasCompacto(minimoHorasPrevistas, larguraHoras)}.
                   </p>
                 )}
                 {!abaixoDoRealizado && saldoProjetado != null && (
@@ -303,32 +394,7 @@ export function DrawerAtividade({
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="drawer-inicio" className="mb-1 block text-[12.5px] font-medium text-muted">
-                    Início previsto
-                  </label>
-                  <input
-                    id="drawer-inicio"
-                    type="date"
-                    value={inicio}
-                    onChange={(e) => setInicio(e.target.value)}
-                    className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="drawer-fim" className="mb-1 block text-[12.5px] font-medium text-muted">
-                    Fim previsto
-                  </label>
-                  <input
-                    id="drawer-fim"
-                    type="date"
-                    value={fim}
-                    onChange={(e) => setFim(e.target.value)}
-                    className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                </div>
-              </div>
+              {blocoPeriodo}
 
               <div>
                 <label htmlFor="drawer-predecessora" className="mb-1 block text-[12.5px] font-medium text-muted">
@@ -403,18 +469,7 @@ export function DrawerAtividade({
                   </div>
                 ))}
 
-              <div>
-                <label htmlFor="drawer-observacao" className="mb-1 block text-[12.5px] font-medium text-muted">
-                  Observação
-                </label>
-                <textarea
-                  id="drawer-observacao"
-                  value={observacao}
-                  onChange={(e) => setObservacao(e.target.value)}
-                  rows={3}
-                  className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </div>
+              {blocoObservacao}
             </>
           )}
         </div>
@@ -433,7 +488,7 @@ export function DrawerAtividade({
             disabled={salvando || excedenteTravado || abaixoDoRealizado}
             title={
               abaixoDoRealizado
-                ? `Já foram realizadas ${formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade — reduza menos, ou ajuste os apontamentos antes.`
+                ? `Já foram realizadas ${formatHorasCompacto(no.horasRealizadas, larguraHoras)} nesta atividade — reduza no máximo até ${formatHorasCompacto(minimoHorasPrevistas, larguraHoras)}, ou ajuste os apontamentos antes.`
                 : excedenteTravado
                   ? "Esta proposta não permite ultrapassar o saldo do item — reduza as horas antes de salvar."
                   : undefined

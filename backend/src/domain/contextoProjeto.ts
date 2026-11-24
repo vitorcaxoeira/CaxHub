@@ -198,6 +198,10 @@ interface AtividadeParaPermissao {
 // "criar" habilitado nesta fase pra área de Alocação (Líder Técnico distribui horas de
 // um item de proposta entre os consultores do próprio time).
 const ACOES_LIDER_TECNICO: AcaoProjeto[] = ["visualizar", "criar", "editar", "mover", "aprovar", "excluir"];
+// A alocação identifica quem executa o trabalho. Este conjunto é deliberadamente menor
+// que o do Líder Técnico: o executor trabalha somente na própria atividade, sem ganhar
+// alçada para criar, aprovar ou excluir atividades do departamento.
+const ACOES_DO_EXECUTOR: AcaoProjeto[] = ["visualizar", "editar", "mover", "lancarApontamento"];
 
 // role vem do JWT (req.user.role) — o mesmo papel usado pelo requireRole() das rotas.
 export function podeExecutarAcao(
@@ -207,7 +211,15 @@ export function podeExecutarAcao(
   atividade: AtividadeParaPermissao
 ): boolean {
   if (role === "admin") return true;
-  if (role === "comercial") return acao === "visualizar";
+
+  const meuCodfor = contexto.consultor?.codfor;
+  const souOExecutor = meuCodfor != null && meuCodfor > 0 && meuCodfor === atividade.codfor;
+
+  // Comercial continua somente leitor do trabalho alheio. Quando a atividade foi
+  // atribuída à própria pessoa, porém, a alocação precisa permitir que ela execute o
+  // trabalho (inclusive iniciar/parar, que usam a ação "mover"). Sem esta exceção a
+  // regra abaixo devolvia 403 antes de chegar à verificação de executor.
+  if (role === "comercial") return souOExecutor ? ACOES_DO_EXECUTOR.includes(acao) : acao === "visualizar";
 
   if (contexto.departamentosGerenciados.includes(atividade.depexe)) {
     // O Líder Técnico PODE lançar apontamento por qualquer consultor do departamento que
@@ -246,9 +258,8 @@ export function podeExecutarAcao(
   // guarda, um Consultor que viesse do Senior com codfor 0 casaria com todas elas e
   // ganharia `editar` em item de qualquer departamento. Hoje o menor codfor da base é 2,
   // então é uma trava preventiva.
-  const meuCodfor = contexto.consultor?.codfor;
-  if (meuCodfor != null && meuCodfor > 0 && meuCodfor === atividade.codfor) {
-    return acao === "visualizar" || acao === "mover" || acao === "editar" || acao === "lancarApontamento";
+  if (souOExecutor) {
+    return ACOES_DO_EXECUTOR.includes(acao);
   }
 
   return false;

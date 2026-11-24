@@ -1,0 +1,60 @@
+# Sobreposição do docker-compose.yml para a VPS com domínio próprio (https://soeltech.caxhub.com.br).
+# Ativada SÓ nessa VPS, pelo `.env` da raiz:
+#   COMPOSE_FILE=docker-compose.yml:deploy/compose.vps.yml
+#   CAXHUB_HOST=soeltech.caxhub.com.br
+#   CAXHUB_PUBLICO=false     (vira true pelo deploy/ativar-publico.sh, depois que o DNS responder)
+# A VPS antiga e o ambiente local não têm essa variável e seguem com o compose puro.
+#
+# Só o frontend (nginx) entra na rede do Traefik; backend e banco ficam na rede interna do compose.
+services:
+  db:
+    # Só loopback: túnel SSH do backup local (Bakcup Soeltech.ps1). NUNCA "5432:5432": o Docker
+    # fura o UFW em porta publicada e abriria o banco para a internet.
+    ports:
+      - "127.0.0.1:5432:5432"
+    mem_limit: 1g
+
+  backend:
+    # Chromium do PDF do 5S + syncs: teto alto, mas com limite para não derrubar o resto da VPS.
+    mem_limit: 3g
+
+  frontend:
+    # !override troca a lista do compose base (sem isso o Compose soma e a 8080 ficaria pública).
+    # Loopback serve para testar por SSH; o acesso público é pelo Traefik.
+    ports: !override
+      - "127.0.0.1:8080:80"
+    mem_limit: 128m
+    volumes:
+      # Soma ao ./downloads do compose base. IP real do usuário atrás do Traefik (ver o arquivo).
+      - ./deploy/nginx-realip.conf:/etc/nginx/conf.d/00-realip.conf:ro
+    networks:
+      - default
+      - proxy
+    labels:
+      - traefik.enable=${CAXHUB_PUBLICO:-false}
+      - traefik.docker.network=proxy
+      - traefik.http.routers.caxhub.rule=Host(`${CAXHUB_HOST:?defina CAXHUB_HOST no .env}`)
+      - traefik.http.routers.caxhub.entrypoints=websecure
+      - traefik.http.routers.caxhub.tls.certresolver=letsencrypt
+      - traefik.http.routers.caxhub.middlewares=caxhub-seg
+      - traefik.http.services.caxhub.loadbalancer.server.port=80
+      # Cabeçalhos de segurança. Sem Permissions-Policy: o app usa a câmera (fotos do 5S).
+      - traefik.http.middlewares.caxhub-seg.headers.stsSeconds=31536000
+      - traefik.http.middlewares.caxhub-seg.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.caxhub-seg.headers.frameDeny=true
+      - traefik.http.middlewares.caxhub-seg.headers.referrerPolicy=strict-origin-when-cross-origin
+      # Login com limite de tentativas: roteador mais específico (prioridade maior), mesmo serviço.
+      - traefik.http.routers.caxhub-login.rule=Host(`${CAXHUB_HOST}`) && Path(`/api/auth/login`)
+      - traefik.http.routers.caxhub-login.priority=100
+      - traefik.http.routers.caxhub-login.entrypoints=websecure
+      - traefik.http.routers.caxhub-login.tls=true
+      - traefik.http.routers.caxhub-login.service=caxhub
+      - traefik.http.routers.caxhub-login.middlewares=caxhub-seg,caxhub-login-limit
+      - traefik.http.middlewares.caxhub-login-limit.ratelimit.average=5
+      - traefik.http.middlewares.caxhub-login-limit.ratelimit.period=1m
+      - traefik.http.middlewares.caxhub-login-limit.ratelimit.burst=10
+
+networks:
+  proxy:
+    name: proxy
+    external: true

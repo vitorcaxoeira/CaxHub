@@ -19,14 +19,53 @@ export interface ResumoConsultor {
   porProjeto: PontoPorProjeto[];
   metaDiariaMinutos: number | null;
   metaTotalMinutos: number;
+  // O que as férias (lançadas pelo gestor) e as folgas do calendário tiraram da meta até hoje: a meta acima já vem sem esses minutos.
+  abonado: { feriasMinutos: number; folgaMinutos: number };
+  // As mesmas horas, do período INTEIRO (inclusive os dias que ainda vão chegar): o que está marcado e não é contabilizado na meta.
+  abonadoPeriodo: { feriasMinutos: number; folgaMinutos: number };
+  // Férias remuneradas cujo mês de pagamento cai no período: a tela soma ao LÍQUIDO da nota (não estão no ganho/projeção/valor fixo). `ateAgora` = só as de competência já iniciada.
+  ferias: { total: number; ateAgora: number; itens: { gozoId: number; inicio: string; fim: string; competencia: string; valor: number; competenciaIniciada: boolean }[] };
+  // A conta do cartão Progresso da meta, do período inteiro (jornada − férias − folgas = meta) e o ritmo até hoje.
+  metaPeriodo: {
+    jornadaMinutos: number;
+    feriasMinutos: number;
+    folgaMinutos: number;
+    metaMinutos: number;
+    diasComJornada: number;
+    diasFerias: number;
+    diasFolgaInteira: number;
+    metaAteHojeMinutos: number;
+    realizadoAteHojeMinutos: number;
+    diasComMetaRestantes: number;
+    /** Horas trabalhadas em dia sem jornada (fim de semana): contam no realizado e não têm meta. */
+    semJornadaMinutos: number;
+  };
   // null = nenhum dia do período tem jornada cadastrada (sem meta pra falar de saldo).
   saldoMinutos: number | null;
   valorHora: number | null;
+  // Horas de deslocamento do período (minutos) e o valor delas (metade do valor-hora; null sem
+  // contrato). Já entram no ganho até agora e na projeção.
+  deslocamento: { minutos: number; valor: number | null };
   ganhoAteAgora: number | null;
   projecaoGanho: number | null;
+  // Contrato de VALOR FIXO (codmot 12): nota = valor-hora × quantidade fixa por mês do período + deslocamento lançado. Null nos contratos por hora.
+  // Os descontos não estão aqui: a tela deduz de `total`.
+  contratoFixo: { qtd: number; valorMensal: number; meses: number; deslocamento: number; total: number } | null;
+  // Gestão de Descontos: o que sai da nota nas competências do período. Mês aberto = previsto das parcelas pendentes; fechado = o descontado.
+  descontos: {
+    total: number;
+    parcial: boolean;
+    competencias: { competencia: string; ano: number; mes: number; total: number; fechada: boolean; parcial: boolean; qtd: number }[];
+  };
   sessoesPendentes: number;
   ratsPendentes: number;
   notificacoesNaoLidas: number;
+  // Pedidos de apontamento avulso aguardando o gestor (reprovados não entram) e a soma do
+  // tempo pedido.
+  emAprovacao: { quantidade: number; minutos: number };
+  // Pedidos de ajuste de horário aguardando o gestor; `diferencaMinutos` = tempo pedido −
+  // tempo atual das sessões (pode ser negativo).
+  emAjuste: { quantidade: number; diferencaMinutos: number };
 }
 
 // `semConsultor: true` é o mesmo shape de /dashboard/meu-perfil pra usuário sem registro de
@@ -51,8 +90,9 @@ export function useDashboardConsultor(filtro: FiltroDashboard) {
   const anosChave = filtro.anos.join(",");
   const mesesChave = filtro.meses.join(",");
 
-  const carregar = useCallback(() => {
-    setLoading(true);
+  const carregar = useCallback((silencioso = false) => {
+    // Recarga "silenciosa" (ex.: depois de lançar uma folga no calendário da Home): atualiza os números sem trocar a tela pelo esqueleto.
+    if (!silencioso) setLoading(true);
     axios
       .get<RespostaResumo>("/api/dashboard/meu-resumo", {
         params: { anos: anosChave, meses: mesesChave, codfor: filtro.codfor },
@@ -76,5 +116,5 @@ export function useDashboardConsultor(filtro: FiltroDashboard) {
     carregar();
   }, [carregar]);
 
-  return { resumo, semConsultor, loading, erro, recarregar: carregar };
+  return { resumo, semConsultor, loading, erro, recarregar: () => carregar(true) };
 }

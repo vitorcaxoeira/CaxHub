@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { sitratLabel, sitratTone } from "../domain/ratDominio";
+import { sitratLabelEfetivo, sitratToneEfetivo } from "../domain/ratDominio";
 import { sitproLabel, sitproTone } from "../domain/propostasDominio";
 import { resolverContextoConsultor } from "../domain/contextoProjeto";
 import { simNaoLabel, tipdesLabel, moddesLabel } from "../domain/rdvDominio";
@@ -85,10 +85,13 @@ ratVisualizacaoRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
         consultorNome: consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${rat.codfor}`,
         datemi: rat.datemi,
         dataApr: rat.dataApr,
-        sitratLabel: sitratLabel(rat.sitrat),
-        sitratTone: sitratTone(rat.sitrat),
+        sitratLabel: sitratLabelEfetivo(rat),
+        sitratTone: sitratToneEfetivo(rat),
         obsrat: rat.obsrat?.trim() || null,
         origemCaxHub: rat.origemCaxHub,
+        // Excluída no Senior (ver desvincularRatAusenteNoSenior em routes/rats.ts) — a tela
+        // mostra uma tarja com a data, mesmo padrão de PedidoVisualizacao.tsx.
+        removidoEmSenior: rat.removidoEmSenior,
       },
       itens: itens.map((item) => {
         const propostaItem =
@@ -103,6 +106,10 @@ ratVisualizacaoRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
           duracaoMinutos: item.horini != null && item.horfim != null ? item.horfim - item.horini : null,
           desati: item.desati,
           confirmadoNoSenior: item.numrat != null,
+          // Excluído no Senior (ver desvincularItensAusentesNoSenior em routes/rats.ts) —
+          // numrat/seqrat são preservados como histórico, mesmo raciocínio de
+          // Rat.removidoEmSenior acima.
+          removidoEmSenior: item.removidoEmSenior,
         };
       }),
       despesasViagem: despesasViagem.map((d) => ({
@@ -110,7 +117,7 @@ ratVisualizacaoRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
         datemi: d.datemi,
         desrdv: d.desrdv?.trim() || null,
         tipdesLabel: tipdesLabel(d.tipdes),
-        moddesLabel: d.moddes != null ? moddesLabel(d.moddes) : null,
+        moddesLabel: d.moddes?.trim() ? moddesLabel(d.moddes) : null,
         qtdrdv: d.qtdrdv,
         vlrunt: d.vlrunt,
         vlrtot: d.vlrtot,

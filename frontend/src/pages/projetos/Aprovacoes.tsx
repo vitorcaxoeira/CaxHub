@@ -1,6 +1,6 @@
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "../../components/ui/Toast";
 import { toneBadge } from "../../components/ui/badges";
 import {
@@ -8,7 +8,11 @@ import {
   SolicitacaoApontamento,
   SolicitacaoExcedente,
 } from "../../components/projetos/AtividadeDetalhe";
+import { regras } from "../../components/ui/padroesFiltros/regras";
+import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { MultiSelectDropdown, MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
+import { IndicadorProgresso } from "../../components/cronograma/IndicadorProgresso";
+import { tomConsumo } from "../../lib/consumoHoras";
 import { formatHoras, horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
 import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
 
@@ -28,6 +32,8 @@ interface AtividadeDetalheDados {
   itemRealizado: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
+  estruturaAtividadeId: number | null;
+  depexeLabel: string;
   podeVerCronograma: boolean;
   qtdhorPrevisto: number | null;
   horasExcedentes: number;
@@ -79,6 +85,9 @@ export interface SolicitacaoAjuste {
   // apontamento bloqueado (ver domain/bloqueioApontamento.ts, backend) — só desabilita
   // "Aprovar"; "Reprovar" continua sempre disponível.
   bloqueadoApontamentoEfetivo: boolean;
+  // Minutos. Só nos pendentes (null nos decididos) — alimentam a barra de consumo.
+  teto: number | null;
+  realizado: number | null;
 }
 
 // Pedido de mudança numa das 3 flags de configuração da proposta (PropostaModoAlocacao) e a
@@ -116,6 +125,15 @@ const FILTROS: { valor: string; rotulo: string }[] = [
   { valor: "", rotulo: "Todas" },
 ];
 
+const ABAS_VALIDAS: Aba[] = ["excedentes", "apontamentos", "ajustes", "config-proposta"];
+
+// Ref da linha destacada (vinda de uma notificação, `?atividade=`). Função de módulo, e não
+// inline, pra ter identidade estável: o React só chama de novo quando a linha monta, então
+// digitar no formulário de decisão não fica rolando a tela de volta.
+function rolarAteLinha(el: HTMLDivElement | null) {
+  el?.scrollIntoView({ block: "center" });
+}
+
 const TOM_STATUS: Record<string, string> = {
   pendente: "bg-warning/15 text-warning",
   aprovada: "bg-success/15 text-success",
@@ -125,6 +143,78 @@ const TOM_STATUS: Record<string, string> = {
 // "03/08 09:00 – 10:30" a partir de dois ISO.
 function intervalo(inicio: string, fim: string): string {
   return `${dateTimeFormatter.format(new Date(inicio))} – ${dateTimeFormatter.format(new Date(fim))}`;
+}
+
+// Duração do intervalo pedido/aprovado num ajuste — mesmo formato "H:MM h" usado no resto
+// do app (formatHoras), pro gestor não precisar calcular de cabeça quanto tempo o pedido
+// representa.
+function minutosEntre(inicio: string, fim: string): number {
+  return Math.round((new Date(fim).getTime() - new Date(inicio).getTime()) / 60000);
+}
+
+function duracaoIntervalo(inicio: string, fim: string): string {
+  return formatHoras(minutosEntre(inicio, fim) / 60);
+}
+
+// Duração em minutos do horário que o gestor está digitando no formulário "Decidir" — null
+// enquanto os campos não formam um intervalo válido (aí a barra volta a usar o pedido).
+function minutosDoFormulario(data: string, horaInicio: string, horaFim: string): number | null {
+  if (!data || !horaInicio || !horaFim || horaFim <= horaInicio) return null;
+  const minutos = Math.round((new Date(`${data}T${horaFim}`).getTime() - new Date(`${data}T${horaInicio}`).getTime()) / 60000);
+  return Number.isFinite(minutos) ? minutos : null;
+}
+
+// Versões translúcidas das cores de tomConsumo pro trecho "que o pedido acrescenta". Ficam
+// como strings literais aqui (e não montadas com `${cor}/40`) porque o Tailwind só gera as
+// classes que aparecem por extenso no código-fonte.
+const COR_TRECHO_PEDIDO: Record<string, string> = {
+  "bg-destructive": "bg-destructive/40",
+  "bg-warning": "bg-warning/40",
+  "bg-primary": "bg-primary/40",
+};
+
+const hm = (minutos: number) => minutosParaInputHoras(minutos);
+
+// Barra de consumo da atividade (mesma leitura do card do Quadro: realizado sobre o TETO,
+// alocado + excedentes) com o efeito de aprovar o pedido em cima: o percentual e a barra
+// "depois", e o trecho do pedido numa versão clara da cor do estado projetado. `deltaMinutos`
+// pode ser negativo (ajuste que encurta) — aí o trecho claro é o que o pedido libera.
+function ImpactoNoTeto({ teto, realizado, deltaMinutos }: { teto: number; realizado: number; deltaMinutos: number }) {
+  if (teto <= 0) {
+    return <p className="mt-1.5 text-[12px] text-warning">Atividade sem horas alocadas — não há teto pra conferir este pedido.</p>;
+  }
+  const projetado = Math.max(0, realizado + deltaMinutos);
+  const avancoAtual = realizado / teto;
+  const avancoProjetado = projetado / teto;
+  const tomAtual = tomConsumo(avancoAtual);
+  const tomProjetado = tomConsumo(avancoProjetado);
+  // A barra é desenhada sobre max(teto, projetado, realizado): quando estoura, o trilho
+  // cresce e o marcador mostra onde o teto termina, em vez de a barra só travar em 100%.
+  const escala = Math.max(teto, projetado, realizado);
+  const excede = projetado - teto;
+
+  return (
+    <div className="mt-1.5">
+      <p className="font-mono text-[12px] tabular-nums text-muted">
+        Realizado {hm(realizado)} / {hm(teto)} h <span className={tomAtual.texto}>({Math.round(avancoAtual * 100)}%)</span>
+        {" → "}
+        {deltaMinutos < 0 ? "após aprovar (libera " + hm(-deltaMinutos) + ") " : "após aprovar "}
+        <span className={tomProjetado.texto}>
+          {hm(projetado)} / {hm(teto)} h ({Math.round(avancoProjetado * 100)}%)
+        </span>
+        {excede > 0 && <span className="font-semibold text-destructive"> · excede o teto em {hm(excede)}</span>}
+      </p>
+      <IndicadorProgresso
+        className="mt-1"
+        alturaPx={6}
+        camadas={[
+          { percentual: Math.max(realizado, projetado) / escala, cor: COR_TRECHO_PEDIDO[tomProjetado.barra] },
+          { percentual: Math.min(realizado, projetado) / escala, cor: tomAtual.barra },
+        ]}
+        marcador={escala > teto ? { percentual: teto / escala, cor: "bg-foreground" } : undefined}
+      />
+    </div>
+  );
 }
 
 const classeBotao = {
@@ -275,10 +365,12 @@ function CabecalhoLinha({
 
 function ListaExcedentes({
   status,
+  destacarAtividadeId,
   onVerAtividade,
   onMudou,
 }: {
   status: string;
+  destacarAtividadeId: number | null;
   onVerAtividade: (id: number) => void;
   onMudou: () => void;
 }) {
@@ -294,6 +386,11 @@ function ListaExcedentes({
   // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
   // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
   const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  // Padrão do filtro (estrela, 03/11/2026). Os nomes vêm da própria fila, então só o formato é conferido.
+  const padroes = usePadroesTela({
+    tela: "projetos.aprovacoes.excedentes",
+    campos: { consultor: { rotulo: "Consultor", atual: consultorFiltro, aplicar: setConsultorFiltro, validar: regras.lista("string"), semOpcoes: true } },
+  });
   const [processandoLote, setProcessandoLote] = useState(false);
 
   const carregar = useCallback(() => {
@@ -418,6 +515,7 @@ function ListaExcedentes({
             onChange={setConsultorFiltro}
             labelTodos="Todos os consultores"
             labelSufixo="consultores"
+            acessorio={padroes.estrela("consultor")}
           />
           {status === "pendente" && pendentesDecidiveis.length > 0 && (
             <div className="ml-auto flex items-center gap-2">
@@ -443,7 +541,11 @@ function ListaExcedentes({
       ) : (
         <div className="space-y-2">
           {solicitacoesFiltradas.map((s) => (
-            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+            <div
+              key={s.id}
+              ref={s.atividadeId === destacarAtividadeId ? rolarAteLinha : undefined}
+              className={`rounded-md border bg-surface px-3.5 py-3 ${s.atividadeId === destacarAtividadeId ? "border-primary ring-2 ring-primary/40" : "border-border"}`}
+            >
               <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
 
               <p className="mt-1.5 font-mono text-[12px] text-muted">
@@ -536,10 +638,12 @@ function ListaExcedentes({
 
 function ListaApontamentos({
   status,
+  destacarAtividadeId,
   onVerAtividade,
   onMudou,
 }: {
   status: string;
+  destacarAtividadeId: number | null;
   onVerAtividade: (id: number) => void;
   onMudou: () => void;
 }) {
@@ -560,6 +664,11 @@ function ListaApontamentos({
   // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
   // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
   const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  // Padrão do filtro (estrela, 03/11/2026). Os nomes vêm da própria fila, então só o formato é conferido.
+  const padroes = usePadroesTela({
+    tela: "projetos.aprovacoes.apontamentos",
+    campos: { consultor: { rotulo: "Consultor", atual: consultorFiltro, aplicar: setConsultorFiltro, validar: regras.lista("string"), semOpcoes: true } },
+  });
   const [processandoLote, setProcessandoLote] = useState(false);
 
   const carregar = useCallback(() => {
@@ -694,6 +803,7 @@ function ListaApontamentos({
             onChange={setConsultorFiltro}
             labelTodos="Todos os consultores"
             labelSufixo="consultores"
+            acessorio={padroes.estrela("consultor")}
           />
           {/* Só faz sentido decidir em lote na aba Pendentes — nas outras os pedidos já
               foram decididos ou misturam situações diferentes. */}
@@ -719,18 +829,37 @@ function ListaApontamentos({
       ) : (
         <div className="space-y-2">
           {solicitacoesFiltradas.map((s) => (
-            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+            <div
+              key={s.id}
+              ref={s.atividadeId === destacarAtividadeId ? rolarAteLinha : undefined}
+              className={`rounded-md border bg-surface px-3.5 py-3 ${s.atividadeId === destacarAtividadeId ? "border-primary ring-2 ring-primary/40" : "border-border"}`}
+            >
               <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
 
               <p className="mt-1.5 font-mono text-[12px] text-muted">
                 Pediu <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+                {" "}
+                <span className="text-warning">({duracaoIntervalo(s.inicioSolicitado, s.fimSolicitado)})</span>
             {s.inicioAprovado && s.fimAprovado && (
               <>
                 {" · Aprovado "}
                 <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>
+                {" "}
+                <span className="text-success">({duracaoIntervalo(s.inicioAprovado, s.fimAprovado)})</span>
               </>
             )}
           </p>
+
+          {s.status === "pendente" && s.teto != null && s.realizado != null && (
+            <ImpactoNoTeto
+              teto={s.teto}
+              realizado={s.realizado}
+              deltaMinutos={
+                (decidindoId === s.id ? minutosDoFormulario(data, horaInicio, horaFim) : null) ??
+                minutosEntre(s.inicioSolicitado, s.fimSolicitado)
+              }
+            />
+          )}
 
           <p className="mt-1.5 text-[13px] text-foreground">
             <span className="text-muted">Descrição do trabalho: </span>
@@ -836,10 +965,12 @@ function ListaApontamentos({
 
 function ListaAjustes({
   status,
+  destacarAtividadeId,
   onVerAtividade,
   onMudou,
 }: {
   status: string;
+  destacarAtividadeId: number | null;
   onVerAtividade: (id: number) => void;
   onMudou: () => void;
 }) {
@@ -857,6 +988,11 @@ function ListaAjustes({
   // Filtro de consultor: valores são os nomes que já aparecem nos pedidos carregados, não uma
   // lista de todos os consultores do sistema — é só pra recortar o que já está na tela.
   const [consultorFiltro, setConsultorFiltro] = useState<string[]>([]);
+  // Padrão do filtro (estrela, 03/11/2026). Os nomes vêm da própria fila, então só o formato é conferido.
+  const padroes = usePadroesTela({
+    tela: "projetos.aprovacoes.ajustes",
+    campos: { consultor: { rotulo: "Consultor", atual: consultorFiltro, aplicar: setConsultorFiltro, validar: regras.lista("string"), semOpcoes: true } },
+  });
   const [processandoLote, setProcessandoLote] = useState(false);
 
   const carregar = useCallback(() => {
@@ -984,6 +1120,7 @@ function ListaAjustes({
             onChange={setConsultorFiltro}
             labelTodos="Todos os consultores"
             labelSufixo="consultores"
+            acessorio={padroes.estrela("consultor")}
           />
           {status === "pendente" && pendentesDecidiveis.length > 0 && (
             <div className="ml-auto flex items-center gap-2">
@@ -1007,21 +1144,52 @@ function ListaAjustes({
       ) : (
         <div className="space-y-2">
           {solicitacoesFiltradas.map((s) => (
-            <div key={s.id} className="rounded-md border border-border bg-surface px-3.5 py-3">
+            <div
+              key={s.id}
+              ref={s.atividadeId === destacarAtividadeId ? rolarAteLinha : undefined}
+              className={`rounded-md border bg-surface px-3.5 py-3 ${s.atividadeId === destacarAtividadeId ? "border-primary ring-2 ring-primary/40" : "border-border"}`}
+            >
               <CabecalhoLinha {...s} onVerAtividade={onVerAtividade} criadoEm={s.criadoEm} />
 
               <p className="mt-1.5 font-mono text-[12px] text-muted">
                 De{" "}
-                <span className="text-muted">{intervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>
+                <span className="text-muted">{intervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>{" "}
+                <span className="text-muted">({duracaoIntervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)})</span>
                 {" para "}
-                <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+                <span className="text-warning">{intervalo(s.inicioSolicitado, s.fimSolicitado)}</span>{" "}
+                <span className="text-warning">({duracaoIntervalo(s.inicioSolicitado, s.fimSolicitado)})</span>
                 {s.inicioAprovado && s.fimAprovado && (
                   <>
                     {" · Gravado "}
-                    <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>
+                    <span className="text-success">{intervalo(s.inicioAprovado, s.fimAprovado)}</span>{" "}
+                    <span className="text-success">({duracaoIntervalo(s.inicioAprovado, s.fimAprovado)})</span>
                   </>
                 )}
               </p>
+              <p className="mt-0.5 font-mono text-[12px] tabular-nums text-muted">
+                Original{" "}
+                <span className="text-foreground">{duracaoIntervalo(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual)}</span>
+                {" → após o ajuste "}
+                <span className="text-warning">{duracaoIntervalo(s.inicioSolicitado, s.fimSolicitado)}</span>
+                {" ("}
+                {(() => {
+                  const dif = minutosEntre(s.inicioSolicitado, s.fimSolicitado) - minutosEntre(s.inicioAnterior ?? s.inicioAtual, s.fimAnterior ?? s.fimAtual ?? s.inicioAtual);
+                  return `${dif >= 0 ? "+" : "−"}${minutosParaInputHoras(Math.abs(dif))} h`;
+                })()}
+                {")"}
+              </p>
+
+              {s.status === "pendente" && s.teto != null && s.realizado != null && (
+                <ImpactoNoTeto
+                  teto={s.teto}
+                  realizado={s.realizado}
+                  deltaMinutos={
+                    ((decidindoId === s.id ? minutosDoFormulario(data, horaInicio, horaFim) : null) ??
+                      minutosEntre(s.inicioSolicitado, s.fimSolicitado)) -
+                    (s.fimAtual ? minutosEntre(s.inicioAtual, s.fimAtual) : 0)
+                  }
+                />
+              )}
 
               <p className="mt-1.5 text-[13px] text-foreground">
                 <span className="text-muted">Motivo: </span>
@@ -1122,6 +1290,11 @@ function ListaConfigProposta({ status, onMudou }: { status: string; onMudou: () 
   // Filtro de solicitante: mesma ideia das outras 3 listas, recortando só o que já está na
   // tela (não é uma lista de todo mundo que poderia pedir).
   const [solicitanteFiltro, setSolicitanteFiltro] = useState<string[]>([]);
+  // Padrão do filtro (estrela, 03/11/2026). Os nomes vêm da própria fila, então só o formato é conferido.
+  const padroes = usePadroesTela({
+    tela: "projetos.aprovacoes.config-proposta",
+    campos: { solicitante: { rotulo: "Solicitante", atual: solicitanteFiltro, aplicar: setSolicitanteFiltro, validar: regras.lista("string"), semOpcoes: true } },
+  });
   const [processandoLote, setProcessandoLote] = useState(false);
 
   const carregar = useCallback(() => {
@@ -1230,6 +1403,7 @@ function ListaConfigProposta({ status, onMudou }: { status: string; onMudou: () 
             onChange={setSolicitanteFiltro}
             labelTodos="Todos os solicitantes"
             labelSufixo="solicitantes"
+            acessorio={padroes.estrela("solicitante")}
           />
           {status === "pendente" && pendentesDecidiveis.length > 0 && (
             <div className="ml-auto flex items-center gap-2">
@@ -1342,8 +1516,20 @@ function ListaConfigProposta({ status, onMudou }: { status: string; onMudou: () 
 // `podeDecidir` por linha diz de qual lado a pessoa está naquele pedido.
 export function Aprovacoes() {
   const toast = useToast();
+  // A notificação chega com ?aba=&status=&atividade= (ver NotificacoesSino). O efeito abaixo
+  // reaplica quando a URL muda com a tela já aberta — clicar numa segunda notificação.
+  const [searchParams] = useSearchParams();
   const [aba, setAba] = useState<Aba>("excedentes");
   const [status, setStatus] = useState("pendente");
+  const [destacarAtividadeId, setDestacarAtividadeId] = useState<number | null>(null);
+  useEffect(() => {
+    const abaDaUrl = searchParams.get("aba") as Aba | null;
+    if (abaDaUrl && ABAS_VALIDAS.includes(abaDaUrl)) setAba(abaDaUrl);
+    const statusDaUrl = searchParams.get("status");
+    if (statusDaUrl !== null && FILTROS.some((f) => f.valor === statusDaUrl)) setStatus(statusDaUrl);
+    const atividade = Number(searchParams.get("atividade"));
+    setDestacarAtividadeId(Number.isFinite(atividade) && atividade > 0 ? atividade : null);
+  }, [searchParams]);
   const [atividadeAberta, setAtividadeAberta] = useState<AtividadeDetalheDados | null>(null);
   // Força as listas a recarregar quando o drawer mexe no excedente da atividade.
   const [versao, setVersao] = useState(0);
@@ -1415,13 +1601,13 @@ export function Aprovacoes() {
       </div>
 
       {aba === "excedentes" && (
-        <ListaExcedentes key={`exc-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
+        <ListaExcedentes key={`exc-${versao}`} status={status} destacarAtividadeId={destacarAtividadeId} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
       )}
       {aba === "apontamentos" && (
-        <ListaApontamentos key={`apo-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
+        <ListaApontamentos key={`apo-${versao}`} status={status} destacarAtividadeId={destacarAtividadeId} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
       )}
       {aba === "ajustes" && (
-        <ListaAjustes key={`aju-${versao}`} status={status} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
+        <ListaAjustes key={`aju-${versao}`} status={status} destacarAtividadeId={destacarAtividadeId} onVerAtividade={abrirAtividade} onMudou={() => setVersao((v) => v + 1)} />
       )}
       {aba === "config-proposta" && (
         <ListaConfigProposta key={`cfg-${versao}`} status={status} onMudou={() => setVersao((v) => v + 1)} />
@@ -1445,6 +1631,8 @@ export function Aprovacoes() {
           itemRealizado={atividadeAberta.itemRealizado}
           estruturaNome={atividadeAberta.estruturaNome}
           estruturaPercentual={atividadeAberta.estruturaPercentual}
+          estruturaAtividadeId={atividadeAberta.estruturaAtividadeId}
+          depexeLabel={atividadeAberta.depexeLabel}
           podeVerCronograma={atividadeAberta.podeVerCronograma}
           qtdhorPrevisto={atividadeAberta.qtdhorPrevisto}
           horasExcedentes={atividadeAberta.horasExcedentes}

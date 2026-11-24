@@ -4,9 +4,10 @@ import { useNavigate } from "react-router-dom";
 import { formatHorasCompacto } from "../../lib/cronograma";
 import { tomConsumo } from "../../lib/consumoHoras";
 import { horasParaMinutos, minutosParaInputHoras } from "../../utils/horas";
-import { toneBadge } from "../ui/badges";
+import { textoJanelaRetroativa, useJanelaRetroativa } from "../../hooks/useJanelaRetroativa";
 import { HistoricoContextual } from "../auditoria/HistoricoContextual";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
+import { HierarquiaAtividadeTooltip } from "../cronograma/HierarquiaAtividadeTooltip";
 
 interface Comentario {
   id: number;
@@ -79,6 +80,10 @@ export interface SolicitacaoApontamento {
   // apontamento bloqueado (ver domain/bloqueioApontamento.ts, backend) — só desabilita
   // "Aprovar"; "Reprovar" continua sempre disponível.
   bloqueadoApontamentoEfetivo: boolean;
+  // Minutos. Só nos pendentes da lista de Aprovações (null nos decididos e no drawer) —
+  // alimentam a barra de consumo.
+  teto: number | null;
+  realizado: number | null;
 }
 
 export interface SolicitacaoExcedente {
@@ -125,6 +130,12 @@ interface AtividadeDetalheProps {
   itemRealizado: number;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
+  // Id do nó da EAP — com ele, "Contexto do item" monta a MESMA hierarquia completa da
+  // tooltip da Lista/Kanban (pasta(s) raiz da proposta → item → pasta(s)/atividade do
+  // item, ver HierarquiaAtividadeTooltip), em vez de só o nome da folha (`estruturaNome`
+  // acima continua existindo só pro cálculo de progresso logo abaixo).
+  estruturaAtividadeId: number | null;
+  depexeLabel: string;
   podeVerCronograma: boolean;
   // Horas da PRÓPRIA alocação (não do item): o previsto e o excedente que o gestor
   // autorizou por cima dele. Juntos formam o teto de apontamento da atividade.
@@ -179,6 +190,8 @@ export function AtividadeDetalhe({
   itemRealizado,
   estruturaNome,
   estruturaPercentual,
+  estruturaAtividadeId,
+  depexeLabel,
   podeVerCronograma,
   qtdhorPrevisto,
   horasExcedentes,
@@ -237,6 +250,8 @@ export function AtividadeDetalhe({
   // do excedente: pode haver vários pendentes na mesma atividade, um por dia esquecido.
   const [apontamentos, setApontamentos] = useState<SolicitacaoApontamento[]>([]);
   const [abrindoApontamento, setAbrindoApontamento] = useState(false);
+  // Só o dia corrente, salvo exceção do líder — o calendário nem oferece o que o backend recusaria.
+  const janela = useJanelaRetroativa();
   // Uma data só: um apontamento começa e termina no mesmo dia. Antes eram dois
   // datetime-local, o que deixava escolher datas diferentes sem querer.
   const [dataApontamento, setDataApontamento] = useState("");
@@ -254,6 +269,11 @@ export function AtividadeDetalhe({
     }
     if (horaFimApontamento <= horaInicioApontamento) {
       setErroApontamento("A hora final precisa ser depois da inicial.");
+      return;
+    }
+    // `min` do input não impede digitar uma data antiga à mão; o backend recusaria com o mesmo texto.
+    if (janela && dataApontamento < janela.primeiroDiaPermitido) {
+      setErroApontamento(textoJanelaRetroativa(janela));
       return;
     }
     if (motivoApontamento.trim() === "") {
@@ -644,6 +664,7 @@ export function AtividadeDetalhe({
                   <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5">
                     {abrindoApontamento ? (
                       <div className="space-y-2">
+                        {janela && <p className="text-[11.5px] text-muted">{textoJanelaRetroativa(janela)}</p>}
                         <div className="flex flex-wrap items-center gap-2">
                           <label htmlFor="apont-data" className="text-[12px] text-muted">
                             Data
@@ -651,6 +672,7 @@ export function AtividadeDetalhe({
                           <input
                             id="apont-data"
                             type="date"
+                            min={janela?.primeiroDiaPermitido}
                             value={dataApontamento}
                             onChange={(e) => setDataApontamento(e.target.value)}
                             className="rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -756,15 +778,22 @@ export function AtividadeDetalhe({
               <section>
                 <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Contexto do item</p>
                 <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5">
-                  {itemDescricao && <p className="mb-2 text-sm text-foreground">{itemDescricao}</p>}
-                  {estruturaNome && (
-                    <p className="mb-2 flex items-center gap-1.5 text-[12px] text-muted">
-                      <span className={`inline-block rounded px-1.5 py-0.5 font-mono text-[10.5px] ${toneBadge.neutral}`}>
-                        {estruturaNome}
-                      </span>
-                      {estruturaPercentual != null && `${estruturaPercentual}% concluído`}
-                    </p>
+                  {/* Mesma hierarquia completa da tooltip da Lista/Kanban (pasta(s) raiz da
+                      proposta → item → pasta(s)/atividade do item, ver
+                      HierarquiaAtividadeTooltip) — aqui sempre visível, sem precisar de hover:
+                      a tela de Detalhe já é aberta sob demanda. Com estrutura, ela substitui o
+                      antigo par "itemDescricao solto + badge da folha" (o cabeçalho 📦 do
+                      próprio componente já mostra o item); sem estrutura (item ainda não
+                      alocado na EAP), cai no texto simples de sempre, sem chamar o endpoint à
+                      toa. */}
+                  {estruturaAtividadeId != null ? (
+                    <div className="mb-2 overflow-hidden rounded border border-border/60">
+                      <HierarquiaAtividadeTooltip atividadeId={atividadeId} itemNome={itemDescricao ?? "—"} itemDepexeLabel={depexeLabel} />
+                    </div>
+                  ) : (
+                    itemDescricao && <p className="mb-2 text-sm text-foreground">{itemDescricao}</p>
                   )}
+                  {estruturaPercentual != null && <p className="mb-2 text-[12px] text-muted">{estruturaPercentual}% concluído</p>}
                   {(() => {
                     // Teto e realizado DESTA ATIVIDADE (não do item inteiro) — mesma
                     // grandeza e mesmo visual do card do Quadro e da linha de grupo da

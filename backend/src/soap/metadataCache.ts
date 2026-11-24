@@ -5,7 +5,7 @@
 // novo (~3s, timeout 20s). O dicionário é praticamente imutável (muda só quando alguém mexe
 // no cadastro de tabela/campo customizado no Senior, evento raro e administrativo) — TTL
 // longo (12h) é seguro e evita reconsultar o mesmo catálogo a cada vez que um admin abre a
-// mesma linha da tela de Importados do Senior.
+// mesma linha da tela de Importados do ERP.
 //
 // Deliberadamente em memória, não em tabela do Postgres: processo único no compose (mesma
 // premissa já assumida por filtrosAtivos.ts, Fase 3), reinicia raramente, e o pior caso de

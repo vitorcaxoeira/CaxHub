@@ -1,15 +1,24 @@
-import { useEffect, useState } from "react";
+import axios from "axios";
+import { useEffect, useRef, useState } from "react";
 import { useDashboardConsultor, ResumoConsultor } from "../../hooks/useDashboardConsultor";
 import { formatHorasCompacto } from "../../lib/cronograma";
-import { carregarFeriados, Feriado } from "../../lib/feriados";
+import { cn } from "../../lib/cn";
 import { rotuloMesAno } from "../../lib/periodos";
+import { BlocoProdutividade, MesProdutividade } from "../../lib/produtividade";
 import { DonutChart, DonutItem } from "../ui/DonutChart";
 import { SerieTemporalBarra, SeriePonto } from "../ui/SerieTemporalBarra";
-import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
+import { CardProgressoMeta } from "./CardProgressoMeta";
 import { Skeleton } from "../ui/Skeleton";
+import { Spinner } from "../ui/Spinner";
+import { CardCalendario } from "./CardCalendario";
 import { CardValorHora } from "./CardValorHora";
+import { ModalDescontosDoMes } from "./ModalDescontosDoMes";
+import { CardRdv } from "./CardRdv";
+import { CardDescontosParcelas } from "./CardDescontosParcelas";
+import { DetalheDiaProdutividade } from "./DetalheDiaProdutividade";
 
 const dateFormatterCurto = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
+const dateFormatterDiaSemana = new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "UTC" });
 const dateFormatterLongo = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "long", timeZone: "UTC" });
 
 function formatarDiaCurto(iso: string): string {
@@ -19,20 +28,45 @@ function formatarDiaCurto(iso: string): string {
 // Tom da barra de meta — inverso do `tomConsumo` usado no Cronograma/Lista de Atividades:
 // lá passar de 100% é estouro (ruim); aqui é a meta de produtividade batida (bom). Por isso
 // não reaproveita aquela função, mesmo parecendo a mesma conta.
-function tomMeta(avanco: number): string {
-  if (avanco >= 1) return "bg-success";
-  if (avanco >= 0.7) return "bg-primary";
-  return "bg-warning";
-}
-
-function Estatistica({ label, valor, destaque }: { label: string; valor: string; destaque?: "success" | "warning" | "destructive" }) {
+function Estatistica({
+  label,
+  valor,
+  detalhe,
+  detalheNaoOficial,
+  detalheTitulo,
+  destaque,
+}: {
+  label: string;
+  valor: string;
+  detalhe?: string;
+  // Linha de baixo é uma estimativa, não um número do sistema — âmbar e itálico pra não ser
+  // confundida com o valor oficial de cima.
+  detalheNaoOficial?: boolean;
+  detalheTitulo?: string;
+  destaque?: "success" | "warning" | "destructive";
+}) {
   const cor = destaque === "success" ? "text-success" : destaque === "warning" ? "text-warning" : destaque === "destructive" ? "text-destructive" : "text-foreground";
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{label}</p>
-      <p className={`mt-1.5 font-mono text-xl font-semibold tabular-nums ${cor}`}>{valor}</p>
+    <div className="rounded-lg border border-border bg-surface p-4 2xl:p-3">
+      <p className="font-mono text-[10px] uppercase leading-tight tracking-widest text-muted 2xl:tracking-wider">{label}</p>
+      <p className={`mt-1.5 font-mono text-xl font-semibold tabular-nums 2xl:text-lg ${cor}`}>{valor}</p>
+      {detalhe && (
+        <p
+          title={detalheTitulo}
+          className={`mt-0.5 font-mono text-[11px] ${detalheNaoOficial ? "cursor-help italic text-warning" : "text-muted"}`}
+        >
+          {detalhe}
+        </p>
+      )}
     </div>
   );
+}
+
+// formatHorasCompacto perde o sinal quando a parte inteira das horas é 0 (-30 min vira
+// "00:30"), então o sinal sai daqui, com o módulo formatado à parte.
+function formatarDiferencaHoras(minutos: number): string {
+  if (minutos === 0) return "00:00 h";
+  return `${minutos > 0 ? "+" : "-"}${formatHorasCompacto(Math.abs(minutos))} h`;
 }
 
 // Agrupa os dias do período em semanas (domingo–sábado, mesmo recorte do dashboard de
@@ -43,7 +77,51 @@ function inicioDaSemana(dataIso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-function AcordeaoSemanal({ porDia }: { porDia: ResumoConsultor["porDia"] }) {
+interface FiltroDetalheDia {
+  anos: number[];
+  meses: number[];
+  codfor?: number;
+}
+
+type DetalheDias =
+  | { estado: "ocioso" | "carregando" }
+  | { estado: "ok"; blocos: BlocoProdutividade[] }
+  | { estado: "erro"; mensagem: string };
+
+// Cada semana abre e mostra os dias; cada dia também abre e mostra as linhas do relatório de produtividade
+// (ver DetalheDiaProdutividade). Os dados vêm de GET /dashboard/produtividade — o mesmo do relatório impresso —
+// e só são buscados quando a pessoa abre o primeiro dia, uma vez por filtro: quem só olha os totais não paga a
+// consulta (uma por mês do período).
+function AcordeaoSemanal({ porDia, filtro }: { porDia: ResumoConsultor["porDia"]; filtro: FiltroDetalheDia }) {
+  const chaveFiltro = `${filtro.anos.join(",")}|${filtro.meses.join(",")}|${filtro.codfor ?? ""}`;
+  const chaveAtual = useRef(chaveFiltro);
+  const [detalhe, setDetalhe] = useState<DetalheDias>({ estado: "ocioso" });
+
+  // Mudou o período ou o consultor: o que estava carregado já não vale.
+  useEffect(() => {
+    chaveAtual.current = chaveFiltro;
+    setDetalhe({ estado: "ocioso" });
+  }, [chaveFiltro]);
+
+  function carregarDetalhe() {
+    if (detalhe.estado !== "ocioso") return;
+    const chaveDaChamada = chaveFiltro;
+    setDetalhe({ estado: "carregando" });
+    axios
+      .get("/api/dashboard/produtividade", {
+        params: { anos: filtro.anos.join(","), meses: filtro.meses.join(","), codfor: filtro.codfor },
+      })
+      .then(({ data }) => {
+        if (chaveAtual.current !== chaveDaChamada) return; // resposta de um filtro que já foi trocado
+        const meses: MesProdutividade[] = data.meses ?? [];
+        setDetalhe({ estado: "ok", blocos: meses.flatMap((m) => m.blocos) });
+      })
+      .catch((err) => {
+        if (chaveAtual.current !== chaveDaChamada) return;
+        setDetalhe({ estado: "erro", mensagem: err.response?.data?.error ?? "Não foi possível carregar o detalhe do dia" });
+      });
+  }
+
   const semanas = new Map<string, { total: number; dias: { data: string; minutos: number }[] }>();
   for (const ponto of porDia) {
     if (ponto.minutos <= 0) continue;
@@ -72,35 +150,40 @@ function AcordeaoSemanal({ porDia }: { porDia: ResumoConsultor["porDia"] }) {
                 {semana.dias
                   .sort((a, b) => (a.data < b.data ? -1 : 1))
                   .map((dia) => (
-                    <div key={dia.data} className="flex items-center justify-between text-[12.5px]">
-                      <span className="text-muted">{formatarDiaCurto(dia.data)}</span>
-                      <span className="font-mono tabular-nums text-foreground">{formatHorasCompacto(dia.minutos)} h</span>
-                    </div>
+                    <details
+                      key={dia.data}
+                      className="group rounded"
+                      onToggle={(e) => {
+                        if (e.currentTarget.open) carregarDetalhe();
+                      }}
+                    >
+                      <summary className="flex cursor-pointer list-none items-center justify-between rounded px-1.5 py-1 text-[12.5px] hover:bg-surface-2">
+                        <span className="flex items-center gap-2 text-muted">
+                          <span aria-hidden className="inline-block text-[9px] transition-transform group-open:rotate-90">
+                            ▶
+                          </span>
+                          <span className="w-8 capitalize">{dateFormatterDiaSemana.format(new Date(`${dia.data}T00:00:00Z`)).replace(".", "")}</span>
+                          {formatarDiaCurto(dia.data)}
+                        </span>
+                        <span className="font-mono tabular-nums text-foreground">{formatHorasCompacto(dia.minutos)} h</span>
+                      </summary>
+                      <div className="px-1.5 pb-2 pt-1">
+                        {detalhe.estado === "ok" ? (
+                          <DetalheDiaProdutividade data={dia.data} minutosDoDia={dia.minutos} blocos={detalhe.blocos} />
+                        ) : detalhe.estado === "erro" ? (
+                          <p className="text-[12.5px] text-destructive">{detalhe.mensagem}</p>
+                        ) : (
+                          <div className="flex items-center gap-2 py-2 text-[12.5px] text-muted">
+                            <Spinner /> Carregando…
+                          </div>
+                        )}
+                      </div>
+                    </details>
                   ))}
               </div>
             </details>
           ))}
         </div>
-      )}
-    </section>
-  );
-}
-
-function ListaFeriados({ feriados }: { feriados: Feriado[] }) {
-  return (
-    <section className="rounded-lg border border-border bg-surface p-6 shadow-sm">
-      <p className="mb-4 font-mono text-[10px] uppercase tracking-widest text-muted">Feriados no período</p>
-      {feriados.length === 0 ? (
-        <p className="text-sm text-muted">Nenhum feriado nacional no período.</p>
-      ) : (
-        <ul className="space-y-1.5">
-          {feriados.map((f) => (
-            <li key={f.date} className="flex items-center justify-between text-[12.5px]">
-              <span className="text-muted">{formatarDiaCurto(f.date)}</span>
-              <span className="text-foreground">{f.name}</span>
-            </li>
-          ))}
-        </ul>
       )}
     </section>
   );
@@ -120,29 +203,14 @@ interface DashboardConsultorProps {
 // vindo do Senior (ContratoConsultor). Nasceu só pro consultor comum; gestor/admin ganharam
 // acesso depois, escolhendo QUEM ver via `codfor` (ver Home.tsx).
 export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: DashboardConsultorProps) {
-  const { resumo, semConsultor, loading, erro } = useDashboardConsultor({ anos, meses, codfor });
-  const [feriados, setFeriados] = useState<Feriado[]>([]);
-
-  useEffect(() => {
-    if (!resumo) return;
-    let cancelado = false;
-    const mesesSelecionados = new Set(resumo.periodo.meses);
-    // Um combo pode não ter feriado nenhum dentro dele mesmo tendo feriado no ano — busca por
-    // ano inteiro (com cache, ver lib/feriados.ts) e filtra só os meses realmente selecionados,
-    // pra não misturar feriado de um mês fora do filtro quando o período tem lacunas.
-    Promise.all(resumo.periodo.anos.map((ano) => carregarFeriados(ano))).then((listas) => {
-      if (cancelado) return;
-      setFeriados(listas.flat().filter((f) => mesesSelecionados.has(Number(f.date.slice(5, 7)))));
-    });
-    return () => {
-      cancelado = true;
-    };
-  }, [resumo?.periodo.anos.join(","), resumo?.periodo.meses.join(",")]);
+  const { resumo, semConsultor, loading, erro, recarregar } = useDashboardConsultor({ anos, meses, codfor });
+  // Detalhe dos descontos que saem da nota (Gestão de Descontos), aberto pelo link do card Valor-hora.
+  const [verDescontos, setVerDescontos] = useState(false);
 
   if (loading) {
     return (
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        {Array.from({ length: 6 }).map((_, i) => (
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8 2xl:gap-3">
+        {Array.from({ length: 8 }).map((_, i) => (
           <Skeleton key={i} className="h-20 rounded-lg" />
         ))}
       </div>
@@ -160,7 +228,6 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
     return <p className="text-sm text-muted">Não foi possível montar o painel — cadastro de consultor não encontrado.</p>;
   }
 
-  const avancoMeta = resumo.metaTotalMinutos > 0 ? resumo.totalMinutos / resumo.metaTotalMinutos : null;
 
   const totalProjeto = resumo.porProjeto.reduce((soma, p) => soma + p.valor, 0);
   const itensDonut: DonutItem[] = resumo.porProjeto
@@ -172,19 +239,51 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
   const combosRotulo = resumo.periodo.anos.flatMap((ano) => resumo.periodo.meses.map((mes) => rotuloMesAno(ano, mes)));
   const rotuloPeriodo = combosRotulo.length <= 4 ? combosRotulo.join(", ") : `${combosRotulo.length} meses selecionados`;
 
+  // Relatório "Produtividade por Fornecedor" em aba nova (página própria fora do AppShell, ver
+  // RelatorioProdutividade.tsx): leva o mesmo período do filtro e, quando gestor/admin olha outro consultor,
+  // o `codfor` dele — o backend confere a permissão. Um relatório por mês selecionado.
+  function imprimirProdutividade() {
+    const q = new URLSearchParams({ anos: resumo!.periodo.anos.join(","), meses: resumo!.periodo.meses.join(",") });
+    if (codfor != null) q.set("codfor", String(codfor));
+    window.open(`/relatorio/produtividade?${q.toString()}`, "_blank");
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-baseline justify-between">
         <h1 className="font-display text-xl font-bold text-foreground">{nomeExibido ? `Painel de ${nomeExibido}` : "Meu painel"}</h1>
-        <p className="font-mono text-[11px] text-muted">{rotuloPeriodo}</p>
+        <div className="flex items-center gap-3">
+          <p className="font-mono text-[11px] text-muted">{rotuloPeriodo}</p>
+          <button
+            type="button"
+            onClick={imprimirProdutividade}
+            title="Imprime o relatório Produtividade por Fornecedor, um por mês do filtro (mesmo formato do Senior)"
+            className="rounded-md border border-border px-3 py-1 text-[12.5px] font-medium text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Imprimir
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        <Estatistica label="Total de horas" valor={`${formatHorasCompacto(resumo.totalMinutos)} h`} />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8 2xl:gap-3">
         <Estatistica
-          label="Saldo de horas"
-          valor={resumo.saldoMinutos == null ? "—" : `${resumo.saldoMinutos >= 0 ? "+" : ""}${formatHorasCompacto(resumo.saldoMinutos)} h`}
-          destaque={resumo.saldoMinutos == null ? undefined : resumo.saldoMinutos >= 0 ? "success" : "warning"}
+          label="Total de horas"
+          valor={`${formatHorasCompacto(resumo.totalMinutos)} h`}
+          detalhe={`≈ ${formatHorasCompacto(resumo.totalMinutos + resumo.emAprovacao.minutos + resumo.emAjuste.diferencaMinutos)} h`}
+          detalheNaoOficial
+          detalheTitulo="Estimativa, não oficial: total de horas + horas em aprovação + diferença dos ajustes pendentes. Só vale se o gestor aprovar tudo."
+        />
+        <Estatistica
+          label="Em Aprovação"
+          valor={`${formatHorasCompacto(resumo.emAprovacao.minutos)} h`}
+          detalhe={resumo.emAprovacao.quantidade > 0 ? `${resumo.emAprovacao.quantidade} ${resumo.emAprovacao.quantidade === 1 ? "sessão" : "sessões"}` : undefined}
+          destaque={resumo.emAprovacao.quantidade > 0 ? "warning" : undefined}
+        />
+        <Estatistica
+          label="Em Ajuste"
+          valor={formatarDiferencaHoras(resumo.emAjuste.diferencaMinutos)}
+          detalhe={resumo.emAjuste.quantidade > 0 ? `${resumo.emAjuste.quantidade} ${resumo.emAjuste.quantidade === 1 ? "sessão" : "sessões"}` : undefined}
+          destaque={resumo.emAjuste.quantidade > 0 ? "warning" : undefined}
         />
         <Estatistica
           label="Meta diária"
@@ -197,53 +296,69 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
           }
         />
         <Estatistica
+          label="Saldo de horas"
+          valor={resumo.saldoMinutos == null ? "—" : `${resumo.saldoMinutos >= 0 ? "+" : ""}${formatHorasCompacto(resumo.saldoMinutos)} h`}
+          destaque={resumo.saldoMinutos == null ? undefined : resumo.saldoMinutos >= 0 ? "success" : "warning"}
+        />
+        <Estatistica
+          label="Deslocamento"
+          valor={`${formatHorasCompacto(resumo.deslocamento.minutos)} h`}
+          detalhe="pago a 50% do valor-hora"
+        />
+        <Estatistica
           label="Sessões pendentes"
           valor={String(resumo.sessoesPendentes)}
           destaque={resumo.sessoesPendentes > 0 ? "warning" : undefined}
         />
         <Estatistica label="RATs pendentes" valor={String(resumo.ratsPendentes)} destaque={resumo.ratsPendentes > 0 ? "warning" : undefined} />
-        <Estatistica label="Notificações" valor={String(resumo.notificacoesNaoLidas)} destaque={resumo.notificacoesNaoLidas > 0 ? "warning" : undefined} />
       </div>
 
+      {/* Com contrato de valor fixo o card de valor-hora tem 5 KPIs na linha (a fixa ao lado da projeção): em telas largas ele ganha o dobro da largura do progresso da meta. */}
+      <div className={cn("grid grid-cols-1 gap-4 lg:grid-cols-2", resumo.contratoFixo && "xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]")}>
+        <CardValorHora
+          valorHora={resumo.valorHora}
+          ganhoAteAgora={resumo.ganhoAteAgora}
+          projecaoGanho={resumo.projecaoGanho}
+          contratoFixo={resumo.contratoFixo}
+          ferias={resumo.ferias}
+          deslocamentoValor={resumo.deslocamento.valor}
+          deslocamentoMinutos={resumo.deslocamento.minutos}
+          descontos={resumo.descontos}
+          rotuloPeriodoDescontos={resumo.descontos.competencias.length > 1 ? "Descontos do período" : "Descontos do mês"}
+          onVerDescontos={() => setVerDescontos(true)}
+        />
+
+        <CardProgressoMeta meta={resumo.metaPeriodo} totalMinutos={resumo.totalMinutos} rotuloPeriodo={rotuloPeriodo} />
+      </div>
+
+      <CardRdv filtro={{ anos, meses, codfor }} rotuloPeriodo={rotuloPeriodo} />
+
+      {/* Gestão de Descontos: parcelas do consultor em foco (todas, não só o período do topo). */}
+      <CardDescontosParcelas codfor={codfor} />
+
+      {/* Horas por dia e por semana ocupam a largura toda, alinhadas ao card de RDV logo acima. */}
+      <SerieTemporalBarra
+        titulo="Horas por dia"
+        pontos={pontosSerieDia}
+        series={[{ nome: "Horas", cor: "primary" }]}
+        formatarValor={(v) => `${formatHorasCompacto(v)} h`}
+      />
+
+      <AcordeaoSemanal porDia={resumo.porDia} filtro={{ anos: resumo.periodo.anos, meses: resumo.periodo.meses, codfor }} />
+
+      {/* Fim da página, lado a lado: o resumo por projeto e o calendário de trabalho do período (férias, folgas e feriados). */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <CardValorHora valorHora={resumo.valorHora} ganhoAteAgora={resumo.ganhoAteAgora} projecaoGanho={resumo.projecaoGanho} />
-
-        <section className="rounded-lg border border-border bg-surface p-5">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Progresso da meta</p>
-          {avancoMeta == null ? (
-            <p className="mt-3 text-sm text-muted">Sem jornada cadastrada no período — meta não configurada.</p>
-          ) : (
-            <>
-              <p className="mt-2 font-mono text-2xl font-semibold text-foreground">{Math.round(avancoMeta * 100)}%</p>
-              <p className="font-mono text-[12px] text-muted">
-                {formatHorasCompacto(resumo.totalMinutos)} / {formatHorasCompacto(resumo.metaTotalMinutos)} h
-              </p>
-              <div className="mt-2">
-                <IndicadorProgresso avanco={avancoMeta} cor={tomMeta(avancoMeta)} alturaPx={6} />
-              </div>
-            </>
-          )}
-        </section>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <SerieTemporalBarra
-            titulo="Horas por dia"
-            pontos={pontosSerieDia}
-            series={[{ nome: "Horas", cor: "primary" }]}
-            formatarValor={(v) => `${formatHorasCompacto(v)} h`}
-          />
-        </div>
         <DonutChart titulo="Horas por projeto" itens={itensDonut} formatarValor={(v) => `${formatHorasCompacto(v)} h`} />
+        <CardCalendario anos={resumo.periodo.anos} meses={resumo.periodo.meses} codfor={codfor} aoMudar={recarregar} />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <AcordeaoSemanal porDia={resumo.porDia} />
-        </div>
-        <ListaFeriados feriados={feriados} />
-      </div>
+      {verDescontos && (
+        <ModalDescontosDoMes
+          codfor={codfor}
+          competencias={resumo.descontos.competencias.filter((c) => c.qtd > 0).map((c) => c.competencia)}
+          onFechar={() => setVerDescontos(false)}
+        />
+      )}
     </div>
   );
 }
