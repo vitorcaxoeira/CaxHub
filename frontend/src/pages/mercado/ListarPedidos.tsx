@@ -49,8 +49,7 @@ const MODPRO_OPCOES: MultiSelectOption<number>[] = [
   { value: 2, label: "DRM" },
 ];
 
-const PAGE_SIZE = 30;
-const OPCOES_POR_PAGINA = [10, 30, 50, 100, 200];
+const PAGE_SIZE = 25;
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const formatMoney = (v: number) => `R$ ${currencyFormatter.format(v)}`;
@@ -117,7 +116,7 @@ export function ListarPedidos() {
 
   const [pageCliente, setPageCliente] = useState(1);
   // "Por página" da aba Por Cliente com a estrela de padrão (12/11/2026); a paginação é no navegador, sem consulta para esperar.
-  const pp = usePorPagina({ tela: "mercado.pedidos.por-cliente", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const pp = usePorPagina({ tela: "mercado.pedidos.por-cliente", inicial: PAGE_SIZE });
   // Índice de TODOS os pedidos do filtro atual (ver GET /pedidos/por-cliente/indice).
   // Os grupos da aba passam a ser derivados dele, não de uma chamada agregada: só assim
   // dá pra recalcular Qtd./Valor de cada accordion depois do filtro de coluna e esconder
@@ -597,7 +596,6 @@ export function ListarPedidos() {
             loading={loadingClientes}
             onPageChange={setPageCliente}
             label="clientes"
-            opcoesPorPagina={pp.opcoes}
             onPageSizeChange={(n) => {
               pp.mudar(n);
               setPageCliente(1);

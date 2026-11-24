@@ -162,6 +162,7 @@ export function PropostasTable({ url, params }: { url: string; params: Record<st
   return (
     <ListaServidor<PropostaRow>
       chave="projetos.propostas"
+      camposRelacionados
       url={url}
       params={params}
       defs={COLUNAS}

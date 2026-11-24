@@ -43,8 +43,6 @@ interface Props<T, C> {
   rotulo: string;
   vazio: string;
   pageSize?: number;
-  /** Tamanhos de página que a pessoa pode escolher (Pagination); sem isso valem 10, 25, 50, 100 e 200 (e o `pageSize` inicial). A estrela do seletor grava o padrão do usuário. */
-  opcoesPorPagina?: number[];
   /** Muda para buscar de novo sem mudar os filtros (ex.: depois de uma ação). */
   recarga?: unknown;
   onLinha?: (linha: T) => void;
@@ -115,7 +113,6 @@ export function ListaServidor<T extends object, C = undefined>({
   rotulo,
   vazio,
   pageSize: pageSizeInicial = 50,
-  opcoesPorPagina,
   recarga,
   onLinha,
   detalhe,
@@ -142,7 +139,7 @@ export function ListaServidor<T extends object, C = undefined>({
   const [page, setPage] = useState(1);
   // "Por página" com a estrela de padrão (12/11/2026): a lista cuida sozinha, salvo se a tela assumir (`acessorioPorPagina`/`aoMudarPorPagina`).
   const porPaginaDaTela = acessorioPorPagina !== undefined || aoMudarPorPagina !== undefined;
-  const pp = usePorPagina({ tela: chave, inicial: pageSizeInicial, opcoes: opcoesPorPagina, ativo: !porPaginaDaTela });
+  const pp = usePorPagina({ tela: chave, inicial: pageSizeInicial, ativo: !porPaginaDaTela });
   const [pageSizeDaTela, setPageSizeDaTela] = useState(pageSizeInicial);
   const pageSize = porPaginaDaTela ? pageSizeDaTela : pp.porPagina;
   const [dados, setDados] = useState<Resposta<T> | null>(null);
@@ -369,7 +366,6 @@ export function ListaServidor<T extends object, C = undefined>({
         loading={loading}
         onPageChange={setPage}
         label={rotulo}
-        opcoesPorPagina={pp.opcoes}
         onPageSizeChange={(n) => {
           if (porPaginaDaTela) setPageSizeDaTela(n);
           else pp.mudar(n);

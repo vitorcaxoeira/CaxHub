@@ -8,6 +8,8 @@ import { sitpedTone, SITPED_LABELS } from "../domain/pedidoDominio";
 import { FORFAT_LABELS, MODPRO_LABELS, SITPRO_LABELS, forfatLabel } from "../domain/propostasDominio";
 import { runPedidoSyncPorClientes, ResultadoSyncPorCliente } from "../sync/pedidoSync";
 import { ResultadoSyncRatsFaltantes, sincronizarRatsFaltantesDosPedidos } from "../sync/ratsDosPedidos";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_PEDIDOS } from "../domain/fontesDeCampos";
 
 // Tela "Mercado > Listar Pedidos" — espelho de E120PED (ver backend/src/sync/pedidoSync.ts).
 // Só admin acessa (menu "Mercado" restrito, ver frontend/src/layout/Sidebar.tsx).
@@ -257,7 +259,9 @@ registrarListaConsultavel(
     const modpro = f.modproFiltro.length ? f.modproFiltro : null;
     const de = f.datemiDe ? f.datemiDe.toISOString().slice(0, 10) : null;
     const ate = f.datemiAte ? f.datemiAte.toISOString().slice(0, 10) : null;
+    const extras = extrasDaConsulta(FONTES_PEDIDOS, req.query as Record<string, unknown>);
     return {
+      fontes: FONTES_PEDIDOS,
       interna: Prisma.sql`
         SELECT p.codemp, p.codfil, p.numped, p.codcli, p.datemi, p.datprv, p.obsped, NULLIF(trim(p.obsmot), '') AS obsmot,
                p.vlrbse::float8 AS vlrbse, p.vlrliq::float8 AS vlrliq, p.pedcli, p.sitped,
@@ -275,7 +279,7 @@ registrarListaConsultavel(
                CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${rotuloSql(Prisma.sql`pr.sitpro`, SITPRO_LABELS, "Situação", "Sem situação")} END AS "situacaoProposta",
                CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${SITPRO_TOM_SQL} END AS "situacaoPropostaTone",
                CASE WHEN pr.codpro IS NULL THEN NULL ELSE ${rotuloSql(Prisma.sql`pr.forfat`, FORFAT_LABELS, "Forma")} END AS faturamento,
-               fp.desfpg AS "formaPagamento", cp.descpg AS "condicaoPagamento"
+               fp.desfpg AS "formaPagamento", cp.descpg AS "condicaoPagamento"${extras.selecao}
         FROM pedidos p
         LEFT JOIN clientes c ON c.codcli = p.codcli
         LEFT JOIN LATERAL (
@@ -315,6 +319,7 @@ registrarListaConsultavel(
         col.texto("pedcli"),
         col.texto("formaPagamento"),
         col.texto("condicaoPagamento"),
+        ...extras.colunas,
       ],
       totais: ["vlrbse", "vlrliq"],
       ordemPadrao: Prisma.sql`x."datemi" DESC, x."numped" DESC`,

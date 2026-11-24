@@ -29,6 +29,7 @@ export function InadimplenciaTable({ url, params }: { url: string; params: Recor
   return (
     <ListaServidor<InadimplenciaRow>
       chave="financeiro.inadimplencia"
+      camposRelacionados
       url={url}
       params={params}
       defs={COLUNAS}

@@ -60,6 +60,8 @@ import {
 import { col, linhasFiltradasDaLista, registrarListaConsultavel, type ListaConsultavel } from "./listaConsultavel";
 import { converterHeicSeNecessario, ehHeic } from "../domain/comprovanteHeic";
 import { ErroEntradaConsulta } from "../consultas/consultaColunas";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_RATS } from "../domain/fontesDeCampos";
 
 // Tela "Meus Apontamentos": RATs agrupam os apontamentos (RatItem) de um consultor numa
 // proposta. Visibilidade: consultor vê só as próprias RATs; gestor do departamento
@@ -391,7 +393,7 @@ ratsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     const sitratFiltro = listaDeInteirosNaoZero(req.query.sitrat);
 
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 30));
 
     // Caminho rápido: sem busca (cliente/proposta/RAT), sem busca em itens e sem filtro de integração nada
     // precisa olhar dentro das RATs, então o banco já devolve só a página e o total.
@@ -626,14 +628,15 @@ async function listaRatsDoUsuario(req: AuthenticatedRequest, opcoes: OpcoesConsu
   const { contexto, role } = ctx;
   const filtros = filtrosTopoRats(req.query);
   const conjunto = precisaCalcularConjunto(req.query as Record<string, unknown>, filtros);
-  const { com, interna } = consultaRatsLista(visibilidadeRats(role, contexto), filtros, { ...opcoes, conjunto });
+  const extras = extrasDaConsulta(FONTES_RATS, req.query as Record<string, unknown>);
+  const { com, interna } = consultaRatsLista(visibilidadeRats(role, contexto), filtros, { ...opcoes, conjunto, extras });
   return {
     com,
     interna,
-    colunas: COLUNAS_LISTA_RATS,
+    fontes: FONTES_RATS,
+    colunas: [...COLUNAS_LISTA_RATS, ...extras.colunas],
     ordemPadrao: ORDEM_PADRAO_RATS,
     pageSizePadrao: 30,
-    paginaMaxima: 100,
     // Só exibição (não filtra nem ordena): tons dos selos e se a pessoa pode fechar a RAT.
     decorar: (linhas) =>
       linhas.map((l) => {

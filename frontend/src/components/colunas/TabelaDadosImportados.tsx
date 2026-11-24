@@ -28,9 +28,8 @@ export interface RespostaDadosBase {
   itens: Record<string, unknown>[];
 }
 
-const PAGE_SIZE = 30;
+const PAGE_SIZE = 25;
 // O servidor aceita até 1.000 por página (PAGE_SIZE_MAXIMO em sync/dadosSincronizados.ts).
-const OPCOES_POR_PAGINA = [30, 50, 100, 200, 500];
 
 // Resumos do rodapé que a rota `<endpoint>/resumo` calcula (agregação do Prisma: sem mediana nem distintos; ver
 // backend/src/sync/dadosSincronizados.ts, FUNCOES_RESUMO_DADOS). Coluna com domínio é código: só contagem/vazios.
@@ -103,7 +102,7 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({
   const [resposta, setResposta] = useState<R | null>(null);
   const [pagina, setPagina] = useState(1);
   // "Por página" com a estrela de padrão (12/11/2026): um padrão só para todas as tabelas do Ver dados; a 1ª consulta espera o padrão salvo.
-  const pp = usePorPagina({ tela: "admin.ver-dados", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const pp = usePorPagina({ tela: "admin.ver-dados", inicial: PAGE_SIZE });
   const porPagina = pp.porPagina;
   const [busca, setBusca] = useState("");
   const [carregando, setCarregando] = useState(true);
@@ -274,7 +273,6 @@ export function TabelaDadosImportados<R extends RespostaDadosBase>({
             loading={carregando}
             onPageChange={setPagina}
             label="registros"
-            opcoesPorPagina={pp.opcoes}
             onPageSizeChange={(n) => {
               pp.mudar(n);
               setPagina(1);

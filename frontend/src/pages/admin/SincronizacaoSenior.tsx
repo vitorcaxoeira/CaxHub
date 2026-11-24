@@ -64,8 +64,7 @@ const TIPO_LABEL: Record<string, string> = {
 
 const TIPO_OPCOES: MultiSelectOption<string>[] = Object.entries(TIPO_LABEL).map(([value, label]) => ({ value, label }));
 
-const PAGE_SIZE = 30;
-const OPCOES_POR_PAGINA = [10, 25, 30, 50, 100]; // a API aceita até 100 por página
+const PAGE_SIZE = 25;
 
 // "07/08" — dia/mês de uma data (ISO) vinda do payload congelado da pendência.
 function formatarDataCurta(valor: unknown): string | null {
@@ -167,7 +166,7 @@ function PainelAtividades() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   // "Por página" com a estrela de padrão (12/11/2026): a 1ª consulta espera o padrão salvo.
-  const pp = usePorPagina({ tela: "admin.sincronizacao.atividades", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const pp = usePorPagina({ tela: "admin.sincronizacao.atividades", inicial: PAGE_SIZE });
   const pageSize = pp.porPagina;
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -574,7 +573,6 @@ function PainelAtividades() {
           loading={loading}
           onPageChange={setPage}
           label="pendências"
-          opcoesPorPagina={pp.opcoes}
           onPageSizeChange={(n) => {
             pp.mudar(n);
             setPage(1);
@@ -776,7 +774,7 @@ function PainelDespesas() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   // "Por página" com a estrela de padrão (12/11/2026): a 1ª consulta espera o padrão salvo.
-  const pp = usePorPagina({ tela: "admin.sincronizacao.despesas", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const pp = usePorPagina({ tela: "admin.sincronizacao.despesas", inicial: PAGE_SIZE });
   const pageSize = pp.porPagina;
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -1101,7 +1099,6 @@ function PainelDespesas() {
           loading={loading}
           onPageChange={setPage}
           label="pendências"
-          opcoesPorPagina={pp.opcoes}
           onPageSizeChange={(n) => {
             pp.mudar(n);
             setPage(1);

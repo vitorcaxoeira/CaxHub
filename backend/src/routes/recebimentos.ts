@@ -3,6 +3,8 @@ import { Router } from "express";
 import { col, registrarListaConsultavel } from "./listaConsultavel";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_RECEBIMENTOS } from "../domain/fontesDeCampos";
 
 export const recebimentosRouter = Router();
 recebimentosRouter.use(requireAuth, requireRole("admin"));
@@ -242,11 +244,13 @@ registrarListaConsultavel(
   "/",
   (req) => {
     const { empFil, portadores, contas, clientes, datpgtInicio, datpgtFim } = lerFiltros(req);
+    const extras = extrasDaConsulta(FONTES_RECEBIMENTOS, req.query as Record<string, unknown>);
     return {
+      fontes: FONTES_RECEBIMENTOS,
       interna: Prisma.sql`
         SELECT m.codemp, m.codfil, m.numtit, m.codtpt, (m.numtit || ' - ' || m.codtpt) AS titulo, t.codcli, c.nomcli,
                (t.codcli || ' - ' || c.nomcli) AS cliente, m.datpgt, m.vlrliq::float8 AS vlrliq,
-               m.codpor, p.despor, cc.descco, NULL::text AS moeda_sigla
+               m.codpor, p.despor, cc.descco, NULL::text AS moeda_sigla${extras.selecao}
         FROM movimentos_receber m
         JOIN titulos_receber t ON t.codemp = m.codemp AND t.codfil = m.codfil AND t.numtit = m.numtit AND t.codtpt = m.codtpt
         JOIN clientes c ON c.codcli = t.codcli
@@ -267,6 +271,7 @@ registrarListaConsultavel(
         col.texto("despor"),
         col.texto("descco"),
         col.decimal("vlrliq", { obrigatoria: true }),
+        ...extras.colunas,
       ],
       ordemPadrao: Prisma.sql`x."datpgt" DESC`,
     };

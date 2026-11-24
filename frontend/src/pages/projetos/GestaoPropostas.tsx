@@ -10,6 +10,7 @@ import { MultiSelectDropdown, type MultiSelectOption } from "../../components/ui
 import { toneBadge, type Tone } from "../../components/ui/badges";
 import { regras } from "../../components/ui/padroesFiltros/regras";
 import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
+import { POR_PAGINA_PADRAO } from "../../lib/porPagina";
 import { useToast } from "../../components/ui/Toast";
 import { classeBotaoPrimario, classeBotaoSecundario } from "../../components/gestao5s/campos";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
@@ -550,6 +551,7 @@ function RatsDaProposta({
         <ListaServidor<RatRow, (rota: string) => void>
         // Chave própria: a arrumação de colunas da lista filha não é a da lista de propostas.
         chave="projetos.gestao-propostas.rats"
+        camposRelacionados
         url="/api/gestao-propostas/rats"
         params={{ codemp: row.codemp, codpro: row.codpro }}
         defs={COLUNAS_RATS}
@@ -560,7 +562,6 @@ function RatsDaProposta({
         classeCelula={CELULA_COMPACTA}
         // Só o tamanho INICIAL: a lista guarda o valor depois; quem abre outra linha já começa com o que a pessoa escolheu (porPagina vem da tela).
         pageSize={porPagina}
-        opcoesPorPagina={POR_PAGINA_RATS}
         aoMudarPorPagina={aoMudarPorPagina}
         acessorioPorPagina={estrelaPorPagina}
         />
@@ -720,8 +721,6 @@ const SITUACOES_PADRAO = [4, 7, 8];
 
 // "Por página": a lista de propostas abre com 15 e a de RATs com 10 (pedidos do Vitor, 09/11/2026); a estrela ao lado do seletor grava o tamanho que a
 // pessoa prefere como padrão dela (usePadroesTela, junto com os filtros do topo).
-const POR_PAGINA_PROPOSTAS = [10, 15, 25, 50, 100, 200];
-const POR_PAGINA_RATS = [10, 25, 50, 100];
 const POR_PAGINA_PROPOSTAS_PADRAO = 15;
 const POR_PAGINA_RATS_PADRAO = 10;
 
@@ -808,8 +807,8 @@ export function GestaoPropostas() {
       modpro: { rotulo: "Modalidade", atual: modpro, aplicar: setModpro, validar: regras.lista("number", opcoesModalidade.map((o) => o.value)) },
       // Tamanho de página: as opções são fixas da tela (nada a esperar do servidor), então aplica já. Aplicado antes da 1ª consulta (a lista só renderiza
       // quando `padroes.pronto`), então a lista abre direto no tamanho salvo.
-      porPagina: { rotulo: "Por página", atual: porPagina, aplicar: setPorPagina, validar: regras.valorUnico("number", POR_PAGINA_PROPOSTAS), semOpcoes: true },
-      porPaginaRats: { rotulo: "Por página (RATs)", atual: porPaginaRats, aplicar: setPorPaginaRats, validar: regras.valorUnico("number", POR_PAGINA_RATS), semOpcoes: true },
+      porPagina: { rotulo: "Por página", atual: porPagina, aplicar: setPorPagina, validar: regras.valorUnico("number", POR_PAGINA_PADRAO), semOpcoes: true },
+      porPaginaRats: { rotulo: "Por página (RATs)", atual: porPaginaRats, aplicar: setPorPaginaRats, validar: regras.valorUnico("number", POR_PAGINA_PADRAO), semOpcoes: true },
     },
   });
 
@@ -1064,7 +1063,6 @@ export function GestaoPropostas() {
           classeCelula={CELULA_COMPACTA}
           // Abre com 15 registros por página (pedido do Vitor, 09/11/2026), ou no tamanho que a pessoa salvou na estrela do seletor.
           pageSize={porPagina}
-          opcoesPorPagina={POR_PAGINA_PROPOSTAS}
           aoMudarPorPagina={setPorPagina}
           acessorioPorPagina={padroes.estrela("porPagina")}
           exportavel="gestao-propostas"

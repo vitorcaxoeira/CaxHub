@@ -6,6 +6,8 @@ import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis
 import { Modal } from "../../components/ui/Modal";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { KpiTile } from "../../components/ui/KpiTile";
+import { useMensagens } from "../../hooks/useMensagens";
 import { cn } from "../../lib/cn";
 import {
   agruparOpcoesVinculo,
@@ -270,15 +272,26 @@ const COLUNAS: DefColuna<LinhaVinculo, Acoes>[] = [
   },
 ];
 
+type FiltroKpi = "kyria" | "hcm" | "semCusto" | "conferir";
+const PASSA_NO_KPI: Record<FiltroKpi, (l: LinhaVinculo) => boolean> = {
+  kyria: (l) => l.kyriaMemberIds.length > 0,
+  hcm: (l) => !!l.hcm,
+  semCusto: (l) => l.regime === "indefinido",
+  conferir: (l) => l.regime === "ambos",
+};
+
 export function VinculoConsultores() {
   const [painel, setPainel] = useState<Painel | null>(null);
   const [loading, setLoading] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
-  const [aviso, setAviso] = useState<string | null>(null);
+  const msg = useMensagens();
+  const setErro = msg.erro;
+  const setAviso = msg.sucesso;
   const [inativos, setInativos] = useState(false);
+  // Indicador clicado: filtra a lista (clicar de novo, ou em "Consultores", mostra todos). Os números dos indicadores seguem sendo os do conjunto inteiro.
+  const [filtroKpi, setFiltroKpi] = useState<FiltroKpi | null>(null);
   // "codemp-codusu-lado" da linha sendo salva — trava só aquele seletor.
   const [salvando, setSalvando] = useState<string | null>(null);
-  const [historico, setHistorico] = useState<{ linha: LinhaVinculo; dados: HistoricoValorHora | null; erro: string | null } | null>(null);
+  const [historico, setHistorico] = useState<{ linha: LinhaVinculo; dados: HistoricoValorHora | null } | null>(null);
   const [manual, setManual] = useState<LinhaVinculo | null>(null);
   const [mensal, setMensal] = useState<LinhaVinculo | null>(null);
 
@@ -307,7 +320,6 @@ export function VinculoConsultores() {
   async function vincular(linha: LinhaVinculo, lado: Lado, valor: string | null, forcar = false): Promise<void> {
     const chave = `${linha.codemp}-${linha.codusu}-${lado}`;
     setSalvando(chave);
-    setAviso(null);
     try {
       const corpo = lado === "kyria" ? { memberId: valor, forcar } : { colaborador: valor, forcar };
       await axios.put(`/api/consultores-vinculos/${linha.codemp}/${linha.codusu}/${lado}`, corpo);
@@ -349,11 +361,14 @@ export function VinculoConsultores() {
   }
 
   function abrirHistorico(linha: LinhaVinculo): void {
-    setHistorico({ linha, dados: null, erro: null });
+    setHistorico({ linha, dados: null });
     axios
       .get<HistoricoValorHora>(`/api/consultores-vinculos/${linha.codemp}/${linha.codusu}/valor-hora`)
-      .then(({ data }) => setHistorico({ linha, dados: data, erro: null }))
-      .catch((err) => setHistorico({ linha, dados: null, erro: err.response?.data?.error ?? "Falha ao carregar o histórico" }));
+      .then(({ data }) => setHistorico({ linha, dados: data }))
+      .catch((err) => {
+        setErro(err.response?.data?.error ?? "Falha ao carregar o histórico");
+        setHistorico(null);
+      });
   }
 
   const acoes: Acoes = {
@@ -406,7 +421,13 @@ export function VinculoConsultores() {
     };
   }, [linhas]);
 
+  const linhasDaTabela = useMemo(() => (filtroKpi ? linhas.filter(PASSA_NO_KPI[filtroKpi]) : linhas), [linhas, filtroKpi]);
+  const alternarKpi = (f: FiltroKpi) => setFiltroKpi((atual) => (atual === f ? null : f));
+
   const espelhoVazio = !!painel && painel.espelhosContrato.contratos === 0;
+  useEffect(() => {
+    if (espelhoVazio) msg.atencao("Os contratos de compra ainda não foram importados: sincronize Contratos, Itens e Reajustes de Contratos de Compra em Administração › Importados do ERP.");
+  }, [espelhoVazio, msg]);
 
   return (
     <div>
@@ -426,38 +447,19 @@ export function VinculoConsultores() {
         O vínculo com o Kyria é o mesmo campo de "Ver dados › Membros" (só atendente); o do HCM guarda um funcionário por consultor.
       </p>
 
-      {espelhoVazio && (
-        <p className="mb-4 rounded-md border border-warning/40 bg-warning/10 px-4 py-2.5 text-sm text-warning">
-          Os contratos de compra ainda não foram importados: sincronize "Contratos de Compra", "Itens dos Contratos de Compra" e "Reajustes dos Contratos de Compra"
-          em Administração › Importados do ERP para ver o histórico do valor-hora.
-        </p>
-      )}
-      {erro && <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">{erro}</p>}
-      {aviso && <p className="mb-4 rounded-md border border-success/40 bg-success/10 px-4 py-2.5 text-sm text-success">{aviso}</p>}
-
       {loading && !painel ? (
         <Skeleton className="h-48 w-full" />
       ) : (
         <>
-          <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted">
-            <span>
-              <b className="text-foreground">{resumo.total}</b> consultores
-            </span>
-            <span>
-              <b className="text-foreground">{resumo.comKyria}</b> com atendente no Kyria
-            </span>
-            <span>
-              <b className="text-foreground">{resumo.comHcm}</b> com funcionário no HCM
-            </span>
-            <span>
-              <b className="text-foreground">{resumo.semCusto}</b> sem custo definido
-            </span>
-            {resumo.conferir > 0 && (
-              <span className="text-warning">
-                <b>{resumo.conferir}</b> com contrato e HCM — conferir
-              </span>
-            )}
-            <span className="ml-auto flex flex-wrap gap-2">
+          <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            <KpiTile label="Consultores" value={resumo.total.toLocaleString("pt-BR")} onClick={() => setFiltroKpi(null)} ativo={filtroKpi === null} title="Mostrar todos os consultores" />
+            <KpiTile label="Com atendente no Kyria" value={resumo.comKyria.toLocaleString("pt-BR")} sub={`${(resumo.total - resumo.comKyria).toLocaleString("pt-BR")} sem vínculo`} onClick={() => alternarKpi("kyria")} ativo={filtroKpi === "kyria"} title="Filtrar a lista: só quem tem atendente no Kyria" />
+            <KpiTile label="Com funcionário no HCM" value={resumo.comHcm.toLocaleString("pt-BR")} sub={`${(resumo.total - resumo.comHcm).toLocaleString("pt-BR")} sem vínculo`} onClick={() => alternarKpi("hcm")} ativo={filtroKpi === "hcm"} title="Filtrar a lista: só quem tem funcionário no HCM" />
+            <KpiTile label="Sem custo definido" value={resumo.semCusto.toLocaleString("pt-BR")} tone={resumo.semCusto > 0 ? "warning" : undefined} onClick={() => alternarKpi("semCusto")} ativo={filtroKpi === "semCusto"} title="Filtrar a lista: só quem está sem custo definido" />
+            <KpiTile label="Com contrato e HCM" value={resumo.conferir.toLocaleString("pt-BR")} sub="conferir" tone={resumo.conferir > 0 ? "warning" : undefined} onClick={() => alternarKpi("conferir")} ativo={filtroKpi === "conferir"} title="Filtrar a lista: só quem tem contrato e funcionário no HCM" />
+          </div>
+          <div className="mb-4 flex justify-end">
+            <span className="flex flex-wrap gap-2">
               <button type="button" className={BOTAO} disabled={resumo.seguraKyria === 0} onClick={() => void aplicarSugestoes("kyria", resumo.seguraKyria)}>
                 Aceitar sugestões seguras do Kyria ({resumo.seguraKyria})
               </button>
@@ -471,8 +473,8 @@ export function VinculoConsultores() {
             chave="admin.vinculo-consultores"
             defs={COLUNAS}
             colunas={COLUNAS_LOCAIS}
-            linhas={linhas}
-            paginacao={{ opcoes: [5, 10, 25, 50, 100], inicial: 10, rotulo: "consultores" }}
+            linhas={linhasDaTabela}
+            paginacao={{ inicial: 10, rotulo: "consultores" }}
             ler={ler}
             chaveLinha={(l) => `${l.codemp}-${l.codusu}`}
             loading={loading}
@@ -492,8 +494,7 @@ export function VinculoConsultores() {
         subtitulo="Contrato de compra do consultor (E460CTR / CCS / REA)"
         className="max-w-2xl"
       >
-        {historico?.erro && <p className="text-sm text-destructive">{historico.erro}</p>}
-        {historico && !historico.dados && !historico.erro && <Skeleton className="h-32 w-full" />}
+        {historico && !historico.dados && <Skeleton className="h-32 w-full" />}
         {historico?.dados && <HistoricoValorHoraView dados={historico.dados} />}
       </Modal>
     </div>
@@ -516,7 +517,7 @@ function ModalValorManual({ linha, onClose, aoMudar }: { linha: LinhaVinculo | n
   const [vigencia, setVigencia] = useState("");
   const [valor, setValor] = useState("");
   const [observacao, setObservacao] = useState("");
-  const [erro, setErro] = useState<string | null>(null);
+  const setErro = useMensagens().erro;
   const url = linha ? `/api/custo-hora/valor-hora-manual/${linha.codemp}/${linha.codusu}` : "";
 
   const carregar = useCallback(() => {
@@ -604,7 +605,6 @@ function ModalValorManual({ linha, onClose, aoMudar }: { linha: LinhaVinculo | n
             </button>
           </div>
         </div>
-        {erro && <p className="text-destructive">{erro}</p>}
       </div>
     </Modal>
   );
@@ -615,7 +615,7 @@ function ModalContratoMensal({ linha, onClose, aoMudar }: { linha: LinhaVinculo 
   const [ehMensal, setEhMensal] = useState(false);
   const [desde, setDesde] = useState("");
   const [ate, setAte] = useState("");
-  const [erro, setErro] = useState<string | null>(null);
+  const setErro = useMensagens().erro;
 
   useEffect(() => {
     setEhMensal(linha?.contratoMensal ?? false);
@@ -655,7 +655,6 @@ function ModalContratoMensal({ linha, onClose, aoMudar }: { linha: LinhaVinculo 
             <span className="text-[12px] text-muted">(vazio = sem limite)</span>
           </div>
         )}
-        {erro && <p className="text-destructive">{erro}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className={BOTAO} onClick={onClose}>
             Cancelar

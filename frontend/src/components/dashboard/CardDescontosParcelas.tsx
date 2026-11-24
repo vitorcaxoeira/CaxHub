@@ -81,6 +81,7 @@ export function CardDescontosParcelas({ codfor }: { codfor?: number }) {
           </div>
           <ListaServidor<ParcelaLista>
             chave="home.descontos.parcelas"
+            camposRelacionados
             url="/api/descontos/parcelas"
             params={params}
             defs={COLUNAS_PARCELAS_SEM_CONSULTOR}
@@ -88,7 +89,6 @@ export function CardDescontosParcelas({ codfor }: { codfor?: number }) {
             rotulo="parcelas"
             vazio="Nenhuma parcela com esses filtros."
             pageSize={10}
-            opcoesPorPagina={[10, 30, 50]}
             rodape={(d) => (
               <div className="flex flex-wrap gap-x-8 gap-y-1 border-t border-border bg-surface px-5 py-3">
                 {(

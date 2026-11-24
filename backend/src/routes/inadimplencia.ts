@@ -3,6 +3,8 @@ import { Router } from "express";
 import { col, registrarListaConsultavel } from "./listaConsultavel";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_INADIMPLENCIA } from "../domain/fontesDeCampos";
 
 export const inadimplenciaRouter = Router();
 inadimplenciaRouter.use(requireAuth, requireRole("admin"));
@@ -187,10 +189,12 @@ registrarListaConsultavel(
   "/",
   (req) => {
     const { empFil, faixa } = lerFiltros(req);
+    const extras = extrasDaConsulta(FONTES_INADIMPLENCIA, req.query as Record<string, unknown>);
     return {
+      fontes: FONTES_INADIMPLENCIA,
       interna: Prisma.sql`
         SELECT t.codemp, t.codfil, t.numtit, t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente, t.vctpro, t.vlrabe::float8 AS vlrabe,
-               (CURRENT_DATE - t.vctpro)::int AS dias_atraso
+               (CURRENT_DATE - t.vctpro)::int AS dias_atraso${extras.selecao}
         FROM titulos_receber t
         JOIN clientes c ON c.codcli = t.codcli
         WHERE t.vlrabe > 0
@@ -203,6 +207,7 @@ registrarListaConsultavel(
         col.data("vctpro", { obrigatoria: true }),
         col.inteiro("dias_atraso", { obrigatoria: true }),
         col.decimal("vlrabe", { obrigatoria: true }),
+        ...extras.colunas,
       ],
       ordemPadrao: Prisma.sql`x."dias_atraso" DESC`,
     };

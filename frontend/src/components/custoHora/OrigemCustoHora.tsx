@@ -119,7 +119,7 @@ function OrigemClt({ dados }: { dados: OrigemResposta }) {
         chaveLinha={(l, i) => `${l.ctared}-${l.codclc}-${l.debcre}-${i}`}
         vazio="Sem lançamentos da folha para o colaborador neste mês."
         classeLinha={(l) => (l.considerado ? undefined : "opacity-60")}
-        paginacao={{ opcoes: [10, 25, 50, 100], inicial: 25, rotulo: "lançamentos" }}
+        paginacao={{ inicial: 25, rotulo: "lançamentos" }}
       />
     </div>
   );

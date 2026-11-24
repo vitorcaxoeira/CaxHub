@@ -117,7 +117,7 @@ export function ClientesRiscoTable({ url, params, empFilIds, recarga }: { url: s
       params={params}
       recarga={recarga}
       defs={COLUNAS}
-      pageSize={20}
+      pageSize={15}
       chaveLinha={(r) => String(r.codcli)}
       rotulo="clientes"
       vazio="Nenhum cliente em risco encontrado com os filtros atuais."

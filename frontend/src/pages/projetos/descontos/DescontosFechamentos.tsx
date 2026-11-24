@@ -120,6 +120,7 @@ export function DescontosFechamentos() {
 
       <ListaServidor<FechamentoLista>
         chave="projetos.descontos.fechamentos"
+        camposRelacionados
         exportavel="descontos-fechamentos"
         url="/api/descontos/fechamentos"
         params={params}
@@ -128,8 +129,7 @@ export function DescontosFechamentos() {
         chaveLinha={(f) => `${f.competencia}-${f.codfor}`}
         rotulo="fechamentos"
         vazio="Nenhuma competência fechada ainda."
-        pageSize={30}
-        opcoesPorPagina={[30, 50, 100, 200]}
+        pageSize={25}
         rodape={(d) => (
           <div className="flex flex-wrap gap-x-8 gap-y-1 border-t border-border bg-surface px-5 py-3">
             {(

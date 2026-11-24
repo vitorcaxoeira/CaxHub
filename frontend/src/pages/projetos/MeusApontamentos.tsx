@@ -268,8 +268,7 @@ function podeEditarObservacao(item: RatItemRow): boolean {
 // Tabela de RATs com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (04/11/2026): ListaServidor
 // sobre GET /rats/lista (backend/src/domain/ratsListaSql.ts, tudo resolvido no banco). Os filtros do topo continuam os mesmos e com a
 // estrela de padrão; a linha abre o acordeão de Atividades/RDVs (várias abertas ao mesmo tempo, como antes).
-const PAGE_SIZE_RATS = 30;
-const OPCOES_POR_PAGINA_RATS = [10, 25, 30, 50, 100];
+const PAGE_SIZE_RATS = 25;
 
 interface AcoesRats {
   navegar: (rota: string) => void;
@@ -2434,6 +2433,7 @@ export function MeusApontamentos() {
           {padroesRats.pronto ? (
             <ListaServidor<RatRow, AcoesRats>
               chave="projetos.apontamentos.rats"
+              camposRelacionados
               url="/api/rats/lista"
               params={filtrosRatsParaQuery()}
               defs={COLUNAS_RATS}
@@ -2451,7 +2451,6 @@ export function MeusApontamentos() {
               vazio="Nenhuma RAT ainda — confirme uma sessão pendente pra começar."
               pageSize={PAGE_SIZE_RATS}
               // GET /rats/lista aceita até 100 por página (paginaMaxima no backend).
-              opcoesPorPagina={OPCOES_POR_PAGINA_RATS}
               recarga={recargaRats}
               detalhe={renderDetalheRat}
               abertas={abertasRats}

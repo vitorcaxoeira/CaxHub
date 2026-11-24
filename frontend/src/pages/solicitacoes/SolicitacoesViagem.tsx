@@ -311,7 +311,6 @@ function ListaSolicitacoes({ escopo }: { escopo: EscopoViagem }) {
             rotulo="solicitações"
             vazio={terminoDe ? `Nenhuma viagem com término a partir de ${formatarDia(terminoDe)}. Use "Ver histórico" para ver as anteriores.` : texto.vazio}
             pageSize={25}
-            opcoesPorPagina={[25, 50, 100, 200]}
             aoCarregar={(d) => setKpis((d as Resposta<LinhaViagem> & { kpis?: Record<string, number> }).kpis ?? {})}
           />
         </div>

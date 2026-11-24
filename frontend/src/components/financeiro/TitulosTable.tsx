@@ -81,6 +81,7 @@ export function TitulosTable({ url, params, recarga }: { url: string; params: Re
   return (
     <ListaServidor<TituloRow>
       chave="financeiro.titulos-receber"
+      camposRelacionados
       url={url}
       recarga={recarga}
       params={params}

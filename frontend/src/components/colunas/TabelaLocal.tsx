@@ -29,18 +29,23 @@ interface Props<T, C> {
   classeLinha?: (linha: T) => string | undefined;
   onLinha?: (linha: T) => void;
   /**
+   * Linha de total que NÃO é soma das linhas (24/11/2026, Rentabilidade por CC: razões e percentuais calculados sobre o recorte inteiro): é uma linha
+   * `T` como as outras, desenhada no rodapé com as mesmas colunas visíveis e na mesma ordem do usuário, acima do resumo (Σ). Aparece quando há linhas.
+   */
+  linhaDeTotal?: T;
+  /**
    * Paginação NO NAVEGADOR (18/11/2026, Vínculo de Consultores): as linhas que passam nos filtros/ordem são divididas em páginas, com o seletor
    * "Por página" (e a estrela de padrão, chave = `chave`). Sem isto a tabela mostra tudo, como sempre. O resumo do rodapé continua sobre TODAS as
    * linhas filtradas, não só as da página.
    */
-  paginacao?: { opcoes: number[]; inicial: number; rotulo?: string };
+  paginacao?: { inicial: number; rotulo?: string };
 }
 
-export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, chaveLinha, vazio, ler, ctx, loading = false, alturaMax, classeLinha, onLinha, paginacao }: Props<T, C>) {
+export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, chaveLinha, vazio, ler, ctx, loading = false, alturaMax, classeLinha, onLinha, linhaDeTotal, paginacao }: Props<T, C>) {
   const titulos = useMemo(() => titulosDe(defs), [defs]);
   const { t, tc } = useTabelaLocalConfiguravel(chave, defs, linhas, colunas, { ler, titulos });
 
-  const pp = usePorPagina({ tela: chave, inicial: paginacao?.inicial ?? 10, opcoes: paginacao?.opcoes, ativo: !!paginacao });
+  const pp = usePorPagina({ tela: chave, inicial: paginacao?.inicial ?? 10, ativo: !!paginacao });
   const [pagina, setPagina] = useState(1);
   // Mudou o filtro, a ordem ou o tamanho da página: volta para a primeira (senão a pessoa fica numa página que já não existe).
   const chaveConsulta = JSON.stringify([t.estado.filtros, t.estado.ordem, pp.porPagina]);
@@ -74,7 +79,10 @@ export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, ch
               </tr>
             )}
           </tbody>
-          <tfoot className="sticky bottom-0 z-10">{!loading && tc.rodape({ colunas: t.colunas, resultado: t.resumir(tc.pedidosResumo) })}</tfoot>
+          <tfoot className="sticky bottom-0 z-10">
+            {!loading && linhaDeTotal && t.linhas.length > 0 && <tr className="border-t-2 border-border bg-surface-2 font-semibold text-foreground">{tc.celulas(linhaDeTotal, ctx as C)}</tr>}
+            {!loading && tc.rodape({ colunas: t.colunas, resultado: t.resumir(tc.pedidosResumo) })}
+          </tfoot>
         </table>
       </div>
       {paginacao && (
@@ -85,7 +93,6 @@ export function TabelaLocal<T, C = undefined>({ chave, defs, colunas, linhas, ch
           loading={loading}
           onPageChange={setPagina}
           label={paginacao.rotulo ?? "registros"}
-          opcoesPorPagina={pp.opcoes}
           onPageSizeChange={pp.mudar}
           acessorioPorPagina={pp.estrela}
         />

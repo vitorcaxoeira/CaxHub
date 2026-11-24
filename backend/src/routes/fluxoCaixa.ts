@@ -4,6 +4,8 @@ import { col, registrarListaConsultavel } from "./listaConsultavel";
 import { situacaoSql } from "./financeiroComum";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_OPERACIONAL_TITULOS } from "../domain/fontesDeCampos";
 
 export const fluxoCaixaRouter = Router();
 fluxoCaixaRouter.use(requireAuth, requireRole("admin"));
@@ -650,6 +652,7 @@ registrarListaConsultavel(
     const corte = typeof req.query.corte === "string" ? req.query.corte : "vencendo_hoje";
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const busca = q === "" ? null : `%${q}%`;
+    const extras = extrasDaConsulta(FONTES_OPERACIONAL_TITULOS, req.query as Record<string, unknown>);
     const colunas = [
       col.texto("titulo", { obrigatoria: true }),
       col.texto("cliente", { obrigatoria: true }),
@@ -658,13 +661,15 @@ registrarListaConsultavel(
       col.decimal("valor", { obrigatoria: true }),
       col.inteiro("dias_atraso", { obrigatoria: true }),
       col.texto("situacao", { obrigatoria: true }),
+      ...extras.colunas,
     ];
     if (corte === "recebido_hoje") {
       return {
+        fontes: FONTES_OPERACIONAL_TITULOS,
         interna: Prisma.sql`
           SELECT t.numtit, t.codtpt, (t.numtit || ' - ' || t.codtpt) AS titulo, t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente,
                  t.datemi, t.vctpro, m.vlrliq::float8 AS valor, t.sittit, 0::int AS dias_atraso,
-                 ${situacaoSql.rotulo} AS situacao, ${situacaoSql.tom} AS tom
+                 ${situacaoSql.rotulo} AS situacao, ${situacaoSql.tom} AS tom${extras.selecao}
           FROM movimentos_receber m
           JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
           JOIN titulos_receber t ON t.codemp = m.codemp AND t.codfil = m.codfil AND t.numtit = m.numtit AND t.codtpt = m.codtpt
@@ -677,10 +682,11 @@ registrarListaConsultavel(
       };
     }
     return {
+      fontes: FONTES_OPERACIONAL_TITULOS,
       interna: Prisma.sql`
         SELECT t.numtit, t.codtpt, (t.numtit || ' - ' || t.codtpt) AS titulo, t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente,
                t.datemi, t.vctpro, t.vlrabe::float8 AS valor, t.sittit, GREATEST(0, CURRENT_DATE - t.vctpro)::int AS dias_atraso,
-               ${situacaoSql.rotulo} AS situacao, ${situacaoSql.tom} AS tom
+               ${situacaoSql.rotulo} AS situacao, ${situacaoSql.tom} AS tom${extras.selecao}
         FROM titulos_receber t
         JOIN clientes c ON c.codcli = t.codcli
         WHERE ${Prisma.raw(condicaoCorte(corte))}

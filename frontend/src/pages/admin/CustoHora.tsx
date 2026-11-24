@@ -44,7 +44,7 @@ type Aba = "resultado" | "contas" | "parametros";
 const BOTAO = "rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground transition hover:border-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 const BOTAO_PRIMARIO = "rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 const CAMPO = "rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-const POR_PAGINA = { opcoes: [10, 25, 50, 100], inicial: 25 };
+const POR_PAGINA = { inicial: 25 };
 
 const mensagemDe = (err: unknown, padrao: string): string => (axios.isAxiosError(err) ? (err.response?.data?.error ?? padrao) : padrao);
 

@@ -66,6 +66,7 @@ export function ModalDetalheLancamentos({ ctareds, mesReferencia, rotulo, codccu
     <Modal open onClose={onClose} title={rotulo} subtitulo={formatarMes(mesReferencia)} className="max-w-5xl">
       <ListaServidor<LancamentoContabilDetalhe>
         chave="contabil.resultado.lancamentos"
+        camposRelacionados
         url="/api/contabil/resultado/lancamentos"
         params={{ ctareds: ctareds.join(","), mesReferencia, codccu: codccu.length > 0 ? codccu.join(",") : undefined }}
         defs={COLUNAS}

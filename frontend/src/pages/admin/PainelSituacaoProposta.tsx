@@ -50,8 +50,7 @@ interface PreviewEnvio {
   envelopeXml: string;
 }
 
-const PAGE_SIZE = 30;
-const OPCOES_POR_PAGINA = [10, 25, 30, 50, 100]; // a API aceita até 100 por página
+const PAGE_SIZE = 25;
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
@@ -88,7 +87,7 @@ export function PainelSituacaoProposta() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   // "Por página" com a estrela de padrão (12/11/2026): a 1ª consulta espera o padrão salvo.
-  const pp = usePorPagina({ tela: "admin.sincronizacao.situacao-proposta", inicial: PAGE_SIZE, opcoes: OPCOES_POR_PAGINA });
+  const pp = usePorPagina({ tela: "admin.sincronizacao.situacao-proposta", inicial: PAGE_SIZE });
   const pageSize = pp.porPagina;
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -349,7 +348,6 @@ export function PainelSituacaoProposta() {
           loading={loading}
           onPageChange={setPage}
           label="pendências"
-          opcoesPorPagina={pp.opcoes}
           onPageSizeChange={(n) => {
             pp.mudar(n);
             setPage(1);

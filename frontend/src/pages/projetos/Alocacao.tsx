@@ -75,7 +75,7 @@ interface KpisResumo {
 
 type Situacao = "semAlocacao" | "saldoPendente" | "totalmenteAlocadas" | "compartilhadasEmAberto" | "horasDivergentes";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 15;
 
 // Domínio "USU_ModPro" do Senior (modalidade da proposta) — mesmos valores de
 // backend/src/domain/propostasDominio.ts (MODPRO_LABELS) e de MODPRO_OPCOES em
@@ -799,7 +799,6 @@ export function Alocacao() {
           rotulo="propostas"
           vazio="Nenhuma proposta encontrada com os filtros atuais."
           pageSize={PAGE_SIZE}
-          opcoesPorPagina={[PAGE_SIZE, 50, 100, 200]}
           aoCarregar={(d) => {
             setKpis((d as Resposta<PropostaRow> & { kpis: KpisResumo }).kpis);
             setLoading(false);

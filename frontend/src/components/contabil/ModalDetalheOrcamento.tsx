@@ -46,6 +46,7 @@ export function ModalDetalheOrcamento({ ctareds, mesReferencia, rotulo, codccu, 
     <Modal open onClose={onClose} title={`${rotulo} — Orçado`} subtitulo={formatarMes(mesReferencia)} className="max-w-5xl">
       <ListaServidor<LinhaOrcamento>
         chave="contabil.orcado-realizado.orcamentos"
+        camposRelacionados
         url="/api/contabil/orcado-realizado/orcamentos"
         params={{ ctareds: ctareds.join(","), mesReferencia, codccu: codccu.length > 0 ? codccu.join(",") : undefined }}
         defs={COLUNAS}

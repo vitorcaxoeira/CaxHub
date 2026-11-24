@@ -1191,7 +1191,7 @@ gestao5sRouter.get("/observacoes", async (req: Req5S, res) => {
     if (ehDataIso(req.query.de)) filtros.push({ dataOcorrido: { gte: paraData(req.query.de) } });
     if (ehDataIso(req.query.ate)) filtros.push({ dataOcorrido: { lte: paraData(req.query.ate) } });
     const where: Prisma.Observacao5SWhereInput = { AND: filtros };
-    const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 20, 1), 100);
+    const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 20, 1), 200);
     const page = Math.max(Number(req.query.page) || 1, 1);
     const [total, itens] = await Promise.all([
       prisma.observacao5S.count({ where }),

@@ -45,6 +45,7 @@ export function RecebimentosTable({ url, params }: { url: string; params: Record
   return (
     <ListaServidor<RecebimentoRow>
       chave="financeiro.recebimentos"
+      camposRelacionados
       url={url}
       params={params}
       defs={COLUNAS}

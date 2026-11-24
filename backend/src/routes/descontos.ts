@@ -33,6 +33,8 @@ import {
 } from "../domain/descontosDados";
 import { fecharCompetencia } from "../sync/fechamentoDescontos";
 import { col, registrarListaConsultavel } from "./listaConsultavel";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_DESCONTOS_PROCESSOS, FONTES_DESCONTOS_PARCELAS, FONTES_DESCONTOS_FECHAMENTOS } from "../domain/fontesDeCampos";
 
 // Gestão de Descontos (Gestão de Projetos › Gestão de Descontos, 05/11/2026): descontos abatidos da nota dos consultores. Regras de cálculo
 // em domain/descontos.ts; acesso em domain/descontosAcesso.ts (admin e administrativo administram; gestor vê o time; consultor vê os
@@ -385,7 +387,9 @@ registrarListaConsultavel(
     const vigAte = lerData(q.vigenciaAte) ? qTexto(q.vigenciaAte) : null;
     const lancDe = lerData(q.lancamentoDe) ? qTexto(q.lancamentoDe) : null;
     const lancAte = lerData(q.lancamentoAte) ? qTexto(q.lancamentoAte) : null;
+    const extras = extrasDaConsulta(FONTES_DESCONTOS_PROCESSOS, q as Record<string, unknown>);
     return {
+      fontes: FONTES_DESCONTOS_PROCESSOS,
       interna: Prisma.sql`
         SELECT p.id, 'DESC-' || p.ano || '-' || lpad(p.sequencia::text, 6, '0') AS processo, p.codemp, p.codfor,
                ${NOME_CONSULTOR} AS consultor, t.nome AS tipo, t.id AS "tipoId",
@@ -396,7 +400,7 @@ registrarListaConsultavel(
                a.descontadas AS "parcelasDescontadas", a.pendentes AS "parcelasPendentes",
                a.descontado::float8 AS "totalDescontado", a.saldo::float8 AS "saldoDevedor",
                ${caseRotulo("p.status", STATUS_PROCESSO_ROTULO)} AS status, p.status AS "statusCodigo",
-               p.observacao, p.criado_em AS "criadoEm"
+               p.observacao, p.criado_em AS "criadoEm"${extras.selecao}
         FROM descontos_processos p
         JOIN descontos_tipos t ON t.id = p.tipo_id
         ${JOIN_CONSULTOR}
@@ -441,6 +445,7 @@ registrarListaConsultavel(
         col.texto("status", { obrigatoria: true }),
         col.data("criadoEm"),
         col.texto("observacao"),
+        ...extras.colunas,
       ],
       totais: ["valorTotal", "totalDescontado", "saldoDevedor"],
       ordemPadrao: Prisma.sql`x."criadoEm" DESC, x."id" DESC`,
@@ -466,7 +471,9 @@ registrarListaConsultavel(
     // Seleção múltipla (Home › Descontos · Parcelas): vários anos da competência e várias situações de uma vez.
     const anos = qAnos(q.anos);
     const situacoes = qSituacoes(q.situacoes);
+    const extras = extrasDaConsulta(FONTES_DESCONTOS_PARCELAS, q as Record<string, unknown>);
     return {
+      fontes: FONTES_DESCONTOS_PARCELAS,
       interna: Prisma.sql`
         SELECT dp.id, p.id AS "processoId", 'DESC-' || p.ano || '-' || lpad(p.sequencia::text, 6, '0') AS processo, p.codemp, p.codfor,
                ${NOME_CONSULTOR} AS consultor, t.nome AS tipo,
@@ -474,7 +481,7 @@ registrarListaConsultavel(
                dp.competencia, dp.vencimento, dp.valor::float8 AS valor, dp.valor_descontado::float8 AS "valorDescontado",
                (CASE dp.situacao WHEN 'pendente' THEN dp.valor WHEN 'parcial' THEN dp.valor - dp.valor_descontado ELSE 0 END)::float8 AS restante,
                ${caseRotulo("dp.situacao", SITUACAO_PARCELA_ROTULO)} AS situacao, dp.situacao AS "situacaoCodigo",
-               dp.observacao
+               dp.observacao${extras.selecao}
         FROM descontos_parcelas dp
         JOIN descontos_processos p ON p.id = dp.processo_id
         JOIN descontos_tipos t ON t.id = p.tipo_id
@@ -501,6 +508,7 @@ registrarListaConsultavel(
         col.decimal("restante"),
         col.texto("situacao", { obrigatoria: true }),
         col.texto("observacao"),
+        ...extras.colunas,
       ],
       totais: ["valor", "valorDescontado", "restante"],
       ordemPadrao: Prisma.sql`x."competencia" ASC, x."vencimento" ASC, x."id" ASC`,
@@ -540,13 +548,15 @@ registrarListaConsultavel(
     const codfor = qInteiro(q.codfor);
     const compDe = qCompetencia(q.competenciaDe);
     const compAte = qCompetencia(q.competenciaAte);
+    const extras = extrasDaConsulta(FONTES_DESCONTOS_FECHAMENTOS, q as Record<string, unknown>);
     return {
+      fontes: FONTES_DESCONTOS_FECHAMENTOS,
       interna: Prisma.sql`
         SELECT f.competencia, f.codemp, f.codfor,
                COALESCE(co.nomcom, co.nomfor, 'Fornecedor ' || f.codfor) AS consultor,
                f.valor_nota::float8 AS "valorNota", f.total_previsto::float8 AS "totalPrevisto", f.total_descontado::float8 AS "totalDescontado",
                (f.valor_nota - f.total_descontado)::float8 AS liquido, f.saldo_transportado::float8 AS "saldoTransportado",
-               CASE f.origem WHEN 'job' THEN 'Automático' ELSE 'Manual' END AS origem, f.fechado_em AS "fechadoEm"
+               CASE f.origem WHEN 'job' THEN 'Automático' ELSE 'Manual' END AS origem, f.fechado_em AS "fechadoEm"${extras.selecao}
         FROM descontos_fechamentos f
         LEFT JOIN LATERAL (SELECT c.nomcom, c.nomfor FROM consultores c WHERE c.codfor = f.codfor LIMIT 1) co ON TRUE
         WHERE ${escopoSql(escopo, Prisma.sql`f.codfor`)}
@@ -563,6 +573,7 @@ registrarListaConsultavel(
         col.decimal("saldoTransportado"),
         col.texto("origem"),
         col.data("fechadoEm"),
+        ...extras.colunas,
       ],
       totais: ["valorNota", "totalPrevisto", "totalDescontado", "liquido", "saldoTransportado"],
       ordemPadrao: Prisma.sql`x."competencia" DESC, x."consultor" ASC`,

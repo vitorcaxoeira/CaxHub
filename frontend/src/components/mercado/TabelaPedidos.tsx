@@ -200,6 +200,7 @@ export function TabelaPedidos({
   return (
     <ListaServidor<PedidoLista, Navegar>
       chave={chave}
+      camposRelacionados
       url="/api/pedidos"
       params={params}
       recarga={recarga}
@@ -212,8 +213,7 @@ export function TabelaPedidos({
       chaveLinha={(p) => `${p.codemp}-${p.codfil}-${p.numped}`}
       rotulo="pedidos"
       vazio="Nenhum pedido encontrado com esses filtros."
-      pageSize={30}
-      opcoesPorPagina={[30, 50, 100, 200]}
+      pageSize={25}
     />
   );
 }

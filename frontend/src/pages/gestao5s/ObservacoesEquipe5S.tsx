@@ -30,7 +30,6 @@ interface AreaOpcao {
 
 // Observações recebidas da equipe (fora da auditoria): "foi relatado que havia um talher sujo
 // sobre a mesa da sala de reunião no dia XX/XX". Líderes registram nas áreas que enxergam.
-const OPCOES_POR_PAGINA = [10, 20, 50, 100];
 
 export function ObservacoesEquipe5S() {
   const { mostrar } = useToast();
@@ -43,7 +42,7 @@ export function ObservacoesEquipe5S() {
   const [editando, setEditando] = useState<Observacao | "nova" | null>(null);
   const [foto, setFoto] = useState<string | null>(null);
   // "Por página" com a estrela de padrão (12/11/2026): a 1ª consulta espera o padrão salvo. A API aceita até 100 por página.
-  const pp = usePorPagina({ tela: "gestao5s.observacoes", inicial: 20, opcoes: OPCOES_POR_PAGINA });
+  const pp = usePorPagina({ tela: "gestao5s.observacoes", inicial: 15 });
   const pageSize = pp.porPagina;
 
   const carregar = useCallback(() => {
@@ -158,7 +157,6 @@ export function ObservacoesEquipe5S() {
           loading={loading}
           onPageChange={setPage}
           label="observações"
-          opcoesPorPagina={pp.opcoes}
           onPageSizeChange={(n) => {
             pp.mudar(n);
             setPage(1);

@@ -81,6 +81,7 @@ export function OperacionalTitulosTable({ corte, empFilIds, recarga }: Operacion
   return (
     <ListaServidor<OperacionalRow>
       chave="financeiro.fluxo-caixa.operacional"
+      camposRelacionados
       url="/api/financeiro/fluxo-caixa/operacional/titulos"
       params={{ empFil: empFilIds, corte, q: busca || undefined }}
       recarga={recarga}

@@ -76,6 +76,7 @@ export function DescontosParcelas() {
 
       <ListaServidor<ParcelaLista>
         chave="projetos.descontos.parcelas"
+        camposRelacionados
         exportavel="descontos-parcelas"
         url="/api/descontos/parcelas"
         params={params}
@@ -83,8 +84,7 @@ export function DescontosParcelas() {
         chaveLinha={(p) => String(p.id)}
         rotulo="parcelas"
         vazio="Nenhuma parcela encontrada."
-        pageSize={30}
-        opcoesPorPagina={[30, 50, 100, 200]}
+        pageSize={25}
         rodape={(d) => (
           <div className="flex flex-wrap gap-x-8 gap-y-1 border-t border-border bg-surface px-5 py-3">
             {(

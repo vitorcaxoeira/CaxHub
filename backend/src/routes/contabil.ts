@@ -16,6 +16,8 @@ import {
   type CentroCustoParaMatriz,
 } from "../domain/matrizContabil";
 import { runSincronizacaoContabil, sincronizacaoContabilEmAndamento } from "../sync/contabilSyncOrchestrator";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_LANCAMENTOS_RESULTADO, FONTES_ORCAMENTO_CONTABIL } from "../domain/fontesDeCampos";
 
 export const contabilRouter = Router();
 // Só autenticado — quem vê O QUÊ é decidido rota a rota por gruposPermitidos/gruposConsultados
@@ -341,7 +343,9 @@ registrarListaConsultavel(
     const codccu = parseStringListParam(req.query.codccu);
     // Nunca confia no ctared cru do cliente: o mesmo recorte de grupo que decide o que ele vê na matriz decide o que ele pode detalhar.
     const grupos = gruposConsultados(permitidos, null);
+    const extras = extrasDaConsulta(FONTES_LANCAMENTOS_RESULTADO, req.query as Record<string, unknown>);
     return {
+      fontes: FONTES_LANCAMENTOS_RESULTADO,
       totais: ["valor"],
       interna: Prisma.sql`
         SELECT b.*,
@@ -351,7 +355,7 @@ registrarListaConsultavel(
           SELECT r.numlct::text AS numlct, r.ctared AS ctared, (r.ctared || ' - ' || pc.descta) AS conta, r.datlct AS datlct,
                  (CASE WHEN cc.desccu IS NOT NULL THEN r.codccu || ' - ' || cc.desccu ELSE r.codccu END) AS centro_custo,
                  r.debcre AS debcre, r.vlrrat::float8 AS vlrrat, (${Prisma.raw(FORMULA_VALOR_REALIZADO)})::float8 AS valor,
-                 l.cpllct AS cpllct, l.orilct AS orilct, l.sitlct AS sitlct, l.codhpd AS codhpd
+                 l.cpllct AS cpllct, l.orilct AS orilct, l.sitlct AS sitlct, l.codhpd AS codhpd${extras.selecao}
           FROM rateios_lancamento r
           JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
           LEFT JOIN centros_custo cc ON cc.codemp = r.codemp AND cc.codccu = r.codccu
@@ -372,6 +376,7 @@ registrarListaConsultavel(
         col.texto("centro_custo"),
         col.texto("debcre_label"),
         col.decimal("valor", { obrigatoria: true }),
+        ...extras.colunas,
       ],
       ordemPadrao: Prisma.sql`x."datlct" ASC, x."numlct" ASC`,
       // Templates de Histórico em lote (nunca por linha — N+1). Catálogo GLOBAL, join só por codhpd.
@@ -410,14 +415,16 @@ registrarListaConsultavel(
     if (!/^\d{4}-\d{2}$/.test(mesReferencia)) throw new ErroEntradaConsulta("Parâmetro mesReferencia é obrigatório no formato AAAA-MM");
     const codccu = parseStringListParam(req.query.codccu);
     const grupos = gruposConsultados(permitidos, null);
+    const extras = extrasDaConsulta(FONTES_ORCAMENTO_CONTABIL, req.query as Record<string, unknown>);
     return {
+      fontes: FONTES_ORCAMENTO_CONTABIL,
       totais: ["valor"],
       interna: Prisma.sql`
         SELECT o.mesano AS mesano, o.ctared AS ctared, (o.ctared || ' - ' || pc.descta) AS conta,
                (CASE WHEN f.nomfil IS NOT NULL THEN o.codfil || ' - ' || f.nomfil ELSE o.codfil::text END) AS filial,
                (CASE WHEN cc.desccu IS NOT NULL THEN o.codccu || ' - ' || cc.desccu ELSE o.codccu END) AS centro_custo,
                (CASE WHEN o.ctafin = 0 THEN NULL WHEN nf.descta IS NOT NULL THEN o.ctafin || ' - ' || nf.descta ELSE o.ctafin::text END) AS conta_financeira,
-               (-o.vlrrat)::float8 AS valor
+               (-o.vlrrat)::float8 AS valor${extras.selecao}
         FROM orcamentos_contabeis o
         JOIN plano_contabil pc ON pc.codemp = o.codemp AND pc.ctared = o.ctared
         LEFT JOIN filial f ON f.codemp = o.codemp AND f.codfil = o.codfil
@@ -433,6 +440,7 @@ registrarListaConsultavel(
         col.texto("centro_custo"),
         col.texto("conta_financeira"),
         col.decimal("valor", { obrigatoria: true }),
+        ...extras.colunas,
       ],
       ordemPadrao: Prisma.sql`x."conta" ASC, x."centro_custo" ASC`,
     };

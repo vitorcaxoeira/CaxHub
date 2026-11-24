@@ -2,7 +2,9 @@ import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MultiSelectDropdown, type MultiSelectOption } from "../../components/ui/MultiSelectDropdown";
-import { Skeleton } from "../../components/ui/Skeleton";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { CONTROLE } from "../../components/ui/estilos";
 import { cn } from "../../lib/cn";
 import { formatarValor, mesAnterior, type FormatoIndicador } from "../../lib/rentabilidade";
@@ -23,6 +25,8 @@ interface Resultado {
   total: Record<string, number | null>;
   avisos: string[];
 }
+/** Uma linha da tabela: um centro de custo, ou (`total`) o total do recorte desenhado no rodapé. */
+type LinhaTela = Linha & { total?: boolean };
 interface Opcoes {
   setores: string[];
   centros: { codccu: string; desccu: string }[];
@@ -40,7 +44,6 @@ export function RentabilidadePorCC() {
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
-  const [ordem, setOrdem] = useState<{ coluna: string; sentido: 1 | -1 } | null>(null);
 
   useEffect(() => {
     axios
@@ -73,19 +76,53 @@ export function RentabilidadePorCC() {
 
   const opcoesCc: MultiSelectOption<string>[] = useMemo(() => opcoes.centros.map((c) => ({ value: c.codccu, label: `${c.codccu} · ${c.desccu}` })), [opcoes.centros]);
 
-  const linhas = useMemo(() => {
-    if (!resultado) return [];
-    if (!ordem) return resultado.linhas;
-    return [...resultado.linhas].sort((a, b) => {
-      const va = a.valores[ordem.coluna];
-      const vb = b.valores[ordem.coluna];
-      if (va === null || va === undefined) return 1;
-      if (vb === null || vb === undefined) return -1;
-      return (va - vb) * ordem.sentido;
-    });
-  }, [resultado, ordem]);
+  // As colunas são os indicadores configurados + o centro de custo. Ordem, visibilidade, largura, título, filtro, ordem e resumo (Σ) por coluna são do kit de
+  // colunas do CaxHub (por usuário, chave abaixo); o total do recorte é o do servidor (razões e percentuais não se somam), na linha de total do rodapé.
+  const defs = useMemo<DefColuna<LinhaTela>[]>(
+    () => [
+      {
+        nome: "centroDeCusto",
+        titulo: "Centro de custo",
+        fixa: true,
+        congelada: true,
+        largura: 280,
+        texto: (l) => (l.total ? "Total do recorte" : `${l.codccu} ${l.desccu}`),
+        classe: "text-foreground",
+        render: (l) =>
+          l.total ? (
+            "Total do recorte"
+          ) : (
+            <>
+              <span className="font-mono text-xs text-muted">{l.codccu}</span> {l.desccu}
+            </>
+          ),
+      },
+      ...(resultado?.colunas ?? []).map<DefColuna<LinhaTela>>((c) => ({
+        nome: c.codigo,
+        titulo: c.rotulo,
+        direita: true,
+        largura: 130,
+        formatarValor: (v) => formatarValor(typeof v === "number" ? v : null, c.formato),
+        formatarResumo: (v) => formatarValor(v, c.formato),
+        // Percentual não se soma.
+        ...(c.formato === "percentual" ? { resumos: ["media", "minimo", "maximo", "mediana"] as const } : {}),
+        classe: (l) => cn("whitespace-nowrap tabular-nums", (l.valores[c.codigo] ?? 0) < 0 && c.formato !== "percentual" && "text-destructive"),
+        render: (l) => formatarValor(l.valores[c.codigo], c.formato),
+      })),
+    ],
+    [resultado?.colunas]
+  );
+  const colunasLocais = useMemo<ColunaLocal[]>(
+    () => [{ nome: "centroDeCusto", tipo: "texto", obrigatoria: true }, ...(resultado?.colunas ?? []).map((c): ColunaLocal => ({ nome: c.codigo, tipo: "decimal" }))],
+    [resultado?.colunas]
+  );
+  const lerCelula = useMemo(
+    () => (l: LinhaTela, coluna: string): unknown => (coluna === "centroDeCusto" ? `${l.codccu} ${l.desccu}` : l.valores[coluna]),
+    []
+  );
+  const linhaDeTotal = useMemo<LinhaTela | undefined>(() => (resultado ? { codccu: "", desccu: "Total do recorte", valores: resultado.total, total: true } : undefined), [resultado]);
+  const linhas = useMemo<LinhaTela[]>(() => resultado?.linhas ?? [], [resultado]);
 
-  const alternarOrdem = (coluna: string) => setOrdem((o) => (o?.coluna === coluna ? (o.sentido === -1 ? { coluna, sentido: 1 } : null) : { coluna, sentido: -1 }));
   const periodoInvalido = !!inicio && !!fim && inicio > fim;
 
   return (
@@ -139,78 +176,28 @@ export function RentabilidadePorCC() {
         </p>
       ))}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="max-h-[70vh] overflow-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead className="sticky top-0 z-10">
-              <tr>
-                <th className="sticky left-0 z-20 min-w-[16rem] bg-surface-2 px-4 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">Centro de custo</th>
-                {resultado?.colunas.map((c) => (
-                  <th key={c.codigo} className="whitespace-nowrap bg-surface-2 px-4 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                    <button type="button" onClick={() => alternarOrdem(c.codigo)} className="uppercase tracking-wider hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Ordenar">
-                      {c.rotulo}
-                      {ordem?.coluna === c.codigo ? (ordem.sentido === -1 ? " ↓" : " ↑") : ""}
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {carregando &&
-                Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i} className="border-t border-border/60">
-                    <td className="px-4 py-3">
-                      <Skeleton className="h-4 w-48" />
-                    </td>
-                    <td className="px-4 py-3" colSpan={Math.max(1, resultado?.colunas.length ?? 4)}>
-                      <Skeleton className="h-4 w-full" />
-                    </td>
-                  </tr>
-                ))}
-              {!carregando && resultado && resultado.colunas.length === 0 && (
-                <tr>
-                  <td className="px-4 py-8 text-center text-sm text-muted">
-                    Nenhum indicador configurado. <Link to="/admin/indicadores-rentabilidade" className="text-primary underline-offset-2 hover:underline">Cadastre ou importe a configuração</Link>.
-                  </td>
-                </tr>
-              )}
-              {!carregando && resultado && resultado.colunas.length > 0 && linhas.length === 0 && (
-                <tr>
-                  <td colSpan={resultado.colunas.length + 1} className="px-4 py-8 text-center text-sm text-muted">
-                    Nenhum centro de custo com movimento neste recorte.
-                  </td>
-                </tr>
-              )}
-              {!carregando &&
-                resultado &&
-                linhas.map((l) => (
-                  <tr key={l.codccu} className="border-t border-border/60 hover:bg-surface-2">
-                    <td className="sticky left-0 bg-surface px-4 py-2.5 text-foreground">
-                      <span className="font-mono text-xs text-muted">{l.codccu}</span> {l.desccu}
-                    </td>
-                    {resultado.colunas.map((c) => (
-                      <td key={c.codigo} className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums", (l.valores[c.codigo] ?? 0) < 0 && c.formato !== "percentual" && "text-destructive")}>
-                        {formatarValor(l.valores[c.codigo], c.formato)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-            </tbody>
-            {!carregando && resultado && resultado.colunas.length > 0 && linhas.length > 0 && (
-              <tfoot className="sticky bottom-0">
-                <tr className="border-t-2 border-border">
-                  <td className="sticky left-0 bg-surface-2 px-4 py-3 font-semibold text-foreground">Total do recorte</td>
-                  {resultado.colunas.map((c) => (
-                    <td key={c.codigo} className={cn("whitespace-nowrap bg-surface-2 px-4 py-3 text-right font-semibold tabular-nums", (resultado.total[c.codigo] ?? 0) < 0 && c.formato !== "percentual" && "text-destructive")}>
-                      {formatarValor(resultado.total[c.codigo], c.formato)}
-                    </td>
-                  ))}
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-      </div>
+      {!carregando && resultado && resultado.colunas.length === 0 ? (
+        <p className="rounded-lg border border-border bg-surface px-4 py-8 text-center text-sm text-muted">
+          Nenhum indicador configurado.{" "}
+          <Link to="/admin/indicadores-rentabilidade" className="text-primary underline-offset-2 hover:underline">
+            Cadastre ou importe a configuração
+          </Link>
+          .
+        </p>
+      ) : (
+        <TabelaLocal<LinhaTela>
+          chave="contabil.rentabilidade-cc"
+          defs={defs}
+          colunas={colunasLocais}
+          linhas={linhas}
+          ler={lerCelula}
+          chaveLinha={(l) => l.codccu}
+          loading={carregando}
+          vazio="Nenhum centro de custo com movimento neste recorte."
+          alturaMax="max-h-[70vh]"
+          linhaDeTotal={linhaDeTotal}
+        />
+      )}
     </div>
   );
 }

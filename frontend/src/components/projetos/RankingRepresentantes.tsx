@@ -143,8 +143,7 @@ export function RankingRepresentantes({
       detalhe={(r) => <PropostasAbertas codrep={r.codrep} params={empFiltroParams} />}
       rotulo="representantes"
       vazio="Nenhum representante encontrado com os filtros atuais."
-      pageSize={20}
-      opcoesPorPagina={[20, 50, 100]}
+      pageSize={15}
     />
   );
 }

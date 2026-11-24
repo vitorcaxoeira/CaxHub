@@ -204,8 +204,7 @@ function Historico({ areas, ehLider }: { areas: AreaOpcao[]; ehLider: boolean })
           onLinha={(a) => navigate(`/5s/avaliacoes/${a.id}`)}
           rotulo="avaliações"
           vazio="Nenhuma avaliação encontrada."
-          pageSize={20}
-          opcoesPorPagina={[20, 50, 100, 200]}
+          pageSize={15}
         />
       )}
     </>

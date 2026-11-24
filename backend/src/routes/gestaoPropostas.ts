@@ -60,6 +60,7 @@ import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
 import { runRatItemSyncPorCodpro } from "../sync/ratItemSync";
 import { runRatSyncPorCodpro } from "../sync/ratSync";
 import { col, registrarListaConsultavel, type ListaConsultavel } from "./listaConsultavel";
+import { FONTES_RATS } from "../domain/fontesDeCampos";
 
 // Tela Gestão Propostas (09/11/2026): gestão das propostas — horas vendidas × executadas em RAT, o que é faturável e as ações que mudam a
 // SITUAÇÃO da proposta (Finalizar, Em Execução...). Acesso (19/11/2026, domain/gestaoPropostasAcesso.ts): admin (tudo), papel comercial e líder do
@@ -227,14 +228,16 @@ registrarListaConsultavel(
       codemp,
       codpro,
     };
+    const extras = extrasDaConsulta(FONTES_RATS, req.query as Record<string, unknown>);
     const { com, interna } = consultaRatsLista(
       { todas: true, codfor: null, depexes: [] },
       filtros,
-      { conjunto: precisaCalcularConjuntoRats(req.query as Record<string, unknown>, filtros), comFaturamento: true },
+      { conjunto: precisaCalcularConjuntoRats(req.query as Record<string, unknown>, filtros), comFaturamento: true, extras },
     );
     return {
       com,
       interna,
+      fontes: FONTES_RATS,
       colunas: [
         col.inteiro("id", { obrigatoria: true }),
         col.inteiro("numrat"),
@@ -247,6 +250,7 @@ registrarListaConsultavel(
         col.inteiro("minutosFaturaveis", { obrigatoria: true }),
         col.inteiro("minutosNaoFaturaveis", { obrigatoria: true }),
         ...(comValores ? [col.decimal("valorFaturamento", { obrigatoria: true }), col.decimal("valorNaoFaturado", { obrigatoria: true })] : []),
+        ...extras.colunas,
       ],
       ordemPadrao: ORDEM_PADRAO_RATS,
       pageSizePadrao: 10,

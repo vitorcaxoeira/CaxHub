@@ -27,6 +27,8 @@ import {
   DEPEXE_LABELS,
   FORFAT_LABELS,
 } from "../domain/propostasDominio";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_PROPOSTAS_PROJETOS } from "../domain/fontesDeCampos";
 
 export const projetosRouter = Router();
 projetosRouter.use(requireAuth, requireRole("admin", "comercial"));
@@ -833,7 +835,9 @@ registrarListaConsultavel(
     const { clientes, representantes, tipven, modpro, datproInicio, datproFim } = lerFiltrosComuns(req);
     const alerta = typeof req.query.alerta === "string" && req.query.alerta !== "" ? req.query.alerta : null;
     const estagnadaDias = Math.max(1, Math.min(365, parseIntParam(req.query.estagnadaDias) ?? 15));
+    const extras = extrasDaConsulta(FONTES_PROPOSTAS_PROJETOS, req.query as Record<string, unknown>);
     return {
+      fontes: FONTES_PROPOSTAS_PROJETOS,
       com: Prisma.sql`WITH item_valor AS (
           SELECT codemp, codpro,
                  SUM(qtdhor::numeric / 60 * COALESCE(valhor, 0))::float8 AS valor,
@@ -848,7 +852,7 @@ registrarListaConsultavel(
                ${rotuloSql(Prisma.sql`p.modpro`, MODPRO_LABELS, "Modalidade")} AS modalidade,
                ${rotuloSql(Prisma.sql`p.forfat`, FORFAT_LABELS, "Forma")} AS forfat,
                ${SITUACAO_PROPOSTA_SQL} AS situacao,
-               ${TOM_PROPOSTA_SQL} AS tom
+               ${TOM_PROPOSTA_SQL} AS tom${extras.selecao}
         FROM propostas p
         JOIN clientes c ON c.codcli = p.codcli
         LEFT JOIN item_valor iv ON iv.codemp = p.codemp AND iv.codpro = p.codpro
@@ -873,6 +877,7 @@ registrarListaConsultavel(
         col.decimal("horas", { obrigatoria: true }),
         col.decimal("valor", { obrigatoria: true }),
         col.texto("situacao", { obrigatoria: true }),
+        ...extras.colunas,
       ],
       totais: ["valor", "horas"],
       ordemPadrao: Prisma.sql`x."datpro" DESC NULLS LAST, x."codpro" DESC`,

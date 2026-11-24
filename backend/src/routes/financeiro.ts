@@ -8,6 +8,8 @@ import {
   runSincronizacaoContasReceber,
   sincronizacaoContasReceberEmAndamento,
 } from "../sync/contasReceberSyncOrchestrator";
+import { extrasDaConsulta } from "../consultas/camposRelacionados";
+import { FONTES_TITULOS_RECEBER } from "../domain/fontesDeCampos";
 
 const JOBS_CONTAS_RECEBER = [
   "empresa-sync",
@@ -314,7 +316,9 @@ registrarListaConsultavel(
     const vctproFim = parseDateParam(req.query.vctproFim);
     const datemiInicio = parseDateParam(req.query.datemiInicio);
     const datemiFim = parseDateParam(req.query.datemiFim);
+    const extras = extrasDaConsulta(FONTES_TITULOS_RECEBER, req.query as Record<string, unknown>);
     return {
+      fontes: FONTES_TITULOS_RECEBER,
       interna: Prisma.sql`
         SELECT t.codemp, t.codfil, t.numtit, t.codtpt, tt.abrtpt, (t.codemp || '/' || t.codfil) AS unidade, (t.numtit || '·' || tt.abrtpt) AS titulo,
                t.codcli, c.nomcli, (t.codcli || ' - ' || c.nomcli) AS cliente, e.nomemp, f.nomfil,
@@ -330,7 +334,7 @@ registrarListaConsultavel(
                (CASE WHEN t.sittit = 'AB' AND tt.recsom <> 'C' AND t.vctpro >= CURRENT_DATE THEN t.vlrabe ELSE 0 END)::float8 AS vlr_a_vencer,
                (CASE WHEN tt.recsom = 'C' AND t.sittit LIKE 'A%' THEN -t.vlrabe ELSE 0 END)::float8 AS vlr_credito,
                COALESCE((SELECT SUM(m.vlrliq) FROM movimentos_receber m JOIN transacoes tr ON tr.codemp = m.codemp AND tr.codtns = m.codtns
-                          WHERE m.codemp = t.codemp AND m.codfil = t.codfil AND m.numtit = t.numtit AND m.codtpt = t.codtpt AND tr.rectpb = 'PG'), 0)::float8 AS vlr_pago
+                          WHERE m.codemp = t.codemp AND m.codfil = t.codfil AND m.numtit = t.numtit AND m.codtpt = t.codtpt AND tr.rectpb = 'PG'), 0)::float8 AS vlr_pago${extras.selecao}
         FROM titulos_receber t
         JOIN clientes c ON c.codcli = t.codcli
         JOIN tipos_titulo tt ON tt.codtpt = t.codtpt
@@ -372,6 +376,7 @@ registrarListaConsultavel(
         col.decimal("vlr_a_vencer", { obrigatoria: true, semValores: true }),
         col.decimal("vlr_credito", { obrigatoria: true, semValores: true }),
         col.decimal("vlr_pago", { obrigatoria: true, semValores: true }),
+        ...extras.colunas,
       ],
       totais: ["vlr_vencido", "vlr_a_vencer", "vlr_credito", "vlr_pago"],
       ordemPadrao: Prisma.sql`x."dias_atraso" DESC`,

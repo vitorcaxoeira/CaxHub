@@ -196,6 +196,7 @@ export function DescontosLancamentos() {
 
       <ListaServidor<ProcessoLista>
         chave="projetos.descontos.processos"
+        camposRelacionados
         exportavel="descontos-lancamentos"
         url="/api/descontos/processos"
         params={params}
@@ -204,8 +205,7 @@ export function DescontosLancamentos() {
         chaveLinha={(p) => String(p.id)}
         rotulo="processos"
         vazio="Nenhum desconto encontrado."
-        pageSize={30}
-        opcoesPorPagina={[30, 50, 100, 200]}
+        pageSize={25}
         detalhe={(p) => <DetalheProcesso id={p.id} recarga={recarga} onMudou={() => setRecarga((n) => n + 1)} onEditar={setEditando} />}
         rodape={(d) => (
           <div className="flex flex-wrap gap-x-8 gap-y-1 border-t border-border bg-surface px-5 py-3">

@@ -55,7 +55,7 @@ const STATUS_VALIDOS = ["pendente", "enviando", "enviado", "bloqueado", "invalid
 sincronizacaoRouter.get("/", async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 30));
     const status =
       typeof req.query.status === "string" && (STATUS_VALIDOS as readonly string[]).includes(req.query.status)
         ? req.query.status
@@ -217,7 +217,7 @@ const STATUS_VALIDOS_DESPESA = ["pendente", "enviando", "enviado", "bloqueado"] 
 sincronizacaoRouter.get("/despesas", async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 30));
     const status =
       typeof req.query.status === "string" && (STATUS_VALIDOS_DESPESA as readonly string[]).includes(req.query.status)
         ? req.query.status
@@ -340,7 +340,7 @@ const STATUS_VALIDOS_PROPOSTA = ["pendente", "enviando", "enviado", "bloqueado"]
 sincronizacaoRouter.get("/propostas-situacao", async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 30));
     const status =
       typeof req.query.status === "string" && (STATUS_VALIDOS_PROPOSTA as readonly string[]).includes(req.query.status)
         ? req.query.status

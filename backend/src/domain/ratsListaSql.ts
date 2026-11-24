@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { INTEGRACAO_ERP_LABELS, type IntegracaoErpStatus, SITRAT_LABELS, SITRAT_ORDER } from "./ratDominio";
 import { RAT_ITEM_VALIDO } from "./eficienciaDados";
 import { AGREGADOS_DE_FATURAMENTO, ITENS_COM_ITEM_DA_PROPOSTA } from "./gestaoPropostasSql";
+import type { ExtrasDaConsulta } from "../consultas/camposRelacionados";
 
 // Lista de RATs de Meus Apontamentos em SQL (04/11/2026): uma linha por RAT visível, com cliente, consultor, itens, minutos e o status
 // de integração com o Senior JÁ calculados no banco. É a consulta interna de `registrarListaConsultavel` (GET /rats/lista): por fora
@@ -70,6 +71,8 @@ export const ROTULOS_INTEGRACAO = STATUS_INTEGRACAO.map((s) => INTEGRACAO_ERP_LA
 export const ROTULOS_SITRAT = [...SITRAT_ORDER.map((s) => SITRAT_LABELS[s]), "Excluída"];
 
 export interface OpcoesConsultaRats {
+  /** "Mais campos" ligados pela pessoa (consultas/camposRelacionados.ts): entram no SELECT de dentro; a camada de fora é `b.*` e já os repassa. */
+  extras?: ExtrasDaConsulta;
   /** Só as candidatas a "Fechar Todos": Digitado (9) e não removidas no Senior. */
   somenteDigitadasAtivas?: boolean;
   /**
@@ -228,7 +231,7 @@ export function consultaRatsLista(
       COALESCE(cons.nome, 'Fornecedor ' || r.codfor::text) AS "consultorNome",
       ${totalItens} AS "totalItens",
       ${totalMinutos} AS "totalMinutos",
-      ${STATUS_POR_RANK(rank)} AS integracao${faturamento}
+      ${STATUS_POR_RANK(rank)} AS integracao${faturamento}${opcoes.extras?.selecao ?? Prisma.empty}
     FROM rats r
     LEFT JOIN cons ON cons.codfor = r.codfor
     ${juncoes} ${ondeVis}`;
