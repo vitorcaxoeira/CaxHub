@@ -10,7 +10,7 @@ import { useToast } from "../../components/ui/Toast";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { cn } from "../../lib/cn";
 import { descreverDetalhe, mesAnterior, resumirResultado, ROTULO_ORIGEM, rotuloCompetencia } from "../../lib/custoHora";
-import { alternarRegra, type ContaDoPlano, type RegraConta } from "../../lib/rentabilidade";
+import { alternarRegra, chaveDaConta, type ContaDoPlano, type RegraConta } from "../../lib/rentabilidade";
 import { formatarReais } from "../../lib/vinculoConsultores";
 
 interface Config {
@@ -445,6 +445,7 @@ const COLUNAS_MOVIMENTO: DefColuna<MovimentoConta, AcoesMovimento>[] = [
 
 function AbaContas({ config, recarregar, setErro, setAviso }: { config: Config; recarregar: () => Promise<void>; setErro: (e: string | null) => void; setAviso: (a: string | null) => void }) {
   const [plano, setPlano] = useState<ContaDoPlano[] | null>(null);
+  const [usadas, setUsadas] = useState<ReadonlySet<string>>(new Set());
   const salvas = useMemo<RegraConta[]>(() => config.contasFolha.map((c) => ({ codemp: c.codemp, ctared: c.ctared, acao: c.acao as "incluir" | "excluir" })), [config.contasFolha]);
   const [regras, setRegras] = useState<RegraConta[]>(salvas);
   const [competencia, setCompetencia] = useState(mesAnterior());
@@ -459,7 +460,12 @@ function AbaContas({ config, recarregar, setErro, setAviso }: { config: Config; 
       .get<{ contas: ContaDoPlano[] }>("/api/rentabilidade/plano")
       .then(({ data }) => setPlano(data.contas))
       .catch((err) => setErro(mensagemDe(err, "Falha ao carregar o plano de contas")));
+    axios
+      .get<{ contas: { codemp: number; ctared: number }[] }>("/api/custo-hora/contas-folha/usadas")
+      .then(({ data }) => setUsadas(new Set(data.contas.map(chaveDaConta))))
+      .catch((err) => setErro(mensagemDe(err, "Falha ao carregar as contas usadas na folha")));
   }, [setErro]);
+  const recorte = useMemo(() => ({ rotulo: "Só contas usadas na folha", contas: usadas }), [usadas]);
 
   const carregarMovimento = useCallback(() => {
     setLoading(true);
@@ -498,7 +504,7 @@ function AbaContas({ config, recarregar, setErro, setAviso }: { config: Config; 
   return (
     <div className="space-y-5">
       <div className="rounded-lg border border-border bg-surface p-4">
-        <SeletorContas plano={plano} regras={regras} onChange={setRegras} rotuloBusca="Contas do plano (qualquer nível)" semAjuda />
+        <SeletorContas plano={plano} regras={regras} onChange={setRegras} rotuloBusca="Contas do plano (qualquer nível)" semAjuda recorte={recorte} />
         <div className="mt-3 flex items-center justify-end gap-3">
           {mudou && <span className="text-[12px] text-warning">Regras alteradas e ainda não salvas.</span>}
           <button type="button" className={BOTAO} disabled={!mudou || salvando} onClick={() => setRegras(salvas)}>

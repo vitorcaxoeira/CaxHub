@@ -130,6 +130,18 @@ interface MovimentoConta {
   colaboradores: number;
 }
 
+// As contas que a folha já contabilizou em qualquer competência do espelho (24/11/2026): o recorte "Só contas usadas na folha" do seletor de contas.
+// Histórico inteiro, não um mês: a regra de conta é permanente.
+custoHoraRouter.get("/contas-folha/usadas", async (_req, res) => {
+  try {
+    const contas = await prisma.$queryRaw<{ codemp: number; ctared: number }[]>`
+      SELECT DISTINCT numemp AS codemp, ctared FROM hcm_contabilizacao_folha WHERE ctared IS NOT NULL ORDER BY 1, 2`;
+    res.json({ contas });
+  } catch (error) {
+    handleError(res, error, "contas-folha-usadas");
+  }
+});
+
 // O que a folha contabilizou no mês, por conta do plano (débito, crédito e quantos colaboradores): é o que a pessoa olha para decidir quais contas entram
 // no custo — e vê, na hora, o efeito das regras já gravadas (`selecionada`). O custo usa só o DÉBITO (decisão da diretoria, 19/11/2026); o crédito é informativo.
 custoHoraRouter.get("/contas-folha/movimento", async (req, res) => {
