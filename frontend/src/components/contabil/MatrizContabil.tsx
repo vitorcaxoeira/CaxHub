@@ -72,6 +72,8 @@ interface MatrizContabilProps<V> {
   // Com `subcolunas`, só nas marcadas `detalhavel` (e o clique informa qual foi).
   onClickValor?: (params: ValorClicado) => void;
   subcolunas?: SubcolunaMatriz<V>[];
+  /** Visão Ano (24/11/2026): o cabeçalho de cada ano vira link que abre o ano mês a mês. Só age em colunas 'AAAA'. */
+  onAbrirPeriodo?: (periodo: string) => void;
 }
 
 const MESES_ABREV = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
@@ -86,6 +88,10 @@ export function formatarMes(mes: string): string {
   return `${MESES_ABREV[Number(mesNum) - 1]}/${ano.slice(2)}`;
 }
 
+// Coluna de ano ("AAAA", visão Ano) mostra só o ano; coluna de mês ("AAAA-MM") mostra "Jun/26".
+const ehAno = (periodo: string) => periodo.length === 4;
+const rotuloPeriodo = (periodo: string) => (ehAno(periodo) ? periodo : formatarMes(periodo));
+
 function Valor({ v, formato = "numero", className = "" }: { v: number | null; formato?: "numero" | "percentual"; className?: string }) {
   if (v === null || !Number.isFinite(v)) return <span className={`font-mono text-[12.5px] text-muted ${className}`}>—</span>;
   return (
@@ -95,7 +101,7 @@ function Valor({ v, formato = "numero", className = "" }: { v: number | null; fo
   );
 }
 
-export function MatrizContabil<V = ValoresPadrao>({ meses, linhas, totalGeral, loading, rotuloColuna = "Conta", onClickValor, subcolunas }: MatrizContabilProps<V>) {
+export function MatrizContabil<V = ValoresPadrao>({ meses, linhas, totalGeral, loading, rotuloColuna = "Conta", onClickValor, subcolunas, onAbrirPeriodo }: MatrizContabilProps<V>) {
   const multiplas = !!subcolunas && subcolunas.length > 0;
   const colunas = (multiplas ? subcolunas : [SUBCOLUNA_PADRAO]) as SubcolunaMatriz<V>[];
   // Com várias subcolunas, cada mês é um bloco: borda à esquerda da 1ª subcoluna para separar os meses.
@@ -185,7 +191,18 @@ export function MatrizContabil<V = ValoresPadrao>({ meses, linhas, totalGeral, l
                   colSpan={colunas.length}
                   className={`min-w-[92px] px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-wider text-muted ${multiplas ? "border-l border-border text-center" : "text-right"}`}
                 >
-                  {formatarMes(mes)}
+                  {onAbrirPeriodo && ehAno(mes) ? (
+                    <button
+                      type="button"
+                      onClick={() => onAbrirPeriodo(mes)}
+                      title={`Ver ${mes} mês a mês`}
+                      className="rounded px-1 underline decoration-dotted underline-offset-2 hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {mes}
+                    </button>
+                  ) : (
+                    rotuloPeriodo(mes)
+                  )}
                 </th>
               ))}
               <th
