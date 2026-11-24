@@ -64,9 +64,9 @@ export function AppShell() {
           onSalvarMenuPadrao={() => void menuPadrao.salvar(sidebarOpen ? "aberto" : "recolhido")}
           onToggleMobileMenu={() => setMobileMenuOpen((open) => !open)}
         />
-        {/* Menu recolhido (faixa de ícones): o conteúdo usa toda a largura disponível (06/11/2026, tabelas largas cortavam colunas com faixas vazias dos
-            dois lados). Com o menu aberto segue a largura máxima de sempre. */}
-        <main className={`w-full flex-1 p-4 lg:p-6 ${sidebarOpen ? "mx-auto max-w-7xl" : "max-w-none"}`}>
+        {/* O conteúdo usa toda a largura disponível, com o menu aberto ou recolhido (06/11/2026 liberou o recolhido; 24/11/2026 liberou o aberto: em monitor
+            grande o `max-w-7xl` de 1.280 px deixava ~190 px vazios de cada lado). Tela que precisa de largura estreita limita a si própria (`max-w-*`). */}
+        <main className="w-full max-w-none flex-1 p-4 lg:p-6">
           <Outlet />
         </main>
       </div>
