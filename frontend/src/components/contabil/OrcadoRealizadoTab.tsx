@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { MatrizContabil, type LinhaMatriz, type SubcolunaMatriz, type ValorClicado } from "./MatrizContabil";
 import { ModalDetalheLancamentos } from "./ModalDetalheLancamentos";
 import { ModalDetalheOrcamento } from "./ModalDetalheOrcamento";
-import { variacao, type FormatoVariacao } from "../../lib/orcadoRealizado";
+import { agruparPorAno, variacao, type FormatoVariacao, type Periodo } from "../../lib/orcadoRealizado";
+import { ModalAnoOrcadoRealizado } from "./ModalAnoOrcadoRealizado";
 
 interface OrcadoRealizadoTabProps {
   anos: number[];
@@ -18,17 +19,22 @@ interface OrcadoRealizadoTabProps {
   onFormatoVariacao: (f: FormatoVariacao) => void;
   /** Estrela do padrão salvo (usePadroesTela da página). */
   estrelaVariacao?: ReactNode;
+  /** Visão das colunas: Mês, ou Ano (clicar no ano abre o modal mês a mês). Vai pra URL como `periodo=ano`. */
+  periodo: Periodo;
+  onPeriodo: (p: Periodo) => void;
+  /** Estrela do padrão salvo da visão (usePadroesTela da página). */
+  estrelaPeriodo?: ReactNode;
 }
 
 /** Os números de uma linha (e do total geral) que a resposta traz: orçado e realizado por mês e no período. */
-interface ValoresOrcadoRealizado {
+export interface ValoresOrcadoRealizado {
   valoresRealizado: number[];
   valoresOrcado: number[];
   totalRealizado: number;
   totalOrcado: number;
 }
 
-interface RespostaOrcadoRealizado {
+export interface RespostaOrcadoRealizado {
   meses: string[];
   linhas: LinhaMatriz<ValoresOrcadoRealizado>[];
   totalGeral: ValoresOrcadoRealizado;
@@ -39,6 +45,11 @@ const RESULTADO_VAZIO: RespostaOrcadoRealizado = {
   linhas: [],
   totalGeral: { valoresRealizado: [], valoresOrcado: [], totalRealizado: 0, totalOrcado: 0 },
 };
+
+const PERIODOS: { value: Periodo; label: string }[] = [
+  { value: "mes", label: "Mês" },
+  { value: "ano", label: "Ano" },
+];
 
 const FORMATOS: { value: FormatoVariacao; label: string }[] = [
   { value: "valor", label: "R$" },
@@ -71,16 +82,22 @@ export function OrcadoRealizadoTab({
   formatoVariacao,
   onFormatoVariacao,
   estrelaVariacao,
+  periodo,
+  onPeriodo,
+  estrelaPeriodo,
 }: OrcadoRealizadoTabProps) {
   const [resultado, setResultado] = useState<RespostaOrcadoRealizado>(RESULTADO_VAZIO);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   // Origem do valor clicado (como na Matriz): Realizado abre os lançamentos contabilizados; Orçado, as linhas do orçamento.
   const [detalhe, setDetalhe] = useState<ValorClicado | null>(null);
+  // Ano aberto no modal (visão Ano). Fecha quando os filtros mudam, junto com a nova busca.
+  const [anoAberto, setAnoAberto] = useState<string | null>(null);
 
   useEffect(() => {
     if (anos.length === 0) return;
     setLoading(true);
+    setAnoAberto(null);
     const params: Record<string, string> = { anos: anos.join(",") };
     if (meses.length > 0) params.meses = meses.join(",");
     if (niveis.length > 0) params.niveis = niveis.join(",");
@@ -100,10 +117,35 @@ export function OrcadoRealizadoTab({
 
   const colunas = useMemo(() => subcolunas(formatoVariacao), [formatoVariacao]);
 
+  // Visão Ano: as colunas viram os anos (soma dos meses). Os totais são os mesmos da visão Mês.
+  const exibidos = useMemo(
+    () => (periodo === "ano" ? agruparPorAno(resultado.meses, resultado.linhas, resultado.totalGeral) : resultado),
+    [periodo, resultado]
+  );
+
   return (
     <div>
-      <div className="mb-4 flex items-center gap-2 text-sm text-muted">
-        <span>Variação</span>
+      <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex items-center gap-2 text-sm text-muted">
+          <span>Visualização</span>
+          <div className="flex gap-1 rounded-md border border-border p-1">
+            {PERIODOS.map((p) => (
+              <button
+                key={p.value}
+                onClick={() => onPeriodo(p.value)}
+                className={`rounded-md px-3 py-1 text-sm font-medium transition ${
+                  periodo === p.value ? "bg-primary text-primary-foreground" : "text-muted hover:bg-surface-2 hover:text-foreground"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+            <span className="relative inline-block h-7 w-7">{estrelaPeriodo}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-sm text-muted">
+          <span>Variação</span>
         <div className="flex gap-1 rounded-md border border-border p-1">
           {FORMATOS.map((f) => (
             <button
@@ -119,6 +161,7 @@ export function OrcadoRealizadoTab({
           <span className="relative inline-block h-7 w-7">{estrelaVariacao}</span>
         </div>
       </div>
+      </div>
 
       {erro && (
         <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
@@ -132,17 +175,22 @@ export function OrcadoRealizadoTab({
         </p>
       ) : (
         <MatrizContabil<ValoresOrcadoRealizado>
-          meses={resultado.meses}
-          linhas={resultado.linhas}
-          totalGeral={resultado.totalGeral}
+          meses={exibidos.meses}
+          linhas={exibidos.linhas}
+          totalGeral={exibidos.totalGeral}
           loading={loading}
           subcolunas={colunas}
-          onClickValor={setDetalhe}
+          // Na visão Ano o detalhe é por mês (o backend recebe AAAA-MM): clicar no ano abre o modal, e de lá sai o detalhe.
+          onClickValor={periodo === "mes" ? setDetalhe : undefined}
+          onAbrirPeriodo={periodo === "ano" ? setAnoAberto : undefined}
         />
       )}
 
-      {detalhe?.subcoluna === "realizado" && <ModalDetalheLancamentos {...detalhe} codccu={centrosCusto} onClose={() => setDetalhe(null)} />}
-      {detalhe?.subcoluna === "orcado" && <ModalDetalheOrcamento {...detalhe} codccu={centrosCusto} onClose={() => setDetalhe(null)} />}
+      {periodo === "mes" && detalhe?.subcoluna === "realizado" && <ModalDetalheLancamentos {...detalhe} codccu={centrosCusto} onClose={() => setDetalhe(null)} />}
+      {periodo === "mes" && detalhe?.subcoluna === "orcado" && <ModalDetalheOrcamento {...detalhe} codccu={centrosCusto} onClose={() => setDetalhe(null)} />}
+      {anoAberto && (
+        <ModalAnoOrcadoRealizado ano={anoAberto} resultado={resultado} colunas={colunas} codccu={centrosCusto} onClose={() => setAnoAberto(null)} />
+      )}
 
       <p className="mt-4 text-[11px] text-muted">
         Orçado vem de orcamentos_contabeis, com o sinal normalizado pra mesma convenção do
