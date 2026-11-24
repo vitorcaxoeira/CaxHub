@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { No } from "../../formulas/formula";
-import { calcularIndicadores, contasEmMaisDeUm, contasSemIndicador, contasSelecionadas, ordemDeCalculo, quemUsa, validarIndicador, type ContaDoPlano } from "./indicadores";
+import { calcularIndicadores, contasEmMaisDeUm, contasSemIndicador, contasSelecionadas, classificarOrigem, ordemDeCalculo, origemDoIndicador, ordenarGrupos, quemUsa, validarIndicador, type ContaDoPlano, type IndicadorConfigurado } from "./indicadores";
 
 const col = (nome: string): No => ({ t: "col", nome });
 const num = (v: number): No => ({ t: "num", v });
@@ -144,4 +144,90 @@ test("diagnóstico: conta sem indicador e conta em mais de um", () => {
   const sel = new Map([["Servicos", new Set(["1:10", "1:11"])], ["Deducoes", new Set(["1:11", "1:12"])]]);
   assert.deepEqual(contasSemIndicador(["1:10", "1:99"], sel), ["1:99"]);
   assert.deepEqual(contasEmMaisDeUm(sel), [{ conta: "1:11", indicadores: ["Servicos", "Deducoes"] }]);
+});
+
+// ---------- origem do valor ----------
+const ind = (codigo: string, tipo: "contas" | "formula" | "sistema", extra: Partial<IndicadorConfigurado> = {}): IndicadorConfigurado => ({
+  id: 1, codigo, rotulo: codigo, tipo, base: "realizado", natureza: "ambos", formato: "moeda", formulaTexto: null, formulaArvore: null, fonte: null, ordem: 1, visivel: true, contas: [], ...extra,
+});
+
+test("origem: indicador de contas (realizado) vale por si; orçado não tem origem em lançamentos", () => {
+  const todos = [ind("ATST", "contas"), ind("ORC", "contas", { base: "orcado" })];
+  assert.deepEqual(origemDoIndicador("ATST", todos), [{ codigo: "ATST", sinal: 1 }]);
+  assert.equal(origemDoIndicador("ORC", todos), null);
+  assert.equal(origemDoIndicador("NAO_EXISTE", todos), null);
+});
+
+test("origem: fórmula de soma e subtração abre cada parcela com o sinal", () => {
+  const todos = [
+    ind("A", "contas"), ind("B", "contas"), ind("C", "contas"),
+    ind("SOMA", "formula", { formulaArvore: bin("+", bin("+", col("A"), col("B")), col("C")) }),
+    ind("DIF", "formula", { formulaArvore: bin("-", col("A"), bin("+", col("B"), col("C"))) }),
+  ];
+  assert.deepEqual(origemDoIndicador("SOMA", todos), [{ codigo: "A", sinal: 1 }, { codigo: "B", sinal: 1 }, { codigo: "C", sinal: 1 }]);
+  assert.deepEqual(origemDoIndicador("DIF", todos), [{ codigo: "A", sinal: 1 }, { codigo: "B", sinal: -1 }, { codigo: "C", sinal: -1 }]);
+});
+
+test("origem: fórmula que cita outra fórmula é aberta até as contas", () => {
+  const todos = [
+    ind("A", "contas"), ind("B", "contas"), ind("R", "contas"),
+    ind("TOT", "formula", { formulaArvore: bin("+", col("A"), col("B")) }),
+    ind("BRUTA", "formula", { formulaArvore: bin("-", col("TOT"), col("R")) }),
+  ];
+  assert.deepEqual(origemDoIndicador("BRUTA", todos), [{ codigo: "A", sinal: 1 }, { codigo: "B", sinal: 1 }, { codigo: "R", sinal: -1 }]);
+});
+
+test("origem: razão, número, função e indicador do sistema não têm origem em lançamentos", () => {
+  const todos = [
+    ind("A", "contas"), ind("B", "contas"), ind("H", "sistema", { fonte: "HorasKyria" }),
+    ind("RAZAO", "formula", { formulaArvore: bin("/", col("A"), col("B")) }),
+    ind("MAIS_NUM", "formula", { formulaArvore: bin("+", col("A"), num(10)) }),
+    ind("COM_HORAS", "formula", { formulaArvore: bin("+", col("A"), col("H")) }),
+    ind("ABS_A", "formula", { formulaArvore: abs(col("A")) }),
+  ];
+  for (const c of ["RAZAO", "MAIS_NUM", "COM_HORAS", "ABS_A", "H"]) assert.equal(origemDoIndicador(c, todos), null, c);
+});
+
+test("origem: fórmula em círculo não trava", () => {
+  const todos = [ind("X", "formula", { formulaArvore: col("Y") }), ind("Y", "formula", { formulaArvore: col("X") })];
+  assert.equal(origemDoIndicador("X", todos), null);
+});
+
+// ---------- grupos ----------
+test("grupos: alfabéticos, sem grupo por último, sem repetir", () => {
+  assert.deepEqual(ordenarGrupos(["SHCM", "", "ADM", "ADM", "COM"]), ["ADM", "COM", "SHCM", ""]);
+  assert.deepEqual(ordenarGrupos([]), []);
+});
+
+// ---------- classificação da origem (fase 2) ----------
+test("classificar: contas e soma de contas são lançamentos", () => {
+  const todos = [ind("A", "contas"), ind("B", "contas"), ind("S", "formula", { formulaArvore: bin("+", col("A"), col("B")) })];
+  assert.deepEqual(classificarOrigem("A", todos), { tipo: "lancamentos", componentes: [{ codigo: "A", sinal: 1 }] });
+  assert.deepEqual(classificarOrigem("S", todos), { tipo: "lancamentos", componentes: [{ codigo: "A", sinal: 1 }, { codigo: "B", sinal: 1 }] });
+});
+
+test("classificar: indicador do sistema e soma deles são horas", () => {
+  const todos = [
+    ind("HK", "sistema", { fonte: "HorasKyria", formato: "horas" }), ind("HR", "sistema", { fonte: "HorasRat", formato: "horas" }),
+    ind("HT", "formula", { formulaArvore: bin("+", col("HK"), col("HR")) }),
+  ];
+  assert.deepEqual(classificarOrigem("HK", todos), { tipo: "horas", componentes: [{ codigo: "HK", sinal: 1 }] });
+  assert.deepEqual(classificarOrigem("HT", todos), { tipo: "horas", componentes: [{ codigo: "HK", sinal: 1 }, { codigo: "HR", sinal: 1 }] });
+});
+
+test("classificar: razão, ABS, TOTAL e mistura de contas com horas são fórmula, com as referências e as de dentro de TOTAL", () => {
+  const todos = [
+    ind("A", "contas"), ind("B", "contas"), ind("HT", "sistema", { fonte: "HorasKyria" }),
+    ind("MARGEM", "formula", { formulaArvore: bin("-", col("A"), abs(col("B"))) }),
+    ind("PCT", "formula", { formulaArvore: bin("/", col("HT"), total("HT")) }),
+    ind("MISTO", "formula", { formulaArvore: bin("+", col("A"), col("HT")) }),
+  ];
+  assert.deepEqual(classificarOrigem("MARGEM", todos), { tipo: "formula", referencias: [{ codigo: "A", emTotal: false }, { codigo: "B", emTotal: false }] });
+  assert.deepEqual(classificarOrigem("PCT", todos), { tipo: "formula", referencias: [{ codigo: "HT", emTotal: true }] });
+  assert.equal(classificarOrigem("MISTO", todos)?.tipo, "formula");
+});
+
+test("classificar: conta de base orçada e código desconhecido não têm origem", () => {
+  assert.equal(classificarOrigem("ORC", [ind("ORC", "contas", { base: "orcado" })]), null);
+  assert.equal(classificarOrigem("X", []), null);
 });

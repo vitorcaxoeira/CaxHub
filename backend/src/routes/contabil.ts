@@ -323,6 +323,17 @@ contabilRouter.get("/resultado", async (req: AuthenticatedRequest, res) => {
 // Filtro e ordem por coluna, resumo no rodapé e colunas calculadas (listaConsultavel.ts, trazido do CaxHub_Dash em 03/11/2026): a consulta
 // é a da tela, vira subconsulta. O recorte de grupos do usuário (gestor) continua aqui dentro, igual à matriz. Histórico: a coluna filtra e
 // ordena pelo complemento (cpllct); o texto com o template do histórico padrão é montado só para a página (`decorar`).
+/** Acrescenta `historico` (o complemento do lançamento com o template do histórico padrão) às linhas que trazem `cpllct` e `codhpd`. Templates em lote (nunca por linha — N+1). */
+export async function comHistoricoPadrao<T extends Record<string, unknown>>(linhas: T[]): Promise<(T & { historico: string | null })[]> {
+  const codhpds = [...new Set(linhas.map((l) => l.codhpd).filter((c): c is number => typeof c === "number"))];
+  const templates = codhpds.length > 0 ? await prisma.historicoPadrao.findMany({ where: { codhpd: { in: codhpds } } }) : [];
+  const templatePorCodhpd = new Map(templates.map((t) => [t.codhpd, t.deshpd]));
+  return linhas.map((l) => ({
+    ...l,
+    historico: formatarHistorico((l.cpllct as string | null) ?? null, typeof l.codhpd === "number" ? templatePorCodhpd.get(l.codhpd) : null),
+  }));
+}
+
 registrarListaConsultavel(
   contabilRouter,
   "/resultado/lancamentos",
@@ -380,16 +391,8 @@ registrarListaConsultavel(
       ],
       ordemPadrao: Prisma.sql`x."datlct" ASC, x."numlct" ASC`,
       // Templates de Histórico em lote (nunca por linha — N+1). Catálogo GLOBAL, join só por codhpd.
-      decorar: async (linhas) => {
-        const codhpds = [...new Set(linhas.map((l) => l.codhpd).filter((c): c is number => typeof c === "number"))];
-        const templates = codhpds.length > 0 ? await prisma.historicoPadrao.findMany({ where: { codhpd: { in: codhpds } } }) : [];
-        const templatePorCodhpd = new Map(templates.map((t) => [t.codhpd, t.deshpd]));
-        return linhas.map((l) => ({
-          ...l,
-          historico: formatarHistorico((l.cpllct as string | null) ?? null, typeof l.codhpd === "number" ? templatePorCodhpd.get(l.codhpd) : null),
-          sitlctLabel: sitlotLabel((l.sitlct as number | null) ?? null),
-        }));
-      },
+      decorar: async (linhas) =>
+        (await comHistoricoPadrao(linhas)).map((l) => ({ ...l, sitlctLabel: sitlotLabel((l.sitlct as number | null) ?? null) })),
     };
   },
   "contabil-lancamentos",

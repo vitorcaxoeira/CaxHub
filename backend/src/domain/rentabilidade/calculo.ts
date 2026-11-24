@@ -7,9 +7,12 @@ import { FORMULA_VALOR_REALIZADO, SITRAT_CONTABILIZADO } from "../contabilDomini
 import type { No } from "../../formulas/formula";
 import {
   calcularIndicadores,
+  ordenarGrupos,
+  rotuloGrupo,
   contasEmMaisDeUm,
   contasSelecionadas,
   contasSemIndicador,
+  classificarOrigem,
   type ContaDoPlano,
   type FonteSistema,
   type FormatoIndicador,
@@ -31,6 +34,11 @@ export interface Recorte {
    * `Fato`: conta ou CC fora do modelo some do relatório.
    */
   restringirModelo: boolean;
+  /**
+   * Grupo = Conta Paralela da conta (`despar`, a mesma da Matriz). Nulo/indefinido = todos; "" = contas SEM grupo. Com grupo, o cálculo sai só do
+   * movimento daquele grupo, e as colunas de sistema (horas) ficam só nos CCs que têm movimento nele (a aba Por Grupo, 24/11/2026).
+   */
+  grupo?: string | null;
 }
 
 export interface LinhaResultado {
@@ -40,7 +48,7 @@ export interface LinhaResultado {
 }
 
 export interface ResultadoRentabilidade {
-  colunas: { codigo: string; rotulo: string; formato: FormatoIndicador }[];
+  colunas: { codigo: string; rotulo: string; formato: FormatoIndicador; /** O valor desta coluna abre a origem (lançamentos). */ origem?: boolean }[];
   linhas: LinhaResultado[];
   total: ValoresLinha;
   avisos: string[];
@@ -73,10 +81,11 @@ export async function carregarPlano(): Promise<ContaDoPlano[]> {
   return contas;
 }
 
-function filtrosComuns(alias: "r" | "o", recorte: Recorte): Prisma.Sql {
+export function filtrosComuns(alias: "r" | "o", recorte: Recorte): Prisma.Sql {
   const a = Prisma.raw(alias);
   const partes: Prisma.Sql[] = [];
   if (recorte.setor) partes.push(Prisma.sql`AND btrim(COALESCE(pc.despar, '')) = ${recorte.setor}`);
+  if (recorte.grupo != null) partes.push(Prisma.sql`AND btrim(COALESCE(pc.despar, '')) = ${recorte.grupo}`);
   if (recorte.ccs && recorte.ccs.length) partes.push(Prisma.sql`AND ${a}.codccu = ANY(${recorte.ccs}::text[])`);
   if (recorte.restringirModelo) {
     partes.push(Prisma.sql`AND EXISTS (SELECT 1 FROM empresa e JOIN modelo_planos m ON m.codmpc = e.codmpc AND m.ctared = ${a}.ctared WHERE e.codemp = ${a}.codemp)`);
@@ -252,6 +261,13 @@ export async function calcularRentabilidade(recorte: Recorte, indicadores?: Indi
     if (recorte.setor) avisos.push("As horas do sistema (Kyria e RAT) ainda não filtram por setor: aparecem inteiras mesmo com um setor escolhido.");
   }
 
+  // Com grupo: as horas do sistema só nos CCs que têm movimento em conta DAQUELE grupo (senão um CC sem lançamento no grupo entraria com horas).
+  if (recorte.grupo != null) {
+    const ccsDoGrupo = new Set<string>();
+    for (const i of config) if (i.tipo === "contas") for (const [cc, v] of bases.get(i.codigo) ?? []) if (Math.abs(v) >= 0.005) ccsDoGrupo.add(cc);
+    for (const i of config) if (i.tipo === "sistema") bases.set(i.codigo, new Map([...(bases.get(i.codigo) ?? [])].filter(([cc]) => ccsDoGrupo.has(cc))));
+  }
+
   // Linhas = CCs com algum valor diferente de zero em indicador de conta ou de sistema.
   const comValor = new Set<string>();
   for (const base of bases.values()) for (const [cc, v] of base) if (Math.abs(v) >= 0.005) comValor.add(cc);
@@ -262,11 +278,59 @@ export async function calcularRentabilidade(recorte: Recorte, indicadores?: Indi
   const { porLinha, total } = calcularIndicadores(config, bases, codigosCc);
   const visiveis = config.filter((i) => i.visivel);
   return {
-    colunas: visiveis.map((i) => ({ codigo: i.codigo, rotulo: i.rotulo, formato: i.formato })),
+    colunas: visiveis.map((i) => ({ codigo: i.codigo, rotulo: i.rotulo, formato: i.formato, origem: classificarOrigem(i.codigo, config) !== null })),
     linhas: codigosCc.map((cc) => ({ codccu: cc, desccu: descricao.get(cc) ?? "", valores: porLinha.get(cc)! })),
     total,
     avisos,
   };
+}
+
+/** Grupos (Conta Paralela; "" = sem grupo) com lançamento contabilizado no recorte, sem ordem. */
+export async function gruposComMovimento(recorte: Recorte): Promise<string[]> {
+  const linhas = await prisma.$queryRaw<{ grupo: string }[]>`
+    SELECT DISTINCT btrim(COALESCE(pc.despar, '')) AS grupo
+    FROM rateios_lancamento r
+    JOIN lancamentos_contabeis l ON l.codemp = r.codemp AND l.numlct = r.numlct
+    JOIN plano_contabil pc ON pc.codemp = r.codemp AND pc.ctared = r.ctared
+    JOIN centros_custo cc ON cc.codemp = r.codemp AND cc.codccu = r.codccu
+    WHERE r.sitrat = ${SITRAT_CONTABILIZADO} AND l.sitlct = ${SITRAT_CONTABILIZADO}
+      AND r.removido_em_senior IS NULL AND l.removido_em_senior IS NULL
+      AND pc.anasin = 'A' AND cc.anasin = 'A'
+      AND r.datlct >= ${recorte.inicio}::date AND r.datlct < ${recorte.fim}::date
+      ${filtrosComuns("r", { ...recorte, grupo: undefined })}`;
+  return linhas.map((l) => l.grupo);
+}
+
+export interface GrupoResultado {
+  /** Conta Paralela ("" = sem grupo). */
+  grupo: string;
+  rotulo: string;
+  total: ValoresLinha;
+  linhas: LinhaResultado[];
+}
+
+export interface ResultadoPorGrupo {
+  colunas: ResultadoRentabilidade["colunas"];
+  grupos: GrupoResultado[];
+  /** O total do recorte (o mesmo de calcularRentabilidade sem grupo). */
+  total: ValoresLinha;
+  avisos: string[];
+}
+
+/**
+ * A aba Por Grupo (24/11/2026): o cálculo de CADA grupo com movimento (ordem de `ordenarGrupos`), mais o total do recorte. Cada grupo soma só as contas dele;
+ * o mesmo CC aparece em cada grupo em que tem movimento. Grupos sem linha são omitidos.
+ */
+export async function calcularRentabilidadePorGrupo(recorte: Recorte, indicadores?: IndicadorConfigurado[]): Promise<ResultadoPorGrupo> {
+  const config = indicadores ?? (await carregarIndicadores());
+  const geral = await calcularRentabilidade({ ...recorte, grupo: undefined }, config);
+  const grupos: GrupoResultado[] = [];
+  for (const g of ordenarGrupos(await gruposComMovimento(recorte))) {
+    const r = await calcularRentabilidade({ ...recorte, grupo: g }, config);
+    if (r.linhas.length === 0) continue;
+    grupos.push({ grupo: g, rotulo: rotuloGrupo(g), total: r.total, linhas: r.linhas });
+  }
+  return { colunas: geral.colunas, grupos, total: geral.total, avisos: geral.avisos };
 }
 
 export interface Diagnostico {

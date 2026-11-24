@@ -241,6 +241,105 @@ export function calcularIndicadores(
 
 const arredondar = (x: number) => Math.round(x * 100) / 100;
 
+// ---------- grupos (aba Por Grupo, 24/11/2026) ----------
+
+/** Ordem dos grupos (Conta Paralela) na aba: alfabética, com "" (sem grupo) sempre por último. */
+export function ordenarGrupos(grupos: string[]): string[] {
+  return [...new Set(grupos)].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b, "pt-BR")));
+}
+
+/** Como o grupo aparece na tela: "" vira "Sem grupo". */
+export const rotuloGrupo = (grupo: string): string => (grupo === "" ? "Sem grupo" : grupo);
+
+// ---------- origem do valor (24/11/2026) ----------
+
+/** Um indicador de contas (realizado) que compõe o valor de uma coluna, e o sinal em que entra (-1 quando é subtraído numa fórmula). */
+export interface ComponenteDeOrigem {
+  codigo: string;
+  sinal: 1 | -1;
+}
+
+/** A fórmula como soma/subtração de colunas (`a + b - c`): cada coluna com o seu sinal. Qualquer outra operação (`*`, `/`, funções, número) devolve null. */
+function combinacaoLinear(no: No): { nome: string; sinal: 1 | -1 }[] | null {
+  switch (no.t) {
+    case "col":
+      return [{ nome: no.nome, sinal: 1 }];
+    case "neg": {
+      const a = combinacaoLinear(no.a);
+      return a && a.map((x) => ({ nome: x.nome, sinal: (x.sinal * -1) as 1 | -1 }));
+    }
+    case "bin": {
+      if (no.op !== "+" && no.op !== "-") return null;
+      const a = combinacaoLinear(no.a);
+      const b = combinacaoLinear(no.b);
+      if (!a || !b) return null;
+      return [...a, ...(no.op === "-" ? b.map((x) => ({ nome: x.nome, sinal: (x.sinal * -1) as 1 | -1 })) : b)];
+    }
+    default:
+      return null;
+  }
+}
+
+/** O indicador "folha" de uma origem linear: de CONTAS (realizado; lançamentos) ou do SISTEMA (horas e custo das horas). */
+type TipoFolha = "contas" | "sistema";
+
+/**
+ * Os indicadores "folha" que formam o valor de uma coluna, com o sinal: o indicador vale por si se for da folha pedida; uma fórmula só se for soma/subtração de colunas
+ * que, no fim, são todas dessa folha (fórmulas citadas por ela são abertas). Qualquer outra coisa devolve `null`.
+ */
+function origemLinear(codigo: string, indicadores: IndicadorConfigurado[], folha: TipoFolha, profundidade = 0): ComponenteDeOrigem[] | null {
+  if (profundidade > 10) return null;
+  const i = indicadores.find((x) => x.codigo === codigo);
+  if (!i) return null;
+  if (i.tipo === folha) return folha === "contas" && i.base !== "realizado" ? null : [{ codigo: i.codigo, sinal: 1 }];
+  if (i.tipo !== "formula" || !i.formulaArvore) return null;
+  const termos = combinacaoLinear(i.formulaArvore);
+  if (!termos || termos.length === 0) return null;
+  const saida: ComponenteDeOrigem[] = [];
+  for (const t of termos) {
+    const sub = origemLinear(t.nome, indicadores, folha, profundidade + 1);
+    if (!sub) return null;
+    for (const s of sub) saida.push({ codigo: s.codigo, sinal: (s.sinal * t.sinal) as 1 | -1 });
+  }
+  return saida;
+}
+
+/**
+ * De onde vem o valor de uma coluna, em lançamentos: os indicadores de CONTAS (base realizado) que o formam, com o sinal. Indicador de contas vale por si;
+ * fórmula só se for soma/subtração de colunas que, no fim, são indicadores de contas. Qualquer outra coisa — razão, percentual, horas do sistema, base orçada —
+ * não tem origem em lançamentos: `null` (ver `classificarOrigem` para os demais tipos).
+ */
+export function origemDoIndicador(codigo: string, indicadores: IndicadorConfigurado[]): ComponenteDeOrigem[] | null {
+  return origemLinear(codigo, indicadores, "contas");
+}
+
+/** O que o modal de origem de uma coluna mostra (fase 2, 24/11/2026). */
+export type OrigemClassificada =
+  /** Soma/subtração de indicadores de contas: a lista de lançamentos contábeis. */
+  | { tipo: "lancamentos"; componentes: ComponenteDeOrigem[] }
+  /** Soma/subtração de indicadores do sistema (horas Kyria/RAT e o custo delas): a lista de apontamentos. */
+  | { tipo: "horas"; componentes: ComponenteDeOrigem[] }
+  /** Qualquer outra conta (ABS, ×, ÷, TOTAL): a composição — cada coluna citada, com o valor da linha e, nas de dentro de TOTAL(), o do total do recorte. */
+  | { tipo: "formula"; referencias: { codigo: string; emTotal: boolean }[] };
+
+/**
+ * Como se chega ao valor de uma coluna: lançamentos (contas), apontamentos (horas e custo do sistema) ou a composição de uma fórmula. `null` quando não há o que
+ * mostrar (indicador de contas de base orçada, sem fórmula, ou código desconhecido).
+ */
+export function classificarOrigem(codigo: string, indicadores: IndicadorConfigurado[]): OrigemClassificada | null {
+  const i = indicadores.find((x) => x.codigo === codigo);
+  if (!i) return null;
+  const lancamentos = origemLinear(codigo, indicadores, "contas");
+  if (lancamentos) return { tipo: "lancamentos", componentes: lancamentos };
+  const horas = origemLinear(codigo, indicadores, "sistema");
+  if (horas) return { tipo: "horas", componentes: horas };
+  if (i.tipo === "formula" && i.formulaArvore) {
+    const emTotal = new Set(colunasDaFormula(i.formulaArvore, true));
+    return { tipo: "formula", referencias: colunasDaFormula(i.formulaArvore).map((c) => ({ codigo: c, emTotal: emTotal.has(c) })) };
+  }
+  return null;
+}
+
 // ---------- diagnóstico ----------
 
 /** Contas analíticas com movimento que nenhum indicador de soma pega. */
