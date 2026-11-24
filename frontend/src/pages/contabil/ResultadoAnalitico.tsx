@@ -10,7 +10,7 @@ import { regras } from "../../components/ui/padroesFiltros/regras";
 import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { MatrizTab } from "../../components/contabil/MatrizTab";
 import { OrcadoRealizadoTab } from "../../components/contabil/OrcadoRealizadoTab";
-import { formatoVariacaoDaUrl, type FormatoVariacao } from "../../lib/orcadoRealizado";
+import { formatoVariacaoDaUrl, periodoDaUrl, type FormatoVariacao, type Periodo } from "../../lib/orcadoRealizado";
 import { DreTab } from "../../components/contabil/DreTab";
 import { CentroCustoTab } from "../../components/contabil/CentroCustoTab";
 import { DashContabilTab } from "../../components/contabil/DashContabilTab";
@@ -95,6 +95,8 @@ export function ResultadoAnalitico() {
   const [visao, setVisao] = useState<Visao>(visaoInicial);
   // Orçado x Realizado: a coluna de variação em R$ (padrão) ou em % — vai pra URL como os demais filtros.
   const [formatoVariacao, setFormatoVariacao] = useState<FormatoVariacao>(formatoVariacaoDaUrl(searchParams.get("variacao")));
+  // Orçado x Realizado: colunas por mês ou por ano (24/11/2026). Vai pra URL como `periodo=ano`, só na aba Orçado.
+  const [periodo, setPeriodo] = useState<Periodo>(periodoDaUrl(searchParams.get("periodo")));
 
   // Ano e mês são multi-seleção — dá pra comparar vários anos lado a lado (cada
   // combinação ano×mês vira uma coluna na matriz) e/ou recortar só alguns meses. Sem
@@ -150,6 +152,7 @@ export function ResultadoAnalitico() {
         ["incluirSemGrupo", "incluirSemGrupo"],
         ["ordenarPor", "ordenarPor"],
         ["formatoVariacao", "variacao"],
+        ["periodo", "periodo"],
       ] as const
     )
       .filter(([, chave]) => searchParams.has(chave))
@@ -179,6 +182,14 @@ export function ResultadoAnalitico() {
         aplicar: setOrdenarPor,
         validar: regras.valorUnico("string", ["clacta", "ctared"] as const),
         semOpcoes: true,
+      },
+      periodo: {
+        rotulo: "Visualização",
+        atual: periodo,
+        aplicar: setPeriodo,
+        validar: regras.valorUnico("string", ["mes", "ano"] as const),
+        semOpcoes: true,
+        urlKey: "periodo",
       },
       formatoVariacao: {
         rotulo: "Variação",
@@ -215,11 +226,12 @@ export function ResultadoAnalitico() {
     if (incluirSemGrupo) params.incluirSemGrupo = "true";
     if (ordenarPor !== "clacta") params.ordenarPor = ordenarPor;
     if (visao === "orcado" && formatoVariacao === "pct") params.variacao = "pct";
+    if (visao === "orcado" && periodo === "ano") params.periodo = "ano";
     // "Todos"/desmarcado num filtro com padrão salvo vai vazio, para o F5 manter a escolha em vez de voltar ao padrão.
     p.marcarUrl(params);
     setSearchParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visao, anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor, formatoVariacao, setSearchParams, p.padroes]);
+  }, [visao, anos, meses, niveis, grupos, centrosCusto, incluirSemGrupo, ordenarPor, formatoVariacao, periodo, setSearchParams, p.padroes]);
 
   const opcoesAnos = useMemo(() => {
     const todos = new Set([...(opcoes?.anos ?? []), ...anos]);
@@ -390,6 +402,9 @@ export function ResultadoAnalitico() {
           formatoVariacao={formatoVariacao}
           onFormatoVariacao={setFormatoVariacao}
           estrelaVariacao={p.estrela("formatoVariacao")}
+          periodo={periodo}
+          onPeriodo={setPeriodo}
+          estrelaPeriodo={p.estrela("periodo")}
         />
       )}
       {p.pronto && visao === "dre" && <DreTab key={refreshKey} anos={anos} meses={meses} grupos={grupos} centrosCusto={centrosCusto} />}
