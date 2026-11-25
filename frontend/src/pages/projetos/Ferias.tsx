@@ -2,6 +2,7 @@ import axios from "axios";
 import { CalendarDays, Palmtree } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { GradeDoMes, horas, useCalendarioMes } from "../../components/calendario/pecas";
 import { Modal } from "../../components/ui/Modal";
 import { useToast } from "../../components/ui/Toast";
 import { cn } from "../../lib/cn";
@@ -476,6 +477,10 @@ function TabelaMeses({
       return proximo;
     });
   const naMediaQtd = meses.filter((m) => m.naMedia ?? (m.diasUteis ?? 0) > 0).length;
+  // Do mês mais recente para o mais antigo (o mais próximo das férias primeiro).
+  const ordenados = [...meses].sort((a, b) => b.ano * 12 + b.mes - (a.ano * 12 + a.mes));
+  // Mês cujo calendário está aberto no modal.
+  const [calendario, setCalendario] = useState<{ ano: number; mes: number } | null>(null);
 
   return (
     <div className="mt-2">
@@ -493,7 +498,7 @@ function TabelaMeses({
             </tr>
           </thead>
           <tbody>
-            {meses.map((m) => {
+            {ordenados.map((m) => {
               const chave = chaveMes(m);
               const padrao = m.diasUteisPadrao ?? 0;
               const dias = m.diasUteis ?? padrao;
@@ -533,9 +538,9 @@ function TabelaMeses({
                     <button
                       type="button"
                       aria-label={`Abrir o calendário de ${rotulo}`}
-                      title="Abre o calendário deste mês em outra aba"
+                      title="Abre o calendário deste mês, com as horas trabalhadas"
                       className="inline-flex items-center text-primary hover:opacity-80"
-                      onClick={() => window.open(`/projetos/calendario?codfor=${codfor}&ano=${m.ano}&mes=${m.mes}`, "_blank", "noopener")}
+                      onClick={() => setCalendario({ ano: m.ano, mes: m.mes })}
                     >
                       <CalendarDays size={14} aria-hidden />
                     </button>
@@ -550,7 +555,50 @@ function TabelaMeses({
         Média usada: <span className="font-mono text-foreground">{pctTexto(mediaUsada)}</span> · {naMediaQtd} de {meses.length} meses entram. Mês com 0 dias úteis
         disponíveis sai da média; ao ajustar os dias, a simulação refaz sozinha.
       </p>
+      {calendario && <ModalCalendarioMes ano={calendario.ano} mes={calendario.mes} codfor={codfor} onFechar={() => setCalendario(null)} />}
     </div>
+  );
+}
+
+/**
+ * O calendário de um mês da média, só para consulta: a mesma grade da Home do consultor (férias, folgas e feriados), com as horas trabalhadas em cada dia e o
+ * total do mês. Clicar num dia não faz nada aqui (folga se marca na página Calendário).
+ */
+function ModalCalendarioMes({ ano, mes, codfor, onFechar }: { ano: number; mes: number; codfor: number; onFechar: () => void }) {
+  const { dados, loading, erro, feriados } = useCalendarioMes(ano, mes, codfor);
+  return (
+    <Modal open onClose={onFechar} title={`${MESES[mes - 1]} ${ano}`} subtitulo={dados?.consultor.nome} className="max-w-3xl">
+      {erro && <p className="mb-3 text-sm text-destructive">{erro}</p>}
+      {dados && (
+        <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-border bg-surface px-4 py-2">
+            <p className="text-[11px] text-muted">Horas trabalhadas</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{horas(dados.totais.apontadoMinutos)}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface px-4 py-2">
+            <p className="text-[11px] text-muted">Meta do mês</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{horas(dados.totais.metaMinutos)}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface px-4 py-2">
+            <p className="text-[11px] text-muted">Dias com horas</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{dados.dias.filter((d) => d.apontadoMinutos > 0).length}</p>
+          </div>
+        </div>
+      )}
+      <GradeDoMes dados={dados} loading={loading} feriados={feriados} onDia={() => undefined} compacto />
+      <p className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted">
+        <span>
+          <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-primary/40" /> Férias
+        </span>
+        <span>
+          <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-warning/40" /> Folga
+        </span>
+        <span>
+          <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-muted" /> Feriado
+        </span>
+        <span>As horas em cada dia são as trabalhadas.</span>
+      </p>
+    </Modal>
   );
 }
 
