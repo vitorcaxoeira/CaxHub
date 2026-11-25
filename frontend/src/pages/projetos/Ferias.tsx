@@ -49,6 +49,8 @@ const COLUNAS_LOCAIS: ColunaLocal[] = [
   { nome: "departamento", tipo: "texto" },
   { nome: "aquisitivo", tipo: "data", utc: true },
   { nome: "saldo", tipo: "inteiro" },
+  { nome: "formacao", tipo: "decimal" },
+  { nome: "total", tipo: "inteiro" },
   { nome: "situacao", tipo: "texto" },
   { nome: "proximas", tipo: "data", utc: true },
 ];
@@ -62,6 +64,10 @@ const lerLinha = (l: LinhaResumo, coluna: string): unknown => {
       return l.qtdAquisitivos > 0 ? l.saldoVencido : null;
     case "situacao":
       return l.emFerias ? `Em férias até ${dataBr(l.emFerias.fim)}` : null;
+    case "formacao":
+      return l.qtdAquisitivos > 0 ? l.saldoEmFormacao : null;
+    case "total":
+      return l.qtdAquisitivos > 0 ? l.saldoTotal : null;
     case "proximas":
       return l.proximasFerias?.inicio ?? null;
     default:
@@ -92,32 +98,41 @@ const COLUNAS: DefColuna<LinhaResumo>[] = [
   },
   {
     nome: "saldo",
-    titulo: "Saldo (dias)",
-    dica: "Vencido (períodos aquisitivos completos) ~ fração em formação do período em curso (total de todos os períodos)",
+    titulo: "Saldo vencido",
+    dica: "Dias de férias dos períodos aquisitivos já completos: o direito inteiro está adquirido e pode ser tirado",
     direita: true,
-    largura: 190,
-    classe: (l) => cn("font-mono text-sm", l.saldoVencido > 0 ? "text-primary" : "text-muted"),
+    largura: 130,
+    classe: (l) => cn("font-mono text-sm", l.saldoVencido > 0 ? "font-semibold text-primary" : "text-muted"),
+    title: (l) => (l.qtdAquisitivos === 0 ? undefined : `Períodos aquisitivos já completos: ${l.saldoVencido} dia(s) de férias adquiridos e ainda não tirados.`),
+    render: (l) => (l.qtdAquisitivos === 0 ? "—" : l.saldoVencido),
+  },
+  {
+    nome: "formacao",
+    titulo: "Em formação",
+    dica: "Dias já ganhos no período aquisitivo ainda em curso, proporcionais ao tempo decorrido (ainda não vencidos)",
+    direita: true,
+    largura: 120,
+    classe: (l) => cn("font-mono text-sm", l.saldoEmFormacao > 0 ? "text-foreground" : "text-muted"),
     title: (l) => {
-      if (l.qtdAquisitivos === 0) return undefined;
-      const partes = [`Vencido (períodos aquisitivos completos): ${l.saldoVencido} d`];
-      for (const f of l.periodosEmFormacao) {
-        partes.push(
-          `Em formação ${dataBr(f.inicio)} a ${dataBr(f.fim)}: ${f.diasDecorridos} de ${f.diasDoPeriodo} dias decorridos = ${numeroBr(f.acumulado)} de ${f.diasDireito} d${f.saldo !== f.acumulado ? ` (saldo ${numeroBr(f.saldo)} d depois das férias lançadas)` : ""}`,
-        );
-      }
-      partes.push(`Total de todos os períodos: ${l.saldoTotal} d`);
-      return partes.join("\n");
+      if (l.periodosEmFormacao.length === 0) return l.qtdAquisitivos === 0 ? undefined : "Nenhum período aquisitivo em curso.";
+      return l.periodosEmFormacao
+        .map(
+          (f) =>
+            `Período ${dataBr(f.inicio)} a ${dataBr(f.fim)}: ${f.diasDecorridos} de ${f.diasDoPeriodo} dias decorridos = ${numeroBr(f.acumulado)} de ${f.diasDireito} dias de férias ganhos até hoje${f.saldo !== f.acumulado ? ` (restam ${numeroBr(f.saldo)} depois das férias lançadas)` : ""}.`,
+        )
+        .join("\n");
     },
-    render: (l) =>
-      l.qtdAquisitivos === 0 ? (
-        "—"
-      ) : (
-        <>
-          {l.saldoVencido}
-          {l.saldoEmFormacao > 0 && <span className="ml-1 text-muted">~{numeroBr(l.saldoEmFormacao)}</span>}
-          {l.saldoTotal !== l.saldoVencido && <span className="ml-1 text-[11px] text-muted">(total {l.saldoTotal})</span>}
-        </>
-      ),
+    render: (l) => (l.qtdAquisitivos === 0 ? "—" : numeroBr(l.saldoEmFormacao)),
+  },
+  {
+    nome: "total",
+    titulo: "Total do direito",
+    dica: "Soma dos saldos de todos os períodos aquisitivos cadastrados, inclusive os que ainda não vencem",
+    direita: true,
+    largura: 130,
+    classe: "font-mono text-sm text-muted",
+    title: (l) => (l.qtdAquisitivos === 0 ? undefined : `Soma de todos os períodos aquisitivos cadastrados (${l.qtdAquisitivos}): ${l.saldoTotal} dia(s), incluindo os que ainda não vencem.`),
+    render: (l) => (l.qtdAquisitivos === 0 ? "—" : l.saldoTotal),
   },
   {
     nome: "situacao",
