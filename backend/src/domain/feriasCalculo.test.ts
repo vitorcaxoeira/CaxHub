@@ -11,6 +11,7 @@ import {
   proximoDiaUtil,
   mesesDaMedia,
   saldoDoAquisitivo,
+  saldoPorVencimento,
   valorDasFerias,
 } from "./feriasCalculo";
 
@@ -125,4 +126,41 @@ test("proximoDiaUtil: pula fim de semana e feriado nacional", () => {
   assert.equal(proximoDiaUtil(d("2026-11-25")).toISOString().slice(0, 10), "2026-11-26", "quarta -> quinta");
   assert.equal(proximoDiaUtil(d("2026-11-27")).toISOString().slice(0, 10), "2026-11-30", "sexta -> segunda");
   assert.equal(proximoDiaUtil(d("2026-04-02")).toISOString().slice(0, 10), "2026-04-06", "quinta antes da Sexta-feira Santa -> segunda");
+});
+
+test("saldoPorVencimento: vencido, fração em formação e total (caso da Jéssica: 20 + ~6,4 = total 40)", () => {
+  const periodos = [
+    { inicio: "2025-08-01", fim: "2026-08-01", diasDireito: 20, diasGozados: 0, diasFolgaDescontada: 0, saldo: 20 },
+    { inicio: "2026-08-01", fim: "2027-08-01", diasDireito: 20, diasGozados: 0, diasFolgaDescontada: 0, saldo: 20 },
+  ];
+  const r = saldoPorVencimento(periodos, "2026-11-25");
+  assert.equal(r.vencido, 20);
+  assert.equal(r.total, 40);
+  assert.equal(r.periodosEmFormacao.length, 1);
+  assert.equal(r.periodosEmFormacao[0].diasDecorridos, 116);
+  assert.equal(r.periodosEmFormacao[0].diasDoPeriodo, 365);
+  assert.ok(Math.abs(r.emFormacao - (20 * 116) / 365) < 1e-9);
+  // No último dia do período o direito inteiro vale como vencido (fim <= hoje) e nada fica em formação.
+  const fechado = saldoPorVencimento(periodos, "2027-08-01");
+  assert.equal(fechado.vencido, 40);
+  assert.equal(fechado.emFormacao, 0);
+  // Período que ainda não começou só entra no total.
+  const futuro = saldoPorVencimento(periodos, "2026-07-31");
+  assert.equal(futuro.vencido, 0);
+  assert.ok(futuro.emFormacao > 19.9 && futuro.emFormacao < 20);
+  assert.equal(saldoPorVencimento(periodos, "2025-07-01").emFormacao, 0);
+  assert.equal(saldoPorVencimento(periodos, "2025-07-01").total, 40);
+});
+
+test("saldoPorVencimento: férias já lançadas no período em curso consomem a fração; saldo negativo não conta", () => {
+  const r = saldoPorVencimento(
+    [
+      { inicio: "2026-08-01", fim: "2027-08-01", diasDireito: 20, diasGozados: 5, diasFolgaDescontada: 0, saldo: 15 },
+      { inicio: "2025-08-01", fim: "2026-08-01", diasDireito: 20, diasGozados: 25, diasFolgaDescontada: 0, saldo: -5 },
+    ],
+    "2026-11-25",
+  );
+  assert.equal(r.vencido, 0, "saldo negativo vale 0");
+  assert.ok(Math.abs(r.emFormacao - Math.max(0, (20 * 116) / 365 - 5)) < 1e-9);
+  assert.equal(r.total, 15);
 });

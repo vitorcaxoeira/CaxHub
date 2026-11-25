@@ -18,6 +18,11 @@ interface LinhaResumo {
   departamento: string | null;
   aquisitivoAtual: { id: number; inicio: string; fim: string; diasDireito: number; saldo: number; remunerado: boolean } | null;
   saldoTotal: number;
+  /** Saldo dos períodos aquisitivos já completos (o direito inteiro está adquirido). */
+  saldoVencido: number;
+  /** Dias já "ganhos" nos períodos ainda em curso, proporcionais ao tempo decorrido (1 casa decimal). */
+  saldoEmFormacao: number;
+  periodosEmFormacao: { inicio: string; fim: string; diasDecorridos: number; diasDoPeriodo: number; diasDireito: number; acumulado: number; saldo: number }[];
   emFerias: Gozo | null;
   proximasFerias: Gozo | null;
   qtdAquisitivos: number;
@@ -54,7 +59,7 @@ const lerLinha = (l: LinhaResumo, coluna: string): unknown => {
     case "aquisitivo":
       return l.aquisitivoAtual?.inicio ?? null;
     case "saldo":
-      return l.aquisitivoAtual?.saldo ?? null;
+      return l.qtdAquisitivos > 0 ? l.saldoVencido : null;
     case "situacao":
       return l.emFerias ? `Em férias até ${dataBr(l.emFerias.fim)}` : null;
     case "proximas":
@@ -63,6 +68,9 @@ const lerLinha = (l: LinhaResumo, coluna: string): unknown => {
       return (l as unknown as Record<string, unknown>)[coluna];
   }
 };
+
+/** Dias com no máximo 1 casa decimal e vírgula (6,4). */
+const numeroBr = (n: number) => (Math.round(n * 10) / 10).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
 
 const COLUNAS: DefColuna<LinhaResumo>[] = [
   { nome: "nome", titulo: "Consultor", fixa: true, largura: 240, classe: "text-sm font-medium text-foreground", texto: (l) => l.nome, render: (l) => l.nome },
@@ -85,15 +93,31 @@ const COLUNAS: DefColuna<LinhaResumo>[] = [
   {
     nome: "saldo",
     titulo: "Saldo (dias)",
+    dica: "Vencido (períodos aquisitivos completos) ~ fração em formação do período em curso (total de todos os períodos)",
     direita: true,
-    largura: 130,
-    classe: (l) => cn("font-mono text-sm", l.aquisitivoAtual && l.aquisitivoAtual.saldo > 0 ? "text-primary" : "text-muted"),
-    render: (l) => (
-      <>
-        {l.aquisitivoAtual ? l.aquisitivoAtual.saldo : "—"}
-        {l.qtdAquisitivos > 1 && <span className="ml-1 text-[11px] text-muted">(total {l.saldoTotal})</span>}
-      </>
-    ),
+    largura: 190,
+    classe: (l) => cn("font-mono text-sm", l.saldoVencido > 0 ? "text-primary" : "text-muted"),
+    title: (l) => {
+      if (l.qtdAquisitivos === 0) return undefined;
+      const partes = [`Vencido (períodos aquisitivos completos): ${l.saldoVencido} d`];
+      for (const f of l.periodosEmFormacao) {
+        partes.push(
+          `Em formação ${dataBr(f.inicio)} a ${dataBr(f.fim)}: ${f.diasDecorridos} de ${f.diasDoPeriodo} dias decorridos = ${numeroBr(f.acumulado)} de ${f.diasDireito} d${f.saldo !== f.acumulado ? ` (saldo ${numeroBr(f.saldo)} d depois das férias lançadas)` : ""}`,
+        );
+      }
+      partes.push(`Total de todos os períodos: ${l.saldoTotal} d`);
+      return partes.join("\n");
+    },
+    render: (l) =>
+      l.qtdAquisitivos === 0 ? (
+        "—"
+      ) : (
+        <>
+          {l.saldoVencido}
+          {l.saldoEmFormacao > 0 && <span className="ml-1 text-muted">~{numeroBr(l.saldoEmFormacao)}</span>}
+          {l.saldoTotal !== l.saldoVencido && <span className="ml-1 text-[11px] text-muted">(total {l.saldoTotal})</span>}
+        </>
+      ),
   },
   {
     nome: "situacao",

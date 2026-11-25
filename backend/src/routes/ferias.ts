@@ -6,7 +6,7 @@ import { ContextoDoUsuario, contextoDoUsuario, podeLancarFerias, resolverAlvo } 
 import { chaveDia, lerDia } from "../domain/calendarioTrabalho";
 import { consultoresFiltraveis, nomeConsultor } from "../domain/contextoProjeto";
 import { aquisitivosDoConsultor, aquisitivosDosConsultores, simularFerias, type AquisitivoDto, type MesDaMediaGravado } from "../domain/feriasDados";
-import { diasCorridosEntre, diasUteisDoMes, diasUteisDoPeriodo, feriadosUteisDoMes, proximoDiaUtil } from "../domain/feriasCalculo";
+import { diasCorridosEntre, diasUteisDoMes, diasUteisDoPeriodo, feriadosUteisDoMes, proximoDiaUtil, saldoPorVencimento } from "../domain/feriasCalculo";
 import { depexeLabel } from "../domain/propostasDominio";
 
 // Controle de férias dos consultores PJ (13/11/2026), no lugar da planilha "Simulação Férias PJs". O PERÍODO AQUISITIVO é o direito (ex.: 05/2025 à 05/2026,
@@ -88,13 +88,18 @@ feriasRouter.get("/resumo", async (req: AuthenticatedRequest, res) => {
         const lista = aquisitivos.get(c.codfor as number) ?? [];
         const gozos = lista.flatMap((a) => a.gozos).filter((g) => g.situacao !== "cancelada");
         const atual = lista.find((a) => a.inicio <= hoje && hoje <= a.fim) ?? lista[0] ?? null;
+        const saldo = saldoPorVencimento(lista, hoje);
         return {
           codemp: c.codemp,
           codfor: c.codfor as number,
           nome: nomeConsultor(c),
           departamento: c.depexe != null ? depexeLabel(c.depexe) : null,
           aquisitivoAtual: atual ? { id: atual.id, inicio: atual.inicio, fim: atual.fim, diasDireito: atual.diasDireito, saldo: atual.saldo, remunerado: atual.remunerado } : null,
-          saldoTotal: lista.reduce((soma, a) => soma + Math.max(0, a.saldo), 0),
+          saldoTotal: saldo.total,
+          // Saldo por vencimento: períodos completos (vencido) e a fração proporcional dos períodos em curso (em formação).
+          saldoVencido: saldo.vencido,
+          saldoEmFormacao: Math.round(saldo.emFormacao * 10) / 10,
+          periodosEmFormacao: saldo.periodosEmFormacao,
           emFerias: gozos.find((g) => g.inicio <= hoje && hoje <= g.fim) ?? null,
           proximasFerias: gozos.filter((g) => g.inicio > hoje).sort((a, b) => a.inicio.localeCompare(b.inicio))[0] ?? null,
           qtdAquisitivos: lista.length,

@@ -161,6 +161,75 @@ export function valorDasFerias(params: { diasUteis: number; horasDia: number; me
   return { horasFerias: centavos(horas), valorFerias: centavos(horas * params.valorHora) };
 }
 
+export interface PeriodoParaSaldo {
+  /** YYYY-MM-DD */
+  inicio: string;
+  fim: string;
+  diasDireito: number;
+  diasGozados: number;
+  diasFolgaDescontada: number;
+  /** Saldo do período como a tela de férias já calcula (direito - gozados - folgas). */
+  saldo: number;
+}
+
+export interface FracaoEmFormacao {
+  inicio: string;
+  fim: string;
+  /** Dias do período aquisitivo já decorridos até hoje, e a duração total dele. */
+  diasDecorridos: number;
+  diasDoPeriodo: number;
+  diasDireito: number;
+  /** diasDireito x decorridos / duração: os dias de férias já "ganhos" até hoje (decimal). */
+  acumulado: number;
+  /** O que sobra do acumulado depois das férias e folgas já lançadas no período (nunca negativo). */
+  saldo: number;
+}
+
+export interface SaldoPorVencimento {
+  /** Períodos aquisitivos JÁ COMPLETOS (fim até hoje): o direito inteiro está adquirido. Soma dos saldos (nunca negativos). */
+  vencido: number;
+  /** Fração dos períodos ainda em curso (início até hoje, fim depois de hoje): dias ganhos até hoje, proporcionais ao tempo decorrido. */
+  emFormacao: number;
+  /** Soma dos saldos de todos os períodos, inclusive os que ainda não começaram. */
+  total: number;
+  periodosEmFormacao: FracaoEmFormacao[];
+}
+
+const diaUtc = (iso: string) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
+const diasEntre = (de: string, ate: string) => Math.round((diaUtc(ate) - diaUtc(de)) / 86_400_000);
+
+/**
+ * Separa o saldo de férias de um consultor em "vencido" (período aquisitivo completo), "em formação" (fração proporcional ao tempo decorrido dos períodos em curso)
+ * e "total" (todos os períodos, inclusive os futuros). Ex.: períodos 01/08/2025–01/08/2026 (20 d) e 01/08/2026–01/08/2027 (20 d), hoje 25/11/2026 -> vencido 20,
+ * em formação 20 x 116/365 = 6,4, total 40.
+ */
+export function saldoPorVencimento(periodos: PeriodoParaSaldo[], hoje: string): SaldoPorVencimento {
+  const positivo = (n: number) => Math.max(0, n);
+  let vencido = 0;
+  let total = 0;
+  const periodosEmFormacao: FracaoEmFormacao[] = [];
+  for (const p of periodos) {
+    total += positivo(p.saldo);
+    if (p.fim <= hoje) {
+      vencido += positivo(p.saldo);
+    } else if (p.inicio <= hoje) {
+      const diasDoPeriodo = diasEntre(p.inicio, p.fim);
+      const diasDecorridos = diasEntre(p.inicio, hoje);
+      const acumulado = diasDoPeriodo > 0 ? (p.diasDireito * diasDecorridos) / diasDoPeriodo : 0;
+      periodosEmFormacao.push({
+        inicio: p.inicio,
+        fim: p.fim,
+        diasDecorridos,
+        diasDoPeriodo,
+        diasDireito: p.diasDireito,
+        acumulado,
+        saldo: positivo(acumulado - p.diasGozados - p.diasFolgaDescontada),
+      });
+    }
+  }
+  return { vencido, emFormacao: periodosEmFormacao.reduce((s, f) => s + f.saldo, 0), total, periodosEmFormacao };
+}
+
 /** Primeiro dia útil (seg–sex, fora feriado nacional) DEPOIS de `fim`: o retorno ao trabalho que o aviso de férias informa. */
 export function proximoDiaUtil(fim: Date): Date {
   const d = new Date(Date.UTC(fim.getUTCFullYear(), fim.getUTCMonth(), fim.getUTCDate() + 1));
