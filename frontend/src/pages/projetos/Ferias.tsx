@@ -1,5 +1,5 @@
 import axios from "axios";
-import { CalendarDays, Palmtree } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronRight, Palmtree } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { GradeDoMes, useCalendarioMes } from "../../components/calendario/pecas";
@@ -481,10 +481,21 @@ function TabelaMeses({
   const ordenados = [...meses].sort((a, b) => b.ano * 12 + b.mes - (a.ano * 12 + a.mes));
   // Mês cujo calendário está aberto no modal.
   const [calendario, setCalendario] = useState<{ ano: number; mes: number } | null>(null);
+  // A tabela começa recolhida: a média usada fica sempre visível e o gestor abre os meses quando quer conferir ou ajustar.
+  const [aberto, setAberto] = useState(false);
 
   return (
     <div className="mt-2">
-      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Meses considerados na média</p>
+      <button
+        type="button"
+        onClick={() => setAberto((v) => !v)}
+        aria-expanded={aberto}
+        className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-muted hover:text-foreground"
+      >
+        {aberto ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+        Meses considerados na média ({meses.length})
+      </button>
+      {aberto && (
       <div className="mt-1 overflow-x-auto">
         <table className="w-full border-collapse text-[12.5px]">
           <thead>
@@ -551,6 +562,7 @@ function TabelaMeses({
           </tbody>
         </table>
       </div>
+      )}
       <p className="mt-2 text-[12px] text-muted">
         Média usada: <span className="font-mono text-foreground">{pctTexto(mediaUsada)}</span> · {naMediaQtd} de {meses.length} meses entram. Mês com 0 dias úteis
         disponíveis sai da média; ao ajustar os dias, a simulação refaz sozinha.
