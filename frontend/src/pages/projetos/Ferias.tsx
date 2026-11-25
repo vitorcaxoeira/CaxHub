@@ -3,6 +3,9 @@ import { CalendarDays, ChevronDown, ChevronRight, Palmtree } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { GradeDoMes, useCalendarioMes } from "../../components/calendario/pecas";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { Modal } from "../../components/ui/Modal";
 import { useToast } from "../../components/ui/Toast";
 import { cn } from "../../lib/cn";
@@ -34,6 +37,85 @@ const campo = "w-full rounded-md border border-border bg-surface px-2 py-1.5 tex
 const rotuloCampo = "mb-1 block text-[11.5px] text-muted";
 const botaoPrimario = "rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50";
 const botaoSecundario = "rounded-md border border-border px-3 py-1.5 text-[12.5px] text-muted hover:bg-surface-2 hover:text-foreground";
+// Lista de consultores no padrão do kit de colunas (TabelaLocal): funil e ordem por coluna, colunas configuráveis por usuário, paginação com "Por página".
+// Cada coluna é declarada uma vez aqui (constantes do módulo: o kit exige defs/colunas/ler estáveis).
+const COLUNAS_LOCAIS: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "departamento", tipo: "texto" },
+  { nome: "aquisitivo", tipo: "data", utc: true },
+  { nome: "saldo", tipo: "inteiro" },
+  { nome: "situacao", tipo: "texto" },
+  { nome: "proximas", tipo: "data", utc: true },
+];
+
+/** O valor que o funil e a ordem usam: o período aquisitivo e as próximas férias valem pela data de início; a situação, pelo texto exibido. */
+const lerLinha = (l: LinhaResumo, coluna: string): unknown => {
+  switch (coluna) {
+    case "aquisitivo":
+      return l.aquisitivoAtual?.inicio ?? null;
+    case "saldo":
+      return l.aquisitivoAtual?.saldo ?? null;
+    case "situacao":
+      return l.emFerias ? `Em férias até ${dataBr(l.emFerias.fim)}` : null;
+    case "proximas":
+      return l.proximasFerias?.inicio ?? null;
+    default:
+      return (l as unknown as Record<string, unknown>)[coluna];
+  }
+};
+
+const COLUNAS: DefColuna<LinhaResumo>[] = [
+  { nome: "nome", titulo: "Consultor", fixa: true, largura: 240, classe: "text-sm font-medium text-foreground", texto: (l) => l.nome, render: (l) => l.nome },
+  { nome: "departamento", titulo: "Departamento", largura: 180, classe: "text-sm text-muted", texto: (l) => l.departamento, render: (l) => l.departamento ?? "—" },
+  {
+    nome: "aquisitivo",
+    titulo: "Período aquisitivo",
+    largura: 250,
+    classe: "font-mono text-[12.5px] text-muted",
+    render: (l) =>
+      l.aquisitivoAtual ? (
+        <>
+          {dataBr(l.aquisitivoAtual.inicio)} a {dataBr(l.aquisitivoAtual.fim)}
+          {!l.aquisitivoAtual.remunerado && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-sans text-[10.5px] text-muted">não remuneradas</span>}
+        </>
+      ) : (
+        "—"
+      ),
+  },
+  {
+    nome: "saldo",
+    titulo: "Saldo (dias)",
+    direita: true,
+    largura: 130,
+    classe: (l) => cn("font-mono text-sm", l.aquisitivoAtual && l.aquisitivoAtual.saldo > 0 ? "text-primary" : "text-muted"),
+    render: (l) => (
+      <>
+        {l.aquisitivoAtual ? l.aquisitivoAtual.saldo : "—"}
+        {l.qtdAquisitivos > 1 && <span className="ml-1 text-[11px] text-muted">(total {l.saldoTotal})</span>}
+      </>
+    ),
+  },
+  {
+    nome: "situacao",
+    titulo: "Situação",
+    largura: 220,
+    render: (l) =>
+      l.emFerias ? (
+        <span className="inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[11.5px] font-medium text-primary">
+          <Palmtree size={12} aria-hidden /> Em férias até {dataBr(l.emFerias.fim)}
+        </span>
+      ) : (
+        <span className="text-muted">—</span>
+      ),
+  },
+  {
+    nome: "proximas",
+    titulo: "Próximas férias",
+    largura: 220,
+    classe: "font-mono text-[12.5px] text-muted",
+    render: (l) => (l.proximasFerias ? `${dataBr(l.proximasFerias.inicio)} a ${dataBr(l.proximasFerias.fim)}` : "—"),
+  },
+];
 
 // Controle de férias dos consultores PJ (13/11/2026), no lugar da planilha "Simulação Férias PJs". O gestor do departamento (e o admin) lança o período
 // AQUISITIVO (o direito) e os GOZOS (as férias tiradas); o gozo vira "Férias" no calendário do consultor e sai da meta. O valor é uma simulação gravada no gozo
@@ -82,61 +164,19 @@ export function Ferias() {
         <input type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar consultor ou departamento…" aria-label="Buscar consultor" className={cn(campo, "max-w-sm")} />
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-surface-2 text-left font-mono text-[10px] uppercase tracking-wider text-muted">
-                <th className="px-3 py-2">Consultor</th>
-                <th className="px-3 py-2">Departamento</th>
-                <th className="px-3 py-2">Período aquisitivo</th>
-                <th className="px-3 py-2 text-right">Saldo (dias)</th>
-                <th className="px-3 py-2">Situação</th>
-                <th className="px-3 py-2">Próximas férias</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-muted">
-                    Carregando...
-                  </td>
-                </tr>
-              )}
-              {!loading && filtradas.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-muted">
-                    Nenhum consultor encontrado.
-                  </td>
-                </tr>
-              )}
-              {filtradas.map((l) => (
-                <tr key={l.codfor} onClick={() => setAberto(l)} className="cursor-pointer border-t border-border/60 hover:bg-surface-2">
-                  <td className="px-3 py-2 font-medium text-foreground">{l.nome}</td>
-                  <td className="px-3 py-2 text-muted">{l.departamento ?? "—"}</td>
-                  <td className="px-3 py-2 font-mono text-[12.5px] text-muted">
-                    {l.aquisitivoAtual ? `${dataBr(l.aquisitivoAtual.inicio)} a ${dataBr(l.aquisitivoAtual.fim)}` : "—"}
-                    {l.aquisitivoAtual && !l.aquisitivoAtual.remunerado && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-sans text-[10.5px] text-muted">não remuneradas</span>}
-                  </td>
-                  <td className={cn("px-3 py-2 text-right font-mono", l.aquisitivoAtual && l.aquisitivoAtual.saldo > 0 ? "text-primary" : "text-muted")}>
-                    {l.aquisitivoAtual ? l.aquisitivoAtual.saldo : "—"}
-                    {l.qtdAquisitivos > 1 && <span className="ml-1 text-[11px] text-muted">(total {l.saldoTotal})</span>}
-                  </td>
-                  <td className="px-3 py-2">
-                    {l.emFerias ? (
-                      <span className="inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[11.5px] font-medium text-primary">
-                        <Palmtree size={12} aria-hidden /> Em férias até {dataBr(l.emFerias.fim)}
-                      </span>
-                    ) : (
-                      <span className="text-muted">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-[12.5px] text-muted">{l.proximasFerias ? `${dataBr(l.proximasFerias.inicio)} a ${dataBr(l.proximasFerias.fim)}` : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <div className="mt-4">
+        <TabelaLocal<LinhaResumo>
+          chave="projetos.ferias"
+          defs={COLUNAS}
+          colunas={COLUNAS_LOCAIS}
+          linhas={filtradas}
+          ler={lerLinha}
+          chaveLinha={(l) => String(l.codfor)}
+          loading={loading}
+          vazio="Nenhum consultor encontrado."
+          onLinha={setAberto}
+          paginacao={{ inicial: 10, rotulo: "consultores" }}
+        />
       </div>
 
       {aberto && <ModalConsultor linha={aberto} onFechar={() => setAberto(null)} onMudou={carregar} />}
