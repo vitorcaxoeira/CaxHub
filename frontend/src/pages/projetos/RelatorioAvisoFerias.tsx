@@ -4,7 +4,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { OrientacaoRelatorio, RelatorioShell, TemaRelatorio, usePreferencia } from "../../components/relatorio/relatorioComum";
 import { Spinner } from "../../components/ui/Spinner";
 import { cn } from "../../lib/cn";
-import { MESES, dataBr, moeda } from "../../lib/feriasCalendario";
+import { MESES, dataBr, hhhmm, hhhmmDeHoras, moeda } from "../../lib/feriasCalendario";
 
 const CHAVE_TEMA = "caxhub-aviso-ferias-tema";
 const CHAVE_ORIENTACAO = "caxhub-aviso-ferias-orientacao";
@@ -33,7 +33,6 @@ export interface AvisoFerias {
 
 const num = (v: number, casas = 2) => v.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: casas });
 const pct = (v: number) => `${num(v * 100, 2)}%`;
-const horasDecimal = (minutos: number) => `${num(minutos / 60, 2)} h`;
 
 // Aviso de férias do consultor (13/11/2026): documento imprimível aberto pelo botão "Aviso" da tela Férias, ao lado de "Editar". Traz as datas do gozo, o retorno ao
 // trabalho, o DEMONSTRATIVO do cálculo do valor (dias úteis × horas/dia × média do % trabalhado × valor-hora) com os meses da média, o pagamento e o saldo que sobra, e
@@ -128,15 +127,15 @@ export function Folha({ d }: { d: AvisoFerias }) {
         <table className="w-full border-collapse text-[13px]">
           <tbody>
             <Linha rotulo="Dias úteis do período de gozo" detalhe="segunda a sexta, sem feriados nacionais" valor={c.diasUteis != null ? String(c.diasUteis) : "—"} />
-            <Linha rotulo="Horas por dia útil" valor={c.horasDia != null ? `${num(c.horasDia)} h` : "—"} />
+            <Linha rotulo="Horas por dia útil" valor={c.horasDia != null ? hhhmmDeHoras(c.horasDia) : "—"} />
             <Linha rotulo="Média do % trabalhado" detalhe="média simples dos meses abaixo" valor={c.mediaPct != null ? pct(c.mediaPct) : "—"} />
             <Linha
               rotulo="Horas de férias"
-              detalhe={valorCompleto ? `${c.diasUteis} × ${num(c.horasDia as number)} h × ${pct(c.mediaPct as number)}` : undefined}
-              valor={c.horasFerias != null ? `${num(c.horasFerias)} h` : "—"}
+              detalhe={valorCompleto ? `${c.diasUteis} × ${hhhmmDeHoras(c.horasDia as number)} × ${pct(c.mediaPct as number)}` : undefined}
+              valor={c.horasFerias != null ? hhhmmDeHoras(c.horasFerias) : "—"}
             />
             <Linha rotulo="Valor-hora" valor={c.valorHora != null ? moeda(c.valorHora) : "—"} />
-            <Linha rotulo="Valor das férias" detalhe={c.horasFerias != null && c.valorHora != null ? `${num(c.horasFerias)} h × ${moeda(c.valorHora)}` : undefined} valor={c.valorFerias != null ? moeda(c.valorFerias) : "—"} total />
+            <Linha rotulo="Valor das férias" detalhe={c.horasFerias != null && c.valorHora != null ? `${hhhmmDeHoras(c.horasFerias)} × ${moeda(c.valorHora)}` : undefined} valor={c.valorFerias != null ? moeda(c.valorFerias) : "—"} total />
           </tbody>
         </table>
 
@@ -161,8 +160,8 @@ export function Folha({ d }: { d: AvisoFerias }) {
                       {!m.naMedia && <span className="ml-2 font-sans text-[10.5px]">fora da média</span>}
                     </td>
                     <td className="py-1 pr-3 text-right font-mono">{m.diasUteis}</td>
-                    <td className="py-1 pr-3 text-right font-mono">{horasDecimal(m.minutos)}</td>
-                    <td className="py-1 pr-3 text-right font-mono">{m.naMedia && c.horasDia != null ? Math.round(m.diasUteis * c.horasDia * 10) / 10 : "—"}</td>
+                    <td className="py-1 pr-3 text-right font-mono">{hhhmm(m.minutos)}</td>
+                    <td className="py-1 pr-3 text-right font-mono">{m.naMedia && c.horasDia != null ? hhhmmDeHoras(m.diasUteis * c.horasDia) : "—"}</td>
                     <td className="py-1 text-right font-mono">{m.naMedia ? pct(m.pct) : "—"}</td>
                   </tr>
                 ))}

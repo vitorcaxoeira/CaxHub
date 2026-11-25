@@ -1,6 +1,8 @@
 // Tipos e formatadores do calendário de trabalho e do controle de férias do consultor (13/11/2026). Espelham as respostas de GET /calendario e GET /ferias/*
 // (backend/src/routes/calendario.ts e ferias.ts). Horários em MINUTOS desde a meia-noite, como a jornada.
 
+import { formatHorasCompacto } from "./cronograma";
+
 export interface Ausencia {
   id: number;
   diaInteiro: boolean;
@@ -107,6 +109,22 @@ export function dataBr(iso: string): string {
 /** Minutos -> "HH:MM". */
 export function hhmm(minutos: number): string {
   return `${String(Math.trunc(minutos / 60)).padStart(2, "0")}:${String(minutos % 60).padStart(2, "0")}`;
+}
+
+/** Minutos -> "HHH:MM" (3 dígitos de hora: os totais do mês passam de 99 h). */
+export const hhhmm = (minutos: number) => formatHorasCompacto(minutos, 3);
+
+/** Horas decimais (8,5) -> "HHH:MM" (008:30). */
+export const hhhmmDeHoras = (horasDecimais: number) => hhhmm(horasDecimais * 60);
+
+/** Texto digitado em horas -> horas decimais: aceita "8:30" ou "8,5"; vazio ou inválido -> null. */
+export function lerHoras(texto: string): number | null {
+  const t = texto.trim();
+  if (t === "") return null;
+  const hm = /^(\d{1,3}):([0-5]\d)$/.exec(t);
+  if (hm) return Number(hm[1]) + Number(hm[2]) / 60;
+  const n = Number(t.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
 }
 
 /** "14:30" (valor do <input type="time">) -> minutos; vazio ou inválido -> null. */

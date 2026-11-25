@@ -2,11 +2,11 @@ import axios from "axios";
 import { CalendarDays, Palmtree } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { GradeDoMes, horas, useCalendarioMes } from "../../components/calendario/pecas";
+import { GradeDoMes, useCalendarioMes } from "../../components/calendario/pecas";
 import { Modal } from "../../components/ui/Modal";
 import { useToast } from "../../components/ui/Toast";
 import { cn } from "../../lib/cn";
-import { MESES, type Aquisitivo, type Gozo, type MesDaMedia, type Simulacao, dataBr, mensagemDeErro, moeda } from "../../lib/feriasCalendario";
+import { MESES, type Aquisitivo, type Gozo, type MesDaMedia, type Simulacao, dataBr, hhhmm, hhhmmDeHoras, lerHoras, mensagemDeErro, moeda } from "../../lib/feriasCalendario";
 
 interface LinhaResumo {
   codemp: number;
@@ -254,7 +254,7 @@ function ModalConsultor({ linha, onFechar, onMudou }: { linha: LinhaResumo; onFe
                           </td>
                           <td className="py-1.5 pr-2 text-right font-mono">{g.diasCorridos}</td>
                           <td className="py-1.5 pr-2 text-right font-mono">{g.diasUteis ?? "—"}</td>
-                          <td className="py-1.5 pr-2 text-right font-mono" title={g.horasFerias != null ? `${g.horasFerias} h × ${g.valorHora != null ? moeda(g.valorHora) : "—"}/h` : undefined}>
+                          <td className="py-1.5 pr-2 text-right font-mono" title={g.horasFerias != null ? `${hhhmmDeHoras(g.horasFerias)} h × ${g.valorHora != null ? moeda(g.valorHora) : "—"}/h` : undefined}>
                             {!a.remunerado ? "não remunerada" : g.valorFerias != null ? moeda(g.valorFerias) : "—"}
                           </td>
                           <td className="py-1.5 pr-2 font-mono">{g.competenciaPagamento ? `${g.competenciaPagamento.slice(5, 7)}/${g.competenciaPagamento.slice(0, 4)}` : "—"}</td>
@@ -531,8 +531,8 @@ function TabelaMeses({
                       )}
                     </span>
                   </td>
-                  <td className="py-1.5 pr-2 text-right font-mono">{Math.round(m.minutos / 6) / 10} h</td>
-                  <td className="py-1.5 pr-2 text-right font-mono">{Math.round(dias * horasDia * 10) / 10} h</td>
+                  <td className="py-1.5 pr-2 text-right font-mono">{hhhmm(m.minutos)}</td>
+                  <td className="py-1.5 pr-2 text-right font-mono">{hhhmmDeHoras(dias * horasDia)}</td>
                   <td className="py-1.5 pr-2 text-right font-mono">{naMedia ? pctTexto(m.pct) : "—"}</td>
                   <td className="py-1.5 pr-2 text-right">
                     <button
@@ -573,11 +573,11 @@ function ModalCalendarioMes({ ano, mes, codfor, onFechar }: { ano: number; mes: 
         <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
           <div className="rounded-lg border border-border bg-surface px-4 py-2">
             <p className="text-[11px] text-muted">Horas trabalhadas</p>
-            <p className="font-mono text-lg font-semibold text-foreground">{horas(dados.totais.apontadoMinutos)}</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{hhhmm(dados.totais.apontadoMinutos)}</p>
           </div>
           <div className="rounded-lg border border-border bg-surface px-4 py-2">
             <p className="text-[11px] text-muted">Meta do mês</p>
-            <p className="font-mono text-lg font-semibold text-foreground">{horas(dados.totais.metaMinutos)}</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{hhhmm(dados.totais.metaMinutos)}</p>
           </div>
           <div className="rounded-lg border border-border bg-surface px-4 py-2">
             <p className="text-[11px] text-muted">Dias com horas</p>
@@ -655,7 +655,7 @@ function FormGozo({
     }
     const t = window.setTimeout(() => {
       axios
-        .post<Simulacao>("/api/ferias/simular", { codfor: consultor.codfor, inicio, fim, horasDia: numero(horasDia), mediaPct: numero(mediaPct), valorHora: numero(valorHora), diasUteisMes: diasMesParaEnvio(diasMes), somenteDias: !remunerado })
+        .post<Simulacao>("/api/ferias/simular", { codfor: consultor.codfor, inicio, fim, horasDia: lerHoras(horasDia), mediaPct: numero(mediaPct), valorHora: numero(valorHora), diasUteisMes: diasMesParaEnvio(diasMes), somenteDias: !remunerado })
         .then(({ data }) => {
           setSim(data);
           setSimErro(null);
@@ -675,7 +675,7 @@ function FormGozo({
         fim,
         observacao: obs.trim() || null,
         competenciaPagamento: remunerado ? competencia || null : null,
-        horasDia: numero(horasDia),
+        horasDia: lerHoras(horasDia),
         mediaPct: numero(mediaPct),
         valorHora: numero(valorHora),
         diasUteisMes: diasMesParaEnvio(diasMes),
@@ -757,8 +757,8 @@ function FormGozo({
           <div className="mt-2 space-y-3">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <label>
-                <span className={rotuloCampo}>Horas por dia útil</span>
-                <input inputMode="decimal" value={horasDia} onChange={(e) => setHorasDia(e.target.value)} placeholder={String(sim.horasDia)} className={campo} />
+                <span className={rotuloCampo}>Horas por dia útil (hhh:mm)</span>
+                <input value={horasDia} onChange={(e) => setHorasDia(e.target.value)} placeholder={hhhmmDeHoras(sim.horasDia)} className={campo} />
               </label>
               <label>
                 <span className={rotuloCampo}>Média do % trabalhado</span>
@@ -770,7 +770,7 @@ function FormGozo({
               </label>
             </div>
             <p className="font-mono text-[12.5px] text-muted">
-              {sim.diasUteis} dias úteis × {sim.horasDia} h × {sim.mediaPct} = {sim.horasFerias} h
+              {sim.diasUteis} dias úteis × {hhhmmDeHoras(sim.horasDia)} × {sim.mediaPct} = {hhhmmDeHoras(sim.horasFerias)}
               {sim.valorHora != null && sim.valorFerias != null && (
                 <>
                   {" "}

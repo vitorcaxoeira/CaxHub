@@ -36,12 +36,12 @@ describe("Aviso de férias (folha)", () => {
     expect(t).toContain("16/11/2026 a 25/11/2026");
     expect(t).toContain("Retorno ao trabalho 26/11/2026");
     expect(t).toContain("Na nota referente ao mês Novembro/2026");
-    expect(t).toContain("7 × 8,5 h × 93%");
-    expect(t).toContain("55,34 h × R$ 67,67");
+    expect(t).toContain("7 × 008:30 × 93%");
+    expect(t).toContain("055:20 × R$ 67,67");
     expect(t).toContain("R$ 3.744,66");
     expect(t).toContain("Saldo do período aquisitivo após estas férias: 0 dia(s)");
     expect(t).toContain("01/2026");
-    expect(t).toContain("178,5 h");
+    expect(t).toContain("178:30");
     expect(t).not.toContain("canceladas");
   });
 
