@@ -1,5 +1,5 @@
 import axios from "axios";
-import { CalendarDays, ChevronDown, ChevronRight, Palmtree } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronRight, Palmtree, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { GradeDoMes, useCalendarioMes } from "../../components/calendario/pecas";
@@ -605,7 +605,7 @@ function TabelaMeses({
                     {feriados && <p className="font-sans text-[11px] text-muted">{feriados}</p>}
                   </td>
                   <td className="py-1.5 pr-2 text-right">
-                    <span className="inline-flex items-center justify-end gap-2">
+                    <span className="inline-flex items-center justify-end gap-1">
                       <input
                         inputMode="numeric"
                         aria-label={`Dias úteis disponíveis em ${rotulo}`}
@@ -614,11 +614,20 @@ function TabelaMeses({
                         onChange={(e) => definir(chave, e.target.value.replace(/\D/g, "").slice(0, 2))}
                         className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-right font-mono text-sm text-foreground placeholder:text-muted"
                       />
-                      {ajustado && (
-                        <button type="button" className="text-[11px] text-primary hover:underline" onClick={() => definir(chave, "")} title={`Voltar para ${padrao} dia(s) úteis`}>
-                          padrão
-                        </button>
-                      )}
+                      {/* Área fixa para "voltar ao padrão": sempre ocupa o espaço, então o campo não anda quando o dia é ajustado. */}
+                      <span className="inline-flex h-6 w-6 flex-none items-center justify-center">
+                        {ajustado && (
+                          <button
+                            type="button"
+                            className="inline-flex h-5 w-5 items-center justify-center rounded text-primary hover:bg-primary/10"
+                            onClick={() => definir(chave, "")}
+                            aria-label={`Voltar ${rotulo} para o padrão (${padrao} dia(s) úteis)`}
+                            title={`Voltar para o padrão (${padrao} dia(s) úteis)`}
+                          >
+                            <X size={13} strokeWidth={2.5} aria-hidden />
+                          </button>
+                        )}
+                      </span>
                     </span>
                   </td>
                   <td className="py-1.5 pr-2 text-right font-mono">{hhhmm(m.minutos)}</td>
