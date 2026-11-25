@@ -25,6 +25,22 @@ export interface DiaCalendario {
   ausencias: Ausencia[];
 }
 
+/** Um dos 12 meses da média do % trabalhado. Gozos antigos podem não trazer os campos de dias úteis (a tela assume o padrão). */
+export interface MesDaMedia {
+  ano: number;
+  mes: number;
+  /** Horas realizadas no mês, em minutos. */
+  minutos: number;
+  /** horas / (dias úteis x horas/dia), 0 a 1+. */
+  pct: number;
+  diasUteisPadrao?: number;
+  /** Dias úteis disponíveis usados no cálculo (padrão ou ajustado pelo gestor). */
+  diasUteis?: number;
+  feriados?: { data: string; nome: string }[];
+  /** Entra na média (dias úteis > 0). */
+  naMedia?: boolean;
+}
+
 export interface Gozo {
   id: number;
   inicio: string;
@@ -39,6 +55,7 @@ export interface Gozo {
   valorHora: number | null;
   horasFerias: number | null;
   valorFerias: number | null;
+  mesesMedia: MesDaMedia[] | null;
 }
 
 export interface Aquisitivo {
@@ -75,7 +92,7 @@ export interface Simulacao {
   diasUteis: number;
   horasDia: number;
   mediaPct: number;
-  meses: { ano: number; mes: number; minutos: number; pct: number }[];
+  meses: MesDaMedia[];
   valorHora: number | null;
   horasFerias: number;
   valorFerias: number | null;

@@ -2,6 +2,7 @@ import axios from "axios";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { GradeDoMes, Legenda, ModalDia, SaldoDeFerias, horas, useCalendarioMes } from "../../components/calendario/pecas";
+import { useSearchParams } from "react-router-dom";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { useToast } from "../../components/ui/Toast";
 import { cn } from "../../lib/cn";
@@ -20,10 +21,17 @@ interface ConsultorOpcao {
 export function Calendario() {
   const toast = useToast();
   const hoje = new Date();
-  const [ano, setAno] = useState(hoje.getFullYear());
-  const [mes, setMes] = useState(hoje.getMonth() + 1);
+  // Aceita ?codfor=&ano=&mes= (o link "calendário" da tela de Férias abre o mês e o consultor certos). Sem parâmetro, vale o mês de hoje.
+  const [params] = useSearchParams();
+  const paramNumero = (nome: string) => {
+    const n = Number(params.get(nome));
+    return params.get(nome) && Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const [ano, setAno] = useState(paramNumero("ano") ?? hoje.getFullYear());
+  const mesDaUrl = paramNumero("mes");
+  const [mes, setMes] = useState(mesDaUrl && mesDaUrl <= 12 ? mesDaUrl : hoje.getMonth() + 1);
   const [consultores, setConsultores] = useState<ConsultorOpcao[]>([]);
-  const [codfor, setCodfor] = useState<number | null>(null);
+  const [codfor, setCodfor] = useState<number | null>(paramNumero("codfor"));
   const [diaAberto, setDiaAberto] = useState<string | null>(null);
   const { dados, semConsultor, loading, erro, feriados, recarregar } = useCalendarioMes(ano, mes, codfor);
 

@@ -2,17 +2,18 @@
 //
 //   saldo do período aquisitivo = dias de direito (corridos) - dias corridos dos gozos não cancelados - folgas de dia inteiro marcadas para descontar
 //   valor das férias            = dias úteis do gozo x horas/dia x média do % trabalhado x valor-hora   (pago na nota do mês)
-//   média do % trabalhado       = média simples do % de cada mês = horas trabalhadas / (dias úteis do mês x horas/dia), até 12 meses antes do gozo,
-//                                 a partir do primeiro mês com horas (a planilha começa no mês da admissão)
+//   média do % trabalhado       = média simples do % dos 12 meses FECHADOS antes do mês de início das férias (sempre 12)
+//   % de um mês                 = horas executadas / (dias úteis disponíveis do mês x horas/dia)
+//   dias úteis disponíveis      = seg–sex menos feriados nacionais por padrão; o gestor ajusta cada mês. Mês com 0 dias fica fora da média.
+//                                 Por padrão, meses antes do primeiro mês com horas valem 0 (o consultor ainda não trabalhava).
 //
-// Dias úteis = segunda a sexta menos os feriados NACIONAIS (conferido contra a planilha: 11/2025 = 19, 12/2025 = 22, 04/2023 = 18; Carnaval e Corpus Christi
-// não são descontados).
+// Feriados nacionais (conferido contra a planilha: 11/2025 = 19, 12/2025 = 22, 04/2023 = 18; Carnaval e Corpus Christi não são descontados).
 
 import { chaveDia, diasDoPeriodo } from "./calendarioTrabalho";
 
 /** Horas por dia útil que a planilha considera (8h30). Padrão quando a jornada do consultor não diz outra coisa. */
 export const HORAS_DIA_PADRAO = 8.5;
-/** Quantos meses antes do gozo entram na média do % trabalhado. */
+/** Quantos meses fechados antes do mês do gozo entram na média do % trabalhado. */
 export const MESES_DA_MEDIA = 12;
 
 const centavos = (n: number) => Math.round(n * 100) / 100;
@@ -36,15 +37,29 @@ function pascoa(ano: number): Date {
   return new Date(Date.UTC(ano, mes - 1, dia));
 }
 
-/** Feriados nacionais do ano (YYYY-MM-DD): os fixos mais a Sexta-feira Santa. O Dia da Consciência Negra (20/11) é nacional desde 2024. */
-export function feriadosNacionais(ano: number): Set<string> {
-  const fixos = ["01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "12-25"];
-  if (ano >= 2024) fixos.push("11-20");
-  const lista = fixos.map((md) => `${ano}-${md}`);
+/** Feriados nacionais do ano (YYYY-MM-DD -> nome): os fixos mais a Sexta-feira Santa. O Dia da Consciência Negra (20/11) é nacional desde 2024. */
+export function feriadosNacionaisNomeados(ano: number): Map<string, string> {
+  const fixos: [string, string][] = [
+    ["01-01", "Confraternização Universal"],
+    ["04-21", "Tiradentes"],
+    ["05-01", "Dia do Trabalho"],
+    ["09-07", "Independência do Brasil"],
+    ["10-12", "Nossa Senhora Aparecida"],
+    ["11-02", "Finados"],
+    ["11-15", "Proclamação da República"],
+    ["12-25", "Natal"],
+  ];
+  if (ano >= 2024) fixos.push(["11-20", "Dia da Consciência Negra"]);
+  const mapa = new Map(fixos.map(([md, nome]) => [`${ano}-${md}`, nome]));
   const sextaSanta = pascoa(ano);
   sextaSanta.setUTCDate(sextaSanta.getUTCDate() - 2);
-  lista.push(chaveDia(sextaSanta));
-  return new Set(lista);
+  mapa.set(chaveDia(sextaSanta), "Sexta-feira Santa");
+  return mapa;
+}
+
+/** Feriados nacionais do ano (YYYY-MM-DD). */
+export function feriadosNacionais(ano: number): Set<string> {
+  return new Set(feriadosNacionaisNomeados(ano).keys());
 }
 
 /** Dias úteis (seg–sex, fora feriado nacional) de `de` a `ate`, inclusive. */
@@ -62,6 +77,26 @@ export function diasUteisDoPeriodo(de: Date, ate: Date): number {
 /** Dias úteis do mês (mes 1–12). */
 export function diasUteisDoMes(ano: number, mes: number): number {
   return diasUteisDoPeriodo(new Date(Date.UTC(ano, mes - 1, 1)), new Date(Date.UTC(ano, mes, 0)));
+}
+
+/** Feriados nacionais do mês que caem de seg a sex (são os que tiram dia útil), em ordem. */
+export function feriadosUteisDoMes(ano: number, mes: number): { data: string; nome: string }[] {
+  const prefixo = `${ano}-${String(mes).padStart(2, "0")}-`;
+  return [...feriadosNacionaisNomeados(ano).entries()]
+    .filter(([data]) => data.startsWith(prefixo))
+    .filter(([data]) => {
+      const dow = new Date(`${data}T00:00:00Z`).getUTCDay();
+      return dow >= 1 && dow <= 5;
+    })
+    .map(([data, nome]) => ({ data, nome }))
+    .sort((x, y) => x.data.localeCompare(y.data));
+}
+
+/** Dias úteis PADRÃO de um mês da média: os dias úteis do mês, mas 0 antes do primeiro mês com horas (o consultor ainda não trabalhava). */
+export function diasUteisPadraoDoMes(ano: number, mes: number, primeiroMesComHoras: { ano: number; mes: number } | null): number {
+  if (!primeiroMesComHoras) return 0;
+  const indice = (a: number, m: number) => a * 12 + (m - 1);
+  return indice(ano, mes) < indice(primeiroMesComHoras.ano, primeiroMesComHoras.mes) ? 0 : diasUteisDoMes(ano, mes);
 }
 
 /** Dias corridos de `inicio` a `fim`, inclusive nos dois extremos. */
@@ -88,27 +123,29 @@ export function saldoDoAquisitivo(
   return { diasDireito, diasGozados, diasFolgaDescontada: folgasDescontadas, saldo: diasDireito - diasGozados - folgasDescontadas };
 }
 
-/**
- * Os meses que entram na média do % trabalhado de um gozo que começa em `inicioGozo`: até MESES_DA_MEDIA meses completos ANTES do mês do gozo, e nunca antes
- * do primeiro mês com horas (`primeiroMesComHoras`). Em ordem cronológica. Sem horas anteriores, lista vazia.
- */
-export function mesesDaMedia(inicioGozo: Date, primeiroMesComHoras: { ano: number; mes: number } | null): { ano: number; mes: number }[] {
-  if (!primeiroMesComHoras) return [];
+/** Os 12 meses FECHADOS antes do mês de início do gozo, em ordem cronológica (sempre 12, mesmo para consultor recém-admitido). */
+export function mesesDaMedia(inicioGozo: Date): { ano: number; mes: number }[] {
   const indice = (ano: number, mes: number) => ano * 12 + (mes - 1);
   const fim = indice(inicioGozo.getUTCFullYear(), inicioGozo.getUTCMonth() + 1) - 1; // o mês anterior ao do gozo
-  const inicio = Math.max(fim - MESES_DA_MEDIA + 1, indice(primeiroMesComHoras.ano, primeiroMesComHoras.mes));
   const meses: { ano: number; mes: number }[] = [];
-  for (let i = inicio; i <= fim; i++) meses.push({ ano: Math.floor(i / 12), mes: (i % 12) + 1 });
+  for (let i = fim - MESES_DA_MEDIA + 1; i <= fim; i++) meses.push({ ano: Math.floor(i / 12), mes: (i % 12) + 1 });
   return meses;
 }
 
-/** Média simples do % trabalhado: horas do mês / (dias úteis do mês x horas/dia), de cada mês. Sem meses, 1 (100%): não há histórico para reduzir nem aumentar. */
-export function mediaPctTrabalhado(meses: { ano: number; mes: number; minutos: number }[], horasDia = HORAS_DIA_PADRAO): number {
-  if (meses.length === 0) return 1;
-  const pcts = meses.map((m) => {
-    const base = diasUteisDoMes(m.ano, m.mes) * horasDia;
-    return base > 0 ? m.minutos / 60 / base : 0;
-  });
+export interface MesParaMedia {
+  minutos: number;
+  /** Dias úteis disponíveis do mês (padrão ou ajustado pelo gestor). 0 = o mês fica fora da média. */
+  diasUteis: number;
+}
+
+/**
+ * Média simples do % trabalhado: de cada mês com dias disponíveis, horas / (dias úteis x horas/dia). Meses com 0 dias saem da conta. Sem nenhum mês válido, 1
+ * (100%): não há histórico para reduzir nem aumentar.
+ */
+export function mediaPctTrabalhado(meses: MesParaMedia[], horasDia = HORAS_DIA_PADRAO): number {
+  const validos = meses.filter((m) => m.diasUteis > 0);
+  if (validos.length === 0) return 1;
+  const pcts = validos.map((m) => m.minutos / 60 / (m.diasUteis * horasDia));
   return pcts.reduce((soma, p) => soma + p, 0) / pcts.length;
 }
 

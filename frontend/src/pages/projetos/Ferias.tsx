@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { Modal } from "../../components/ui/Modal";
 import { useToast } from "../../components/ui/Toast";
 import { cn } from "../../lib/cn";
-import { type Aquisitivo, type Gozo, type Simulacao, dataBr, mensagemDeErro, moeda } from "../../lib/feriasCalendario";
+import { MESES, type Aquisitivo, type Gozo, type MesDaMedia, type Simulacao, dataBr, mensagemDeErro, moeda } from "../../lib/feriasCalendario";
 
 interface LinhaResumo {
   codemp: number;
@@ -427,6 +427,133 @@ function FormAquisitivo({
   );
 }
 
+const chaveMes = (m: { ano: number; mes: number }) => `${m.ano}-${String(m.mes).padStart(2, "0")}`;
+const pctTexto = (p: number) => `${Math.round(p * 1000) / 10}%`;
+
+/** Os dias úteis que já vêm ajustados num gozo gravado (só os meses em que o valor foi trocado do padrão). */
+function ajustesGravados(meses: MesDaMedia[] | null | undefined): Record<string, string> {
+  const saida: Record<string, string> = {};
+  for (const m of meses ?? []) {
+    if (m.diasUteis != null && m.diasUteisPadrao != null && m.diasUteis !== m.diasUteisPadrao) saida[chaveMes(m)] = String(m.diasUteis);
+  }
+  return saida;
+}
+
+/** Os ajustes digitados no formato da API ({ "AAAA-MM": n }); sem ajuste, undefined (vale o padrão). */
+function diasMesParaEnvio(diasMes: Record<string, string>): Record<string, number> | undefined {
+  const saida: Record<string, number> = {};
+  for (const [chave, texto] of Object.entries(diasMes)) {
+    const n = Number(texto);
+    if (texto.trim() !== "" && Number.isInteger(n) && n >= 0) saida[chave] = n;
+  }
+  return Object.keys(saida).length > 0 ? saida : undefined;
+}
+
+/**
+ * Os 12 meses da média, com os dias úteis disponíveis editáveis (o gestor ajusta; vazio = padrão), as horas, a base e o % de cada mês. Mês com 0 dias fica
+ * fora da média. O botão do calendário abre o mês em outra aba, no calendário do consultor.
+ */
+function TabelaMeses({
+  meses,
+  horasDia,
+  mediaUsada,
+  codfor,
+  diasMes,
+  onMudar,
+}: {
+  meses: MesDaMedia[];
+  horasDia: number;
+  mediaUsada: number;
+  codfor: number;
+  diasMes: Record<string, string>;
+  onMudar: (atualizar: (d: Record<string, string>) => Record<string, string>) => void;
+}) {
+  const definir = (chave: string, texto: string) =>
+    onMudar((d) => {
+      const proximo = { ...d };
+      if (texto.trim() === "") delete proximo[chave];
+      else proximo[chave] = texto;
+      return proximo;
+    });
+  const naMediaQtd = meses.filter((m) => m.naMedia ?? (m.diasUteis ?? 0) > 0).length;
+
+  return (
+    <div className="mt-2">
+      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Meses considerados na média</p>
+      <div className="mt-1 overflow-x-auto">
+        <table className="w-full border-collapse text-[12.5px]">
+          <thead>
+            <tr className="text-left font-mono text-[10px] uppercase tracking-wider text-muted">
+              <th className="py-1 pr-2">Mês</th>
+              <th className="py-1 pr-2 text-right">Dias úteis disponíveis</th>
+              <th className="py-1 pr-2 text-right">Horas</th>
+              <th className="py-1 pr-2 text-right">Base</th>
+              <th className="py-1 pr-2 text-right">% do mês</th>
+              <th className="py-1 pr-2 text-right">Calendário</th>
+            </tr>
+          </thead>
+          <tbody>
+            {meses.map((m) => {
+              const chave = chaveMes(m);
+              const padrao = m.diasUteisPadrao ?? 0;
+              const dias = m.diasUteis ?? padrao;
+              const naMedia = m.naMedia ?? dias > 0;
+              const ajustado = (diasMes[chave] ?? "").trim() !== "";
+              const rotulo = `${String(m.mes).padStart(2, "0")}/${m.ano}`;
+              const feriados = (m.feriados ?? []).map((f) => `${f.data.slice(8)}/${f.data.slice(5, 7)} ${f.nome}`).join(" · ");
+              return (
+                <tr key={chave} className={cn("border-t border-border/60", !naMedia && "text-muted")}>
+                  <td className="py-1.5 pr-2 font-mono">
+                    {rotulo}
+                    <span className="ml-1 font-sans text-[11px] text-muted">{MESES[m.mes - 1]}</span>
+                    {!naMedia && <span className="ml-2 font-sans text-[11px] text-muted">fora da média</span>}
+                    {feriados && <p className="font-sans text-[11px] text-muted">{feriados}</p>}
+                  </td>
+                  <td className="py-1.5 pr-2 text-right">
+                    <span className="inline-flex items-center justify-end gap-2">
+                      <input
+                        inputMode="numeric"
+                        aria-label={`Dias úteis disponíveis em ${rotulo}`}
+                        value={diasMes[chave] ?? ""}
+                        placeholder={String(padrao)}
+                        onChange={(e) => definir(chave, e.target.value.replace(/\D/g, "").slice(0, 2))}
+                        className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-right font-mono text-sm text-foreground placeholder:text-muted"
+                      />
+                      {ajustado && (
+                        <button type="button" className="text-[11px] text-primary hover:underline" onClick={() => definir(chave, "")} title={`Voltar para ${padrao} dia(s) úteis`}>
+                          padrão
+                        </button>
+                      )}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-2 text-right font-mono">{Math.round(m.minutos / 6) / 10} h</td>
+                  <td className="py-1.5 pr-2 text-right font-mono">{Math.round(dias * horasDia * 10) / 10} h</td>
+                  <td className="py-1.5 pr-2 text-right font-mono">{naMedia ? pctTexto(m.pct) : "—"}</td>
+                  <td className="py-1.5 pr-2 text-right">
+                    <button
+                      type="button"
+                      aria-label={`Abrir o calendário de ${rotulo}`}
+                      title="Abre o calendário deste mês em outra aba"
+                      className="inline-flex items-center text-primary hover:opacity-80"
+                      onClick={() => window.open(`/projetos/calendario?codfor=${codfor}&ano=${m.ano}&mes=${m.mes}`, "_blank", "noopener")}
+                    >
+                      <CalendarDays size={14} aria-hidden />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-[12px] text-muted">
+        Média usada: <span className="font-mono text-foreground">{pctTexto(mediaUsada)}</span> · {naMediaQtd} de {meses.length} meses entram. Mês com 0 dias úteis
+        disponíveis sai da média; ao ajustar os dias, a simulação refaz sozinha.
+      </p>
+    </div>
+  );
+}
+
 function FormGozo({
   consultor,
   aquisitivos,
@@ -451,6 +578,8 @@ function FormGozo({
   const [horasDia, setHorasDia] = useState("");
   const [mediaPct, setMediaPct] = useState("");
   const [valorHora, setValorHora] = useState("");
+  // Dias úteis disponíveis ajustados por mês da média ("AAAA-MM" -> texto digitado). Vazio = o padrão (dias úteis com feriados nacionais descontados).
+  const [diasMes, setDiasMes] = useState<Record<string, string>>(() => ajustesGravados(editar?.mesesMedia));
   const [sim, setSim] = useState<Simulacao | null>(null);
   const [simErro, setSimErro] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -478,7 +607,7 @@ function FormGozo({
     }
     const t = window.setTimeout(() => {
       axios
-        .post<Simulacao>("/api/ferias/simular", { codfor: consultor.codfor, inicio, fim, horasDia: numero(horasDia), mediaPct: numero(mediaPct), valorHora: numero(valorHora), somenteDias: !remunerado })
+        .post<Simulacao>("/api/ferias/simular", { codfor: consultor.codfor, inicio, fim, horasDia: numero(horasDia), mediaPct: numero(mediaPct), valorHora: numero(valorHora), diasUteisMes: diasMesParaEnvio(diasMes), somenteDias: !remunerado })
         .then(({ data }) => {
           setSim(data);
           setSimErro(null);
@@ -487,7 +616,7 @@ function FormGozo({
     }, 450);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inicio, fim, horasDia, mediaPct, valorHora, consultor.codfor, remunerado, datasOk]);
+  }, [inicio, fim, horasDia, mediaPct, valorHora, diasMes, consultor.codfor, remunerado, datasOk]);
 
   async function salvar(permitirExcedente = false) {
     setSalvando(true);
@@ -501,6 +630,7 @@ function FormGozo({
         horasDia: numero(horasDia),
         mediaPct: numero(mediaPct),
         valorHora: numero(valorHora),
+        diasUteisMes: diasMesParaEnvio(diasMes),
         permitirExcedente,
       };
       if (editar) await axios.put(`/api/ferias/gozos/${editar.id}`, { ...corpo, recalcular: true });
@@ -601,18 +731,7 @@ function FormGozo({
               )}
             </p>
             {sim.valorHora == null && <p className="text-[12px] text-muted">Consultor sem valor-hora (contrato fixo ou sem contrato): informe o valor-hora se quiser o cálculo.</p>}
-            {sim.meses.length > 0 && (
-              <details className="text-[12px] text-muted">
-                <summary className="cursor-pointer">Meses considerados na média ({sim.meses.length})</summary>
-                <ul className="mt-1 grid grid-cols-2 gap-x-4 font-mono sm:grid-cols-3">
-                  {sim.meses.map((m) => (
-                    <li key={`${m.ano}-${m.mes}`}>
-                      {String(m.mes).padStart(2, "0")}/{m.ano}: {Math.round(m.minutos / 6) / 10} h ({Math.round(m.pct * 1000) / 10}%)
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
+            {sim.meses.length > 0 && <TabelaMeses meses={sim.meses} horasDia={sim.horasDia} mediaUsada={sim.mediaPct} codfor={consultor.codfor} diasMes={diasMes} onMudar={setDiasMes} />}
           </div>
         )}
       </div>

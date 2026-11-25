@@ -26,7 +26,7 @@ export interface AvisoFerias {
     horasFerias: number | null;
     valorFerias: number | null;
     calculadoEm: string | null;
-    meses: { ano: number; mes: number; minutos: number; pct: number }[];
+    meses: { ano: number; mes: number; minutos: number; pct: number; diasUteis: number; diasUteisPadrao: number; naMedia: boolean }[];
     mesesReconstituidos: boolean;
   };
 }
@@ -142,28 +142,33 @@ export function Folha({ d }: { d: AvisoFerias }) {
 
         {c.meses.length > 0 && (
           <div className="mt-4">
-            <p className="mb-1 text-[12px] text-muted">Meses considerados na média do % trabalhado (horas apontadas ÷ horas do mês):</p>
+            <p className="mb-1 text-[12px] text-muted">Meses considerados na média do % trabalhado (horas apontadas ÷ base do mês = dias úteis disponíveis × horas/dia):</p>
             <table className="w-full border-collapse text-[12px]">
               <thead>
                 <tr className="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted">
                   <th className="py-1 pr-3">Mês</th>
+                  <th className="py-1 pr-3 text-right">Dias úteis</th>
                   <th className="py-1 pr-3 text-right">Horas trabalhadas</th>
+                  <th className="py-1 pr-3 text-right">Base (h)</th>
                   <th className="py-1 text-right">% trabalhado</th>
                 </tr>
               </thead>
               <tbody>
                 {c.meses.map((m) => (
-                  <tr key={`${m.ano}-${m.mes}`} className="border-b border-border/50">
+                  <tr key={`${m.ano}-${m.mes}`} className={`border-b border-border/50 ${m.naMedia ? "" : "text-muted"}`}>
                     <td className="py-1 pr-3 font-mono">
                       {String(m.mes).padStart(2, "0")}/{m.ano}
+                      {!m.naMedia && <span className="ml-2 font-sans text-[10.5px]">fora da média</span>}
                     </td>
+                    <td className="py-1 pr-3 text-right font-mono">{m.diasUteis}</td>
                     <td className="py-1 pr-3 text-right font-mono">{horasDecimal(m.minutos)}</td>
-                    <td className="py-1 text-right font-mono">{pct(m.pct)}</td>
+                    <td className="py-1 pr-3 text-right font-mono">{m.naMedia && c.horasDia != null ? Math.round(m.diasUteis * c.horasDia * 10) / 10 : "—"}</td>
+                    <td className="py-1 text-right font-mono">{m.naMedia ? pct(m.pct) : "—"}</td>
                   </tr>
                 ))}
                 {c.mediaPct != null && (
                   <tr className="font-semibold">
-                    <td className="py-1 pr-3" colSpan={2}>
+                    <td className="py-1 pr-3" colSpan={4}>
                       Média
                     </td>
                     <td className="py-1 text-right font-mono">{pct(c.mediaPct)}</td>
@@ -174,7 +179,7 @@ export function Folha({ d }: { d: AvisoFerias }) {
             {c.mesesReconstituidos && <p className="mt-1 text-[11px] text-muted">Tabela refeita com as horas de hoje; a média acima é a gravada no lançamento das férias.</p>}
           </div>
         )}
-        {c.meses.length === 0 && <p className="mt-3 text-[12px] text-muted">Sem histórico de horas nos meses anteriores: média considerada de 100%.</p>}
+        {!c.meses.some((m) => m.naMedia) && <p className="mt-3 text-[12px] text-muted">Sem histórico de horas nos meses anteriores: média considerada de 100%.</p>}
       </section>
       )}
 

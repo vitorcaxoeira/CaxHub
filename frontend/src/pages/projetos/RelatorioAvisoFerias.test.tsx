@@ -18,8 +18,8 @@ const BASE: AvisoFerias = {
     valorFerias: 3744.66,
     calculadoEm: "2026-11-13T13:08:43.456Z",
     meses: [
-      { ano: 2026, mes: 1, minutos: 10710, pct: 1 },
-      { ano: 2026, mes: 2, minutos: 9000, pct: 0.86 },
+      { ano: 2026, mes: 1, minutos: 10710, pct: 1, diasUteis: 21, diasUteisPadrao: 21, naMedia: true },
+      { ano: 2026, mes: 2, minutos: 9000, pct: 0.86, diasUteis: 20, diasUteisPadrao: 20, naMedia: true },
     ],
     mesesReconstituidos: false,
   },

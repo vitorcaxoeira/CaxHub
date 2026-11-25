@@ -5,8 +5,8 @@ import { prisma } from "../db/prisma";
 import { ContextoDoUsuario, contextoDoUsuario, podeLancarFerias, resolverAlvo } from "../domain/acessoCalendario";
 import { chaveDia, lerDia } from "../domain/calendarioTrabalho";
 import { consultoresFiltraveis, nomeConsultor } from "../domain/contextoProjeto";
-import { aquisitivosDoConsultor, aquisitivosDosConsultores, simularFerias, type AquisitivoDto } from "../domain/feriasDados";
-import { diasCorridosEntre, diasUteisDoPeriodo, proximoDiaUtil } from "../domain/feriasCalculo";
+import { aquisitivosDoConsultor, aquisitivosDosConsultores, simularFerias, type AquisitivoDto, type MesDaMediaGravado } from "../domain/feriasDados";
+import { diasCorridosEntre, diasUteisDoMes, diasUteisDoPeriodo, feriadosUteisDoMes, proximoDiaUtil } from "../domain/feriasCalculo";
 import { depexeLabel } from "../domain/propostasDominio";
 
 // Controle de férias dos consultores PJ (13/11/2026), no lugar da planilha "Simulação Férias PJs". O PERÍODO AQUISITIVO é o direito (ex.: 05/2025 à 05/2026,
@@ -25,6 +25,26 @@ function handleError(res: Response, error: unknown, label: string) {
 const ctxDe = (req: AuthenticatedRequest) => contextoDoUsuario(req.user!.userId, req.user!.role as string);
 const num = (v: { toString(): string } | null): number | null => (v == null ? null : Number(v));
 const numeroOuNulo = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+
+/**
+ * Os dias úteis que o gestor ajustou por mês da média ({ "YYYY-MM": n }). Só entram chaves de mês válido e n de 0 até os dias do mês; o resto é ignorado.
+ * Vazio ou ausente -> undefined (vale o padrão).
+ */
+function lerDiasUteisMes(v: unknown): Record<string, number> | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const saida: Record<string, number> = {};
+  for (const [chave, valor] of Object.entries(v as Record<string, unknown>)) {
+    const m = /^(\d{4})-(\d{2})$/.exec(chave);
+    const n = typeof valor === "number" ? valor : Number(valor);
+    if (!m || !Number.isInteger(n) || n < 0) continue;
+    const mes = Number(m[2]);
+    if (mes < 1 || mes > 12) continue;
+    const diasNoMes = new Date(Date.UTC(Number(m[1]), mes, 0)).getUTCDate();
+    if (n > diasNoMes) continue;
+    saida[chave] = n;
+  }
+  return Object.keys(saida).length > 0 ? saida : undefined;
+}
 
 /** "YYYY-MM" ou "YYYY-MM-DD" -> primeiro dia do mês (UTC); vazio -> null; inválido -> undefined. */
 function lerCompetencia(v: unknown): Date | null | undefined {
@@ -165,7 +185,16 @@ feriasRouter.post("/simular", async (req: AuthenticatedRequest, res) => {
       return;
     }
     res.json(
-      await simularFerias({ codemp: alvo.codemp, codfor: alvo.codfor as number, inicio, fim, horasDia: numeroOuNulo(b.horasDia), mediaPct: numeroOuNulo(b.mediaPct), valorHora: numeroOuNulo(b.valorHora) }),
+      await simularFerias({
+        codemp: alvo.codemp,
+        codfor: alvo.codfor as number,
+        inicio,
+        fim,
+        horasDia: numeroOuNulo(b.horasDia),
+        mediaPct: numeroOuNulo(b.mediaPct),
+        valorHora: numeroOuNulo(b.valorHora),
+        diasUteisMes: lerDiasUteisMes(b.diasUteisMes),
+      }),
     );
   } catch (error) {
     handleError(res, error, "simular");
@@ -348,6 +377,7 @@ feriasRouter.post("/gozos", async (req: AuthenticatedRequest, res) => {
           horasDia: numeroOuNulo(b.horasDia),
           mediaPct: numeroOuNulo(b.mediaPct),
           valorHora: numeroOuNulo(b.valorHora),
+          diasUteisMes: lerDiasUteisMes(b.diasUteisMes),
         })
       : null;
     const criado = await prisma.feriasGozo.create({
@@ -360,7 +390,7 @@ feriasRouter.post("/gozos", async (req: AuthenticatedRequest, res) => {
         competenciaPagamento: sim ? g.competenciaPagamento : null,
         diasUteis: sim ? sim.diasUteis : diasUteisDoPeriodo(g.inicio, g.fim),
         ...(sim
-          ? { horasDia: sim.horasDia, mediaPct: sim.mediaPct, valorHora: sim.valorHora, horasFerias: sim.horasFerias, valorFerias: sim.valorFerias, mesesMedia: sim.meses, calculadoEm: new Date() }
+          ? { horasDia: sim.horasDia, mediaPct: sim.mediaPct, valorHora: sim.valorHora, horasFerias: sim.horasFerias, valorFerias: sim.valorFerias, mesesMedia: sim.meses as unknown as Prisma.InputJsonValue, calculadoEm: new Date() }
           : DADOS_SEM_VALOR),
         criadoPor: ctx.userId,
       },
@@ -425,8 +455,9 @@ feriasRouter.put("/gozos/:id", async (req: AuthenticatedRequest, res) => {
         horasDia: numeroOuNulo(b.horasDia),
         mediaPct: numeroOuNulo(b.mediaPct),
         valorHora: numeroOuNulo(b.valorHora),
+        diasUteisMes: lerDiasUteisMes(b.diasUteisMes),
       });
-      Object.assign(dados, { diasUteis: simulacao.diasUteis, horasDia: simulacao.horasDia, mediaPct: simulacao.mediaPct, valorHora: simulacao.valorHora, horasFerias: simulacao.horasFerias, valorFerias: simulacao.valorFerias, mesesMedia: simulacao.meses, calculadoEm: new Date() });
+      Object.assign(dados, { diasUteis: simulacao.diasUteis, horasDia: simulacao.horasDia, mediaPct: simulacao.mediaPct, valorHora: simulacao.valorHora, horasFerias: simulacao.horasFerias, valorFerias: simulacao.valorFerias, mesesMedia: simulacao.meses as unknown as Prisma.InputJsonValue, calculadoEm: new Date() });
     }
     await prisma.feriasGozo.update({ where: { id: gozo.id }, data: dados });
     res.json({ ok: true, simulacao });
@@ -464,7 +495,7 @@ feriasRouter.get("/gozos/:id/aviso", async (req: AuthenticatedRequest, res) => {
       prisma.user.findUnique({ where: { id: ctx.userId }, select: { nome: true } }),
     ]);
     const aquisitivo = aquisitivos.find((a) => a.id === gozo.aquisitivoId);
-    let meses = Array.isArray(gozo.mesesMedia) ? (gozo.mesesMedia as unknown as { ano: number; mes: number; minutos: number; pct: number }[]) : null;
+    let meses = Array.isArray(gozo.mesesMedia) ? (gozo.mesesMedia as unknown as MesDaMediaGravado[]) : null;
     let reconstituido = false;
     // Sem férias remuneradas não há demonstrativo de valor nem tabela de meses.
     if (!gozo.aquisitivo.remunerado) meses = [];
@@ -472,6 +503,12 @@ feriasRouter.get("/gozos/:id/aviso", async (req: AuthenticatedRequest, res) => {
       // Gozo anterior à gravação da tabela de meses: refaz a lista (a média usada continua a gravada, a tabela é só informativa).
       meses = (await simularFerias({ codemp, codfor, inicio: gozo.inicio, fim: gozo.fim, horasDia: num(gozo.horasDia), mediaPct: num(gozo.mediaPct), valorHora: num(gozo.valorHora) })).meses;
       reconstituido = true;
+    } else {
+      // Gozo gravado antes dos dias úteis por mês: nesses meses os dias eram os padrão (feriados descontados) e todos entravam na média.
+      meses = meses.map((m) => {
+        const padrao = m.diasUteisPadrao ?? diasUteisDoMes(m.ano, m.mes);
+        return { ...m, diasUteisPadrao: padrao, diasUteis: m.diasUteis ?? padrao, feriados: m.feriados ?? feriadosUteisDoMes(m.ano, m.mes), naMedia: m.naMedia ?? true };
+      });
     }
     res.json({
       emitidoEm: chaveDia(new Date()),
