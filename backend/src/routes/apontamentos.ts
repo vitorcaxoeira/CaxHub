@@ -20,6 +20,9 @@ import { criarEventoAuditoria } from "../audit/registrarEvento";
 import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade, entidadeIdRat } from "../audit/identidadeEntidade";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
+import { itemFaturavel } from "../domain/eficienciaPropostas";
+import { CODCLI_EMPRESA_PROPRIA, forfatLabel } from "../domain/propostasDominio";
+import { podeVerValoresDaProposta } from "../domain/valoresDaProposta";
 import { confirmouExcluirAjuste, decidirExclusaoComAjuste } from "../domain/exclusaoApontamento";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
@@ -663,8 +666,10 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     // Vê mais de uma pessoa (e por isso precisa de nome/coluna/filtro de consultor na tela):
     // admin, sempre; gestor, quando tem pelo menos um departamento gerenciado.
     const mostrarConsultor = role === "admin" || contexto.departamentosGerenciados.length > 0;
+    // Resumo por forma de faturamento: o valor-hora do item (venda) só vai na resposta de quem pode ver valores de proposta (admin, comercial, gestor de área).
+    const podeVerValores = podeVerValoresDaProposta(role, contexto.departamentosGerenciados);
     if (role !== "admin" && (!codforsPermitidos || codforsPermitidos.size === 0)) {
-      res.json({ sessoes: [], mostrarConsultor: false });
+      res.json({ sessoes: [], mostrarConsultor: false, podeVerValores });
       return;
     }
 
@@ -786,6 +791,7 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
       // Primeira de cada lista = a que a regra automática escolheria (id mais alto, mesma
       // ordem de buscarOuCriarRatRascunho) — a tela pré-seleciona ela.
       ratsDestino,
+      podeVerValores,
       sessoes: sessoes.map((s) => {
         const proposta = propostaPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}`);
         const item = itemPorChave.get(`${s.atividade.codemp}-${s.atividade.codpro}-${s.atividade.seqite}`);
@@ -822,6 +828,13 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           codcli: proposta?.codcli ?? null,
           itemDescricao: item?.despro ?? null,
           seqite: s.atividade.seqite,
+          // Resumo por Forma de Faturamento: a forma é a da PROPOSTA; faturável é o `fatser` do ITEM (mesma régua da Gestão Propostas).
+          forfat: proposta?.forfat ?? null,
+          forfatLabel: proposta?.forfat != null ? forfatLabel(proposta.forfat) : null,
+          faturavel: itemFaturavel(item?.fatser),
+          // Filtro "Propostas" (de clientes / internas) do resumo: interna = cliente é a própria empresa; proposta sem cliente não é nem uma nem outra (como no SQL da Gestão Propostas).
+          interna: proposta?.codcli != null ? proposta.codcli === CODCLI_EMPRESA_PROPRIA : null,
+          ...(podeVerValores ? { valorHoraItem: item?.valhor != null ? Number(item.valhor) : 0 } : {}),
           colunaNome: s.coluna.nome,
           inicio: s.inicio,
           fim: s.fim,
