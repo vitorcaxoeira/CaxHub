@@ -13,6 +13,10 @@ import { DescontosLancamentos } from "./pages/projetos/descontos/DescontosLancam
 import { DescontosParcelas } from "./pages/projetos/descontos/DescontosParcelas";
 import { DescontosFechamentos } from "./pages/projetos/descontos/DescontosFechamentos";
 import { DescontosTipos } from "./pages/projetos/descontos/DescontosTipos";
+import { BonificacaoFechamento } from "./pages/bonificacao/BonificacaoFechamento";
+import { BonificacaoResultados } from "./pages/bonificacao/BonificacaoResultados";
+import { BonificacaoHorasKyria } from "./pages/bonificacao/BonificacaoHorasKyria";
+import { BonificacaoProcessos } from "./pages/bonificacao/BonificacaoProcessos";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
@@ -75,6 +79,7 @@ import { ConformidadeJornada } from "./pages/rh/ConformidadeJornada";
 import { Ferias } from "./pages/rh/Ferias";
 import { DreRh } from "./pages/rh/DreRh";
 import { SincronizacaoKyria } from "./pages/admin/SincronizacaoKyria";
+import { LeiturasKyria } from "./pages/admin/LeiturasKyria";
 import { MapeamentoKyria } from "./pages/admin/MapeamentoKyria";
 import { DadosKyria } from "./pages/admin/DadosKyria";
 import { DadosErp } from "./pages/admin/DadosErp";
@@ -252,6 +257,14 @@ export default function App() {
               <Route element={<RequireRole roles={["admin", "administrativo"]} />}>
                 <Route path="/projetos/descontos/tipos" element={<DescontosTipos />} />
               </Route>
+              {/* Gestão de Bonificação: sem guarda de papel nas telas de leitura (o backend recorta: consultor vê o próprio, gestor o time, admin/
+                  administrativo tudo — domain/bonificacaoAcesso.ts). Os processos (regras e enquadramentos) são só de quem administra. */}
+              <Route path="/bonificacao" element={<BonificacaoFechamento />} />
+              <Route path="/bonificacao/resultados" element={<BonificacaoResultados />} />
+              <Route path="/bonificacao/horas-kyria" element={<BonificacaoHorasKyria />} />
+              <Route element={<RequireRole roles={["admin", "administrativo"]} />}>
+                <Route path="/bonificacao/processos" element={<BonificacaoProcessos />} />
+              </Route>
               <Route path="/projetos/alocacao/:codemp/:codpro" element={<AlocacaoPropostaDetalhe />} />
               <Route path="/projetos/alocacao/:codemp/:codpro/cronograma" element={<CronogramaProposta />} />
               <Route path="/projetos/proposta/:codemp/:codpro" element={<PropostaVisualizacao />} />
@@ -359,6 +372,7 @@ export default function App() {
                 <Route path="/admin/sincronizacao-hcm/dados/:jobName" element={<DadosErp />} />
                 <Route path="/admin/sincronizacao-hcm/removidos/:jobName" element={<DadosErp />} />
                 <Route path="/admin/sincronizacao-kyria" element={<SincronizacaoKyria />} />
+                <Route path="/admin/sincronizacao-kyria/leituras" element={<LeiturasKyria />} />
                 <Route path="/admin/mapeamento-kyria" element={<MapeamentoKyria />} />
                 <Route path="/admin/sincronizacao-kyria/dados/:jobName" element={<DadosKyria />} />
                 <Route path="/admin/departamento-time-kyria" element={<DepartamentoTimeKyria />} />

@@ -31,6 +31,11 @@ export interface ColunaConsulta {
   titulo?: string;
   /** Id da fonte do campo (ex.: "cliente"); só as colunas vindas de camposRelacionados.ts têm. */
   fonte?: string;
+  /**
+   * Como o relatório impresso/PDF e o CSV mostram o número (25/11/2026, Horas Kyria x Trabalhadas): "horasMinutos" = a coluna guarda MINUTOS; a
+   * impressão sai como HH:MM (igual à tela) e o CSV em horas decimais (o Excel soma). Sem isto, número é número.
+   */
+  formato?: "horasMinutos";
 }
 
 /** Descrição da coluna que a API devolve à tela (operadores que o funil oferece, domínio, se tem aba Valores). */

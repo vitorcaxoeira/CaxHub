@@ -1,5 +1,6 @@
 import { prisma } from "../db/prisma";
 import { feriasPagasNasCompetencias } from "./feriasNota";
+import { bonificacoesNasCompetencias } from "./bonificacaoNota";
 import { SITRAT_CANCELADO, sitratLabel } from "./ratDominio";
 import { FATOR_HORA_DESLOCAMENTO, deslocamentoNoPeriodo } from "./resumoConsultor";
 
@@ -52,6 +53,8 @@ export interface TotaisProdutividade {
   valorDeslocamento: number | null;
   /** Férias remuneradas com mês de pagamento nesta competência (soma à nota); 0 quando não há. */
   valorFerias: number;
+  /** Bonificação fechada na competência de processos que compõem a nota (Gestão de Bonificação); 0 quando não há. */
+  valorBonificacao: number;
   valorNota: number | null;
 }
 
@@ -114,7 +117,7 @@ export async function produtividadeDoMes(
   const de = new Date(Date.UTC(ano, mes - 1, 1));
   const ate = new Date(Date.UTC(ano, mes, 0));
 
-  const [ratItens, desloc, ferias] = await Promise.all([
+  const [ratItens, desloc, ferias, bonificacao] = await Promise.all([
     prisma.ratItem.findMany({
       where: {
         codemp,
@@ -136,6 +139,7 @@ export async function produtividadeDoMes(
     }),
     deslocamentoNoPeriodo(codemp, codfor, de, ate),
     feriasPagasNasCompetencias(codemp, codfor, [de]),
+    bonificacoesNasCompetencias(codemp, codfor, [de]),
   ]);
 
   // Cliente e tipo de faturamento em lote (nunca um por linha). Propostas por `IN` de codpro (superset);
@@ -198,7 +202,9 @@ export async function produtividadeDoMes(
       valorTrabalhadas,
       valorDeslocamento,
       valorFerias: ferias.total,
-      valorNota: valorTrabalhadas != null && valorDeslocamento != null ? centavos(valorTrabalhadas + valorDeslocamento + ferias.total) : null,
+      // Só o consultor com contrato (valor-hora/fixo) leva a bonificação na nota; sem valor-hora não há nota (valorNota nulo).
+      valorBonificacao: valorHora != null ? bonificacao.total : 0,
+      valorNota: valorTrabalhadas != null && valorDeslocamento != null ? centavos(valorTrabalhadas + valorDeslocamento + ferias.total + bonificacao.total) : null,
     },
   };
 }

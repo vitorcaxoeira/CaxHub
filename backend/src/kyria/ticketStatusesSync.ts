@@ -2,6 +2,7 @@ import { jobAtivo } from "./jobAtivo";
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { listAllTicketStatuses } from "./client";
+import { comLeitura } from "./registroLeitura";
 
 export const JOB_NAME = "kyria-ticket-statuses-sync";
 // Depois de customers (5:00), antes de tickets (5:15 -> 5:30, ver ticketsSync.ts): a FK de
@@ -12,7 +13,7 @@ export async function runKyriaTicketStatusesSync(): Promise<void> {
   if (!(await jobAtivo(JOB_NAME))) return;
   const inicio = new Date();
   try {
-    const statuses = await listAllTicketStatuses();
+    const statuses = await comLeitura({ jobName: JOB_NAME, recurso: "/ticket-statuses" }, (leitura) => listAllTicketStatuses({ leitura }));
 
     await prisma.$transaction(
       statuses.map((s) =>

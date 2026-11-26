@@ -78,4 +78,57 @@ describe("KpiValorFixo", () => {
     expect(out).toContain("R$ 0,00");
     expect(out).toContain("desconto parcial");
   });
+  it("com bonificação que compõe a nota mostra a linha clicável e soma ao líquido", () => {
+    const out = html(
+      <KpiValorFixo
+        contratoFixo={{ qtd: 150, valorMensal: 10000, meses: 1, deslocamento: 0, total: 10000 }}
+        valorHora={66.67}
+        bonificacao={1440}
+        rotuloPeriodoDescontos="Descontos do mês"
+      />,
+    );
+    expect(out).toContain("Bonificação na nota");
+    expect(out).toContain("+R$ 1.440,00");
+    expect(out).toContain("Ver as bonificações somadas à nota");
+    expect(out).toContain("Líquido");
+    expect(out).toContain("R$ 11.440,00");
+  });
+
+  it("bonificação + férias − descontos: líquido soma as duas e deduz os descontos", () => {
+    const out = html(
+      <KpiValorFixo
+        contratoFixo={{ qtd: 150, valorMensal: 10000, meses: 1, deslocamento: 0, total: 10000 }}
+        valorHora={66.67}
+        ferias={{ valor: 2000, itens: [{ gozoId: 3, inicio: "2026-11-02", fim: "2026-11-11", competencia: "2026-11-01", valor: 2000, competenciaIniciada: true }] }}
+        bonificacao={1440}
+        descontos={{ total: 500, parcial: false }}
+        rotuloPeriodoDescontos="Descontos do mês"
+      />,
+    );
+    expect(out).toContain("−R$ 500,00");
+    expect(out).toContain("+R$ 2.000,00");
+    expect(out).toContain("+R$ 1.440,00");
+    // 10000 + 2000 + 1440 − 500
+    expect(out).toContain("R$ 12.940,00");
+    expect(out).not.toContain("desconto parcial");
+  });
+
+  it("a bonificação entra na conta do 'cobre o desconto': desconto maior que o bruto, mas coberto pela bonificação, não é parcial", () => {
+    const out = html(
+      <KpiValorFixo
+        contratoFixo={{ qtd: 10, valorMensal: 1000, meses: 1, deslocamento: 0, total: 1000 }}
+        valorHora={100}
+        bonificacao={600}
+        descontos={{ total: 1500, parcial: false }}
+        rotuloPeriodoDescontos="Descontos do mês"
+      />,
+    );
+    expect(out).not.toContain("desconto parcial");
+    expect(out).toContain("R$ 100,00");
+  });
+
+  it("sem bonificação, não mostra a linha", () => {
+    const out = html(<KpiValorFixo contratoFixo={{ qtd: 10, valorMensal: 1000, meses: 1, deslocamento: 0, total: 1000 }} valorHora={100} descontos={{ total: 100, parcial: false }} rotuloPeriodoDescontos="Descontos do mês" />);
+    expect(out).not.toContain("Bonificação na nota");
+  });
 });

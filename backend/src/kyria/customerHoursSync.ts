@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { getHoursReport } from "./client";
+import { abrirLeitura, LeituraKyria } from "./registroLeitura";
 import { intervaloDaCompetencia } from "./competencia";
 import { jobAtivo } from "./jobAtivo";
 
@@ -72,16 +73,18 @@ export async function runKyriaCustomerHoursSync(filtros?: FiltrosCustomerHours):
   if (!(await jobAtivo(JOB_NAME))) return;
   const inicio = new Date();
   let query = "GET /reports/hours?groupBy=customer";
+  let leitura: LeituraKyria | null = null;
   try {
     const meses = filtros?.from || filtros?.to ? mesesDoFiltro(filtros) : await filtroAutomatico();
     query = `GET /reports/hours?groupBy=customer&from=${meses[0].from}&to=${meses[meses.length - 1].to}`;
 
+    leitura = await abrirLeitura({ jobName: JOB_NAME, recurso: "/reports/hours?groupBy=customer", limite: null });
     let total = 0;
     let puladas = 0;
     let semClienteLinhas = 0;
     let semClienteMinutos = 0;
     for (const mes of meses) {
-      const relatorio = await getHoursReport({ from: mes.from, to: mes.to, groupBy: "customer" });
+      const relatorio = await getHoursReport({ from: mes.from, to: mes.to, groupBy: "customer", leitura });
       const linhas = relatorio.data.rows;
 
       // FK real pra kyria_customers: cliente ainda não sincronizado localmente é pulado (e
@@ -116,6 +119,7 @@ export async function runKyriaCustomerHoursSync(filtros?: FiltrosCustomerHours):
       total += validas.length;
     }
 
+    await leitura.finalizar("concluida");
     await prisma.syncLog.create({
       data: {
         jobName: JOB_NAME,
@@ -129,6 +133,7 @@ export async function runKyriaCustomerHoursSync(filtros?: FiltrosCustomerHours):
       },
     });
   } catch (error) {
+    await leitura?.finalizar("falhou", error);
     const message = error instanceof Error ? error.message : String(error);
     await prisma.syncLog.create({
       data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },

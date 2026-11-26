@@ -107,6 +107,9 @@ interface NavLeaf {
   // Gestão de Descontos: o acesso vem do backend (GET /descontos/meu-acesso), não do papel.
   // "ver" = quem tem o que ver (administra, gestor de área ou consultor); "gestao" = administra ou gestor; "administrar" = admin/administrativo.
   descontos?: "ver" | "gestao" | "administrar";
+  // Gestão de Bonificação: mesmo modelo de Descontos (GET /bonificacao/meu-acesso): "ver" = administra, gestor de área ou consultor;
+  // "gestao" = administra ou gestor; "administrar" = admin/administrativo.
+  bonificacao?: "ver" | "gestao" | "administrar";
   // Restringe ESTE item a papéis específicos dentro de um grupo aberto a todos (ex.: Atendimento
   // de viagens). Mantido em sincronia com o RequireRole em App.tsx e o backend.
   roles?: string[];
@@ -202,6 +205,18 @@ const groups: NavGroup[] = [
           { to: "/projetos/descontos/tipos", label: "Tipos de desconto", descontos: "administrar" },
         ],
       },
+    ],
+    roles: "*",
+  },
+  {
+    // Bonificação dos consultores (processos com regras e vigências, enquadramento e fechamento mensal). O backend recorta o que cada um vê:
+    // consultor o próprio, gestor de área o time, admin e administrativo tudo (domain/bonificacaoAcesso.ts).
+    label: "Gestão de Bonificação",
+    items: [
+      { to: "/bonificacao", label: "Fechamento mensal", bonificacao: "ver", end: true },
+      { to: "/bonificacao/resultados", label: "Resultados", bonificacao: "ver" },
+      { to: "/bonificacao/horas-kyria", label: "Horas Kyria x Trabalhadas", bonificacao: "ver" },
+      { to: "/bonificacao/processos", label: "Processos", bonificacao: "administrar" },
     ],
     roles: "*",
   },
@@ -378,6 +393,10 @@ const ICONE_DA_ROTA: Record<string, LucideIcon> = {
   "/projetos/descontos/parcelas": ListChecks,
   "/projetos/descontos/fechamentos": CalendarCheck,
   "/projetos/descontos/tipos": Tags,
+  "/bonificacao": CalendarCheck,
+  "/bonificacao/resultados": ListChecks,
+  "/bonificacao/horas-kyria": Timer,
+  "/bonificacao/processos": Settings2,
   "/mercado/pedidos": ClipboardList,
   "/mercado/analise-faturamento": ChartColumn,
   "/rh/quadro": IdCard,
@@ -407,6 +426,7 @@ const ICONE_DO_GRUPO: Record<string, LucideIcon> = {
   "Gestão de Metas": Target,
   "Gestão de Projetos": FolderKanban,
   "Gestão de Descontos": BadgePercent,
+  "Gestão de Bonificação": Award,
   "Gestão de Solicitações": Plane,
   "Gestão 5S": Sparkles,
   "Cadastros 5S": Settings2,
@@ -519,6 +539,20 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
   const [papel5s, setPapel5s] = useState<string | null>(null);
   // Acesso à Gestão de Descontos (GET /descontos/meu-acesso): decide os itens do subgrupo.
   const [acessoDescontos, setAcessoDescontos] = useState<{ administra: boolean; gestao: boolean; visualiza: boolean } | null>(null);
+  // Acesso à Gestão de Bonificação (GET /bonificacao/meu-acesso): decide os itens do grupo.
+  const [acessoBonificacao, setAcessoBonificacao] = useState<{ administra: boolean; gestao: boolean; visualiza: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelado = false;
+    axios
+      .get<{ administra: boolean; gestao: boolean; visualiza: boolean }>("/api/bonificacao/meu-acesso")
+      .then(({ data }) => !cancelado && setAcessoBonificacao(data))
+      .catch(() => !cancelado && setAcessoBonificacao(null));
+    return () => {
+      cancelado = true;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -598,6 +632,10 @@ export function Sidebar({ open, mobileOpen = false, onNavigate, onExpandir }: Si
     if (item.descontos) {
       if (!acessoDescontos) return false;
       return item.descontos === "administrar" ? acessoDescontos.administra : item.descontos === "gestao" ? acessoDescontos.gestao : acessoDescontos.visualiza;
+    }
+    if (item.bonificacao) {
+      if (!acessoBonificacao) return false;
+      return item.bonificacao === "administrar" ? acessoBonificacao.administra : item.bonificacao === "gestao" ? acessoBonificacao.gestao : acessoBonificacao.visualiza;
     }
     if (item.gestorDho) return ehGestorDho;
     if (item.gestorComercial) return ehGestorComercial;

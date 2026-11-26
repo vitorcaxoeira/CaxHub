@@ -2,6 +2,7 @@ import { jobAtivo } from "./jobAtivo";
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { listAllLabelGroups } from "./client";
+import { comLeitura } from "./registroLeitura";
 
 export const JOB_NAME = "kyria-label-groups-sync";
 // Entre status de ticket (5:15) e etiquetas (5:20): a etiqueta aponta pro grupo (sem FK por enquanto, mas é a ordem natural de leitura).
@@ -14,7 +15,7 @@ export async function runKyriaLabelGroupsSync(): Promise<void> {
   if (!(await jobAtivo(JOB_NAME))) return;
   const inicio = new Date();
   try {
-    const grupos = await listAllLabelGroups();
+    const grupos = await comLeitura({ jobName: JOB_NAME, recurso: "/label-groups" }, (leitura) => listAllLabelGroups({ leitura }));
 
     await prisma.$transaction(
       grupos.map((g) =>

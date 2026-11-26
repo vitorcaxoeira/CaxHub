@@ -29,6 +29,12 @@ export interface Resposta<T> {
   pageSize: number;
 }
 
+/** Uma linha de detalhe alinhada às colunas visíveis: `valores` traz o conteúdo de cada coluna pelo nome (as que faltam ficam vazias). */
+export interface LinhaDetalhe {
+  chave: string;
+  valores: Record<string, ReactNode>;
+}
+
 interface Props<T, C> {
   /** Chave da arrumação das colunas e das calculadas (ex.: "financeiro.recebimentos"). */
   chave: string;
@@ -48,6 +54,11 @@ interface Props<T, C> {
   onLinha?: (linha: T) => void;
   /** Linha que abre ao clicar (uma por vez), com este conteúdo logo abaixo dela. Vale em lugar de `onLinha`. */
   detalhe?: (linha: T) => ReactNode;
+  /**
+   * Como `detalhe` (a linha abre ao clicar), mas o conteúdo são LINHAS na própria tabela, alinhadas às colunas visíveis (25/11/2026, Horas Kyria x
+   * Trabalhadas: o time sob o atendente, as horas sob "Horas Kyria"). Vale em lugar de `detalhe`; combina com `abertas` para abrir todas de saída.
+   */
+  linhasDetalhe?: (linha: T) => LinhaDetalhe[];
   /**
    * Linhas abertas controladas pela tela (04/11/2026, RATs de Meus Apontamentos): várias ao mesmo tempo, e a tela pode abrir uma sozinha
    * (ex.: depois de confirmar um apontamento). Com isto, o clique chama `onAlternarAberta` em vez de abrir uma por vez, e trocar filtro
@@ -92,6 +103,11 @@ interface Props<T, C> {
    */
   imprimir?: { titulo: string };
   /**
+   * Parâmetros a mais, calculados NA HORA de imprimir/exportar PDF (25/11/2026): somam-se aos da lista (filtros, ordem, colunas visíveis). Serve
+   * para o relatório saber do estado da tela que não vai na consulta (ex.: quais linhas estavam abertas, para imprimir o detalhe delas).
+   */
+  paramsRelatorio?: () => Record<string, unknown>;
+  /**
    * Mostra "Exportar PDF" (06/11/2026): o mesmo relatório do "Imprimir", gerado no servidor, com TODAS as linhas do filtro (sem o corte de 5.000 do
    * relatório de tela) e texto inteiro nas células. `arquivo` é o nome base do PDF.
    */
@@ -116,6 +132,7 @@ export function ListaServidor<T extends object, C = undefined>({
   recarga,
   onLinha,
   detalhe,
+  linhasDetalhe,
   abertas,
   onAlternarAberta,
   ajustarLinha,
@@ -132,6 +149,7 @@ export function ListaServidor<T extends object, C = undefined>({
   exportavel,
   rotuloExportar = "Exportar CSV",
   imprimir,
+  paramsRelatorio,
   pdf,
   camposRelacionados = false,
 }: Props<T, C>) {
@@ -208,7 +226,7 @@ export function ListaServidor<T extends object, C = undefined>({
   // Parâmetros de exportação/impressão: os da lista + filtros e ordem por coluna + colunas visíveis (na ordem da tela) com os títulos da tela.
   function parametrosDeExportacao() {
     const cabecalhos = Object.fromEntries(tc.layout.visiveis.map((n) => [n, tc.titulos[n] ?? n]));
-    return { ...paramsFixos, filtros: estado.filtrosParam, ordem: estado.ordemParam, colunasCsv: tc.layout.visiveis.join(","), cabecalhos: JSON.stringify(cabecalhos) };
+    return { ...paramsFixos, filtros: estado.filtrosParam, ordem: estado.ordemParam, colunasCsv: tc.layout.visiveis.join(","), cabecalhos: JSON.stringify(cabecalhos), ...(paramsRelatorio?.() ?? {}) };
   }
 
   async function exportarPdf() {
@@ -320,15 +338,16 @@ export function ListaServidor<T extends object, C = undefined>({
               dados?.itens.map((original, i) => {
                 const l = ajustarLinha ? ajustarLinha(original) : original;
                 const chaveL = chaveLinha(l, i);
-                const clicavel = !!(onLinha || detalhe);
-                const aoClicar = detalhe
+                const temDetalhe = detalhe != null || linhasDetalhe != null;
+                const clicavel = !!(onLinha || temDetalhe);
+                const aoClicar = temDetalhe
                   ? controladas
                     ? () => onAlternarAberta?.(l, chaveL)
                     : () => setAberta((a) => (a === chaveL ? null : chaveL))
                   : onLinha
                     ? () => onLinha(l)
                     : undefined;
-                const abertaAqui = detalhe != null && estaAberta(chaveL);
+                const abertaAqui = temDetalhe && estaAberta(chaveL);
                 return (
                   <Fragment key={chaveL}>
                     <tr
@@ -337,6 +356,13 @@ export function ListaServidor<T extends object, C = undefined>({
                     >
                       {tc.celulas(l, ctx as C)}
                     </tr>
+                    {linhasDetalhe &&
+                      abertaAqui &&
+                      linhasDetalhe(l).map((sub) => (
+                        <tr key={`${chaveL}-${sub.chave}`} className="border-t border-border/40 bg-success/10">
+                          {tc.celulasDetalhe(sub.valores)}
+                        </tr>
+                      ))}
                     {detalhe && abertaAqui && (
                       <tr className="border-t border-border/60 bg-surface-2/40">
                         <td colSpan={tc.nColunas} className="px-5 py-3">

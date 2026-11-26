@@ -58,6 +58,11 @@ export interface DefColuna<T, C = undefined> {
   title?: (linha: T) => string | undefined;
   /** Texto inteiro no title quando a coluna está estreita e o conteúdo corta com "…". */
   texto?: (linha: T) => string | null | undefined;
+  /**
+   * Quebra o texto em vez de cortar com "…" (URLs e outros textos que não podem ser lidos pela metade). Vale mesmo com as larguras ajustadas
+   * pelo usuário: a coluna não recebe teto, nem `overflow-hidden`, nem `text-ellipsis`. Use `break-all` na `classe` para textos sem espaço.
+   */
+  quebra?: boolean;
   /** `cortar`: a tabela tem larguras fixas (algo inline-block dentro da célula precisa de `max-w-full truncate` para ganhar o "…"). */
   render: (linha: T, ctx: C, cortar: boolean) => ReactNode;
   /** Resumo do rodapé (28/10/2026): funções que a coluna oferece, limitando as do tipo (ex.: Δ % sem Soma; código só Contagem/Distintos). */
@@ -206,7 +211,7 @@ export function useColunasConfiguraveis<T, C = undefined>(
   // Coluna de texto (a que declara `texto`) no layout automático, sem largura ajustada pelo usuário (04/11/2026): a `largura` da
   // definição vira o teto e o resto corta com "…" (texto inteiro no title), como os `max-w-[…] truncate` das tabelas antes do kit.
   // Sem isto, o `whitespace-nowrap` das células deixava a coluna do tamanho do maior texto e a tabela estourava na horizontal.
-  const tetoTexto = (d: DefColuna<T, C>) => (!cortar && d.texto ? (d.largura ?? LARGURA_SEM_PADRAO) : undefined);
+  const tetoTexto = (d: DefColuna<T, C>) => (!cortar && d.texto && !d.quebra ? (d.largura ?? LARGURA_SEM_PADRAO) : undefined);
 
   const celulas = (linha: T, ctx: C) => [
     <td key="__colunas" aria-hidden className={cn("w-7 min-w-7 max-w-7 p-0", temCongelada && "sticky left-0 z-[1] bg-inherit", opcoes.classeEspaco?.(linha, ctx))} />,
@@ -219,16 +224,39 @@ export function useColunasConfiguraveis<T, C = undefined>(
           data-coluna={d.nome}
           className={cn(
             d.direita ? TD_DIR : TD,
+            d.quebra && "whitespace-normal",
             opcoes.td,
             p && cn(p.classe, "bg-inherit"),
             d.centro && "text-center",
             typeof d.classe === "function" ? d.classe(linha, ctx, { primeira: i === 0, ultima: i === visiveis.length - 1 }) : d.classe,
-            (cortar || teto != null) && "overflow-hidden text-ellipsis",
+            (cortar || teto != null) && !d.quebra && "overflow-hidden text-ellipsis",
           )}
           style={teto != null || p ? { ...(teto != null ? { maxWidth: teto } : {}), ...(p ? { left: p.left } : {}) } : undefined}
           title={d.title?.(linha) ?? (cortar || teto != null ? d.texto?.(linha) || undefined : undefined)}
         >
           {d.render(linha, ctx, cortar || teto != null)}
+        </td>
+      );
+    }),
+  ];
+
+  /**
+   * Linha de DETALHE alinhada às colunas visíveis (25/11/2026, Horas Kyria x Trabalhadas): cada coluna recebe o que `valores` traz para o nome dela
+   * e as demais ficam vazias, então o sub-item aparece sob o mesmo cabeçalho da linha-mãe (ex.: o time sob "Atendente", as horas sob "Horas Kyria").
+   * Colunas paradas seguem paradas. O texto é menor e não corta (a linha é leitura, não tem ação).
+   */
+  const celulasDetalhe = (valores: Record<string, ReactNode>) => [
+    <td key="__colunas" aria-hidden className={cn("w-7 min-w-7 max-w-7 p-0", temCongelada && "sticky left-0 z-[1] bg-inherit")} />,
+    ...visiveis.map((d) => {
+      const p = deParada(d.nome);
+      return (
+        <td
+          key={d.nome}
+          data-coluna={d.nome}
+          className={cn(d.direita ? TD_DIR : TD, "py-1.5 text-[12px] font-normal text-muted", d.centro && "text-center", p && cn(p.classe, "bg-inherit"))}
+          style={p ? { left: p.left } : undefined}
+        >
+          {valores[d.nome] ?? null}
         </td>
       );
     }),
@@ -257,6 +285,7 @@ export function useColunasConfiguraveis<T, C = undefined>(
     ) : null,
     cabecalho,
     celulas,
+    celulasDetalhe,
     pedidosResumo,
     rodape,
   };

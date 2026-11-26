@@ -2638,6 +2638,9 @@ model KyriaTeam {
   tickets KyriaTicket[]
   // Lado inverso de DepartamentoTimeKyria.kyriaTeam (ligação departamento x time, config nativa).
   departamentos DepartamentoTimeKyria[]
+  // Lado inverso das tabelas da Gestão de Bonificação (times liderados por quem está enquadrado; foto semanal da fila).
+  bonificacaoEnquadramentos BonificacaoEnquadramentoTime[]
+  filaSemanal               KyriaFilaSemanal[]
 
   @@map("kyria_teams")
 }
@@ -5290,4 +5293,243 @@ model CustoContaFolha {
 
   @@id([codemp, ctared])
   @@map("custo_contas_folha")
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// Gestão de Bonificação (25/11/2026). PROCESSO = um programa de bonificação (ex.: "Líderes do Suporte"); INDICADOR = um critério dele, com
+// FONTE (manual ou calculada do Kyria/HCM); REGRA = versão do indicador com vigência, valor base e faixas (valor apurado -> pontos);
+// ENQUADRAMENTO = o consultor dentro do processo (e os times Kyria que ele lidera/atende), com vigência; FECHAMENTO = o mês (competência) do
+// processo; RESULTADO = o indicador de um consultor num fechamento (pontos x valor base = valor). Situações/fontes em VarChar + união TS
+// (sem enum Prisma), como em Descontos. Competência sempre dia 1 (@db.Date).
+// ---------------------------------------------------------------------------------------------------------------------------------------
+model BonificacaoProcesso {
+  id             Int       @id @default(autoincrement())
+  nome           String    @db.VarChar(120)
+  descricao      String?   @db.VarChar(500)
+  ativo          Boolean   @default(true)
+  vigenciaInicio DateTime  @map("vigencia_inicio") @db.Date
+  vigenciaFim    DateTime? @map("vigencia_fim") @db.Date
+  /// Quando ligada, o valor de cada consultor na competência FECHADA soma ao valor da nota fiscal dele (Home, Relatório de Produtividade e base dos descontos).
+  /// O valor é copiado para o fechamento no ato de fechar: mudar a flag depois não mexe em nota passada.
+  compoeNota     Boolean   @default(false) @map("compoe_nota")
+  criadoPorId    Int?      @map("criado_por_id")
+  criadoEm       DateTime  @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm   DateTime  @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  indicadores    BonificacaoIndicador[]
+  enquadramentos BonificacaoEnquadramento[]
+  fechamentos    BonificacaoFechamento[]
+
+  @@map("bonificacao_processos")
+}
+
+model BonificacaoIndicador {
+  id         Int     @id @default(autoincrement())
+  processoId Int     @map("processo_id")
+  /// Identificador estável (capacidade_operacional, rnc_area, ...).
+  chave      String  @db.VarChar(60)
+  nome       String  @db.VarChar(120)
+  descricao  String? @db.VarChar(500)
+  /// manual | kyria_capacidade | kyria_eficiencia | kyria_pct_ponto | kyria_chamados_antigos
+  fonte      String  @db.VarChar(30)
+  /// quantidade | percentual | horas (percentual é de 0 a 100)
+  unidade    String  @db.VarChar(15)
+  /// menor_melhor (limite crescente: até X) | maior_melhor (limite decrescente: a partir de X)
+  sentido    String  @db.VarChar(15)
+  ordem      Int     @default(0)
+  ativo      Boolean @default(true)
+
+  processo   BonificacaoProcesso    @relation(fields: [processoId], references: [id], onDelete: Cascade)
+  regras     BonificacaoRegra[]
+  resultados BonificacaoResultado[]
+
+  @@unique([processoId, chave])
+  @@map("bonificacao_indicadores")
+}
+
+model BonificacaoRegra {
+  id             Int       @id @default(autoincrement())
+  indicadorId    Int       @map("indicador_id")
+  vigenciaInicio DateTime  @map("vigencia_inicio") @db.Date
+  vigenciaFim    DateTime? @map("vigencia_fim") @db.Date
+  valorBase      Decimal   @map("valor_base") @db.Decimal(15, 2)
+  /// Só para chamados antigos: idade (em meses) a partir da qual o chamado em aberto conta.
+  idadeMeses     Int?      @map("idade_meses")
+  observacao     String?   @db.VarChar(500)
+  criadoEm       DateTime  @default(now()) @map("criado_em") @db.Timestamptz(6)
+
+  indicador  BonificacaoIndicador   @relation(fields: [indicadorId], references: [id], onDelete: Cascade)
+  faixas     BonificacaoFaixa[]
+  resultados BonificacaoResultado[]
+
+  @@index([indicadorId, vigenciaInicio])
+  @@map("bonificacao_regras")
+}
+
+model BonificacaoFaixa {
+  id      Int      @id @default(autoincrement())
+  regraId Int      @map("regra_id")
+  ordem   Int
+  /// Nulo = "demais casos" (a última faixa).
+  limite  Decimal? @db.Decimal(15, 4)
+  pontos  Decimal  @db.Decimal(6, 3)
+
+  regra BonificacaoRegra @relation(fields: [regraId], references: [id], onDelete: Cascade)
+
+  @@unique([regraId, ordem])
+  @@map("bonificacao_faixas")
+}
+
+model BonificacaoEnquadramento {
+  id             Int       @id @default(autoincrement())
+  processoId     Int       @map("processo_id")
+  codemp         Int
+  codfor         Int
+  vigenciaInicio DateTime  @map("vigencia_inicio") @db.Date
+  vigenciaFim    DateTime? @map("vigencia_fim") @db.Date
+  observacao     String?   @db.VarChar(500)
+  criadoPorId    Int?      @map("criado_por_id")
+  criadoEm       DateTime  @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm   DateTime  @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  processo BonificacaoProcesso            @relation(fields: [processoId], references: [id], onDelete: Cascade)
+  times    BonificacaoEnquadramentoTime[]
+
+  @@index([processoId, codfor])
+  @@index([codfor])
+  @@map("bonificacao_enquadramentos")
+}
+
+model BonificacaoEnquadramentoTime {
+  enquadramentoId Int    @map("enquadramento_id")
+  kyriaTeamId     String @map("kyria_team_id") @db.VarChar(64)
+
+  enquadramento BonificacaoEnquadramento @relation(fields: [enquadramentoId], references: [id], onDelete: Cascade)
+  time          KyriaTeam                @relation(fields: [kyriaTeamId], references: [id], onDelete: Cascade)
+
+  @@id([enquadramentoId, kyriaTeamId])
+  @@index([kyriaTeamId])
+  @@map("bonificacao_enquadramento_times")
+}
+
+model BonificacaoFechamento {
+  id           Int       @id @default(autoincrement())
+  processoId   Int       @map("processo_id")
+  competencia  DateTime  @db.Date
+  /// aberto | fechado
+  situacao     String    @default("aberto") @db.VarChar(10)
+  apuradoEm    DateTime? @map("apurado_em") @db.Timestamptz(6)
+  fechadoEm    DateTime? @map("fechado_em") @db.Timestamptz(6)
+  fechadoPorId Int?      @map("fechado_por_id")
+  /// Cópia de `bonificacao_processos.compoe_nota` feita ao FECHAR: só fechamento fechado com isto ligado entra na nota do consultor.
+  compoeNota   Boolean   @default(false) @map("compoe_nota")
+  criadoEm     DateTime  @default(now()) @map("criado_em") @db.Timestamptz(6)
+
+  processo   BonificacaoProcesso    @relation(fields: [processoId], references: [id], onDelete: Cascade)
+  resultados BonificacaoResultado[]
+
+  @@unique([processoId, competencia])
+  @@map("bonificacao_fechamentos")
+}
+
+model BonificacaoResultado {
+  id             Int      @id @default(autoincrement())
+  fechamentoId   Int      @map("fechamento_id")
+  codemp         Int
+  codfor         Int
+  indicadorId    Int      @map("indicador_id")
+  regraId        Int?     @map("regra_id")
+  /// O que o sistema calculou (Kyria/HCM); nulo quando a fonte é manual ou não havia dado.
+  valorApurado   Decimal? @map("valor_apurado") @db.Decimal(15, 4)
+  /// O que a pessoa digitou (indicador manual ou ajuste); quando existe, vale no lugar do apurado.
+  valorInformado Decimal? @map("valor_informado") @db.Decimal(15, 4)
+  pontos         Decimal? @db.Decimal(6, 3)
+  valorBase      Decimal? @map("valor_base") @db.Decimal(15, 2)
+  valor          Decimal? @db.Decimal(15, 2)
+  /// Como o valor foi apurado (sextas, abertos x fechados, minutos, chamados antigos...).
+  detalhe        Json?
+  observacao     String?  @db.VarChar(500)
+  atualizadoEm   DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  fechamento BonificacaoFechamento @relation(fields: [fechamentoId], references: [id], onDelete: Cascade)
+  indicador  BonificacaoIndicador  @relation(fields: [indicadorId], references: [id])
+  regra      BonificacaoRegra?     @relation(fields: [regraId], references: [id], onDelete: SetNull)
+
+  @@unique([fechamentoId, codfor, indicadorId])
+  @@index([codfor])
+  @@map("bonificacao_resultados")
+}
+
+/// Foto semanal (toda sexta) da fila do Kyria por time: o Kyria só guarda o status ATUAL do chamado, então a "capacidade operacional" (chamados
+/// em fila ou aguardando retorno) só existe como histórico se alguém tirar a foto no dia. Job: kyria/filaSemanalSync.ts.
+model KyriaFilaSemanal {
+  data              DateTime @db.Date
+  teamId            String   @map("team_id") @db.VarChar(64)
+  emFila            Int      @map("em_fila")
+  aguardandoRetorno Int      @map("aguardando_retorno")
+  capturadoEm       DateTime @default(now()) @map("capturado_em") @db.Timestamptz(6)
+
+  time KyriaTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@id([data, teamId])
+  @@map("kyria_fila_semanal")
+}
+
+// Registro das leituras do Kyria (25/11/2026, adaptado do controle de leituras do CaxHub_Dash): cada execução de um job de sincronização vira uma
+// linha em `kyria_leituras` e cada chamada HTTP à API (inclusive a tentativa que levou 429 ou falhou) uma linha em `kyria_leituras_paginas`, com
+// quando foi disparada, o cursor enviado e o devolvido, o limite, as linhas, o tamanho, o tempo de ida e volta e o `requestId` do Kyria. Só registro:
+// quem retoma uma carga parada é o cursor do próprio job (feed de apontamentos: `kyria_sync_cursor`). Retenção: 30 dias (cron em
+// kyria/registroLeitura.ts). Tudo aqui é acessório: falha de gravação vira console.warn e o job segue sem registro.
+model KyriaLeitura {
+  id           Int       @id @default(autoincrement())
+  jobName      String    @map("job_name") @db.VarChar(80)
+  /// Caminho do recurso na API (ex.: "/tickets").
+  recurso      String    @db.VarChar(120)
+  /// Itens por página pedidos (nulo nos relatórios, que não paginam).
+  limite       Int?
+  timeoutMs    Int       @map("timeout_ms")
+  iniciadaEm   DateTime  @default(now()) @map("iniciada_em") @db.Timestamptz(6)
+  atualizadaEm DateTime  @default(now()) @map("atualizada_em") @db.Timestamptz(6)
+  finalizadaEm DateTime? @map("finalizada_em") @db.Timestamptz(6)
+  /// em_andamento | concluida | falhou | interrompida (processo caiu no meio: marcada no boot)
+  status       String    @default("em_andamento") @db.VarChar(20)
+  /// Chamadas bem-sucedidas e linhas recebidas nelas.
+  paginas      Int       @default(0)
+  linhas       Int       @default(0)
+  /// Último cursor devolvido pela API (onde a leitura estava quando terminou ou parou).
+  ultimoCursor String?   @map("ultimo_cursor")
+  erro         String?
+  chamadas     KyriaLeituraPagina[]
+
+  @@index([jobName, iniciadaEm])
+  @@index([status])
+  @@map("kyria_leituras")
+}
+
+model KyriaLeituraPagina {
+  id            Int          @id @default(autoincrement())
+  leituraId     Int          @map("leitura_id")
+  leitura       KyriaLeitura @relation(fields: [leituraId], references: [id], onDelete: Cascade)
+  jobName       String       @map("job_name") @db.VarChar(80)
+  disparadaEm   DateTime     @map("disparada_em") @db.Timestamptz(6)
+  /// Cursor enviado (nulo na primeira página) e o que a API devolveu para a próxima.
+  cursor        String?
+  proximoCursor String?      @map("proximo_cursor")
+  limite        Int?
+  linhas        Int          @default(0)
+  kb            Int          @default(0)
+  /// Ida e volta da chamada (rede + Kyria).
+  msKyria       Int          @map("ms_kyria")
+  tentativa     Int          @default(1)
+  httpStatus    Int?         @map("http_status")
+  /// Segundos que o job esperou (Retry-After) antes de tentar de novo depois de um 429.
+  esperaS       Int?         @map("espera_s")
+  /// ok | erro
+  status        String       @db.VarChar(10)
+  requestId     String?      @map("request_id") @db.VarChar(80)
+  erro          String?
+
+  @@index([jobName, disparadaEm])
+  @@index([leituraId])
+  @@map("kyria_leituras_paginas")
 }

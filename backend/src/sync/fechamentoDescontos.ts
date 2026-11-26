@@ -43,6 +43,8 @@ async function fecharConsultor(
   const valorHora = await valorHoraVigente(codemp, codfor);
   if (!valorHora) return "sem_nota";
   const mes = await produtividadeDoMes(codemp, codfor, competencia.getUTCFullYear(), competencia.getUTCMonth() + 1, valorHora.vlrhor);
+  // O Valor Nota já traz férias pagas e a bonificação FECHADA de processos que compõem a nota (domain/bonificacaoNota.ts): a base do desconto inclui o que já estiver
+  // fechado na hora. Os descontos NÃO esperam a bonificação (decisão do Vitor, 25/11/2026): o que fechar depois aparece na nota/Home sem refazer este fechamento.
   const valorNota = mes.totais.valorNota;
   if (valorNota == null) return "sem_nota";
 

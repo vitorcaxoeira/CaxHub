@@ -2,6 +2,7 @@ import { jobAtivo } from "./jobAtivo";
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { getHoursReport } from "./client";
+import { comLeitura } from "./registroLeitura";
 
 export const JOB_NAME = "kyria-ticket-hours-sync";
 // Depois de tickets (5:30) — a FK de KyriaTicketHours.id pra KyriaTicket.id exige que o ticket
@@ -52,7 +53,7 @@ export async function runKyriaTicketHoursSync(): Promise<void> {
   const { from, to, deData, ateData } = janelaAtual();
   const query = `GET /reports/hours?from=${from}&to=${to}&groupBy=ticket`;
   try {
-    const relatorio = await getHoursReport({ from, to, groupBy: "ticket" });
+    const relatorio = await comLeitura({ jobName: JOB_NAME, recurso: "/reports/hours?groupBy=ticket", paginado: false }, (leitura) => getHoursReport({ from, to, groupBy: "ticket", leitura }));
     const linhas = relatorio.data.rows;
 
     // Só upserta linhas cujo ticket já existe localmente — a FK barraria um insert órfão de

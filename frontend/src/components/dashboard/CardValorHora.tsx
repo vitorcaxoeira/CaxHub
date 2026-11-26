@@ -29,6 +29,12 @@ export interface FeriasDoPeriodo {
   itens: { gozoId: number; inicio: string; fim: string; competencia: string; valor: number; competenciaIniciada: boolean }[];
 }
 
+/** Bonificação (Gestão de Bonificação) fechada nas competências do período, de processos que compõem a nota (vem de /dashboard/meu-resumo): soma ao LÍQUIDO, como as férias. */
+export interface BonificacaoDoPeriodo {
+  total: number;
+  competencias: { competencia: string; total: number; qtd: number }[];
+}
+
 const dataBr = (iso: string) => iso.slice(0, 10).split("-").reverse().join("/");
 const mesAno = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 
@@ -50,9 +56,13 @@ interface CardValorHoraProps {
   onVerDescontos?: () => void;
   // Férias remuneradas pagas nas competências do período: uma linha "Férias" sob o ganho, a projeção e o valor fixo, somada ao líquido (como os descontos, ao contrário).
   ferias?: FeriasDoPeriodo;
+  // Bonificação fechada nas competências do período (processos que compõem a nota): uma linha "Bonificação na nota" sob o ganho, a projeção e o valor fixo, somada ao líquido.
+  // `onVerBonificacao` abre o detalhe (cada indicador que gerou o valor).
+  bonificacao?: BonificacaoDoPeriodo;
+  onVerBonificacao?: () => void;
 }
 
-// Bruto + férias − descontos, sem passar de zero: a nota que não cobre o desconto desconta só o disponível (o resto segue para o mês seguinte).
+// Bruto + férias + bonificação − descontos, sem passar de zero: a nota que não cobre o desconto desconta só o disponível (o resto segue para o mês seguinte).
 const liquidoDe = (bruto: number, desconto: number, ferias = 0) => Math.max(0, Math.round((bruto + ferias - desconto) * 100) / 100);
 
 /** As férias que entram na nota, com os itens que explicam de onde vêm (datas e mês da nota). */
@@ -69,18 +79,24 @@ function LinhasDeLiquido({
   bruto,
   descontos,
   ferias,
+  bonificacao,
   rotuloDescontos,
   onVer,
+  onVerBonificacao,
 }: {
   bruto: number;
   descontos?: DescontosDoPeriodo;
   ferias?: FeriasNaLinha;
+  /** Valor da bonificação que compõe a nota (soma ao líquido). */
+  bonificacao?: number;
   rotuloDescontos: string;
   onVer?: () => void;
+  onVerBonificacao?: () => void;
 }) {
   const valorFerias = ferias?.valor ?? 0;
+  const valorBonificacao = bonificacao ?? 0;
   const totalDescontos = descontos?.total ?? 0;
-  const cobre = totalDescontos <= bruto + valorFerias + 0.005;
+  const cobre = totalDescontos <= bruto + valorFerias + valorBonificacao + 0.005;
   return (
     <div className="mt-1 space-y-0.5 text-[11.5px]">
       {descontos && (
@@ -101,8 +117,21 @@ function LinhasDeLiquido({
           Férias na nota: <span className="font-mono font-semibold tabular-nums text-success">+{moeda.format(valorFerias)}</span>
         </p>
       )}
+      {valorBonificacao > 0 && (
+        <p className="text-muted">
+          Bonificação na nota:{" "}
+          <button
+            type="button"
+            onClick={onVerBonificacao}
+            className="font-mono font-semibold tabular-nums text-success underline decoration-dotted underline-offset-2 hover:decoration-solid"
+            title="Ver as bonificações somadas à nota"
+          >
+            +{moeda.format(valorBonificacao)}
+          </button>
+        </p>
+      )}
       <p className="text-muted">
-        Líquido: <span className="font-mono text-lg font-semibold tabular-nums text-primary">{moeda.format(liquidoDe(bruto, totalDescontos, valorFerias))}</span>
+        Líquido: <span className="font-mono text-lg font-semibold tabular-nums text-primary">{moeda.format(liquidoDe(bruto, totalDescontos, valorFerias + valorBonificacao))}</span>
       </p>
       {descontos && (!cobre || descontos.parcial) && (
         <p className="text-warning" title="A nota não cobre todos os descontos: o que sobrar segue para a competência seguinte.">
@@ -122,8 +151,10 @@ export function KpiValorFixo({
   valorHora,
   descontos,
   ferias,
+  bonificacao,
   rotuloPeriodoDescontos,
   onVerDescontos,
+  onVerBonificacao,
 }: {
   contratoFixo: ContratoFixoDoPeriodo;
   valorHora: number;
@@ -131,8 +162,11 @@ export function KpiValorFixo({
   descontos?: DescontosDoPeriodo;
   /** Só quando há férias pagas na competência do período. */
   ferias?: FeriasNaLinha;
+  /** Só quando há bonificação fechada que compõe a nota no período. */
+  bonificacao?: number;
   rotuloPeriodoDescontos: string;
   onVerDescontos?: () => void;
+  onVerBonificacao?: () => void;
 }) {
   return (
     <div
@@ -146,7 +180,9 @@ export function KpiValorFixo({
         {contratoFixo.meses > 1 && ` × ${contratoFixo.meses} meses`}
         {contratoFixo.deslocamento > 0 && ` + deslocamento ${moeda.format(contratoFixo.deslocamento)}`}
       </p>
-      {(descontos || ferias) && <LinhasDeLiquido bruto={contratoFixo.total} descontos={descontos} ferias={ferias} rotuloDescontos={rotuloPeriodoDescontos} onVer={onVerDescontos} />}
+      {(descontos || ferias || bonificacao) && (
+        <LinhasDeLiquido bruto={contratoFixo.total} descontos={descontos} ferias={ferias} bonificacao={bonificacao} rotuloDescontos={rotuloPeriodoDescontos} onVer={onVerDescontos} onVerBonificacao={onVerBonificacao} />
+      )}
     </div>
   );
 }
@@ -166,9 +202,14 @@ export function CardValorHora({
   rotuloPeriodoDescontos = "Descontos do mês",
   onVerDescontos,
   ferias,
+  bonificacao,
+  onVerBonificacao,
 }: CardValorHoraProps) {
   const [visivel, setVisivel] = useState(false);
   const temDescontos = descontos != null && descontos.total > 0;
+  // A bonificação fechada é de competência já encerrada: entra inteira tanto no líquido do ganho até agora quanto no da projeção e do valor fixo. O backend só a manda para quem
+  // tem contrato (valor-hora/fixo); sem contrato este card nem chega a mostrar valores.
+  const valorBonificacao = bonificacao && bonificacao.total > 0 ? bonificacao.total : undefined;
 
   if (valorHora == null) {
     return (
@@ -212,12 +253,16 @@ export function CardValorHora({
           <div>
             <p className="text-[11px] text-muted">Ganho até agora</p>
             <p className="font-mono text-lg font-semibold text-foreground">{moeda.format(ganho)}</p>
-            {(temDescontos || feriasGanho) && <LinhasDeLiquido bruto={ganho} descontos={temDescontos ? descontos : undefined} ferias={feriasGanho} rotuloDescontos={rotuloPeriodoDescontos} onVer={onVerDescontos} />}
+            {(temDescontos || feriasGanho || valorBonificacao != null) && (
+              <LinhasDeLiquido bruto={ganho} descontos={temDescontos ? descontos : undefined} ferias={feriasGanho} bonificacao={valorBonificacao} rotuloDescontos={rotuloPeriodoDescontos} onVer={onVerDescontos} onVerBonificacao={onVerBonificacao} />
+            )}
           </div>
           <div>
             <p className="text-[11px] text-muted">Projeção do período</p>
             <p className="font-mono text-lg font-semibold text-foreground">{moeda.format(projecao)}</p>
-            {(temDescontos || feriasPeriodo) && <LinhasDeLiquido bruto={projecao} descontos={temDescontos ? descontos : undefined} ferias={feriasPeriodo} rotuloDescontos={rotuloPeriodoDescontos} onVer={onVerDescontos} />}
+            {(temDescontos || feriasPeriodo || valorBonificacao != null) && (
+              <LinhasDeLiquido bruto={projecao} descontos={temDescontos ? descontos : undefined} ferias={feriasPeriodo} bonificacao={valorBonificacao} rotuloDescontos={rotuloPeriodoDescontos} onVer={onVerDescontos} onVerBonificacao={onVerBonificacao} />
+            )}
           </div>
           {contratoFixo && (
             <KpiValorFixo
@@ -225,8 +270,10 @@ export function CardValorHora({
               valorHora={valorHora}
               descontos={temDescontos ? descontos : undefined}
               ferias={feriasPeriodo}
+              bonificacao={valorBonificacao}
               rotuloPeriodoDescontos={rotuloPeriodoDescontos}
               onVerDescontos={onVerDescontos}
+              onVerBonificacao={onVerBonificacao}
             />
           )}
         </div>

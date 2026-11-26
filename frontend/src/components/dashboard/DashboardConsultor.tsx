@@ -13,6 +13,7 @@ import { Spinner } from "../ui/Spinner";
 import { CardCalendario } from "./CardCalendario";
 import { CardValorHora } from "./CardValorHora";
 import { ModalDescontosDoMes } from "./ModalDescontosDoMes";
+import { ModalBonificacaoDoMes } from "./ModalBonificacaoDoMes";
 import { CardRdv } from "./CardRdv";
 import { CardDescontosParcelas } from "./CardDescontosParcelas";
 import { DetalheDiaProdutividade } from "./DetalheDiaProdutividade";
@@ -206,6 +207,8 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
   const { resumo, semConsultor, loading, erro, recarregar } = useDashboardConsultor({ anos, meses, codfor });
   // Detalhe dos descontos que saem da nota (Gestão de Descontos), aberto pelo link do card Valor-hora.
   const [verDescontos, setVerDescontos] = useState(false);
+  // Detalhe da bonificação que compõe a nota (Gestão de Bonificação), aberto pelo link "Bonificação na nota" do card Valor-hora.
+  const [verBonificacao, setVerBonificacao] = useState(false);
 
   if (loading) {
     return (
@@ -326,6 +329,8 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
           descontos={resumo.descontos}
           rotuloPeriodoDescontos={resumo.descontos.competencias.length > 1 ? "Descontos do período" : "Descontos do mês"}
           onVerDescontos={() => setVerDescontos(true)}
+          bonificacao={resumo.bonificacao}
+          onVerBonificacao={() => setVerBonificacao(true)}
         />
 
         <CardProgressoMeta meta={resumo.metaPeriodo} totalMinutos={resumo.totalMinutos} rotuloPeriodo={rotuloPeriodo} />
@@ -357,6 +362,14 @@ export function DashboardConsultor({ anos, meses, codfor, nomeExibido }: Dashboa
           codfor={codfor}
           competencias={resumo.descontos.competencias.filter((c) => c.qtd > 0).map((c) => c.competencia)}
           onFechar={() => setVerDescontos(false)}
+        />
+      )}
+
+      {verBonificacao && (
+        <ModalBonificacaoDoMes
+          codfor={codfor}
+          competencias={resumo.bonificacao.competencias.filter((c) => c.qtd > 0).map((c) => c.competencia)}
+          onFechar={() => setVerBonificacao(false)}
         />
       )}
     </div>

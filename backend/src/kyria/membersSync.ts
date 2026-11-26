@@ -2,6 +2,7 @@ import { jobAtivo } from "./jobAtivo";
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { listAllMembers } from "./client";
+import { comLeitura } from "./registroLeitura";
 
 export const JOB_NAME = "kyria-members-sync";
 // Depois do horário de kyria-teams-sync (4:30) — catálogo pequeno, muda raramente.
@@ -11,7 +12,7 @@ export async function runKyriaMembersSync(): Promise<void> {
   if (!(await jobAtivo(JOB_NAME))) return;
   const inicio = new Date();
   try {
-    const members = await listAllMembers();
+    const members = await comLeitura({ jobName: JOB_NAME, recurso: "/members" }, (leitura) => listAllMembers({ leitura }));
 
     await prisma.$transaction(
       members.map((membro) =>

@@ -31,7 +31,15 @@ import { gerarPdfDaPagina, RelatorioPdfError } from "../lib/relatorioPdf";
 //   GET <caminho>/valores  aba "Valores" do funil
 // O cliente só escolhe entre os NOMES declarados (nunca manda SQL); cada valor entra como parâmetro.
 
+/** Sub-linha impressa sob uma linha do relatório: valor de cada coluna pelo NOME dela (as que faltam saem vazias). */
+export type DetalheImpresso = Record<string, string | number | null>;
+
 export interface ListaConsultavel {
+  /**
+   * Linhas de detalhe do relatório impresso/PDF (25/11/2026): recebe as linhas completas (todas as colunas da consulta) e devolve, na mesma ordem,
+   * as sub-linhas de cada uma (ou null). Só é chamada por `GET <caminho>/impressao`; quem decide se há detalhe é a própria lista, lendo `req.query`.
+   */
+  detalheImpressao?: (linhas: Record<string, unknown>[], req: Request) => Promise<(DetalheImpresso[] | null)[]> | (DetalheImpresso[] | null)[];
   /** A consulta da tela com os filtros do topo, sem ORDER BY nem LIMIT. Expõe uma coluna por nome declarado em `colunas`. */
   interna: Prisma.Sql;
   colunas: ColunaConsulta[];
@@ -136,9 +144,11 @@ const DIA_BR = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
 const DIA_HORA_BR = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" });
 
 /** Uma célula do CSV em português: ";" como separador, vírgula decimal, datas dd/mm/aaaa, Sim/Não. */
-function celulaCsv(valor: unknown, tipo: ColunaConsulta["tipo"] | undefined): string {
+function celulaCsv(valor: unknown, tipo: ColunaConsulta["tipo"] | undefined, formato?: ColunaConsulta["formato"]): string {
   let texto: string;
   if (valor == null) texto = "";
+  // Coluna em minutos que a tela mostra como HH:MM: no CSV vai em horas decimais, que o Excel soma.
+  else if (formato === "horasMinutos" && typeof valor === "number") texto = (valor / 60).toFixed(2).replace(".", ",");
   else if (valor instanceof Date) {
     const meiaNoiteUtc = valor.getUTCHours() === 0 && valor.getUTCMinutes() === 0 && valor.getUTCSeconds() === 0;
     texto = meiaNoiteUtc ? DIA_BR.format(valor) : DIA_HORA_BR.format(valor);
@@ -290,7 +300,7 @@ export function registrarListaConsultavel(
       try {
         const { linhas, nomes, porNome, tituloDe } = await linhasExportadas(req, LIMITE_CSV);
         const cabecalho = nomes.map((n) => celulaCsv(tituloDe(n), undefined));
-        const corpo = linhas.map((l) => nomes.map((n) => celulaCsv(l[n], porNome.get(n)?.tipo)).join(";"));
+        const corpo = linhas.map((l) => nomes.map((n) => celulaCsv(l[n], porNome.get(n)?.tipo, porNome.get(n)?.formato)).join(";"));
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="${rotulo.replace(/[^a-z0-9_-]/gi, "_")}_${Date.now()}.csv"`);
         // BOM + ponto e vírgula + vírgula decimal: abre direto no Excel em português (mesma convenção das outras exportações).
@@ -312,9 +322,12 @@ export function registrarListaConsultavel(
         const totais = Object.fromEntries(
           (lista.totais ?? []).map((c) => [c, Math.round(linhas.reduce((soma, l) => soma + (Number(l[c]) || 0), 0) * 100) / 100])
         );
+        // Detalhe por linha (opcional, só quando a lista declara `detalheImpressao` e a tela pediu): sub-linhas com valores por NOME de coluna.
+        const detalhes = lista.detalheImpressao ? await lista.detalheImpressao(linhas, req) : undefined;
         res.json({
-          colunas: nomes.map((n) => ({ nome: n, titulo: tituloDe(n), tipo: porNome.get(n)?.tipo ?? "texto" })),
+          colunas: nomes.map((n) => ({ nome: n, titulo: tituloDe(n), tipo: porNome.get(n)?.tipo ?? "texto", ...(porNome.get(n)?.formato ? { formato: porNome.get(n)!.formato } : {}) })),
           linhas: linhas.map((l) => Object.fromEntries(nomes.map((n) => [n, l[n] ?? null]))),
+          ...(detalhes ? { detalhes } : {}),
           total: linhas.length,
           truncado,
           limite,

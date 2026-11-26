@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Modal } from "../../components/ui/Modal";
 import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
 import { TabelaLocal } from "../../components/colunas/TabelaLocal";
@@ -95,6 +96,7 @@ const COLUNAS_LOCAIS: ColunaLocal[] = [
 const lerJob = (j: JobKyria, coluna: string): unknown => (coluna === "status" ? statusDoJob(j) : (j as unknown as Record<string, unknown>)[coluna]);
 
 interface AcoesJob {
+  navegar: (para: string) => void;
   alternarAtivo: (job: JobKyria) => void;
   disparar: (job: JobKyria) => void;
   disparando: string | null;
@@ -130,7 +132,7 @@ const COLUNAS_JOBS: DefColuna<JobKyria, AcoesJob>[] = [
       </button>
     ),
   },
-  { nome: "urlCompleta", titulo: "URL", largura: 200, classe: "max-w-[130px] truncate font-mono text-[12px] text-muted", title: (j) => j.urlCompleta, texto: (j) => j.urlCompleta, render: (j) => j.urlCompleta },
+  { nome: "urlCompleta", titulo: "URL", largura: 420, quebra: true, classe: "break-all font-mono text-[12px] text-muted", title: (j) => j.urlCompleta, texto: (j) => j.urlCompleta, render: (j) => j.urlCompleta },
   { nome: "totalRegistros", titulo: "Registros", direita: true, largura: 100, classe: "font-mono text-sm tabular-nums text-muted", render: (j) => numberFormatter.format(j.totalRegistros) },
   {
     nome: "ultimaSincronizacao",
@@ -173,21 +175,40 @@ const COLUNAS_JOBS: DefColuna<JobKyria, AcoesJob>[] = [
     titulo: "Ações",
     direita: true,
     semOrdenar: true,
-    largura: 210,
-    // Coluna "à direita" herda a fonte de número (mono); os links de ação ficam na fonte normal.
+    largura: 80,
+    // Coluna "à direita" herda a fonte de número (mono); o gatilho do menu fica na fonte normal.
     classe: "font-sans",
+    // Ações da linha agrupadas no menu "⋯" (mesmo padrão da Sincronização ERP).
     render: (j, a) => (
-      <div className="flex justify-end gap-3">
-        <Link to={`/admin/sincronizacao-kyria/dados/${j.jobName}`} className="text-sm text-primary hover:underline">
-          Ver dados
-        </Link>
-        <button
-          onClick={() => a.disparar(j)}
-          disabled={!j.ativo || j.emAndamento || a.disparando !== null || a.sincronizandoTodos}
-          className="text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {a.disparando === j.jobName ? "Iniciando..." : "Sincronizar agora"}
-        </button>
+      <div className="flex justify-end">
+        <DropdownMenu placement="bottom-end">
+          <DropdownMenu.Trigger>
+            <button
+              aria-label={`Ações de ${j.displayName}`}
+              title="Ações"
+              className="rounded-md px-2 py-1 text-lg leading-none text-muted transition hover:bg-surface-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              ⋯
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content className="w-56 p-0 py-1">
+            <DropdownMenu.Item onSelect={() => a.navegar(`/admin/sincronizacao-kyria/dados/${j.jobName}`)} className="rounded-none px-3 py-2">
+              Ver dados
+            </DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={() => a.navegar(`/admin/sincronizacao-kyria/leituras?job=${encodeURIComponent(j.jobName)}`)} className="rounded-none px-3 py-2">
+              Ver leituras
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator />
+            <DropdownMenu.Item
+              onSelect={() => a.disparar(j)}
+              disabled={!j.ativo || j.emAndamento || a.disparando !== null || a.sincronizandoTodos}
+              title={!j.ativo ? "Tabela desativada: ative para sincronizar" : undefined}
+              className="rounded-none px-3 py-2"
+            >
+              {a.disparando === j.jobName ? "Iniciando..." : "Sincronizar agora"}
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu>
       </div>
     ),
   },
@@ -198,6 +219,7 @@ export function SincronizacaoKyria() {
   const [sincronizandoTodos, setSincronizandoTodos] = useState(false);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const navigate = useNavigate();
   const [disparando, setDisparando] = useState<string | null>(null);
   const [iniciandoTodos, setIniciandoTodos] = useState(false);
   const [filtrosAberto, setFiltrosAberto] = useState(false);
@@ -325,6 +347,12 @@ export function SincronizacaoKyria() {
           </p>
         </div>
         <div className="flex flex-none gap-2">
+          <Link
+            to="/admin/sincronizacao-kyria/leituras"
+            className="rounded-md border border-border px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-surface-2"
+          >
+            Leituras do Kyria
+          </Link>
           <button
             onClick={abrirFiltros}
             disabled={sincronizandoTodos || iniciandoTodos || jobs.some((j) => j.emAndamento) || !jobs.some((j) => j.aceitaFiltros)}
@@ -402,7 +430,7 @@ export function SincronizacaoKyria() {
         chaveLinha={(j) => j.jobName}
         loading={loading}
         vazio="Nenhuma tabela cadastrada."
-        ctx={{ alternarAtivo, disparar, disparando, sincronizandoTodos }}
+        ctx={{ navegar: navigate, alternarAtivo, disparar, disparando, sincronizandoTodos }}
       />
 
       <Modal
@@ -428,7 +456,7 @@ export function SincronizacaoKyria() {
                   </option>
                 ))}
             </select>
-            <p className="mt-1 truncate font-mono text-[11px] text-muted">
+            <p className="mt-1 break-all font-mono text-[11px] text-muted">
               {jobs.find((j) => j.jobName === filtroJob)?.urlCompleta}
             </p>
           </div>

@@ -2,6 +2,7 @@ import { jobAtivo } from "./jobAtivo";
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { listAllTickets } from "./client";
+import { comLeitura } from "./registroLeitura";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "../sync/upsertEmLote";
 
 export const JOB_NAME = "kyria-tickets-sync";
@@ -46,7 +47,7 @@ export async function runKyriaTicketsSync(): Promise<void> {
   if (!(await jobAtivo(JOB_NAME))) return;
   const inicio = new Date();
   try {
-    const tickets = await listAllTickets();
+    const tickets = await comLeitura({ jobName: JOB_NAME, recurso: "/tickets" }, (leitura) => listAllTickets({ leitura }));
     const sincronizadoEm = inicio.toISOString();
 
     // Pré-filtro ANTES do upsert — 4 FKs reais em cima de upsert em lote: se uma linha do lote
