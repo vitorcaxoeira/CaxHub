@@ -1,11 +1,15 @@
 import axios from "axios";
-import { CalendarDays, Palmtree } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronRight, Palmtree, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { GradeDoMes, useCalendarioMes } from "../../components/calendario/pecas";
+import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import type { ColunaLocal } from "../../components/colunas/aplicarLocal";
+import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { Modal } from "../../components/ui/Modal";
 import { useToast } from "../../components/ui/Toast";
 import { cn } from "../../lib/cn";
-import { type Aquisitivo, type Gozo, type Simulacao, dataBr, mensagemDeErro, moeda } from "../../lib/feriasCalendario";
+import { MESES, type Aquisitivo, type Gozo, type MesDaMedia, type Simulacao, dataBr, hhhmm, hhhmmDeHoras, lerHoras, mensagemDeErro, moeda } from "../../lib/feriasCalendario";
 
 interface LinhaResumo {
   codemp: number;
@@ -14,6 +18,11 @@ interface LinhaResumo {
   departamento: string | null;
   aquisitivoAtual: { id: number; inicio: string; fim: string; diasDireito: number; saldo: number; remunerado: boolean } | null;
   saldoTotal: number;
+  /** Saldo dos períodos aquisitivos já completos (o direito inteiro está adquirido). */
+  saldoVencido: number;
+  /** Dias já "ganhos" nos períodos ainda em curso, proporcionais ao tempo decorrido (1 casa decimal). */
+  saldoEmFormacao: number;
+  periodosEmFormacao: { inicio: string; fim: string; diasDecorridos: number; diasDoPeriodo: number; diasDireito: number; acumulado: number; saldo: number }[];
   emFerias: Gozo | null;
   proximasFerias: Gozo | null;
   qtdAquisitivos: number;
@@ -33,6 +42,119 @@ const campo = "w-full rounded-md border border-border bg-surface px-2 py-1.5 tex
 const rotuloCampo = "mb-1 block text-[11.5px] text-muted";
 const botaoPrimario = "rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50";
 const botaoSecundario = "rounded-md border border-border px-3 py-1.5 text-[12.5px] text-muted hover:bg-surface-2 hover:text-foreground";
+// Lista de consultores no padrão do kit de colunas (TabelaLocal): funil e ordem por coluna, colunas configuráveis por usuário, paginação com "Por página".
+// Cada coluna é declarada uma vez aqui (constantes do módulo: o kit exige defs/colunas/ler estáveis).
+const COLUNAS_LOCAIS: ColunaLocal[] = [
+  { nome: "nome", tipo: "texto", obrigatoria: true },
+  { nome: "departamento", tipo: "texto" },
+  { nome: "aquisitivo", tipo: "data", utc: true },
+  { nome: "saldo", tipo: "inteiro" },
+  { nome: "formacao", tipo: "decimal" },
+  { nome: "total", tipo: "inteiro" },
+  { nome: "situacao", tipo: "texto" },
+  { nome: "proximas", tipo: "data", utc: true },
+];
+
+/** O valor que o funil e a ordem usam: o período aquisitivo e as próximas férias valem pela data de início; a situação, pelo texto exibido. */
+const lerLinha = (l: LinhaResumo, coluna: string): unknown => {
+  switch (coluna) {
+    case "aquisitivo":
+      return l.aquisitivoAtual?.inicio ?? null;
+    case "saldo":
+      return l.qtdAquisitivos > 0 ? l.saldoVencido : null;
+    case "situacao":
+      return l.emFerias ? `Em férias até ${dataBr(l.emFerias.fim)}` : null;
+    case "formacao":
+      return l.qtdAquisitivos > 0 ? l.saldoEmFormacao : null;
+    case "total":
+      return l.qtdAquisitivos > 0 ? l.saldoTotal : null;
+    case "proximas":
+      return l.proximasFerias?.inicio ?? null;
+    default:
+      return (l as unknown as Record<string, unknown>)[coluna];
+  }
+};
+
+/** Dias com no máximo 1 casa decimal e vírgula (6,4). */
+const numeroBr = (n: number) => (Math.round(n * 10) / 10).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+
+const COLUNAS: DefColuna<LinhaResumo>[] = [
+  { nome: "nome", titulo: "Consultor", fixa: true, largura: 240, classe: "text-sm font-medium text-foreground", texto: (l) => l.nome, render: (l) => l.nome },
+  { nome: "departamento", titulo: "Departamento", largura: 180, classe: "text-sm text-muted", texto: (l) => l.departamento, render: (l) => l.departamento ?? "—" },
+  {
+    nome: "aquisitivo",
+    titulo: "Período aquisitivo",
+    largura: 250,
+    classe: "font-mono text-[12.5px] text-muted",
+    render: (l) =>
+      l.aquisitivoAtual ? (
+        <>
+          {dataBr(l.aquisitivoAtual.inicio)} a {dataBr(l.aquisitivoAtual.fim)}
+          {!l.aquisitivoAtual.remunerado && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-sans text-[10.5px] text-muted">não remuneradas</span>}
+        </>
+      ) : (
+        "—"
+      ),
+  },
+  {
+    nome: "saldo",
+    titulo: "Saldo vencido",
+    dica: "Dias de férias dos períodos aquisitivos já completos: o direito inteiro está adquirido e pode ser tirado",
+    direita: true,
+    largura: 130,
+    classe: (l) => cn("font-mono text-sm", l.saldoVencido > 0 ? "font-semibold text-primary" : "text-muted"),
+    title: (l) => (l.qtdAquisitivos === 0 ? undefined : `Períodos aquisitivos já completos: ${l.saldoVencido} dia(s) de férias adquiridos e ainda não tirados.`),
+    render: (l) => (l.qtdAquisitivos === 0 ? "—" : l.saldoVencido),
+  },
+  {
+    nome: "formacao",
+    titulo: "Em formação",
+    dica: "Dias já ganhos no período aquisitivo ainda em curso, proporcionais ao tempo decorrido (ainda não vencidos)",
+    direita: true,
+    largura: 120,
+    classe: (l) => cn("font-mono text-sm", l.saldoEmFormacao > 0 ? "text-foreground" : "text-muted"),
+    title: (l) => {
+      if (l.periodosEmFormacao.length === 0) return l.qtdAquisitivos === 0 ? undefined : "Nenhum período aquisitivo em curso.";
+      return l.periodosEmFormacao
+        .map(
+          (f) =>
+            `Período ${dataBr(f.inicio)} a ${dataBr(f.fim)}: ${f.diasDecorridos} de ${f.diasDoPeriodo} dias decorridos = ${numeroBr(f.acumulado)} de ${f.diasDireito} dias de férias ganhos até hoje${f.saldo !== f.acumulado ? ` (restam ${numeroBr(f.saldo)} depois das férias lançadas)` : ""}.`,
+        )
+        .join("\n");
+    },
+    render: (l) => (l.qtdAquisitivos === 0 ? "—" : numeroBr(l.saldoEmFormacao)),
+  },
+  {
+    nome: "total",
+    titulo: "Total do direito",
+    dica: "Soma dos saldos de todos os períodos aquisitivos cadastrados, inclusive os que ainda não vencem",
+    direita: true,
+    largura: 130,
+    classe: "font-mono text-sm text-muted",
+    title: (l) => (l.qtdAquisitivos === 0 ? undefined : `Soma de todos os períodos aquisitivos cadastrados (${l.qtdAquisitivos}): ${l.saldoTotal} dia(s), incluindo os que ainda não vencem.`),
+    render: (l) => (l.qtdAquisitivos === 0 ? "—" : l.saldoTotal),
+  },
+  {
+    nome: "situacao",
+    titulo: "Situação",
+    largura: 220,
+    render: (l) =>
+      l.emFerias ? (
+        <span className="inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[11.5px] font-medium text-primary">
+          <Palmtree size={12} aria-hidden /> Em férias até {dataBr(l.emFerias.fim)}
+        </span>
+      ) : (
+        <span className="text-muted">—</span>
+      ),
+  },
+  {
+    nome: "proximas",
+    titulo: "Próximas férias",
+    largura: 220,
+    classe: "font-mono text-[12.5px] text-muted",
+    render: (l) => (l.proximasFerias ? `${dataBr(l.proximasFerias.inicio)} a ${dataBr(l.proximasFerias.fim)}` : "—"),
+  },
+];
 
 // Controle de férias dos consultores PJ (13/11/2026), no lugar da planilha "Simulação Férias PJs". O gestor do departamento (e o admin) lança o período
 // AQUISITIVO (o direito) e os GOZOS (as férias tiradas); o gozo vira "Férias" no calendário do consultor e sai da meta. O valor é uma simulação gravada no gozo
@@ -81,61 +203,19 @@ export function Ferias() {
         <input type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar consultor ou departamento…" aria-label="Buscar consultor" className={cn(campo, "max-w-sm")} />
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-surface-2 text-left font-mono text-[10px] uppercase tracking-wider text-muted">
-                <th className="px-3 py-2">Consultor</th>
-                <th className="px-3 py-2">Departamento</th>
-                <th className="px-3 py-2">Período aquisitivo</th>
-                <th className="px-3 py-2 text-right">Saldo (dias)</th>
-                <th className="px-3 py-2">Situação</th>
-                <th className="px-3 py-2">Próximas férias</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-muted">
-                    Carregando...
-                  </td>
-                </tr>
-              )}
-              {!loading && filtradas.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-muted">
-                    Nenhum consultor encontrado.
-                  </td>
-                </tr>
-              )}
-              {filtradas.map((l) => (
-                <tr key={l.codfor} onClick={() => setAberto(l)} className="cursor-pointer border-t border-border/60 hover:bg-surface-2">
-                  <td className="px-3 py-2 font-medium text-foreground">{l.nome}</td>
-                  <td className="px-3 py-2 text-muted">{l.departamento ?? "—"}</td>
-                  <td className="px-3 py-2 font-mono text-[12.5px] text-muted">
-                    {l.aquisitivoAtual ? `${dataBr(l.aquisitivoAtual.inicio)} a ${dataBr(l.aquisitivoAtual.fim)}` : "—"}
-                    {l.aquisitivoAtual && !l.aquisitivoAtual.remunerado && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-sans text-[10.5px] text-muted">não remuneradas</span>}
-                  </td>
-                  <td className={cn("px-3 py-2 text-right font-mono", l.aquisitivoAtual && l.aquisitivoAtual.saldo > 0 ? "text-primary" : "text-muted")}>
-                    {l.aquisitivoAtual ? l.aquisitivoAtual.saldo : "—"}
-                    {l.qtdAquisitivos > 1 && <span className="ml-1 text-[11px] text-muted">(total {l.saldoTotal})</span>}
-                  </td>
-                  <td className="px-3 py-2">
-                    {l.emFerias ? (
-                      <span className="inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[11.5px] font-medium text-primary">
-                        <Palmtree size={12} aria-hidden /> Em férias até {dataBr(l.emFerias.fim)}
-                      </span>
-                    ) : (
-                      <span className="text-muted">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-[12.5px] text-muted">{l.proximasFerias ? `${dataBr(l.proximasFerias.inicio)} a ${dataBr(l.proximasFerias.fim)}` : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <div className="mt-4">
+        <TabelaLocal<LinhaResumo>
+          chave="projetos.ferias"
+          defs={COLUNAS}
+          colunas={COLUNAS_LOCAIS}
+          linhas={filtradas}
+          ler={lerLinha}
+          chaveLinha={(l) => String(l.codfor)}
+          loading={loading}
+          vazio="Nenhum consultor encontrado."
+          onLinha={setAberto}
+          paginacao={{ inicial: 10, rotulo: "consultores" }}
+        />
       </div>
 
       {aberto && <ModalConsultor linha={aberto} onFechar={() => setAberto(null)} onMudou={carregar} />}
@@ -253,7 +333,7 @@ function ModalConsultor({ linha, onFechar, onMudou }: { linha: LinhaResumo; onFe
                           </td>
                           <td className="py-1.5 pr-2 text-right font-mono">{g.diasCorridos}</td>
                           <td className="py-1.5 pr-2 text-right font-mono">{g.diasUteis ?? "—"}</td>
-                          <td className="py-1.5 pr-2 text-right font-mono" title={g.horasFerias != null ? `${g.horasFerias} h × ${g.valorHora != null ? moeda(g.valorHora) : "—"}/h` : undefined}>
+                          <td className="py-1.5 pr-2 text-right font-mono" title={g.horasFerias != null ? `${hhhmmDeHoras(g.horasFerias)} h × ${g.valorHora != null ? moeda(g.valorHora) : "—"}/h` : undefined}>
                             {!a.remunerado ? "não remunerada" : g.valorFerias != null ? moeda(g.valorFerias) : "—"}
                           </td>
                           <td className="py-1.5 pr-2 font-mono">{g.competenciaPagamento ? `${g.competenciaPagamento.slice(5, 7)}/${g.competenciaPagamento.slice(0, 4)}` : "—"}</td>
@@ -427,6 +507,201 @@ function FormAquisitivo({
   );
 }
 
+const chaveMes = (m: { ano: number; mes: number }) => `${m.ano}-${String(m.mes).padStart(2, "0")}`;
+const pctTexto = (p: number) => `${Math.round(p * 1000) / 10}%`;
+
+/** Os dias úteis que já vêm ajustados num gozo gravado (só os meses em que o valor foi trocado do padrão). */
+function ajustesGravados(meses: MesDaMedia[] | null | undefined): Record<string, string> {
+  const saida: Record<string, string> = {};
+  for (const m of meses ?? []) {
+    if (m.diasUteis != null && m.diasUteisPadrao != null && m.diasUteis !== m.diasUteisPadrao) saida[chaveMes(m)] = String(m.diasUteis);
+  }
+  return saida;
+}
+
+/** Os ajustes digitados no formato da API ({ "AAAA-MM": n }); sem ajuste, undefined (vale o padrão). */
+function diasMesParaEnvio(diasMes: Record<string, string>): Record<string, number> | undefined {
+  const saida: Record<string, number> = {};
+  for (const [chave, texto] of Object.entries(diasMes)) {
+    const n = Number(texto);
+    if (texto.trim() !== "" && Number.isInteger(n) && n >= 0) saida[chave] = n;
+  }
+  return Object.keys(saida).length > 0 ? saida : undefined;
+}
+
+/**
+ * Os 12 meses da média, com os dias úteis disponíveis editáveis (o gestor ajusta; vazio = padrão), as horas, a base e o % de cada mês. Mês com 0 dias fica
+ * fora da média. O botão do calendário abre o mês em outra aba, no calendário do consultor.
+ */
+function TabelaMeses({
+  meses,
+  horasDia,
+  mediaUsada,
+  codfor,
+  diasMes,
+  onMudar,
+}: {
+  meses: MesDaMedia[];
+  horasDia: number;
+  mediaUsada: number;
+  codfor: number;
+  diasMes: Record<string, string>;
+  onMudar: (atualizar: (d: Record<string, string>) => Record<string, string>) => void;
+}) {
+  const definir = (chave: string, texto: string) =>
+    onMudar((d) => {
+      const proximo = { ...d };
+      if (texto.trim() === "") delete proximo[chave];
+      else proximo[chave] = texto;
+      return proximo;
+    });
+  const naMediaQtd = meses.filter((m) => m.naMedia ?? (m.diasUteis ?? 0) > 0).length;
+  // Do mês mais recente para o mais antigo (o mais próximo das férias primeiro).
+  const ordenados = [...meses].sort((a, b) => b.ano * 12 + b.mes - (a.ano * 12 + a.mes));
+  // Mês cujo calendário está aberto no modal.
+  const [calendario, setCalendario] = useState<{ ano: number; mes: number } | null>(null);
+  // A tabela começa recolhida: a média usada fica sempre visível e o gestor abre os meses quando quer conferir ou ajustar.
+  const [aberto, setAberto] = useState(false);
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setAberto((v) => !v)}
+        aria-expanded={aberto}
+        className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-muted hover:text-foreground"
+      >
+        {aberto ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+        Meses considerados na média ({meses.length})
+      </button>
+      {aberto && (
+      <div className="mt-1 overflow-x-auto">
+        <table className="w-full border-collapse text-[12.5px]">
+          <thead>
+            <tr className="text-left font-mono text-[10px] uppercase tracking-wider text-muted">
+              <th className="py-1 pr-2">Mês</th>
+              <th className="py-1 pr-2 text-right">Dias úteis disponíveis</th>
+              <th className="py-1 pr-2 text-right">Horas</th>
+              <th className="py-1 pr-2 text-right">Base</th>
+              <th className="py-1 pr-2 text-right">% do mês</th>
+              <th className="py-1 pr-2 text-right">Calendário</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ordenados.map((m) => {
+              const chave = chaveMes(m);
+              const padrao = m.diasUteisPadrao ?? 0;
+              const dias = m.diasUteis ?? padrao;
+              const naMedia = m.naMedia ?? dias > 0;
+              const ajustado = (diasMes[chave] ?? "").trim() !== "";
+              const rotulo = `${String(m.mes).padStart(2, "0")}/${m.ano}`;
+              const feriados = (m.feriados ?? []).map((f) => `${f.data.slice(8)}/${f.data.slice(5, 7)} ${f.nome}`).join(" · ");
+              return (
+                <tr key={chave} className={cn("border-t border-border/60", !naMedia && "text-muted")}>
+                  <td className="py-1.5 pr-2 font-mono">
+                    {rotulo}
+                    <span className="ml-1 font-sans text-[11px] text-muted">{MESES[m.mes - 1]}</span>
+                    {!naMedia && <span className="ml-2 font-sans text-[11px] text-muted">fora da média</span>}
+                    {feriados && <p className="font-sans text-[11px] text-muted">{feriados}</p>}
+                  </td>
+                  <td className="py-1.5 pr-2 text-right">
+                    <span className="inline-flex items-center justify-end gap-1">
+                      <input
+                        inputMode="numeric"
+                        aria-label={`Dias úteis disponíveis em ${rotulo}`}
+                        value={diasMes[chave] ?? ""}
+                        placeholder={String(padrao)}
+                        onChange={(e) => definir(chave, e.target.value.replace(/\D/g, "").slice(0, 2))}
+                        className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-right font-mono text-sm text-foreground placeholder:text-muted"
+                      />
+                      {/* Área fixa para "voltar ao padrão": sempre ocupa o espaço, então o campo não anda quando o dia é ajustado. */}
+                      <span className="inline-flex h-6 w-6 flex-none items-center justify-center">
+                        {ajustado && (
+                          <button
+                            type="button"
+                            className="inline-flex h-5 w-5 items-center justify-center rounded text-primary hover:bg-primary/10"
+                            onClick={() => definir(chave, "")}
+                            aria-label={`Voltar ${rotulo} para o padrão (${padrao} dia(s) úteis)`}
+                            title={`Voltar para o padrão (${padrao} dia(s) úteis)`}
+                          >
+                            <X size={13} strokeWidth={2.5} aria-hidden />
+                          </button>
+                        )}
+                      </span>
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-2 text-right font-mono">{hhhmm(m.minutos)}</td>
+                  <td className="py-1.5 pr-2 text-right font-mono">{hhhmmDeHoras(dias * horasDia)}</td>
+                  <td className="py-1.5 pr-2 text-right font-mono">{naMedia ? pctTexto(m.pct) : "—"}</td>
+                  <td className="py-1.5 pr-2 text-right">
+                    <button
+                      type="button"
+                      aria-label={`Abrir o calendário de ${rotulo}`}
+                      title="Abre o calendário deste mês, com as horas trabalhadas"
+                      className="inline-flex items-center text-primary hover:opacity-80"
+                      onClick={() => setCalendario({ ano: m.ano, mes: m.mes })}
+                    >
+                      <CalendarDays size={14} aria-hidden />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      )}
+      <p className="mt-2 text-[12px] text-muted">
+        Média usada: <span className="font-mono text-foreground">{pctTexto(mediaUsada)}</span> · {naMediaQtd} de {meses.length} meses entram. Mês com 0 dias úteis
+        disponíveis sai da média; ao ajustar os dias, a simulação refaz sozinha.
+      </p>
+      {calendario && <ModalCalendarioMes ano={calendario.ano} mes={calendario.mes} codfor={codfor} onFechar={() => setCalendario(null)} />}
+    </div>
+  );
+}
+
+/**
+ * O calendário de um mês da média, só para consulta: a mesma grade da Home do consultor (férias, folgas e feriados), com as horas trabalhadas em cada dia e o
+ * total do mês. Clicar num dia não faz nada aqui (folga se marca na página Calendário).
+ */
+function ModalCalendarioMes({ ano, mes, codfor, onFechar }: { ano: number; mes: number; codfor: number; onFechar: () => void }) {
+  const { dados, loading, erro, feriados } = useCalendarioMes(ano, mes, codfor);
+  return (
+    <Modal open onClose={onFechar} title={`${MESES[mes - 1]} ${ano}`} subtitulo={dados?.consultor.nome} className="max-w-3xl">
+      {erro && <p className="mb-3 text-sm text-destructive">{erro}</p>}
+      {dados && (
+        <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-border bg-surface px-4 py-2">
+            <p className="text-[11px] text-muted">Horas trabalhadas</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{hhhmm(dados.totais.apontadoMinutos)}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface px-4 py-2">
+            <p className="text-[11px] text-muted">Meta do mês</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{hhhmm(dados.totais.metaMinutos)}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface px-4 py-2">
+            <p className="text-[11px] text-muted">Dias com horas</p>
+            <p className="font-mono text-lg font-semibold text-foreground">{dados.dias.filter((d) => d.apontadoMinutos > 0).length}</p>
+          </div>
+        </div>
+      )}
+      <GradeDoMes dados={dados} loading={loading} feriados={feriados} onDia={() => undefined} compacto />
+      <p className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted">
+        <span>
+          <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-primary/40" /> Férias
+        </span>
+        <span>
+          <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-warning/40" /> Folga
+        </span>
+        <span>
+          <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-muted" /> Feriado
+        </span>
+        <span>As horas em cada dia são as trabalhadas.</span>
+      </p>
+    </Modal>
+  );
+}
+
 function FormGozo({
   consultor,
   aquisitivos,
@@ -451,6 +726,8 @@ function FormGozo({
   const [horasDia, setHorasDia] = useState("");
   const [mediaPct, setMediaPct] = useState("");
   const [valorHora, setValorHora] = useState("");
+  // Dias úteis disponíveis ajustados por mês da média ("AAAA-MM" -> texto digitado). Vazio = o padrão (dias úteis com feriados nacionais descontados).
+  const [diasMes, setDiasMes] = useState<Record<string, string>>(() => ajustesGravados(editar?.mesesMedia));
   const [sim, setSim] = useState<Simulacao | null>(null);
   const [simErro, setSimErro] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -478,7 +755,7 @@ function FormGozo({
     }
     const t = window.setTimeout(() => {
       axios
-        .post<Simulacao>("/api/ferias/simular", { codfor: consultor.codfor, inicio, fim, horasDia: numero(horasDia), mediaPct: numero(mediaPct), valorHora: numero(valorHora), somenteDias: !remunerado })
+        .post<Simulacao>("/api/ferias/simular", { codfor: consultor.codfor, inicio, fim, horasDia: lerHoras(horasDia), mediaPct: numero(mediaPct), valorHora: numero(valorHora), diasUteisMes: diasMesParaEnvio(diasMes), somenteDias: !remunerado })
         .then(({ data }) => {
           setSim(data);
           setSimErro(null);
@@ -487,7 +764,7 @@ function FormGozo({
     }, 450);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inicio, fim, horasDia, mediaPct, valorHora, consultor.codfor, remunerado, datasOk]);
+  }, [inicio, fim, horasDia, mediaPct, valorHora, diasMes, consultor.codfor, remunerado, datasOk]);
 
   async function salvar(permitirExcedente = false) {
     setSalvando(true);
@@ -498,9 +775,10 @@ function FormGozo({
         fim,
         observacao: obs.trim() || null,
         competenciaPagamento: remunerado ? competencia || null : null,
-        horasDia: numero(horasDia),
+        horasDia: lerHoras(horasDia),
         mediaPct: numero(mediaPct),
         valorHora: numero(valorHora),
+        diasUteisMes: diasMesParaEnvio(diasMes),
         permitirExcedente,
       };
       if (editar) await axios.put(`/api/ferias/gozos/${editar.id}`, { ...corpo, recalcular: true });
@@ -579,8 +857,8 @@ function FormGozo({
           <div className="mt-2 space-y-3">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <label>
-                <span className={rotuloCampo}>Horas por dia útil</span>
-                <input inputMode="decimal" value={horasDia} onChange={(e) => setHorasDia(e.target.value)} placeholder={String(sim.horasDia)} className={campo} />
+                <span className={rotuloCampo}>Horas por dia útil (hhh:mm)</span>
+                <input value={horasDia} onChange={(e) => setHorasDia(e.target.value)} placeholder={hhhmmDeHoras(sim.horasDia)} className={campo} />
               </label>
               <label>
                 <span className={rotuloCampo}>Média do % trabalhado</span>
@@ -592,7 +870,7 @@ function FormGozo({
               </label>
             </div>
             <p className="font-mono text-[12.5px] text-muted">
-              {sim.diasUteis} dias úteis × {sim.horasDia} h × {sim.mediaPct} = {sim.horasFerias} h
+              {sim.diasUteis} dias úteis × {hhhmmDeHoras(sim.horasDia)} × {sim.mediaPct} = {hhhmmDeHoras(sim.horasFerias)}
               {sim.valorHora != null && sim.valorFerias != null && (
                 <>
                   {" "}
@@ -601,18 +879,7 @@ function FormGozo({
               )}
             </p>
             {sim.valorHora == null && <p className="text-[12px] text-muted">Consultor sem valor-hora (contrato fixo ou sem contrato): informe o valor-hora se quiser o cálculo.</p>}
-            {sim.meses.length > 0 && (
-              <details className="text-[12px] text-muted">
-                <summary className="cursor-pointer">Meses considerados na média ({sim.meses.length})</summary>
-                <ul className="mt-1 grid grid-cols-2 gap-x-4 font-mono sm:grid-cols-3">
-                  {sim.meses.map((m) => (
-                    <li key={`${m.ano}-${m.mes}`}>
-                      {String(m.mes).padStart(2, "0")}/{m.ano}: {Math.round(m.minutos / 6) / 10} h ({Math.round(m.pct * 1000) / 10}%)
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
+            {sim.meses.length > 0 && <TabelaMeses meses={sim.meses} horasDia={sim.horasDia} mediaUsada={sim.mediaPct} codfor={consultor.codfor} diasMes={diasMes} onMudar={setDiasMes} />}
           </div>
         )}
       </div>

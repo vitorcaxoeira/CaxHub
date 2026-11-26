@@ -4,8 +4,9 @@ import { chaveDia } from "./calendarioTrabalho";
 import {
   HORAS_DIA_PADRAO,
   diasCorridosEntre,
-  diasUteisDoMes,
   diasUteisDoPeriodo,
+  diasUteisPadraoDoMes,
+  feriadosUteisDoMes,
   mediaPctTrabalhado,
   mesesDaMedia,
   saldoDoAquisitivo,
@@ -32,6 +33,20 @@ export interface GozoDto {
   valorHora: number | null;
   horasFerias: number | null;
   valorFerias: number | null;
+  /** A tabela dos meses da média gravada (com os dias úteis usados, inclusive os ajustados pelo gestor). Null em gozo sem valor. */
+  mesesMedia: MesDaMediaGravado[] | null;
+}
+
+/** Um mês da média, como é gravado em `ferias_gozos.meses_media`. Gozos antigos não têm `diasUteis`/`feriados`/`naMedia` (ver rota do aviso). */
+export interface MesDaMediaGravado {
+  ano: number;
+  mes: number;
+  minutos: number;
+  pct: number;
+  diasUteisPadrao?: number;
+  diasUteis?: number;
+  feriados?: { data: string; nome: string }[];
+  naMedia?: boolean;
 }
 
 export interface AquisitivoDto extends SaldoDoAquisitivo {
@@ -73,6 +88,7 @@ function paraDto(a: AquisitivoComGozos, folgasDescontadas: number): AquisitivoDt
       valorHora: num(g.valorHora),
       horasFerias: num(g.horasFerias),
       valorFerias: num(g.valorFerias),
+      mesesMedia: Array.isArray(g.mesesMedia) ? (g.mesesMedia as unknown as MesDaMediaGravado[]) : null,
     })),
   };
 }
@@ -118,8 +134,11 @@ export interface SimulacaoFerias {
   diasUteis: number;
   horasDia: number;
   mediaPct: number;
-  /** Os meses da média, com as horas e o % de cada um (a tela mostra para o gestor conferir). */
-  meses: { ano: number; mes: number; minutos: number; pct: number }[];
+  /**
+   * Os 12 meses da média, com as horas, os dias úteis disponíveis (padrão ou ajustado), os feriados que tiram dia útil e o % de cada um. `naMedia` = entra na
+   * conta (dias > 0). A tela mostra para o gestor conferir e ajustar os dias.
+   */
+  meses: MesDaMediaGravado[];
   valorHora: number | null;
   horasFerias: number;
   /** Null sem valor-hora (consultor sem contrato por hora): não há o que valorar. */
@@ -127,8 +146,9 @@ export interface SimulacaoFerias {
 }
 
 /**
- * Simula o valor das férias de um gozo (planilha "Simulação Férias PJs"): dias úteis x horas/dia x média do % trabalhado x valor-hora. `horasDia`, `mediaPct` e
- * `valorHora` podem ser informados (o gestor ajusta); sem eles valem 8,5 h, a média calculada pelas horas dos meses anteriores e o valor-hora do contrato.
+ * Simula o valor das férias de um gozo (planilha "Simulação Férias PJs"): dias úteis x horas/dia x média do % trabalhado x valor-hora. A média usa os 12 meses
+ * fechados antes do mês de início. `horasDia`, `mediaPct`, `valorHora` e `diasUteisMes` (chave YYYY-MM) podem ser informados (o gestor ajusta); sem eles valem
+ * 8,5 h, a média calculada e o valor-hora do contrato, e os dias úteis de cada mês são os padrão (feriados nacionais descontados).
  */
 export async function simularFerias(params: {
   codemp: number;
@@ -138,11 +158,12 @@ export async function simularFerias(params: {
   horasDia?: number | null;
   mediaPct?: number | null;
   valorHora?: number | null;
+  diasUteisMes?: Record<string, number> | null;
 }): Promise<SimulacaoFerias> {
   const { codemp, codfor, inicio, fim } = params;
   const horasDia = params.horasDia != null && params.horasDia > 0 ? params.horasDia : HORAS_DIA_PADRAO;
 
-  // Horas por mês dos 12 meses antes do gozo; o primeiro mês com horas marca o começo da média (a planilha começa no mês da admissão).
+  // Horas por mês dos 12 meses antes do gozo. O primeiro mês com horas define o padrão de dias: antes dele o consultor ainda não trabalhava (0 dias).
   const janelaFim = new Date(Date.UTC(inicio.getUTCFullYear(), inicio.getUTCMonth(), 0));
   const janelaInicio = new Date(Date.UTC(inicio.getUTCFullYear(), inicio.getUTCMonth() - 12, 1));
   const { porDia } = await horasRealizadasNoPeriodo(codemp, codfor, janelaInicio, janelaFim);
@@ -150,11 +171,18 @@ export async function simularFerias(params: {
   for (const [dia, minutos] of porDia) minutosPorMes.set(dia.slice(0, 7), (minutosPorMes.get(dia.slice(0, 7)) ?? 0) + minutos);
   const comHoras = [...minutosPorMes.entries()].filter(([, m]) => m > 0).map(([chave]) => chave).sort();
   const primeiro = comHoras[0] ? { ano: Number(comHoras[0].slice(0, 4)), mes: Number(comHoras[0].slice(5, 7)) } : null;
-  const meses = mesesDaMedia(inicio, primeiro).map((m) => ({
-    ...m,
-    minutos: minutosPorMes.get(`${m.ano}-${String(m.mes).padStart(2, "0")}`) ?? 0,
-  }));
-  const mediaCalculada = mediaPctTrabalhado(meses, horasDia);
+  const ajustes = params.diasUteisMes ?? {};
+  const meses: Omit<MesDaMediaGravado, "pct">[] = mesesDaMedia(inicio).map((m) => {
+    const chave = `${m.ano}-${String(m.mes).padStart(2, "0")}`;
+    const minutos = minutosPorMes.get(chave) ?? 0;
+    const diasUteisPadrao = diasUteisPadraoDoMes(m.ano, m.mes, primeiro);
+    const diasUteis = ajustes[chave] ?? diasUteisPadrao;
+    return { ano: m.ano, mes: m.mes, minutos, diasUteisPadrao, diasUteis, feriados: feriadosUteisDoMes(m.ano, m.mes), naMedia: diasUteis > 0 };
+  });
+  const mediaCalculada = mediaPctTrabalhado(
+    meses.map((m) => ({ minutos: m.minutos, diasUteis: m.diasUteis ?? 0 })),
+    horasDia,
+  );
   const mediaPct = params.mediaPct != null && params.mediaPct >= 0 ? params.mediaPct : mediaCalculada;
 
   const valorHora = params.valorHora != null && params.valorHora >= 0 ? params.valorHora : ((await valorHoraVigente(codemp, codfor))?.vlrhor ?? null);
@@ -169,7 +197,8 @@ export async function simularFerias(params: {
     horasDia,
     mediaPct: Math.round(mediaPct * 10000) / 10000,
     meses: meses.map((m) => {
-      const base = diasUteisDoMes(m.ano, m.mes) * horasDia;
+      const dias = m.diasUteis ?? 0;
+      const base = dias * horasDia;
       return { ...m, pct: base > 0 ? Math.round((m.minutos / 60 / base) * 10000) / 10000 : 0 };
     }),
     valorHora,

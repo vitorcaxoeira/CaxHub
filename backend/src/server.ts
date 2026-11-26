@@ -126,7 +126,10 @@ import { agendarParadaAutomatica } from "./sync/pararExecucoesAutomaticamente";
 import { agendarParadaPorFechamento } from "./sync/pararSessoesAoFecharPagina";
 import { agendarAcoesVencidas } from "./sync/acoesEficienciaVencidas";
 import { agendarFechamentoDescontos } from "./sync/fechamentoDescontos";
+import { scheduleFilaSemanalSync } from "./kyria/filaSemanalSync";
+import { agendarRegistroDeLeituras } from "./kyria/registroLeitura";
 import { descontosRouter } from "./routes/descontos";
+import { bonificacaoRouter } from "./routes/bonificacao";
 import { carregarFiltrosAtivos } from "./sync/filtrosAtivos";
 import { carregarModosVarreduraAtivos } from "./sync/politicaVarredura";
 import { carregarTamanhosLoteAtivos } from "./sync/politicaLote";
@@ -218,6 +221,7 @@ app.use("/painel-tv", painelTvRouter);
 app.use("/5s", gestao5sRouter);
 app.use("/metas-comercial", metasComercialRouter);
 app.use("/descontos", descontosRouter);
+app.use("/bonificacao", bonificacaoRouter);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 
@@ -355,6 +359,8 @@ async function iniciar() {
     scheduleKyriaTicketHoursSync();
     scheduleKyriaCustomerHoursSync();
     scheduleKyriaTimeEntriesSync();
+    scheduleFilaSemanalSync();
+    agendarRegistroDeLeituras();
   });
 }
 

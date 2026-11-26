@@ -7,7 +7,7 @@ import type { ColunaConsulta } from "./consultaColunas";
 const ref = (nome: string) => Prisma.raw(`x."${nome}"`);
 const DIA_BRT = (nome: string) => Prisma.raw(`(x."${nome}"::timestamp AT TIME ZONE 'America/Sao_Paulo')`);
 
-export type OpcoesColuna = Pick<ColunaConsulta, "obrigatoria" | "semValores" | "dominio" | "titulo" | "fonte">;
+export type OpcoesColuna = Pick<ColunaConsulta, "obrigatoria" | "semValores" | "dominio" | "titulo" | "fonte" | "formato">;
 
 /** Colunas da subconsulta `x`: a expressão é sempre o próprio nome da coluna exposta pela consulta interna. */
 export const col = {

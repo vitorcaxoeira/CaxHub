@@ -46,6 +46,8 @@ export interface MesProdutividade {
     valorDeslocamento: number | null;
     /** Férias remuneradas pagas nesta competência (já somadas em valorNota). */
     valorFerias?: number;
+    /** Bonificação fechada na competência de processos que compõem a nota (já somada em valorNota). */
+    valorBonificacao?: number;
     valorNota: number | null;
   };
 }

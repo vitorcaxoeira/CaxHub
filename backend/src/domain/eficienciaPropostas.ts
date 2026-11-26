@@ -20,6 +20,15 @@ export const modoEstouroValido = (v: unknown): ModoEstouro => (v === "proposta" 
 // fatser do item que vira receita direta (S = Faturamento Normal, A = Antecipado). Os demais (N sem faturamento, C comercial,
 // H suporte, I investimento) entram no valor do painel, mas são apontados à parte como "sem faturamento".
 export const FATSER_FATURAVEL = ["S", "A"] as const;
+
+/**
+ * Item faturável pela MESMA régua do SQL da Gestão Propostas (`FATURAVEL` em gestaoPropostasSql.ts): fatser S ou A, ignorando maiúscula e espaço; nulo ou em
+ * branco (e apontamento sem item casado) = não faturável. Propositalmente diferente de `semFaturamento()` abaixo, que trata fatser vazio como faturável.
+ */
+export function itemFaturavel(fatser: string | null | undefined): boolean {
+  const f = (fatser ?? "").trim().toUpperCase();
+  return (FATSER_FATURAVEL as readonly string[]).includes(f);
+}
 const semFaturamento = (fatser: string | null) => fatser != null && fatser.trim() !== "" && !(FATSER_FATURAVEL as readonly string[]).includes(fatser.trim().toUpperCase());
 
 // Constantes da conta. Vão no payload (`meta.limiares`) pra aba "Como calculamos" nunca divergir

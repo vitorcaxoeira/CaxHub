@@ -38,6 +38,18 @@ export const FONTES_DESCONTOS_PARCELAS: FonteCampos[] = [
 ];
 export const FONTES_DESCONTOS_FECHAMENTOS: FonteCampos[] = [{ id: "fechamento", titulo: "Fechamento", tabela: "descontos_fechamentos", alias: "f" }];
 
+// Gestão de Bonificação (routes/bonificacao.ts).
+export const FONTES_BONIFICACAO_FECHAMENTOS: FonteCampos[] = [
+  { id: "fechamento", titulo: "Fechamento", tabela: "bonificacao_fechamentos", alias: "f" },
+  { id: "processo", titulo: "Processo de bonificação", tabela: "bonificacao_processos", alias: "p" },
+];
+export const FONTES_BONIFICACAO_RESULTADOS: FonteCampos[] = [
+  { id: "resultado", titulo: "Resultado do indicador", tabela: "bonificacao_resultados", alias: "r" },
+  { id: "fechamento", titulo: "Fechamento", tabela: "bonificacao_fechamentos", alias: "f" },
+  { id: "processo", titulo: "Processo de bonificação", tabela: "bonificacao_processos", alias: "p" },
+  { id: "indicador", titulo: "Indicador", tabela: "bonificacao_indicadores", alias: "i" },
+];
+
 // Financeiro (routes/financeiro.ts, fluxoCaixa.ts, inadimplencia.ts, recebimentos.ts).
 export const FONTES_TITULOS_RECEBER: FonteCampos[] = [
   { id: "titulo", titulo: "Título a receber", tabela: "titulos_receber", alias: "t" },

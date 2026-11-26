@@ -23,6 +23,9 @@ import { regras } from "../../components/ui/padroesFiltros/regras";
 import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTela";
 import { ListaServidor } from "../../components/colunas/ListaServidor";
 import { TabelaLocal } from "../../components/colunas/TabelaLocal";
+import { AbaResumoFaturamento } from "./apontamentos/AbaResumoFaturamento";
+import { filtrarPorTipoDeProposta, TIPOS_DE_PROPOSTA, type TipoDeProposta } from "./apontamentos/resumoFaturamento";
+import { SelectFiltro } from "../../components/ui/ControlesFiltro";
 import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { formatHoraDoDia, LOCAIS_ATIVIDADES, lerAtividade, rotuloItem } from "./atividadesRat";
 
@@ -49,6 +52,12 @@ interface SessaoPendente {
   codcli: number | null;
   itemDescricao: string | null;
   seqite: number | null;
+  // Resumo por Forma de Faturamento: forma da PROPOSTA; `faturavel` = fatser do ITEM (S ou A). `valorHoraItem` (venda) só vem para quem pode ver valores.
+  forfat: number | null;
+  forfatLabel: string | null;
+  faturavel: boolean;
+  valorHoraItem?: number | null;
+  interna: boolean | null;
   colunaNome: string;
   inicio: string;
   fim: string;
@@ -776,6 +785,17 @@ export function MeusApontamentos() {
   // time que gerencia (ver GET /sessoes-pendentes) — é o que liga a coluna Consultor e a
   // barra de filtros abaixo.
   const [mostrarConsultor, setMostrarConsultor] = useState(false);
+  // Aba da seção de sessões pendentes: a lista ou o resumo por forma de faturamento (mesmos filtros nas duas).
+  const [abaSessoes, setAbaSessoes] = useState<"sessoes" | "resumo">("sessoes");
+  const [podeVerValores, setPodeVerValores] = useState(false);
+  // Filtro "Propostas" (o mesmo da Gestão Propostas), só da aba de resumo; o padrão é Todas e a estrela guarda o preferido da pessoa.
+  const [tipoPropostaResumo, setTipoPropostaResumo] = useState<TipoDeProposta>("all");
+  const padroesResumo = usePadroesTela({
+    tela: "projetos.apontamentos.resumo",
+    campos: {
+      tipo: { rotulo: "Propostas", atual: tipoPropostaResumo, aplicar: setTipoPropostaResumo, validar: regras.valorUnico("string", TIPOS_DE_PROPOSTA), semOpcoes: true },
+    },
+  });
   // Escolha da RAT de destino na confirmação (25/09/2026). O servidor só manda opções pros
   // grupos consultor+proposta com 2 ou mais RATs Digitadas, e só quando o contrato do Senior
   // já aceita RAT de destino — sem opções, Confirmar segue direto como sempre.
@@ -890,6 +910,7 @@ export function MeusApontamentos() {
       .then((sessoesRes) => {
         setSessoes(sessoesRes.data.sessoes);
         setMostrarConsultor(Boolean(sessoesRes.data.mostrarConsultor));
+        setPodeVerValores(Boolean(sessoesRes.data.podeVerValores));
         setRatsDestino(sessoesRes.data.ratsDestino ?? {});
         setErro(null);
       })
@@ -1779,6 +1800,9 @@ export function MeusApontamentos() {
     });
   }, [sessoes, codforsFiltroSessoes, buscaSessoesDebounced, dataInicioFiltro, dataFimFiltro]);
 
+  // Resumo por Forma de Faturamento: as sessões já filtradas (período, busca, consultores) e ainda o filtro "Propostas" (só desta aba).
+  const sessoesResumo = useMemo(() => filtrarPorTipoDeProposta(sessoesFiltradas, tipoPropostaResumo), [sessoesFiltradas, tipoPropostaResumo]);
+
   // Mesma chave de agrupamento de abrirResumoLote (codfor), só que aqui vira acordeon visual
   // em vez de resumo de confirmação em lote — só faz sentido junto de mostrarConsultor, senão
   // é sempre 1 grupo só (o próprio usuário).
@@ -2129,13 +2153,38 @@ export function MeusApontamentos() {
 
       <div className="space-y-8">
         <section>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <p className="font-mono text-[10px] uppercase tracking-widest text-muted">
-              Sessões pendentes de confirmação{" "}
-              {sessoesFiltradas.length > 0 &&
-                (sessoesFiltradas.length === sessoes.length ? `(${sessoes.length})` : `(${sessoesFiltradas.length} de ${sessoes.length})`)}
-            </p>
+          <Tabs
+            tabs={[
+              {
+                key: "sessoes",
+                label: `Sessões pendentes de confirmação${
+                  sessoesFiltradas.length > 0 ? (sessoesFiltradas.length === sessoes.length ? ` (${sessoes.length})` : ` (${sessoesFiltradas.length} de ${sessoes.length})`) : ""
+                }`,
+              },
+              { key: "resumo", label: "Resumo por Forma de Faturamento" },
+            ]}
+            activeKey={abaSessoes}
+            onChange={(k) => setAbaSessoes(k as "sessoes" | "resumo")}
+          />
+          <div className="mb-3 flex flex-wrap items-center justify-end gap-3">
             <div className="flex flex-wrap items-center gap-3">
+              {/* Só na aba de resumo, e o primeiro filtro dela: de clientes, internas ou todas (como na Gestão Propostas). */}
+              {abaSessoes === "resumo" && (
+                <label className="flex items-center gap-2 text-[12.5px] text-muted">
+                  Propostas
+                  <SelectFiltro
+                    aria-label="Propostas"
+                    className="w-40"
+                    value={tipoPropostaResumo}
+                    onChange={(e) => setTipoPropostaResumo(e.target.value as TipoDeProposta)}
+                    acessorio={padroesResumo.estrela("tipo")}
+                  >
+                    <option value="all">Todas</option>
+                    <option value="cli">De clientes</option>
+                    <option value="int">Internas</option>
+                  </SelectFiltro>
+                </label>
+              )}
               {/* Período (AtividadeSessaoExecucao.inicio) — diferente da busca/consultor
                   abaixo, vale pra qualquer usuário, mesmo consultor comum vendo só as
                   próprias sessões. */}
@@ -2186,7 +2235,7 @@ export function MeusApontamentos() {
                   e clicar aqui confirma só as dele, e o número sempre bate com a lista
                   visível. O resumo por RAT (modal abaixo) é o que deixa o encapsulamento
                   conferível antes de disparar de verdade. */}
-              {sessoesFiltradas.length > 0 && (
+              {abaSessoes === "sessoes" && sessoesFiltradas.length > 0 && (
                 <button
                   onClick={abrirResumoLote}
                   className="rounded-md border border-primary/40 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10"
@@ -2196,7 +2245,7 @@ export function MeusApontamentos() {
               )}
             </div>
           </div>
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <div className={`overflow-hidden rounded-lg border border-border bg-surface ${abaSessoes === "sessoes" ? "" : "hidden"}`}>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse">
                 <thead>
@@ -2363,6 +2412,7 @@ export function MeusApontamentos() {
               </table>
             </div>
           </div>
+          {abaSessoes === "resumo" && <AbaResumoFaturamento sessoes={sessoesResumo} podeVerValores={podeVerValores} loading={loading} />}
         </section>
 
         <section>

@@ -1,4 +1,6 @@
 import axios from "axios";
+import type { LeituraKyria } from "./registroLeitura";
+import { kbDaResposta, linhasDaResposta } from "./registroLeitura";
 
 // ---------------------------------------------------------------------------
 // Cliente REST do Kyria — segunda origem de dados do CaxHub, ao lado do Senior (SOAP,
@@ -44,6 +46,12 @@ import axios from "axios";
 
 const TENTATIVAS_RATE_LIMIT = 3;
 const TENTATIVAS_RATE_LIMIT_FEED = 6;
+// Máximo de itens por página que o OpenAPI do Kyria declara em TODA listagem GET (`limit`: 1 a 750, padrão 50; 751 é recusado com 400 — conferido
+// ao vivo em 25/11/2026). Como a chave tem 60 requisições por minuto, página cheia é o que menos gasta dessa cota (tickets: de ~170 para 12 chamadas
+// por sync). Quem não passa `limit` pega este valor; a amostra do Mapeamento de Campos continua pedindo `limit=1` de propósito (fieldPreview.ts).
+export const LIMITE_MAXIMO_KYRIA = 750;
+/** Timeout de cada chamada à API (ms): o mesmo que o registro das leituras mostra. */
+export const TIMEOUT_KYRIA_MS = 20000;
 
 function esperar(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,6 +97,81 @@ export function mensagemDeFalhaKyria(erro: unknown, operacao: string): string {
   return erro instanceof Error ? erro.message : String(erro);
 }
 
+interface OpcoesGetKyria {
+  /** Nome da operação nas mensagens de erro. */
+  operacao: string;
+  /** Total de tentativas (a primeira conta) quando a API responde 429. */
+  tentativasMax: number;
+  /** Espera, em segundos, quando o 429 não traz `Retry-After`. */
+  esperaPadraoS: number;
+  /** Se informada, cada tentativa (inclusive a que levou 429 ou falhou) é gravada nela. */
+  leitura?: LeituraKyria | null;
+}
+
+/**
+ * GET autenticado com a regra de rate limit do Kyria (60 req/min por chave): em 429 espera o `Retry-After` e tenta de novo até `tentativasMax`.
+ * É o único lugar que fala HTTP com a API nas listagens e nos relatórios, então também é onde cada tentativa vira uma linha do registro de
+ * leituras (cursor enviado e devolvido, linhas, KB, tempo de ida e volta, status HTTP, espera do 429 e `requestId` do Kyria).
+ */
+async function getKyria(rota: string, params: Record<string, unknown>, o: OpcoesGetKyria): Promise<any> {
+  const { baseUrl, token } = kyriaConfig();
+  const cursor = typeof params.cursor === "string" ? params.cursor : null;
+  const limite = typeof params.limit === "number" ? params.limit : null;
+
+  for (let tentativa = 1; ; tentativa++) {
+    const disparadaEm = new Date();
+    const t0 = Date.now();
+    try {
+      const response = await axios.get(`${baseUrl}${rota}`, { headers: { Authorization: `Bearer ${token}` }, params, timeout: TIMEOUT_KYRIA_MS });
+      if (o.leitura) {
+        await o.leitura.registrarChamada({
+          disparadaEm,
+          cursor,
+          proximoCursor: (response.data?.page?.nextCursor as string | null | undefined) ?? null,
+          limite,
+          linhas: linhasDaResposta(response.data),
+          kb: kbDaResposta(response.data, response.headers?.["content-length"]),
+          msKyria: Date.now() - t0,
+          tentativa,
+          httpStatus: response.status,
+          esperaS: null,
+          status: "ok",
+          requestId: (response.data?.requestId as string | undefined) ?? null,
+          erro: null,
+        });
+      }
+      return response.data;
+    } catch (erro) {
+      const resposta = axios.isAxiosError(erro) ? erro.response : undefined;
+      const status = resposta?.status;
+      const vaTentarDeNovo = status === 429 && tentativa < o.tentativasMax;
+      const esperaS = vaTentarDeNovo ? Number(resposta?.headers?.["retry-after"]) || o.esperaPadraoS : null;
+      if (o.leitura) {
+        await o.leitura.registrarChamada({
+          disparadaEm,
+          cursor,
+          proximoCursor: null,
+          limite,
+          linhas: 0,
+          kb: 0,
+          msKyria: Date.now() - t0,
+          tentativa,
+          httpStatus: status ?? null,
+          esperaS,
+          status: "erro",
+          requestId: ((resposta?.data as { requestId?: string } | undefined)?.requestId as string | undefined) ?? null,
+          erro: mensagemDeFalhaKyria(erro, o.operacao),
+        });
+      }
+      if (vaTentarDeNovo && esperaS != null) {
+        await esperar(esperaS * 1000);
+        continue;
+      }
+      throw new Error(mensagemDeFalhaKyria(erro, o.operacao));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GET /teams
 // ---------------------------------------------------------------------------
@@ -110,7 +193,9 @@ export interface KyriaPage {
 }
 
 export interface ListTeamsOptions {
-  /** 1–100, default 50 (definido pelo serviço). */
+  /** Leitura registrada em que esta chamada acontece (ver registroLeitura.ts); sem ela, nada é gravado. */
+  leitura?: LeituraKyria | null;
+  /** 1–750 (padrão do serviço: 50). Sem informar, o client usa o máximo: LIMITE_MAXIMO_KYRIA. */
   limit?: number;
   cursor?: string;
   status?: "active" | "inactive";
@@ -123,26 +208,7 @@ export interface ListTeamsResult {
 }
 
 export async function listTeams(options: ListTeamsOptions = {}): Promise<ListTeamsResult> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/teams`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: options.limit, cursor: options.cursor, status: options.status },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "listTeams"));
-    }
-  }
+  return getKyria("/teams", { limit: options.limit ?? LIMITE_MAXIMO_KYRIA, cursor: options.cursor, status: options.status }, { operacao: "listTeams", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: options.leitura });
 }
 
 /** Pagina automaticamente todas as páginas de /teams, seguindo `page.nextCursor`. */
@@ -173,6 +239,8 @@ export interface KyriaMember {
 }
 
 export interface ListMembersOptions {
+  /** Leitura registrada em que esta chamada acontece (ver registroLeitura.ts); sem ela, nada é gravado. */
+  leitura?: LeituraKyria | null;
   limit?: number;
   cursor?: string;
   status?: "active" | "inactive";
@@ -185,26 +253,7 @@ export interface ListMembersResult {
 }
 
 export async function listMembers(options: ListMembersOptions = {}): Promise<ListMembersResult> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/members`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: options.limit, cursor: options.cursor, status: options.status },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "listMembers"));
-    }
-  }
+  return getKyria("/members", { limit: options.limit ?? LIMITE_MAXIMO_KYRIA, cursor: options.cursor, status: options.status }, { operacao: "listMembers", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: options.leitura });
 }
 
 /** Pagina automaticamente todas as páginas de /members, seguindo `page.nextCursor`. */
@@ -238,6 +287,8 @@ export interface KyriaCustomer {
 }
 
 export interface ListCustomersOptions {
+  /** Leitura registrada em que esta chamada acontece (ver registroLeitura.ts); sem ela, nada é gravado. */
+  leitura?: LeituraKyria | null;
   limit?: number;
   cursor?: string;
   status?: "active" | "inactive";
@@ -250,26 +301,7 @@ export interface ListCustomersResult {
 }
 
 export async function listCustomers(options: ListCustomersOptions = {}): Promise<ListCustomersResult> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/customers`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: options.limit, cursor: options.cursor, status: options.status },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "listCustomers"));
-    }
-  }
+  return getKyria("/customers", { limit: options.limit ?? LIMITE_MAXIMO_KYRIA, cursor: options.cursor, status: options.status }, { operacao: "listCustomers", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: options.leitura });
 }
 
 /** Pagina automaticamente todas as páginas de /customers, seguindo `page.nextCursor`. */
@@ -312,6 +344,8 @@ export interface KyriaTicket {
 }
 
 export interface ListTicketsOptions {
+  /** Leitura registrada em que esta chamada acontece (ver registroLeitura.ts); sem ela, nada é gravado. */
+  leitura?: LeituraKyria | null;
   limit?: number;
   cursor?: string;
 }
@@ -323,26 +357,7 @@ export interface ListTicketsResult {
 }
 
 export async function listTickets(options: ListTicketsOptions = {}): Promise<ListTicketsResult> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/tickets`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: options.limit, cursor: options.cursor },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "listTickets"));
-    }
-  }
+  return getKyria("/tickets", { limit: options.limit ?? LIMITE_MAXIMO_KYRIA, cursor: options.cursor }, { operacao: "listTickets", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: options.leitura });
 }
 
 /** Pagina automaticamente todas as páginas de /tickets, seguindo `page.nextCursor`. */
@@ -376,6 +391,8 @@ export interface KyriaTicketStatus {
 }
 
 export interface ListTicketStatusesOptions {
+  /** Leitura registrada em que esta chamada acontece (ver registroLeitura.ts); sem ela, nada é gravado. */
+  leitura?: LeituraKyria | null;
   limit?: number;
   cursor?: string;
 }
@@ -387,26 +404,7 @@ export interface ListTicketStatusesResult {
 }
 
 export async function listTicketStatuses(options: ListTicketStatusesOptions = {}): Promise<ListTicketStatusesResult> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/ticket-statuses`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: options.limit, cursor: options.cursor },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "listTicketStatuses"));
-    }
-  }
+  return getKyria("/ticket-statuses", { limit: options.limit ?? LIMITE_MAXIMO_KYRIA, cursor: options.cursor }, { operacao: "listTicketStatuses", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: options.leitura });
 }
 
 /** Pagina automaticamente todas as páginas de /ticket-statuses, seguindo `page.nextCursor`. */
@@ -437,6 +435,8 @@ export interface KyriaLabelGroup {
 }
 
 export interface ListLabelGroupsOptions {
+  /** Leitura registrada em que esta chamada acontece (ver registroLeitura.ts); sem ela, nada é gravado. */
+  leitura?: LeituraKyria | null;
   limit?: number;
   cursor?: string;
 }
@@ -448,26 +448,7 @@ export interface ListLabelGroupsResult {
 }
 
 export async function listLabelGroups(options: ListLabelGroupsOptions = {}): Promise<ListLabelGroupsResult> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/label-groups`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: options.limit, cursor: options.cursor },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "listLabelGroups"));
-    }
-  }
+  return getKyria("/label-groups", { limit: options.limit ?? LIMITE_MAXIMO_KYRIA, cursor: options.cursor }, { operacao: "listLabelGroups", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: options.leitura });
 }
 
 /** Pagina automaticamente todas as páginas de /label-groups, seguindo `page.nextCursor`. */
@@ -501,6 +482,8 @@ export interface KyriaLabel {
 }
 
 export interface ListLabelsOptions {
+  /** Leitura registrada em que esta chamada acontece (ver registroLeitura.ts); sem ela, nada é gravado. */
+  leitura?: LeituraKyria | null;
   limit?: number;
   cursor?: string;
 }
@@ -512,26 +495,7 @@ export interface ListLabelsResult {
 }
 
 export async function listLabels(options: ListLabelsOptions = {}): Promise<ListLabelsResult> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/labels`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: options.limit, cursor: options.cursor },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "listLabels"));
-    }
-  }
+  return getKyria("/labels", { limit: options.limit ?? LIMITE_MAXIMO_KYRIA, cursor: options.cursor }, { operacao: "listLabels", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: options.leitura });
 }
 
 /** Pagina automaticamente todas as páginas de /labels, seguindo `page.nextCursor`. */
@@ -573,6 +537,7 @@ export interface KyriaCustomerHoursReportRow {
 }
 
 export interface GetHoursReportOptions<G extends "ticket" | "customer" = "ticket"> {
+  leitura?: LeituraKyria | null;
   /** YYYY-MM-DD */
   from: string;
   /** YYYY-MM-DD */
@@ -591,26 +556,7 @@ export async function getHoursReport(
   options: GetHoursReportOptions<"customer">
 ): Promise<GetHoursReportResult<KyriaCustomerHoursReportRow>>;
 export async function getHoursReport(options: GetHoursReportOptions<"ticket" | "customer">): Promise<GetHoursReportResult<any>> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/reports/hours`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { from: options.from, to: options.to, groupBy: options.groupBy },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 5;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "getHoursReport"));
-    }
-  }
+  return getKyria("/reports/hours", { from: options.from, to: options.to, groupBy: options.groupBy }, { operacao: "getHoursReport", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: options.leitura });
 }
 
 // ---------------------------------------------------------------------------
@@ -626,7 +572,7 @@ export async function getHoursReport(options: GetHoursReportOptions<"ticket" | "
 // `kind: "deleted"` com `tombstone`. Quem consome aplica as mudanças em ordem. Ordenação e
 // continuidade: `page.nextCursor` (opaco, `tef_v1.<id>.<posição>`) vale também quando
 // `hasMore` é false — guardá-lo e reenviá-lo depois devolve só o que mudou desde então.
-// Volume da carga inicial: ~460 páginas de 100 (limite de 60 req/min => ~8 minutos).
+// Volume da carga inicial: ~75 mil mudanças = ~100 páginas de 750 (com 60 req/min, ~2 minutos de requisições em vez de ~8).
 
 export interface KyriaTimeEntrySnapshot {
   ticketId: string;
@@ -659,6 +605,8 @@ export type KyriaTimeEntryChange =
     };
 
 export interface ListTimeEntryChangesOptions {
+  /** Leitura registrada em que esta chamada acontece (ver registroLeitura.ts); sem ela, nada é gravado. */
+  leitura?: LeituraKyria | null;
   limit?: number;
   cursor?: string;
 }
@@ -670,28 +618,7 @@ export interface ListTimeEntryChangesResult {
 }
 
 export async function listTimeEntryChanges(options: ListTimeEntryChangesOptions = {}): Promise<ListTimeEntryChangesResult> {
-  const { baseUrl, token } = kyriaConfig();
-
-  for (let tentativa = 1; ; tentativa++) {
-    try {
-      const response = await axios.get(`${baseUrl}/time-entries`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: options.limit, cursor: options.cursor },
-        timeout: 20000,
-      });
-      return response.data;
-    } catch (erro) {
-      const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
-      // Mais tentativas que nas outras listagens: a carga inicial passa do limite de 60 req/min
-      // várias vezes (cada 429 espera a janela virar — `Retry-After`, ~40 s).
-      if (status === 429 && tentativa < TENTATIVAS_RATE_LIMIT_FEED) {
-        const retryAfter = Number(axios.isAxiosError(erro) && erro.response?.headers["retry-after"]) || 10;
-        await esperar(retryAfter * 1000);
-        continue;
-      }
-      throw new Error(mensagemDeFalhaKyria(erro, "listTimeEntryChanges"));
-    }
-  }
+  return getKyria("/time-entries", { limit: options.limit ?? LIMITE_MAXIMO_KYRIA, cursor: options.cursor }, { operacao: "listTimeEntryChanges", tentativasMax: TENTATIVAS_RATE_LIMIT_FEED, esperaPadraoS: 10, leitura: options.leitura });
 }
 
 // ---------------------------------------------------------------------------

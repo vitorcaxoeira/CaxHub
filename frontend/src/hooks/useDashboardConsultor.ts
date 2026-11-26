@@ -57,6 +57,8 @@ export interface ResumoConsultor {
     parcial: boolean;
     competencias: { competencia: string; ano: number; mes: number; total: number; fechada: boolean; parcial: boolean; qtd: number }[];
   };
+  // Gestão de Bonificação: bonificação FECHADA nas competências do período, de processos que compõem a nota. Soma ao líquido (não está no ganho/projeção/valor fixo).
+  bonificacao: { total: number; competencias: { competencia: string; total: number; qtd: number }[] };
   sessoesPendentes: number;
   ratsPendentes: number;
   notificacoesNaoLidas: number;

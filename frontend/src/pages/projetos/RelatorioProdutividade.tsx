@@ -144,6 +144,12 @@ function Rodape({ mes }: { mes: Mes }) {
             <p className="font-mono text-sm font-semibold tabular-nums text-foreground">R$ {reais(t.valorFerias!)}</p>
           </div>
         )}
+        {temValor && (t.valorBonificacao ?? 0) > 0 && (
+          <div title="Bonificação fechada na Gestão de Bonificação, de processos que compõem a nota: soma ao valor da nota nesta competência.">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Bonificação (fechada na competência)</p>
+            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">R$ {reais(t.valorBonificacao!)}</p>
+          </div>
+        )}
         {temValor && (
           <div className="ml-auto rounded-md bg-success/20 px-3 py-1.5 text-right">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Valor Nota de Serviços</p>

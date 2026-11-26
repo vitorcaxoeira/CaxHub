@@ -1,5 +1,5 @@
 import axios from "axios";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { OrientacaoRelatorio, RelatorioShell, TemaRelatorio, baixarPdfDoServidor, usePreferencia } from "../../components/relatorio/relatorioComum";
 import { Spinner } from "../../components/ui/Spinner";
@@ -20,11 +20,15 @@ interface ColunaImpressa {
   nome: string;
   titulo: string;
   tipo: "texto" | "inteiro" | "decimal" | "data" | "booleano";
+  /** "horasMinutos": o número é em MINUTOS e sai como HH:MM (igual à tela). */
+  formato?: "horasMinutos";
 }
 
 interface DadosImpressao {
   colunas: ColunaImpressa[];
   linhas: Record<string, unknown>[];
+  /** Sub-linhas sob cada linha (mesma ordem de `linhas`; null = sem detalhe), com o valor de cada coluna pelo nome. */
+  detalhes?: (Record<string, string | number | null>[] | null)[];
   total: number;
   truncado: boolean;
   limite: number;
@@ -61,8 +65,15 @@ function lerEspecificacao(id: string | undefined): Especificacao | null {
   }
 }
 
-function celula(valor: unknown, tipo: ColunaImpressa["tipo"]): string {
+/** Minutos → "144:58". */
+function horasMinutos(minutos: number): string {
+  const total = Math.round(minutos);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function celula(valor: unknown, tipo: ColunaImpressa["tipo"], formato?: ColunaImpressa["formato"]): string {
   if (valor == null || valor === "") return "—";
+  if (formato === "horasMinutos" && typeof valor === "number") return horasMinutos(valor);
   if (tipo === "decimal" && typeof valor === "number") return numero.format(valor);
   if (tipo === "booleano") return valor ? "Sim" : "Não";
   if (tipo === "data" && typeof valor === "string") {
@@ -174,13 +185,24 @@ export function RelatorioLista() {
             </thead>
             <tbody>
               {dados.linhas.map((l, i) => (
-                <tr key={i} className="break-inside-avoid border-b border-border/50">
+                <Fragment key={i}>
+                <tr className="break-inside-avoid border-b border-border/50">
                   {dados.colunas.map((c) => (
                     <td key={c.nome} className={`px-1.5 py-0.5 align-top text-foreground ${numerica(c) ? "text-right tabular-nums" : ""}`}>
-                      {celula(l[c.nome], c.tipo)}
+                      {celula(l[c.nome], c.tipo, c.formato)}
                     </td>
                   ))}
                 </tr>
+                {(dados.detalhes?.[i] ?? []).map((sub, k) => (
+                  <tr key={k} className="break-inside-avoid border-b border-border/30 bg-success/10 text-muted">
+                    {dados.colunas.map((c, ci) => (
+                      <td key={c.nome} className={`py-0.5 align-top ${ci === 0 ? "pl-4 pr-1.5" : "px-1.5"} ${numerica(c) ? "text-right tabular-nums" : ""}`}>
+                        {sub[c.nome] == null ? "" : celula(sub[c.nome], c.tipo, c.formato)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                </Fragment>
               ))}
               {dados.total === 0 && (
                 <tr>
@@ -195,7 +217,7 @@ export function RelatorioLista() {
                 <tr className="border-t-2 border-border font-semibold">
                   {dados.colunas.map((c, i) => (
                     <td key={c.nome} className={`px-1.5 py-1 text-foreground ${numerica(c) ? "text-right tabular-nums" : ""}`}>
-                      {c.nome in dados.totais ? numero.format(dados.totais[c.nome]) : i === 0 ? "Total" : ""}
+                      {c.nome in dados.totais ? celula(dados.totais[c.nome], c.tipo === "inteiro" ? "decimal" : c.tipo, c.formato) : i === 0 ? "Total" : ""}
                     </td>
                   ))}
                 </tr>

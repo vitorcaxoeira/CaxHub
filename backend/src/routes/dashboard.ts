@@ -24,6 +24,7 @@ import { descontosPorCompetencia } from "../domain/descontosDados";
 import { rdvConsultorEmAndamento, runSincronizacaoRdvConsultor, statusRdvConsultor } from "../sync/rdvConsultorSync";
 import { totalDoContratoFixo } from "../domain/contratoFixo";
 import { feriasPagasNasCompetencias } from "../domain/feriasNota";
+import { bonificacoesNasCompetencias } from "../domain/bonificacaoNota";
 import { diasUteisLiquidos } from "../domain/calendarioTrabalho";
 
 export const dashboardRouter = Router();
@@ -329,6 +330,8 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
     // Férias remuneradas pagas nas competências do período: NÃO entram no ganho/projeção (são horas); a tela soma ao LÍQUIDO da nota em uma linha própria, como os descontos.
     // No líquido do "ganho até agora" só valem as de competência já iniciada; no da projeção e do valor fixo, todas.
     const feriasNota = await feriasPagasNasCompetencias(codemp, codfor, combos.map(({ ano, mes }) => new Date(Date.UTC(ano, mes - 1, 1))));
+    // Bonificação FECHADA nas competências do período, de processos que compõem a nota (Gestão de Bonificação): como as férias, soma ao LÍQUIDO (não é hora).
+    const bonificacaoNota = await bonificacoesNasCompetencias(codemp, codfor, combos.map(({ ano, mes }) => new Date(Date.UTC(ano, mes - 1, 1))));
     const mesDeHoje = `${hojeUtc.getUTCFullYear()}-${String(hojeUtc.getUTCMonth() + 1).padStart(2, "0")}`;
     let metaTotalMinutos = 0;
     let abonadoFeriasMinutos = 0;
@@ -431,6 +434,15 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
         ateAgora: somarReais(feriasNota.itens.filter((f) => f.competencia.slice(0, 7) <= mesDeHoje).map((f) => f.valor)),
         itens: feriasNota.itens.map((f) => ({ ...f, competenciaIniciada: f.competencia.slice(0, 7) <= mesDeHoje })),
       },
+      // Bonificação que compõe a nota nas competências do período (só fechamento fechado de processo com a flag "compõe a nota"). NÃO está em ganhoAteAgora/projecaoGanho: a tela soma ao
+      // líquido e abre o detalhe por GET /bonificacao/competencias.
+      // Só quem tem contrato (valor-hora/fixo) leva a bonificação na nota: sem contrato, total 0 e nenhuma competência.
+      bonificacao: valorHora
+        ? {
+            total: bonificacaoNota.total,
+            competencias: [...bonificacaoNota.porMes.entries()].map(([competencia, m]) => ({ competencia, total: m.total, qtd: m.itens.length })),
+          }
+        : { total: 0, competencias: [] },
       // O cartão Progresso da meta: a conta da meta do período inteiro e o ritmo até hoje. `metaTotalMinutos` (acima) segue sendo a meta ATÉ HOJE.
       metaPeriodo: {
         jornadaMinutos: jornadaPeriodoMinutos,

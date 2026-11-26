@@ -2,6 +2,7 @@ import { jobAtivo } from "./jobAtivo";
 import cron from "node-cron";
 import { prisma } from "../db/prisma";
 import { listAllLabels } from "./client";
+import { comLeitura } from "./registroLeitura";
 
 export const JOB_NAME = "kyria-labels-sync";
 // Entre status de ticket (5:15) e tickets (5:30). Etiqueta não depende de nenhuma outra tabela Kyria (sem FK), então a ordem só serve pra não
@@ -13,7 +14,7 @@ export async function runKyriaLabelsSync(): Promise<void> {
   if (!(await jobAtivo(JOB_NAME))) return;
   const inicio = new Date();
   try {
-    const labels = await listAllLabels();
+    const labels = await comLeitura({ jobName: JOB_NAME, recurso: "/labels" }, (leitura) => listAllLabels({ leitura }));
 
     await prisma.$transaction(
       labels.map((l) =>

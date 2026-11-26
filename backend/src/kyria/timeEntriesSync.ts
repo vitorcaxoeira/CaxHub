@@ -3,23 +3,24 @@ import { prisma } from "../db/prisma";
 import { upsertEmLote, ColunaUpsert, LinhaUpsert } from "../sync/upsertEmLote";
 import { jobAtivo } from "./jobAtivo";
 import { runKyriaTicketsSync } from "./ticketsSync";
-import { listTimeEntryChanges, KyriaTimeEntryChange, KyriaTimeEntrySnapshot } from "./client";
+import { LIMITE_MAXIMO_KYRIA, listTimeEntryChanges, KyriaTimeEntryChange, KyriaTimeEntrySnapshot } from "./client";
+import { abrirLeitura, LeituraKyria } from "./registroLeitura";
 
 export const JOB_NAME = "kyria-time-entries-sync";
 // Depois de tickets (5:30) e de membros (FKs de kyria_time_entries) e depois dos relatórios de
 // horas (5:45 e 6:00) — o feed é a fonte detalhada, os relatórios continuam sendo a conferência.
 export const CRON_EXPR = "15 6 * * *";
 
-const TAMANHO_PAGINA = 100;
-// Quantas páginas juntar antes de gravar e guardar o cursor. 20 × 100 = 2.000 mudanças por bloco:
-// uma falha no meio da carga inicial (~75 mil mudanças, ~8 min) só perde o bloco em andamento,
+const TAMANHO_PAGINA = LIMITE_MAXIMO_KYRIA;
+// Quantas páginas juntar antes de gravar e guardar o cursor. 3 × 750 = 2.250 mudanças por bloco:
+// uma falha no meio da carga inicial (~75 mil mudanças) só perde o bloco em andamento,
 // e o job retoma do último cursor salvo.
 //
 // Apontamento de ticket que ainda não existe localmente (ticket criado depois do último sync de
 // tickets) fica PENDENTE; no fim da execução o job sincroniza os tickets e regrava só os
 // pendentes — o cursor já passou por eles, então sem isso se perderiam (achado na carga inicial de
 // 17/11/2026: 1 apontamento). O que sobrar sem ticket aparece no log.
-const PAGINAS_POR_BLOCO = 20;
+const PAGINAS_POR_BLOCO = 3;
 
 const COLUNAS: ColunaUpsert[] = [
   { nome: "id", cast: "text" },
@@ -147,11 +148,13 @@ export async function runKyriaTimeEntriesSync(): Promise<void> {
 
   const inicio = new Date();
   let query = "GET /time-entries";
+  let leitura: LeituraKyria | null = null;
   try {
     const salvo = await prisma.kyriaSyncCursor.findUnique({ where: { jobName: JOB_NAME } });
     let cursor: string | undefined = salvo?.cursor;
     const cargaInicial = cursor === undefined;
     query = `GET /time-entries${cursor ? " (incremental)" : " (carga inicial)"}`;
+    leitura = await abrirLeitura({ jobName: JOB_NAME, recurso: "/time-entries", limite: TAMANHO_PAGINA });
 
     const sincronizadoEm = inicio.toISOString();
     const total: ResultadoBloco & { mudancas: number } = { mudancas: 0, gravadas: 0, apagadas: 0, puladasSemTicket: 0 };
@@ -162,7 +165,7 @@ export async function runKyriaTimeEntriesSync(): Promise<void> {
       const bloco: KyriaTimeEntryChange[] = [];
       let ultimoCursor = cursor;
       for (let pagina = 0; pagina < PAGINAS_POR_BLOCO && temMais; pagina++) {
-        const resposta = await listTimeEntryChanges({ limit: TAMANHO_PAGINA, cursor });
+        const resposta = await listTimeEntryChanges({ limit: TAMANHO_PAGINA, cursor, leitura });
         bloco.push(...resposta.data);
         cursor = resposta.page.nextCursor ?? cursor;
         ultimoCursor = cursor;
@@ -197,6 +200,7 @@ export async function runKyriaTimeEntriesSync(): Promise<void> {
       total.puladasSemTicket = aindaPendentes.size;
     }
 
+    await leitura.finalizar("concluida");
     await prisma.syncLog.create({
       data: {
         jobName: JOB_NAME,
@@ -212,6 +216,7 @@ export async function runKyriaTimeEntriesSync(): Promise<void> {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    await leitura?.finalizar("falhou", error);
     await prisma.syncLog.create({
       data: { jobName: JOB_NAME, query, status: "error", message, duracaoMs: Date.now() - inicio.getTime() },
     });
