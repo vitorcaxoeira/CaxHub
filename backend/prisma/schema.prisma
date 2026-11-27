@@ -4886,7 +4886,8 @@ model ContratoVendaReajuste {
   @@map("contratos_venda_reajustes")
 }
 
-// Espelho local da tabela E120ISP do Senior ERP (Vendas - Pedidos - Itens de Serviço).
+// Espelho local da tabela E120ISP do Senior ERP (Vendas - Pedidos - Itens de Serviço). Recorte curado (a tabela tem 190 campos):
+// o que a Gestão de Metas (licenças) e a aba "Itens de Serviço" do pedido leem. Sem chave estrangeira para o pedido.
 model PedidoItemServico {
   codemp Int
   codfil Int
@@ -4895,6 +4896,14 @@ model PedidoItemServico {
   codser String? @db.VarChar(14)
   cplisp String? @db.VarChar(250)
   qtdped Decimal @db.Decimal(14, 5)
+  // Quantidades, unidade, moeda e entrega entraram em 27/11/2026 (aba de itens do pedido); nulos até o próximo sync.
+  qtdrea Decimal? @db.Decimal(14, 5)
+  qtdfat Decimal? @db.Decimal(14, 5)
+  qtdcan Decimal? @db.Decimal(14, 5)
+  qtdabe Decimal? @db.Decimal(14, 5)
+  unimed String? @db.VarChar(3)
+  codmoe String? @db.VarChar(3)
+  datent DateTime? @db.Date
   preuni Decimal @db.Decimal(21, 10)
   vlrbru Decimal? @db.Decimal(15, 2)
   vlrliq Decimal? @db.Decimal(15, 2)
@@ -4913,6 +4922,37 @@ model PedidoItemServico {
   @@id([codemp, codfil, numped, seqisp])
 
   @@map("pedidos_itens_servico")
+}
+
+// Espelho local da tabela E120IPD do Senior ERP (Vendas - Pedidos - Itens de Produto). Recorte curado (a tabela tem 250 campos): só o
+// que a aba "Itens de Produto" do pedido lê. Mesmo molde de PedidoItemServico (sem chave estrangeira para o pedido).
+model PedidoItemProduto {
+  codemp Int
+  codfil Int
+  numped Int
+  seqipd Int
+  codpro String? @db.VarChar(14)
+  codder String? @db.VarChar(7)
+  cplipd String? @db.VarChar(250)
+  qtdped Decimal @db.Decimal(14, 5)
+  qtdaen Decimal? @db.Decimal(14, 5)
+  qtdfat Decimal? @db.Decimal(14, 5)
+  qtdcan Decimal? @db.Decimal(14, 5)
+  qtdabe Decimal? @db.Decimal(14, 5)
+  unimed String? @db.VarChar(3)
+  preuni Decimal? @db.Decimal(21, 10)
+  codmoe String? @db.VarChar(3)
+  /// No Senior é o valor da quantidade EM ABERTO: zera quando o item é liquidado ou cancelado.
+  vlrliq Decimal? @db.Decimal(15, 2)
+  datent DateTime? @db.Date
+  /// Domínio "LSitPed": 1=Aberto Total, 2=Aberto Parcial, 3=Suspenso, 4=Liquidado, 5=Cancelado, 6=Aguardando Integração WMS, 7=Em Transmissão, 8=Preparação Análise ou NF, 9=Não Fechado
+  sitipd Int
+  // Controle de exclusão no Senior: ver comentário em PedidoItemServico.
+  vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
+  removidoEmSenior DateTime? @map("removido_em_senior") @db.Timestamptz(6)
+  @@id([codemp, codfil, numped, seqipd])
+
+  @@map("pedidos_itens_produto")
 }
 
 // Espelho local da tabela E120RAT do Senior ERP (Vendas - Pedidos - Rateios).

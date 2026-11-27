@@ -2,6 +2,7 @@ import axios from "axios";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toneBadge, type Tone } from "../../components/ui/badges";
+import { ItensDoPedido, type ItemProdutoDto, type ItemServicoDto } from "./ItensDoPedido";
 
 interface PedidoDetalhe {
   codemp: number;
@@ -70,13 +71,13 @@ function Secao({ titulo, children }: { titulo: string; children: React.ReactNode
 }
 
 // Tela de visualização somente-leitura de um Pedido — mesmo padrão de
-// PropostaVisualizacao.tsx, sem tabela de itens (Pedido é registro único, não
-// master-detail) e sem aba de Auditoria (ainda não existe trilha de auditoria pra
-// Pedido no backend).
+// PropostaVisualizacao.tsx, com os itens em abas (ItensDoPedido) e sem aba de Auditoria
+// (ainda não existe trilha de auditoria pra Pedido no backend).
 export function PedidoVisualizacao() {
   const { codemp, codfil, numped } = useParams<{ codemp: string; codfil: string; numped: string }>();
   const navigate = useNavigate();
   const [pedido, setPedido] = useState<PedidoDetalhe | null>(null);
+  const [itens, setItens] = useState<{ produto: ItemProdutoDto[]; servico: ItemServicoDto[] }>({ produto: [], servico: [] });
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -86,6 +87,7 @@ export function PedidoVisualizacao() {
       .get(`/api/pedido-visualizacao/${codemp}/${codfil}/${numped}`)
       .then(({ data }) => {
         setPedido(data.pedido);
+        setItens({ produto: data.itensProduto ?? [], servico: data.itensServico ?? [] });
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar o pedido"))
@@ -205,6 +207,8 @@ export function PedidoVisualizacao() {
                 </div>
               </div>
             )}
+
+            <ItensDoPedido key={`${pedido.codemp}-${pedido.codfil}-${pedido.numped}`} produto={itens.produto} servico={itens.servico} />
           </div>
         </>
       )}

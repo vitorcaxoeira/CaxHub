@@ -118,6 +118,7 @@ import { scheduleContratoVendaSync } from "./sync/contratoVendaSync";
 import { scheduleContratoVendaServicoSync } from "./sync/contratoVendaServicoSync";
 import { scheduleContratoVendaReajusteSync } from "./sync/contratoVendaReajusteSync";
 import { schedulePedidoItemServicoSync } from "./sync/pedidoItemServicoSync";
+import { schedulePedidoItemProdutoSync } from "./sync/pedidoItemProdutoSync";
 import { schedulePedidoRateioSync } from "./sync/pedidoRateioSync";
 import { recuperarEnviosInterrompidos, scheduleOutboxSeniorSync } from "./sync/outboxSenior";
 import { recuperarEnviosDespesaInterrompidos, scheduleOutboxSeniorDespesaSync } from "./sync/outboxSeniorDespesa";
@@ -333,6 +334,7 @@ async function iniciar() {
     scheduleContratoVendaServicoSync();
     scheduleContratoVendaReajusteSync();
     schedulePedidoItemServicoSync();
+    schedulePedidoItemProdutoSync();
     schedulePedidoRateioSync();
     // Senior HCM (módulo RH): 27 tabelas encadeadas num cron só, só se o canal do HCM estiver configurado.
     agendarSyncHcm();

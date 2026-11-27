@@ -9,9 +9,10 @@ import { executarVarreduraDoJob } from "./varrerRemovidos";
 
 export const JOB_NAME = "pedidos_itens_servico-sync";
 export const CRON_EXPR = "35 6 * * *";
-// Itens de serviço dos pedidos (E120ISP): base do realizado de Licenças da Gestão de Metas (itens com rateio na conta 177). ~14 mil linhas: sempre completa.
+// Itens de serviço dos pedidos (E120ISP): base do realizado de Licenças da Gestão de Metas (itens com rateio na conta 177) e da aba "Itens de Serviço"
+// da visualização do pedido. ~14 mil linhas: sempre completa.
 export const CAMPO_DATA: string | null = null;
-export const BASE_QUERY = `SELECT CodEmp AS codemp, CodFil AS codfil, NumPed AS numped, SeqIsp AS seqisp, CodSer AS codser, CplIsp AS cplisp, QtdPed AS qtdped, PreUni AS preuni, VlrBru AS vlrbru, VlrLiq AS vlrliq, SitIsp AS sitisp, CtaFin AS ctafin, CodRep AS codrep FROM E120ISP`;
+export const BASE_QUERY = `SELECT CodEmp AS codemp, CodFil AS codfil, NumPed AS numped, SeqIsp AS seqisp, CodSer AS codser, CplIsp AS cplisp, QtdPed AS qtdped, QtdRea AS qtdrea, QtdFat AS qtdfat, QtdCan AS qtdcan, QtdAbe AS qtdabe, UniMed AS unimed, CodMoe AS codmoe, DatEnt AS datent, PreUni AS preuni, VlrBru AS vlrbru, VlrLiq AS vlrliq, SitIsp AS sitisp, CtaFin AS ctafin, CodRep AS codrep FROM E120ISP`;
 
 function montarQuery(desde?: Date): string {
   const filtro = filtroDoJob(JOB_NAME, desde ? "alterados" : "todos", desde);
@@ -26,6 +27,13 @@ interface PedidoItemServicoRow {
   codser?: string;
   cplisp?: string;
   qtdped: number;
+  qtdrea?: number;
+  qtdfat?: number;
+  qtdcan?: number;
+  qtdabe?: number;
+  unimed?: string;
+  codmoe?: string;
+  datent?: string;
   preuni: number;
   vlrbru?: number;
   vlrliq?: number;
@@ -43,6 +51,13 @@ const COLUNAS: ColunaUpsert[] = [
   { nome: "codser", cast: "text" },
   { nome: "cplisp", cast: "text" },
   { nome: "qtdped", cast: "numeric" },
+  { nome: "qtdrea", cast: "numeric" },
+  { nome: "qtdfat", cast: "numeric" },
+  { nome: "qtdcan", cast: "numeric" },
+  { nome: "qtdabe", cast: "numeric" },
+  { nome: "unimed", cast: "text" },
+  { nome: "codmoe", cast: "text" },
+  { nome: "datent", cast: "date" },
   { nome: "preuni", cast: "numeric" },
   { nome: "vlrbru", cast: "numeric" },
   { nome: "vlrliq", cast: "numeric" },
@@ -62,6 +77,13 @@ function linhaDe(row: PedidoItemServicoRow): LinhaUpsert {
       row.codser != null ? row.codser : null,
       row.cplisp != null ? row.cplisp : null,
       row.qtdped.toFixed(5),
+      row.qtdrea != null ? row.qtdrea.toFixed(5) : null,
+      row.qtdfat != null ? row.qtdfat.toFixed(5) : null,
+      row.qtdcan != null ? row.qtdcan.toFixed(5) : null,
+      row.qtdabe != null ? row.qtdabe.toFixed(5) : null,
+      row.unimed != null ? row.unimed : null,
+      row.codmoe != null ? row.codmoe : null,
+      row.datent != null ? String(row.datent).slice(0, 10) : null,
       row.preuni.toFixed(10),
       row.vlrbru != null ? row.vlrbru.toFixed(2) : null,
       row.vlrliq != null ? row.vlrliq.toFixed(2) : null,
