@@ -59,6 +59,43 @@ export function motivoBloqueioAlterarSemSeqAti(seqatisDasIrmas: (bigint | null)[
   );
 }
 
+// Alocação criada sem horas: a criação nasce "invalido" sem motivo gravado (payloadDeAlocacaoInvalido)
+// e nunca é tentada. Quando a alocação ganha horas, é essa criação que precisa sair: o "Alterar" que a
+// edição geraria fica bloqueado se o consultor tem outra alocação no item (alocação 491325,
+// 27/11/2026). Devolve o motivo pra não reviver, ou null quando pode. "invalido" COM motivo é
+// desistência manual ("Marcar como inválido") ou edição substituída: não volta.
+export function motivoNaoReviverCriacao(
+  criacao: { tipo: string; status: string; ultimoErro: string | null },
+  alocacao: { seqati: bigint | null; qtdhor: number | null; sitreg: string | null }
+): string | null {
+  if (criacao.tipo !== "criar_atividade" || criacao.status !== "invalido") {
+    return 'De "invalido" só volta a criação de alocação que ficou sem horas.';
+  }
+  if (criacao.ultimoErro) return "Esta pendência foi marcada como inválida com motivo, por isso não é reenviada.";
+  if (alocacao.seqati != null) return "A alocação já tem seqAti: ela já existe no Senior.";
+  if (alocacao.sitreg === "I") return "A alocação está inativa no CaxHub.";
+  if (alocacao.qtdhor == null || alocacao.qtdhor <= 0) return "A alocação continua sem horas definidas.";
+  return null;
+}
+
+const PREFIXO_EDICAO_SUBSTITUIDA = "Substituída pela criação reenviada";
+
+export function motivoEdicaoSubstituida(criacaoId: number): string {
+  return `${PREFIXO_EDICAO_SUBSTITUIDA} (pendência ${criacaoId}): o envio usa as horas atuais da alocação.`;
+}
+
+// Filtro de quem lê "a pendência mais recente da alocação" (badge do Cronograma, apontamentos
+// pendentes, reenviar, polling do envio): a edição substituída tem id maior que o da criação
+// revivida e não é falha nenhuma. Escrito como OR porque um NOT sobre `ultimoErro` nulo também
+// esconderia a criação invalidada automaticamente (NULL no SQL).
+export const FILTRO_SEM_EDICAO_SUBSTITUIDA = {
+  OR: [
+    { status: { not: "invalido" } },
+    { ultimoErro: null },
+    { NOT: { ultimoErro: { startsWith: PREFIXO_EDICAO_SUBSTITUIDA } } },
+  ],
+};
+
 // O Senior respondeu sucesso, mas o seqAti devolvido já pertence a outra alocação local: ele gravou
 // numa alocação existente em vez de criar esta. Não adianta reenviar (cada reenvio grava de novo na
 // mesma), então a pendência vai direto pra "bloqueado" com este motivo.

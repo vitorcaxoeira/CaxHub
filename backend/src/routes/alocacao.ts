@@ -29,7 +29,8 @@ import {
   validarNaFaixa,
 } from "../domain/datasCronograma";
 import { gerarPdfDaPagina, RelatorioPdfError } from "../lib/relatorioPdf";
-import { enfileirar, processarFilaSincronizacao, reprocessar } from "../sync/outboxSenior";
+import { enfileirar, processarFilaSincronizacao, reprocessar, reviverCriacaoInvalida } from "../sync/outboxSenior";
+import { FILTRO_SEM_EDICAO_SUBSTITUIDA } from "../sync/regrasFilaSenior";
 import { runPropostaSyncPorCodpro } from "../sync/propostaSync";
 import { runPropostaItemSyncPorCodpro } from "../sync/propostaItemSync";
 import { runAtividadeConsultorSyncPorCodpro } from "../sync/atividadeConsultorSync";
@@ -1571,7 +1572,11 @@ alocacaoRouter.get("/propostas/:codemp/:codpro/cronograma", async (req: Authenti
     const pendenciasAlocacao =
       alocacoes.length > 0
         ? await prisma.sincronizacaoPendente.findMany({
-            where: { atividadeId: { in: alocacoes.map((a) => a.id) }, tipo: { in: ["criar_atividade", "editar_atividade"] } },
+            where: {
+              atividadeId: { in: alocacoes.map((a) => a.id) },
+              tipo: { in: ["criar_atividade", "editar_atividade"] },
+              ...FILTRO_SEM_EDICAO_SUBSTITUIDA,
+            },
             select: { atividadeId: true, status: true, ultimoErro: true },
             orderBy: { id: "desc" },
           })
@@ -3641,8 +3646,19 @@ alocacaoRouter.post("/alocacoes/:id/reenviar", async (req: AuthenticatedRequest,
     // Só os tipos com write-back real de alocação têm o que reenviar (mesmo filtro de
     // GET .../cronograma, que é quem decide se o botão aparece: badge "falha" == existe uma
     // dessas pendências com erro).
+    // Criação que nunca saiu por falta de horas tem prioridade: reenviar a edição mais recente seria
+    // mandar um "Alterar" de um registro que o Senior não tem.
+    const revivida = await reviverCriacaoInvalida(id);
+    if (revivida != null) {
+      processarFilaSincronizacao({ apenasId: revivida }).catch((erro) => {
+        console.error("[alocacao] reenvio ao Senior falhou:", erro instanceof Error ? erro.message : erro);
+      });
+      res.status(202).json({ status: "reenviando" });
+      return;
+    }
+
     const pendencia = await prisma.sincronizacaoPendente.findFirst({
-      where: { atividadeId: id, tipo: { in: ["criar_atividade", "editar_atividade"] } },
+      where: { atividadeId: id, tipo: { in: ["criar_atividade", "editar_atividade"] }, ...FILTRO_SEM_EDICAO_SUBSTITUIDA },
       orderBy: { id: "desc" },
     });
     if (!pendencia) {
@@ -3715,7 +3731,7 @@ alocacaoRouter.get("/alocacoes/:id/envio", async (req: AuthenticatedRequest, res
     }
 
     const pendencia = await prisma.sincronizacaoPendente.findFirst({
-      where: { atividadeId: id, tipo: { in: ["criar_atividade", "editar_atividade"] } },
+      where: { atividadeId: id, tipo: { in: ["criar_atividade", "editar_atividade"] }, ...FILTRO_SEM_EDICAO_SUBSTITUIDA },
       orderBy: { id: "desc" },
     });
 

@@ -12,6 +12,7 @@ import {
   prepararReenvioItem,
   rearmarEdicaoApontamento,
 } from "../sync/outboxSenior";
+import { FILTRO_SEM_EDICAO_SUBSTITUIDA } from "../sync/regrasFilaSenior";
 import { conflitosDoIntervalo, mensagemDeConflito } from "../domain/conflitoApontamento";
 import { camposQueMudaram, horariosDoSenior, motivoBloqueioManutencao } from "../domain/manutencaoSessao";
 import { calcularIntegracaoErp, integracaoErpLabel, integracaoErpTone } from "../domain/ratDominio";
@@ -738,7 +739,11 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
     const pendenciasAlocacao =
       sessoes.length > 0
         ? await prisma.sincronizacaoPendente.findMany({
-            where: { atividadeId: { in: sessoes.map((s) => s.atividadeId) }, tipo: { in: ["criar_atividade", "editar_atividade"] } },
+            where: {
+              atividadeId: { in: sessoes.map((s) => s.atividadeId) },
+              tipo: { in: ["criar_atividade", "editar_atividade"] },
+              ...FILTRO_SEM_EDICAO_SUBSTITUIDA,
+            },
             select: { atividadeId: true, status: true, ultimoErro: true },
             orderBy: { id: "desc" },
           })

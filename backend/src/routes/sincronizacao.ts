@@ -2,7 +2,8 @@ import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { requireAuth, requireRole } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import { reprocessar, processarFilaSincronizacao, previewEnvioSenior } from "../sync/outboxSenior";
+import { reprocessar, reviverCriacaoInvalida, processarFilaSincronizacao, previewEnvioSenior } from "../sync/outboxSenior";
+import { motivoNaoReviverCriacao } from "../sync/regrasFilaSenior";
 import { reprocessarDespesa, processarFilaDespesas, previewEnvioDespesa } from "../sync/outboxSeniorDespesa";
 import {
   ehAvisoDeEspera,
@@ -154,7 +155,33 @@ sincronizacaoRouter.post("/:id/reprocessar", async (req, res) => {
       res.status(400).json({ error: "Id inválido" });
       return;
     }
-    await reprocessar(id);
+    const item = await prisma.sincronizacaoPendente.findUnique({ where: { id }, include: { atividade: true } });
+    if (!item) {
+      res.status(404).json({ error: "Pendência não encontrada" });
+      return;
+    }
+    if (item.status === "enviando") {
+      res.status(409).json({ error: "Envio já em andamento" });
+      return;
+    }
+    if (item.status === "enviado") {
+      res.status(400).json({ error: "Esta pendência já foi enviada ao Senior" });
+      return;
+    }
+    if (item.status === "invalido") {
+      // Só a criação invalidada por falta de horas volta, e só se a alocação já tem horas.
+      const motivo = motivoNaoReviverCriacao(item, item.atividade);
+      if (motivo) {
+        res.status(400).json({ error: motivo });
+        return;
+      }
+      if ((await reviverCriacaoInvalida(item.atividadeId)) !== id) {
+        res.status(409).json({ error: "Há outra criação desta alocação na fila. Atualize a tela e reenvie a mais recente." });
+        return;
+      }
+    } else {
+      await reprocessar(id);
+    }
     await processarFilaSincronizacao({ apenasId: id });
     res.json({ ok: true });
   } catch (error) {

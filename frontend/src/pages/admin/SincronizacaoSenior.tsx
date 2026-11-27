@@ -536,7 +536,11 @@ function PainelAtividades() {
                       </DropdownMenu.Trigger>
                       <DropdownMenu.Content>
                         <DropdownMenu.Item onSelect={() => abrirPayload(item)}>Ver payload</DropdownMenu.Item>
-                        {(item.status === "bloqueado" || item.status === "pendente") && (
+                        {/* "invalido" sem motivo é a criação que nasceu sem horas: o backend só
+                            aceita se a alocação já tiver horas, e explica quando recusa. */}
+                        {(item.status === "bloqueado" ||
+                          item.status === "pendente" ||
+                          (item.status === "invalido" && item.tipo === "criar_atividade" && !item.ultimoErro)) && (
                           <DropdownMenu.Item onSelect={() => reprocessar(item.id)} disabled={reprocessando === item.id}>
                             {reprocessando === item.id ? "Enviando..." : "Enviar para o Senior"}
                           </DropdownMenu.Item>

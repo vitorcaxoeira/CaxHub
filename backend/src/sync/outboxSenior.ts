@@ -42,6 +42,8 @@ import {
   motivoBloqueioAlterarSemSeqAti,
   motivoBloqueioAntesDeAlterarApontamento,
   motivoDivergenciaAposAlterarApontamento,
+  motivoEdicaoSubstituida,
+  motivoNaoReviverCriacao,
   motivoSeqAtiDeOutraAlocacao,
 } from "./regrasFilaSenior";
 
@@ -74,12 +76,66 @@ function payloadDeAlocacaoInvalido(tipo: string, payload: Record<string, unknown
   return qtdhor == null || qtdhor <= 0;
 }
 
+function dispararEnvio(pendenciaId: number, tipo: string): void {
+  processarFilaSincronizacao({ apenasId: pendenciaId }).catch((erro) => {
+    console.error(`[outbox] envio imediato (${tipo}) falhou:`, erro instanceof Error ? erro.message : erro);
+  });
+}
+
+// Devolve pra fila a criação invalidada por falta de horas, quando a alocação já tem horas (ver
+// motivoNaoReviverCriacao). O envio relê a alocação viva, então o "Incluir" sai com os dados atuais;
+// o retrato só é atualizado pra tela e auditoria não mostrarem "sem horas". As edições paradas da
+// mesma alocação são encerradas na mesma transação. Não dispara o envio: quem chama decide.
+// Devolve o id da criação revivida, ou null se não havia o que reviver.
+export async function reviverCriacaoInvalida(atividadeId: number): Promise<number | null> {
+  const criacao = await prisma.sincronizacaoPendente.findFirst({
+    where: { atividadeId, tipo: "criar_atividade" },
+    orderBy: { id: "desc" },
+  });
+  if (!criacao || criacao.status !== "invalido") return null;
+  const alocacao = await prisma.atividadeConsultor.findUnique({
+    where: { id: atividadeId },
+    select: { seqati: true, qtdhor: true, sitreg: true },
+  });
+  if (!alocacao || motivoNaoReviverCriacao(criacao, alocacao)) return null;
+
+  return prisma.$transaction(async (tx) => {
+    // Reserva atômica: de duas edições ao mesmo tempo, só uma revive.
+    const reserva = await tx.sincronizacaoPendente.updateMany({
+      where: { id: criacao.id, status: "invalido", ultimoErro: criacao.ultimoErro },
+      data: {
+        status: "pendente",
+        tentativas: 0,
+        ultimoErro: null,
+        payload: { ...(criacao.payload as Prisma.JsonObject), qtdhor: alocacao.qtdhor },
+      },
+    });
+    if (reserva.count === 0) return null;
+    // "enviando" fica de fora: a fila única termina aquele envio antes de pegar a criação, e se ele
+    // gravar o seqAti a criação não é reenviada (ver enviarCriarAtividade).
+    await tx.sincronizacaoPendente.updateMany({
+      where: { atividadeId, tipo: "editar_atividade", status: { in: ["pendente", "bloqueado"] } },
+      data: { status: "invalido", ultimoErro: motivoEdicaoSubstituida(criacao.id) },
+    });
+    return criacao.id;
+  });
+}
+
 export async function enfileirar(
   atividadeId: number,
   tipo: string,
   payload: Record<string, unknown>,
   opcoes: { adiarEnvio?: boolean } = {}
 ): Promise<number> {
+  // Edição de uma alocação cuja criação nunca saiu por falta de horas: em vez do "Alterar", sai a
+  // própria criação.
+  if (tipo === "editar_atividade") {
+    const revivida = await reviverCriacaoInvalida(atividadeId);
+    if (revivida != null) {
+      if (!opcoes.adiarEnvio) dispararEnvio(revivida, "criar_atividade");
+      return revivida;
+    }
+  }
   const invalido = payloadDeAlocacaoInvalido(tipo, payload);
   const criada = await prisma.sincronizacaoPendente.create({
     data: {
@@ -89,11 +145,7 @@ export async function enfileirar(
       ...(invalido ? { status: "invalido" } : {}),
     },
   });
-  if (!invalido && !opcoes.adiarEnvio) {
-    processarFilaSincronizacao({ apenasId: criada.id }).catch((erro) => {
-      console.error(`[outbox] envio imediato (${tipo}) falhou:`, erro instanceof Error ? erro.message : erro);
-    });
-  }
+  if (!invalido && !opcoes.adiarEnvio) dispararEnvio(criada.id, tipo);
   return criada.id;
 }
 
