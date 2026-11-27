@@ -2,15 +2,18 @@ import { useMemo, useState } from "react";
 import { ListaServidor, type LinhaDetalhe } from "../../components/colunas/ListaServidor";
 import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { classeFiltro, competenciaPadrao, fmtCompetencia, fmtHorasMinutos, fmtNumero, Selo, useConsultores, useProcessos } from "./comum";
+import { ModalComprovanteHoras, type PedidoDeComprovante, type TipoComprovante } from "./ModalComprovanteHoras";
 
 // Gestão de Bonificação › Horas Kyria x Trabalhadas: uma linha por atendente, com as horas trabalhadas do ponto (HCM), o saldo do banco de horas
 // no mês, as extras (só o saldo positivo), o total do mês, as horas apontadas no Kyria, o tempo ocioso (total − Kyria), o % (Kyria ÷ total) e o
 // PDI do fechamento; ao abrir a linha, o detalhe por time do chamado e, dentro do time, por área do chamado. É calculado na hora: não precisa
-// apurar o fechamento. Lista do kit (filtro e ordem por coluna, resumo, CSV); backend: GET /bonificacao/relatorios/horas-kyria (routes/bonificacao.ts).
+// apurar o fechamento. Horas trabalhadas, Banco de horas e Horas Kyria são links: abrem o comprovante com os lançamentos que formam o número
+// (ModalComprovanteHoras). Lista do kit (filtro e ordem por coluna, resumo, CSV); backend: GET /bonificacao/relatorios/horas-kyria (routes/bonificacao.ts).
 
 export interface LinhaHoras {
   processoId: number;
   processo: string;
+  codemp: number;
   codfor: number;
   codusu: number | null;
   consultor: string;
@@ -31,8 +34,37 @@ const pct = (v: number | null | undefined) => (v == null ? "—" : `${fmtNumero(
 const mono = "font-mono text-sm tabular-nums text-foreground";
 const horas = (v: number | null) => (v == null ? "—" : fmtHorasMinutos(v));
 
-/** Coluna de tempo (minutos na linha, HH:MM na tela) com soma no resumo. */
-const colunaHoras = (nome: "minutosPonto" | "minutosExtras" | "minutosTotal" | "minutosKyria" | "minutosOcioso", titulo: string, largura: number, dica: string): DefColuna<LinhaHoras> => ({
+/** O que as células da lista sabem fazer: abrir o comprovante de um número. */
+export interface AcoesHoras {
+  abrir: (linha: LinhaHoras, tipo: TipoComprovante, minutosNaTela: number) => void;
+}
+
+/** Número clicável que abre o comprovante. O clique não chega na linha (que abre/fecha os times). */
+function LinkComprovante({ linha, tipo, minutos, acoes, classe, children }: { linha: LinhaHoras; tipo: TipoComprovante; minutos: number; acoes: AcoesHoras; classe?: string; children: string }) {
+  const oQue = { ponto: "horas trabalhadas", banco: "lançamentos do banco de horas", kyria: "apontamentos do Kyria" }[tipo];
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        acoes.abrir(linha, tipo, minutos);
+      }}
+      className={`font-mono tabular-nums underline decoration-dotted underline-offset-2 hover:decoration-solid focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${classe ?? "text-primary"}`}
+      title={`Ver o comprovante: ${oQue} de ${linha.consultor}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Coluna de tempo (minutos na linha, HH:MM na tela) com soma no resumo. `comprovante`: o número vira link (zero não tem o que mostrar). */
+const colunaHoras = (
+  nome: "minutosPonto" | "minutosExtras" | "minutosTotal" | "minutosKyria" | "minutosOcioso",
+  titulo: string,
+  largura: number,
+  dica: string,
+  comprovante?: TipoComprovante
+): DefColuna<LinhaHoras, AcoesHoras> => ({
   nome,
   titulo,
   direita: true,
@@ -40,10 +72,18 @@ const colunaHoras = (nome: "minutosPonto" | "minutosExtras" | "minutosTotal" | "
   dica,
   classe: mono,
   formatarResumo: fmtHorasMinutos,
-  render: (l) => horas(l[nome]),
+  render: (l, acoes) => {
+    const minutos = l[nome];
+    if (!comprovante || !acoes || !minutos) return horas(minutos);
+    return (
+      <LinkComprovante linha={l} tipo={comprovante} minutos={minutos} acoes={acoes}>
+        {fmtHorasMinutos(minutos)}
+      </LinkComprovante>
+    );
+  },
 });
 
-export const COLUNAS: DefColuna<LinhaHoras>[] = [
+export const COLUNAS: DefColuna<LinhaHoras, AcoesHoras>[] = [
   {
     nome: "consultor",
     titulo: "Atendente",
@@ -59,7 +99,7 @@ export const COLUNAS: DefColuna<LinhaHoras>[] = [
     ),
   },
   { nome: "processo", titulo: "Processo", largura: 200, classe: "text-sm text-muted", texto: (l) => l.processo, render: (l) => l.processo },
-  colunaHoras("minutosPonto", "Horas trabalhadas", 130, "Horas trabalhadas do ponto (HCM) no mês"),
+  colunaHoras("minutosPonto", "Horas trabalhadas", 130, "Horas trabalhadas do ponto (HCM) no mês", "ponto"),
   {
     nome: "saldoBanco",
     titulo: "Banco de horas",
@@ -68,19 +108,31 @@ export const COLUNAS: DefColuna<LinhaHoras>[] = [
     dica: "Saldo dos lançamentos do banco de horas no mês (créditos − débitos), sem o saldo anterior. Só o saldo positivo entra como extra.",
     classe: mono,
     formatarResumo: fmtHorasMinutos,
-    render: (l) =>
-      l.saldoBanco != null && l.saldoBanco < 0 ? (
+    render: (l, acoes) => {
+      if (l.saldoBanco == null) return horas(null);
+      const negativo = l.saldoBanco < 0;
+      const numero = acoes ? (
+        <LinkComprovante linha={l} tipo="banco" minutos={l.saldoBanco} acoes={acoes} classe={negativo ? "text-warning" : undefined}>
+          {fmtHorasMinutos(l.saldoBanco)}
+        </LinkComprovante>
+      ) : negativo ? (
+        <span className="text-warning">{fmtHorasMinutos(l.saldoBanco)}</span>
+      ) : (
+        fmtHorasMinutos(l.saldoBanco)
+      );
+      return negativo ? (
         <>
-          <span className="text-warning">{fmtHorasMinutos(l.saldoBanco)}</span>
+          {numero}
           <div className="font-sans text-[10.5px] text-warning">não entrou no cálculo</div>
         </>
       ) : (
-        horas(l.saldoBanco)
-      ),
+        numero
+      );
+    },
   },
   colunaHoras("minutosExtras", "Extras", 100, "Horas extras no cálculo: o saldo do banco de horas no mês, quando positivo"),
   colunaHoras("minutosTotal", "Total do mês", 120, "Horas trabalhadas + extras"),
-  colunaHoras("minutosKyria", "Horas Kyria", 110, "Horas apontadas no Kyria no mês"),
+  colunaHoras("minutosKyria", "Horas Kyria", 110, "Horas apontadas no Kyria no mês", "kyria"),
   colunaHoras("minutosOcioso", "Ocioso", 100, "Total do mês − horas Kyria (negativo: o Kyria passou do total)"),
   { nome: "percentual", titulo: "%", direita: true, largura: 80, dica: "Horas Kyria ÷ total do mês", classe: "font-mono text-sm font-semibold tabular-nums text-primary", render: (l) => pct(l.percentual) },
   { nome: "pdiHoras", titulo: "PDI realizado", direita: true, largura: 120, dica: "Horas de PDI lançadas no fechamento", classe: mono, render: (l) => (l.pdiHoras == null ? "—" : `${fmtNumero(l.pdiHoras)} h`) },
@@ -126,6 +178,7 @@ export function BonificacaoHorasKyria() {
   // Os times de cada atendente começam recolhidos; clicar na linha abre/fecha uma, e o botão abre/fecha todas as da página.
   const [chaves, setChaves] = useState<string[]>([]);
   const [abertas, setAbertas] = useState<ReadonlySet<string>>(new Set());
+  const [comprovante, setComprovante] = useState<PedidoDeComprovante | null>(null);
   const todasAbertas = chaves.length > 0 && chaves.every((c) => abertas.has(c));
   const alternar = (_l: LinhaHoras, chave: string) =>
     setAbertas((a) => {
@@ -144,12 +197,21 @@ export function BonificacaoHorasKyria() {
     [competencia, processoId, codfor]
   );
 
+  // Competência da lista (campo vazio = o servidor usa o mês anterior, o mesmo padrão da tela).
+  const competenciaDaLista = params.competencia ?? competenciaPadrao();
+  const acoes = useMemo<AcoesHoras>(
+    () => ({
+      abrir: (l, tipo, minutosNaTela) => setComprovante({ tipo, codemp: l.codemp, codfor: l.codfor, consultor: l.consultor, competencia: competenciaDaLista, minutosNaTela }),
+    }),
+    [competenciaDaLista]
+  );
+
   return (
     <div>
       <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Gestão de Bonificação</p>
       <div className="mb-4">
         <h1 className="font-display text-2xl font-bold text-foreground">Horas Kyria x Trabalhadas</h1>
-        <p className="mt-1 text-sm text-muted">Horas apontadas no Kyria sobre o total do mês (horas trabalhadas do ponto + extras do banco de horas), por atendente, com o tempo ocioso e o PDI do fechamento. Saldo negativo do banco de horas é mostrado, mas não entra no cálculo. Clique na linha (ou em "Expandir todos") para ver os times e as áreas dos chamados sob cada atendente.</p>
+        <p className="mt-1 text-sm text-muted">Horas apontadas no Kyria sobre o total do mês (horas trabalhadas do ponto + extras do banco de horas), por atendente, com o tempo ocioso e o PDI do fechamento. Saldo negativo do banco de horas é mostrado, mas não entra no cálculo. Clique em Horas trabalhadas, Banco de horas ou Horas Kyria para ver os lançamentos que formam o número. Clique na linha (ou em "Expandir todos") para ver os times e as áreas dos chamados sob cada atendente.</p>
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -174,7 +236,8 @@ export function BonificacaoHorasKyria() {
         )}
       </div>
 
-      <ListaServidor<LinhaHoras>
+      <ListaServidor<LinhaHoras, AcoesHoras>
+        ctx={acoes}
         chave="bonificacao.horas-kyria"
         url="/api/bonificacao/relatorios/horas-kyria"
         params={params}
@@ -184,7 +247,6 @@ export function BonificacaoHorasKyria() {
         vazio="Nenhum atendente enquadrado com indicador de ponto apontado nesta competência."
         pageSize={25}
         exportavel="bonificacao-horas-kyria"
-        rotuloExportar="Exportar Excel"
         imprimir={{ titulo: tituloRelatorio }}
         pdf={{ titulo: tituloRelatorio, arquivo: "horas-kyria-x-trabalhadas" }}
         // O relatório segue a tela: os times saem sob os atendentes que estavam abertos ("Expandir todos" ou clique na linha).
@@ -227,6 +289,7 @@ export function BonificacaoHorasKyria() {
           );
         }}
       />
+      {comprovante && <ModalComprovanteHoras pedido={comprovante} onFechar={() => setComprovante(null)} />}
     </div>
   );
 }

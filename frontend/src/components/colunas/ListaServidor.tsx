@@ -3,6 +3,7 @@ import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
 import { usePorPagina } from "../ui/padroesFiltros/usePorPagina";
 import { baixarPdfDoServidor } from "../relatorio/relatorioComum";
+import { DropdownMenu } from "../ui/DropdownMenu";
 import { Pagination } from "../ui/Pagination";
 import { SkeletonLinhas } from "../ui/Skeleton";
 import { ChipOrdem, ChipsFiltros } from "./ChipsFiltros";
@@ -91,12 +92,11 @@ interface Props<T, C> {
   /** Altura máxima da área rolável (com rolagem vertical própria). Sem ela, a tabela cresce com a página, como antes do kit de colunas. */
   alturaMax?: string;
   /**
-   * Mostra "Exportar CSV" (05/11/2026): baixa TODAS as linhas do filtro atual (não só a página), na ordem escolhida e só com as colunas visíveis,
-   * pelo GET `<url>/csv` que `registrarListaConsultavel` registra. O valor é o nome base do arquivo (ex.: "descontos-parcelas").
+   * Mostra o botão "Exportar", com as opções "Excel (.xlsx)" e "CSV" (27/11/2026): baixa TODAS as linhas do filtro atual (não só a página), na
+   * ordem escolhida e só com as colunas visíveis, pelos GETs `<url>/xlsx` e `<url>/csv` que o kit registra. O valor é o nome base do arquivo
+   * (ex.: "descontos-parcelas").
    */
   exportavel?: string;
-  /** Texto do botão de exportação (padrão "Exportar CSV"; o arquivo abre direto no Excel, ex.: "Exportar Excel"). */
-  rotuloExportar?: string;
   /**
    * Mostra "Imprimir" (06/11/2026): abre em aba nova o relatório impresso (/relatorio/lista) com TODAS as linhas do filtro atual, na ordem
    * escolhida e só com as colunas visíveis, pelo GET `<url>/impressao` que `registrarListaConsultavel` registra.
@@ -147,7 +147,6 @@ export function ListaServidor<T extends object, C = undefined>({
   aoErro,
   alturaMax,
   exportavel,
-  rotuloExportar = "Exportar CSV",
   imprimir,
   paramsRelatorio,
   pdf,
@@ -254,14 +253,14 @@ export function ListaServidor<T extends object, C = undefined>({
     window.open(`/relatorio/lista/${id}`, "_blank");
   }
 
-  async function exportarCsv() {
+  async function exportar(formato: "xlsx" | "csv") {
     if (!exportavel) return;
     setExportando(true);
     try {
-      const { data } = await axios.get<Blob>(`${url}/csv`, { params: parametrosDeExportacao(), responseType: "blob" });
+      const { data } = await axios.get<Blob>(`${url}/${formato}`, { params: parametrosDeExportacao(), responseType: "blob" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(data);
-      link.download = `${exportavel}_${new Date().toISOString().slice(0, 10)}.csv`;
+      link.download = `${exportavel}_${new Date().toISOString().slice(0, 10)}.${formato}`;
       link.click();
       URL.revokeObjectURL(link.href);
     } catch {
@@ -291,15 +290,22 @@ export function ListaServidor<T extends object, C = undefined>({
           {(exportavel || imprimir || pdf) && (
             <div className="ml-auto flex items-center gap-2">
               {exportavel && (
-                <button
-                  type="button"
-                  onClick={exportarCsv}
-                  disabled={exportando || loading || (dados?.total ?? 0) === 0}
-                  title="Baixa todas as linhas do filtro atual, com as colunas visíveis (abre no Excel)"
-                  className="rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {exportando ? "Exportando…" : rotuloExportar}
-                </button>
+                <DropdownMenu>
+                  <DropdownMenu.Trigger>
+                    <button
+                      type="button"
+                      disabled={exportando || loading || (dados?.total ?? 0) === 0}
+                      title="Baixa todas as linhas do filtro atual, com as colunas visíveis"
+                      className="rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted transition hover:bg-surface-2 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {exportando ? "Exportando…" : "Exportar ▾"}
+                    </button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content className="w-44">
+                    <DropdownMenu.Item onSelect={() => void exportar("xlsx")}>Excel (.xlsx)</DropdownMenu.Item>
+                    <DropdownMenu.Item onSelect={() => void exportar("csv")}>CSV</DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu>
               )}
               {pdf && (
                 <button

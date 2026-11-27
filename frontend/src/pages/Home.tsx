@@ -1,9 +1,12 @@
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { DashboardConsultor } from "../components/dashboard/DashboardConsultor";
 import { MultiSelectDropdown } from "../components/ui/MultiSelectDropdown";
 import { SelectBuscavel } from "../components/ui/SelectBuscavel";
+import { Tabs } from "../components/ui/Tabs";
+import { AbaProvisionamento } from "./painel/AbaProvisionamento";
 import { MESES_OPCOES } from "../lib/periodos";
 
 interface Integrante {
@@ -53,6 +56,13 @@ function DepartamentosGerenciadosCard({ departamentos }: { departamentos: Depart
   );
 }
 
+// Abas da Home para quem acompanha consultores (admin e gestor): "Principal" é o painel de sempre; "Provisionamento" é o financeiro do mês de
+// todos os consultores de contrato Fixo/Hora do escopo. Consultor comum não vê abas. A aba escolhida fica na URL (?aba=provisionamento).
+const ABAS_DA_HOME = [
+  { key: "principal", label: "Principal" },
+  { key: "provisionamento", label: "Provisionamento" },
+];
+
 export function Home() {
   const { user } = useAuth();
   const [perfil, setPerfil] = useState<MeuPerfil | null>(null);
@@ -63,6 +73,7 @@ export function Home() {
   const [anos, setAnos] = useState<number[]>([hoje.getFullYear()]);
   const [meses, setMeses] = useState<number[]>([hoje.getMonth() + 1]);
   const [anosDisponiveis, setAnosDisponiveis] = useState<number[]>([]);
+  const [busca, setBusca] = useSearchParams();
 
   useEffect(() => {
     axios
@@ -116,8 +127,7 @@ export function Home() {
 
   const nomeDoSelecionado = consultores.find((c) => c.codfor === codforSelecionado)?.nome;
 
-  if (!mostraDashboard) {
-    return (
+  const principal = !mostraDashboard ? (
       <div className="space-y-6">
         <div className="rounded-lg border border-border bg-surface p-8">
           <p className="font-mono text-[10px] uppercase tracking-widest text-muted">CaxHub</p>
@@ -134,10 +144,7 @@ export function Home() {
 
         {perfil && <DepartamentosGerenciadosCard departamentos={perfil.departamentosGerenciados} />}
       </div>
-    );
-  }
-
-  return (
+  ) : (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
         {podeFiltrarConsultor && (
@@ -168,6 +175,27 @@ export function Home() {
       )}
 
       {perfil && <DepartamentosGerenciadosCard departamentos={perfil.departamentosGerenciados} />}
+    </div>
+  );
+
+  if (!podeFiltrarConsultor) return principal;
+
+  const aba = busca.get("aba") === "provisionamento" ? "provisionamento" : "principal";
+  const trocarAba = (nova: string) =>
+    setBusca(
+      (atual) => {
+        const p = new URLSearchParams(atual);
+        if (nova === "principal") p.delete("aba");
+        else p.set("aba", nova);
+        return p;
+      },
+      { replace: true }
+    );
+
+  return (
+    <div>
+      <Tabs tabs={ABAS_DA_HOME} activeKey={aba} onChange={trocarAba} />
+      {aba === "provisionamento" ? <AbaProvisionamento /> : principal}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { arredondar, media, mesSeguinte, minutosParaHoras, percentualDe, sextasDoMes, type FonteIndicador } from "./bonificacao";
-import { horasDoMes, saldoBancoDoMesSql } from "./bonificacaoHoras";
+import { filtroPontoTrabalhadoSql, horasDoMes, saldoBancoDoMesSql } from "./bonificacaoHoras";
 
 // Gestão de Bonificação: apuração dos indicadores automáticos (Kyria e ponto HCM). Cada função devolve `valor` (nulo = sem dado: o resultado
 // fica pendente até alguém informar) e `detalhe` (a memória de cálculo, gravada no resultado e mostrada na tela). Competência = dia 1 do mês;
@@ -121,9 +121,7 @@ async function apurarPctPonto(ctx: ContextoApuracao): Promise<Apurado> {
     SELECT COALESCE(sum(sp.qtdhor), 0)::float8 AS minutos
     FROM hcm_situacao_ponto sp
     JOIN hcm_situacoes st ON st.codsit = sp.codsit
-    WHERE sp.numemp = ${vinculo.hcmNumemp} AND sp.tipcol = ${vinculo.hcmTipcol} AND sp.numcad = ${vinculo.hcmNumcad}
-      AND st.conabs = 2 AND sp.removido_em_senior IS NULL
-      AND sp.datapu >= ${ini}::date AND sp.datapu < ${fim}::date`;
+    WHERE ${filtroPontoTrabalhadoSql(vinculo.hcmNumemp, vinculo.hcmTipcol, vinculo.hcmNumcad, ini, fim)}`;
 
   const [banco] = await prisma.$queryRaw<{ minutos: number | null }[]>(saldoBancoDoMesSql(vinculo.hcmNumemp, vinculo.hcmTipcol, vinculo.hcmNumcad, ini, fim));
   // Denominador = total do mês (trabalhadas + saldo POSITIVO do banco de horas): domain/bonificacaoHoras.ts, a mesma regra da tela.

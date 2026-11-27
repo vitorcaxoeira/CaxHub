@@ -26,7 +26,8 @@ import {
   type SentidoIndicador,
 } from "../domain/bonificacao";
 import { escopoDoUsuario, escopoSql, podeAdministrarBonificacao, podeVerConsultor, type EscopoBonificacao } from "../domain/bonificacaoAcesso";
-import { saldoBancoDoMesSql } from "../domain/bonificacaoHoras";
+import { areaDoChamadoSql, filtroKyriaNoMesSql, filtroPontoTrabalhadoSql, saldoBancoDoMesSql } from "../domain/bonificacaoHoras";
+import { eTipoComprovante, linhasDoBanco, linhasDoKyria, linhasDoPonto, resumoDoBanco } from "../domain/bonificacaoComprovante";
 import { agruparTimesEAreas, type LinhaTimeArea, type TimeComAreas } from "../domain/bonificacaoTimes";
 import { capturarFilaDoDia } from "../domain/bonificacaoApuracao";
 import { ErroBonificacao, apurarFechamento, auditarBonificacao, dec, faixasDoBanco, informarResultado, isoCompetencia, isoDia } from "../domain/bonificacaoDados";
@@ -1216,7 +1217,7 @@ registrarListaConsultavel(
     const fim = isoDia(new Date(Date.UTC(competencia.getUTCFullYear(), competencia.getUTCMonth() + 1, 1)));
     const processoId = qInteiro(q.processoId);
     const codfor = qInteiro(q.codfor);
-    const NO_MES_KYRIA = Prisma.sql`(en.started_at AT TIME ZONE 'America/Sao_Paulo') >= ${ini}::date AND (en.started_at AT TIME ZONE 'America/Sao_Paulo') < ${fim}::date`;
+    const NO_MES_KYRIA = filtroKyriaNoMesSql(ini, fim);
     // Minutos apontados no mês por time do TICKET e, dentro dele, por ÁREA do chamado, por usuário (codusu) — usada pelo detalhe da tela e pelo
     // da impressão. Área = etiqueta(s) do grupo de chave "area"; chamado com duas áreas vira "A + B" (a hora não conta duas vezes).
     const horasPorTime = async (codusus: unknown[]): Promise<Map<number, TimeComAreas[]>> => {
@@ -1225,16 +1226,10 @@ registrarListaConsultavel(
       const linhas = await prisma.$queryRaw<LinhaTimeArea[]>`
         SELECT m.codusu, COALESCE(kt.name, '(sem time)') AS time, COALESCE(ar.area, '(sem área)') AS area, sum(en.minutes)::float8 AS minutos
         FROM kyria_members m
-        JOIN kyria_time_entries en ON en.user_id = m.id AND en.minutes IS NOT NULL AND ${NO_MES_KYRIA}
+        JOIN kyria_time_entries en ON en.user_id = m.id AND ${NO_MES_KYRIA}
         JOIN kyria_tickets t ON t.id = en.ticket_id
         LEFT JOIN kyria_teams kt ON kt.id = t.team_id
-        LEFT JOIN LATERAL (
-          SELECT string_agg(l.name, ' + ' ORDER BY l.name) AS area
-          FROM kyria_ticket_labels tl
-          JOIN kyria_labels l ON l.id = tl.label_id
-          JOIN kyria_label_groups g ON g.id = l.group_id AND g.key = 'area'
-          WHERE tl.ticket_id = t.id
-        ) ar ON TRUE
+        LEFT JOIN LATERAL (${areaDoChamadoSql(Prisma.sql`t.id`)}) ar ON TRUE
         WHERE m.codusu = ANY(${usuarios}::int[])
         GROUP BY m.codusu, kt.name, ar.area`;
       return agruparTimesEAreas(linhas);
@@ -1268,12 +1263,11 @@ registrarListaConsultavel(
         LEFT JOIN consultor_vinculos v ON v.codemp = x.codemp AND v.codusu = co.codusu
         LEFT JOIN LATERAL (
           SELECT sum(en.minutes) AS minutos FROM kyria_time_entries en JOIN kyria_members m ON m.id = en.user_id
-          WHERE m.codusu = co.codusu AND en.minutes IS NOT NULL AND ${NO_MES_KYRIA}
+          WHERE m.codusu = co.codusu AND ${NO_MES_KYRIA}
         ) ky ON TRUE
         LEFT JOIN LATERAL (
           SELECT COALESCE(sum(sp.qtdhor), 0) AS minutos FROM hcm_situacao_ponto sp JOIN hcm_situacoes st ON st.codsit = sp.codsit
-          WHERE v.hcm_numcad IS NOT NULL AND sp.numemp = v.hcm_numemp AND sp.tipcol = v.hcm_tipcol AND sp.numcad = v.hcm_numcad
-            AND st.conabs = 2 AND sp.removido_em_senior IS NULL AND sp.datapu >= ${ini}::date AND sp.datapu < ${fim}::date
+          WHERE v.hcm_numcad IS NOT NULL AND ${filtroPontoTrabalhadoSql(Prisma.sql`v.hcm_numemp`, Prisma.sql`v.hcm_tipcol`, Prisma.sql`v.hcm_numcad`, ini, fim)}
         ) pt ON TRUE
         LEFT JOIN LATERAL (${saldoBancoDoMesSql(Prisma.sql`v.hcm_numemp`, Prisma.sql`v.hcm_tipcol`, Prisma.sql`v.hcm_numcad`, ini, fim)}) bh ON TRUE
         CROSS JOIN LATERAL (SELECT (COALESCE(pt.minutos, 0) + GREATEST(COALESCE(bh.minutos, 0), 0))::float8 AS minutos) tm
@@ -1332,6 +1326,50 @@ registrarListaConsultavel(
   },
   "bonificacao-horas-kyria"
 );
+
+// Comprovação de uma célula do relatório (clique em Horas trabalhadas, Banco de horas ou Horas Kyria): os lançamentos que formam o número.
+// Mesmo escopo da lista (quem não pode ver o consultor leva 403) e os mesmos filtros do cálculo (domain/bonificacaoComprovante.ts).
+bonificacaoRouter.get("/relatorios/horas-kyria/comprovante", async (req, res) => {
+  try {
+    const escopo = await escopoOuErro(req, res);
+    if (!escopo) return;
+    const tipo = req.query.tipo;
+    const competencia = lerCompetencia(req.query.competencia);
+    const codemp = Number(req.query.codemp);
+    const codfor = Number(req.query.codfor);
+    if (!eTipoComprovante(tipo) || !competencia || !Number.isInteger(codemp) || !Number.isInteger(codfor)) {
+      res.status(400).json({ error: "Informe tipo (ponto, banco ou kyria), competencia, codemp e codfor" });
+      return;
+    }
+    if (!podeVerConsultor(escopo, codfor)) {
+      res.status(403).json({ error: "Sem permissão para ver este consultor" });
+      return;
+    }
+    const ini = isoDia(competencia);
+    const fim = isoDia(new Date(Date.UTC(competencia.getUTCFullYear(), competencia.getUTCMonth() + 1, 1)));
+    const consultor = await prisma.consultor.findFirst({ where: { codemp, codfor }, select: { codusu: true, nomcom: true, nomfor: true } });
+    if (!consultor) {
+      res.status(404).json({ error: "Consultor não encontrado" });
+      return;
+    }
+    const base = { tipo, competencia: ini, consultor: consultor.nomcom ?? consultor.nomfor ?? `Fornecedor ${codfor}` };
+    if (tipo === "kyria") {
+      const linhas = consultor.codusu == null ? [] : await linhasDoKyria(consultor.codusu, ini, fim);
+      res.json({ ...base, linhas });
+      return;
+    }
+    const vinculo = consultor.codusu == null ? null : await prisma.consultorVinculo.findUnique({ where: { codemp_codusu: { codemp, codusu: consultor.codusu } } });
+    const colaborador = vinculo?.hcmNumemp != null && vinculo.hcmTipcol != null && vinculo.hcmNumcad != null ? { numemp: vinculo.hcmNumemp, tipcol: vinculo.hcmTipcol, numcad: vinculo.hcmNumcad } : null;
+    if (tipo === "ponto") {
+      res.json({ ...base, linhas: colaborador ? await linhasDoPonto(colaborador, ini, fim) : [] });
+      return;
+    }
+    const linhas = colaborador ? await linhasDoBanco(colaborador, ini, fim) : [];
+    res.json({ ...base, linhas, banco: resumoDoBanco(linhas) });
+  } catch (error) {
+    handleError(res, error, "horas-kyria-comprovante");
+  }
+});
 
 // ---------------------------------------------------------------- foto da fila do Kyria
 // O cron de sexta (kyria/filaSemanalSync.ts) tira a foto sozinho; aqui o admin tira na hora (ex.: o job falhou ou foi implantado depois da sexta).

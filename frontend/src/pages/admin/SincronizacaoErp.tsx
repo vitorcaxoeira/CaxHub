@@ -1,6 +1,7 @@
 import axios from "axios";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { ModalDeteccaoEmMassa } from "./ModalDeteccaoEmMassa";
 import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { Modal } from "../../components/ui/Modal";
@@ -334,6 +335,8 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
   // Modo de varredura sendo salvo agora (10/09/2026, porte do CaxHub_Atlas) — um jobName de
   // cada vez, mesmo padrão de `salvandoFiltro` abaixo.
   const [salvandoVarredura, setSalvandoVarredura] = useState<string | null>(null);
+  // Ação em massa da coluna "Detecção de exclusão" (27/11/2026).
+  const [deteccaoEmMassa, setDeteccaoEmMassa] = useState(false);
   // Teto da varredura por tabela (21/10/2026): rascunho do campo (por jobName) e liberação única do teto em dois passos.
   const [rascunhoTetoPorJob, setRascunhoTetoPorJob] = useState<Record<string, string>>({});
   const [confirmandoLiberacao, setConfirmandoLiberacao] = useState<string | null>(null);
@@ -931,6 +934,8 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
         </div>
       </div>
 
+      {deteccaoEmMassa && <ModalDeteccaoEmMassa api={API} jobs={jobs} onFechar={() => setDeteccaoEmMassa(false)} onAplicado={carregar} />}
+
       {dimensaoCodemp && (
         <ModalDimensao
           dimensao={dimensaoCodemp}
@@ -1105,7 +1110,19 @@ export function SincronizacaoSenior({ sistema }: { sistema: SistemaSync }) {
                   Sumidos
                 </th>
                 <th className="bg-surface-2 px-2.5 py-3 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
-                  Detecção de exclusão
+                  <span className="inline-flex items-center gap-1.5">
+                    Detecção de exclusão
+                    <button
+                      type="button"
+                      onClick={() => setDeteccaoEmMassa(true)}
+                      disabled={loading || !jobs.some((j) => j.varreduraDisponivel)}
+                      aria-label="Alterar a detecção de exclusão de várias tabelas"
+                      title="Alterar a detecção de exclusão de várias tabelas de uma vez"
+                      className="rounded border border-border bg-surface px-1.5 py-0.5 text-[11px] leading-none text-foreground hover:bg-surface-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      ⋯
+                    </button>
+                  </span>
                 </th>
                 <th className="bg-surface-2 px-2.5 py-3 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-muted">
                   Última sincronização
