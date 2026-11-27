@@ -21,6 +21,71 @@ function textoOuNulo(valor: string | null): string | null {
   return limpo === "" ? null : limpo;
 }
 
+const numero = (valor: { toString(): string } | null): number | null => (valor == null ? null : Number(valor));
+
+// Itens do pedido (E120IPD e E120ISP) com a descrição do cadastro e o símbolo da moeda de cada item (o campo é por item no Senior).
+// Item removido no Senior fica de fora; se o PEDIDO inteiro foi removido, mostra o último retrato dos itens (mesma ideia do cabeçalho).
+async function itensDoPedido(codemp: number, codfil: number, numped: number, pedidoRemovido: boolean) {
+  const where = { codemp, codfil, numped, ...(pedidoRemovido ? {} : { removidoEmSenior: null }) };
+  const [produtoLinhas, servicoLinhas] = await Promise.all([
+    prisma.pedidoItemProduto.findMany({ where, orderBy: { seqipd: "asc" } }),
+    prisma.pedidoItemServico.findMany({ where, orderBy: { seqisp: "asc" } }),
+  ]);
+
+  const unicos = (valores: (string | null)[]) => [...new Set(valores.filter((v): v is string => textoOuNulo(v) != null))];
+  const [produtos, servicos, moedas] = await Promise.all([
+    prisma.produto.findMany({ where: { codemp, codpro: { in: unicos(produtoLinhas.map((i) => i.codpro)) } }, select: { codpro: true, despro: true } }),
+    prisma.servico.findMany({ where: { codemp, codser: { in: unicos(servicoLinhas.map((i) => i.codser)) } }, select: { codser: true, desser: true } }),
+    prisma.moeda.findMany({ where: { codmoe: { in: unicos([...produtoLinhas, ...servicoLinhas].map((i) => i.codmoe)) } }, select: { codmoe: true, sigmoe: true } }),
+  ]);
+  const descricaoProduto = new Map(produtos.map((p) => [p.codpro, p.despro]));
+  const descricaoServico = new Map(servicos.map((s) => [s.codser, s.desser]));
+  const sigla = new Map(moedas.map((m) => [m.codmoe, m.sigmoe]));
+  const rotulo = (codigo: string | null, descricoes: Map<string, string>) => (codigo != null ? descricoes.get(codigo) ?? codigo : "—");
+  // 31/12/1900 é o "sem data" do Senior.
+  const dataOuNula = (data: Date | null) => (data == null || data.getUTCFullYear() <= 1900 ? null : data);
+
+  return {
+    produto: produtoLinhas.map((i) => ({
+      seqipd: i.seqipd,
+      codpro: i.codpro,
+      produtoLabel: rotulo(i.codpro, descricaoProduto),
+      codder: textoOuNulo(i.codder),
+      complemento: textoOuNulo(i.cplipd),
+      qtdped: Number(i.qtdped),
+      qtdaen: numero(i.qtdaen),
+      qtdfat: numero(i.qtdfat),
+      qtdcan: numero(i.qtdcan),
+      qtdabe: numero(i.qtdabe),
+      unimed: textoOuNulo(i.unimed),
+      preuni: numero(i.preuni),
+      moedaSigla: i.codmoe != null ? sigla.get(i.codmoe) ?? null : null,
+      vlrliq: numero(i.vlrliq),
+      datent: dataOuNula(i.datent),
+      sitipdLabel: sitpedLabel(i.sitipd),
+      sitipdTone: sitpedTone(i.sitipd),
+    })),
+    servico: servicoLinhas.map((i) => ({
+      seqisp: i.seqisp,
+      codser: i.codser,
+      servicoLabel: rotulo(i.codser, descricaoServico),
+      complemento: textoOuNulo(i.cplisp),
+      qtdped: Number(i.qtdped),
+      qtdrea: numero(i.qtdrea),
+      qtdfat: numero(i.qtdfat),
+      qtdcan: numero(i.qtdcan),
+      qtdabe: numero(i.qtdabe),
+      unimed: textoOuNulo(i.unimed),
+      preuni: Number(i.preuni),
+      moedaSigla: i.codmoe != null ? sigla.get(i.codmoe) ?? null : null,
+      vlrliq: numero(i.vlrliq),
+      datent: dataOuNula(i.datent),
+      sitispLabel: sitpedLabel(i.sitisp),
+      sitispTone: sitpedTone(i.sitisp),
+    })),
+  };
+}
+
 pedidoVisualizacaoRouter.get("/:codemp/:codfil/:numped", async (req, res) => {
   try {
     const codemp = Number(req.params.codemp);
@@ -41,10 +106,11 @@ pedidoVisualizacaoRouter.get("/:codemp/:codfil/:numped", async (req, res) => {
       return;
     }
 
-    const [cliente, { ratPorChave, propostaPorChave }, { formaPagamentoPorChave, condicaoPagamentoPorChave }] = await Promise.all([
+    const [cliente, { ratPorChave, propostaPorChave }, { formaPagamentoPorChave, condicaoPagamentoPorChave }, itens] = await Promise.all([
       prisma.cliente.findUnique({ where: { codcli: pedido.codcli } }),
       resolverRatEProposta([pedido]),
       resolverFormaECondicaoPagamento([pedido]),
+      itensDoPedido(codemp, codfil, numped, pedido.removidoEmSenior != null),
     ]);
 
     const rat = pedido.numrat != null ? ratPorChave.get(`${pedido.codemp}-${Number(pedido.numrat)}`) : undefined;
@@ -84,6 +150,8 @@ pedidoVisualizacaoRouter.get("/:codemp/:codfil/:numped", async (req, res) => {
         // listagens; os dados abaixo são o último retrato conhecido.
         removidoEmSenior: pedido.removidoEmSenior,
       },
+      itensProduto: itens.produto,
+      itensServico: itens.servico,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
