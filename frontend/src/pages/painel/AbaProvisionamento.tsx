@@ -171,6 +171,8 @@ export function AbaProvisionamento() {
         rotulo="consultores"
         vazio="Nenhum consultor com contrato Fixo ou Hora no seu escopo."
         pageSize={50}
+        // Todas as linhas do filtro, com as colunas visíveis. O arquivo leva os valores mesmo com a tela oculta: ocultar é privacidade de tela.
+        exportavel={`provisionamento-${valida}`}
         rodape={(d) => (
           <div className="flex flex-wrap gap-x-8 gap-y-1 border-t border-border bg-surface px-5 py-3">
             <div>

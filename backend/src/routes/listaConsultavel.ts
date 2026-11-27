@@ -20,6 +20,8 @@ import { col } from "../consultas/colunasDeSubconsulta";
 import { catalogoDaFonte, type FonteCampos } from "../consultas/camposRelacionados";
 import { titulosDaTabela } from "../consultas/titulosDosCampos";
 import type { FiltroColuna } from "../sync/filtroColunaLocal";
+import { colunasDaExportacao, montarCsv } from "../consultas/csv";
+import { TIPO_XLSX, montarXlsx } from "../consultas/xlsx";
 import { lerInteiro } from "./parametrosConsulta";
 import { gerarPdfDaPagina, RelatorioPdfError } from "../lib/relatorioPdf";
 
@@ -139,26 +141,6 @@ export async function linhasFiltradasDaLista(lista: ListaConsultavel, q: Record<
 const LIMITE_CSV = 50000;
 /** Teto de linhas do relatório impresso (papel: acima disso a pessoa deve filtrar ou exportar para o Excel). */
 const LIMITE_IMPRESSAO = 5000;
-
-const DIA_BR = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
-const DIA_HORA_BR = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" });
-
-/** Uma célula do CSV em português: ";" como separador, vírgula decimal, datas dd/mm/aaaa, Sim/Não. */
-function celulaCsv(valor: unknown, tipo: ColunaConsulta["tipo"] | undefined, formato?: ColunaConsulta["formato"]): string {
-  let texto: string;
-  if (valor == null) texto = "";
-  // Coluna em minutos que a tela mostra como HH:MM: no CSV vai em horas decimais, que o Excel soma.
-  else if (formato === "horasMinutos" && typeof valor === "number") texto = (valor / 60).toFixed(2).replace(".", ",");
-  else if (valor instanceof Date) {
-    const meiaNoiteUtc = valor.getUTCHours() === 0 && valor.getUTCMinutes() === 0 && valor.getUTCSeconds() === 0;
-    texto = meiaNoiteUtc ? DIA_BR.format(valor) : DIA_HORA_BR.format(valor);
-  } else if (typeof valor === "boolean") texto = valor ? "Sim" : "Não";
-  else if (typeof valor === "number") texto = (tipo === "decimal" ? valor.toFixed(2) : String(valor)).replace(".", ",");
-  else texto = String(valor);
-  // Células que o Excel interpretaria como fórmula (=, +, -, @) ganham um apóstrofo na frente: texto vindo do banco nunca vira fórmula.
-  if (typeof valor === "string" && /^[=+\-@]/.test(texto)) texto = `'${texto}`;
-  return /[;"\r\n]/.test(texto) ? `"${texto.replace(/"/g, '""')}"` : texto;
-}
 
 export function registrarListaConsultavel(
   router: Router,
@@ -282,16 +264,7 @@ export function registrarListaConsultavel(
     if (truncado) linhas.length = limite;
 
     const porNome = new Map(colunas.map((c) => [c.nome, c]));
-    const pedidas = typeof q.colunasCsv === "string" ? q.colunasCsv.split(",").filter((n) => porNome.has(n)) : [];
-    const nomes = pedidas.length ? pedidas : lista.colunas.map((c) => c.nome);
-    let titulos: Record<string, unknown> = {};
-    try {
-      const lido = typeof q.cabecalhos === "string" ? JSON.parse(q.cabecalhos) : {};
-      if (lido && typeof lido === "object") titulos = lido as Record<string, unknown>;
-    } catch {
-      /* cabeçalho é só enfeite: sem JSON válido usa o nome técnico */
-    }
-    const tituloDe = (n: string) => (typeof titulos[n] === "string" ? (titulos[n] as string) : n);
+    const { nomes, tituloDe } = colunasDaExportacao(q, (n) => porNome.has(n), lista.colunas.map((c) => c.nome));
     return { lista, linhas, nomes, porNome, tituloDe, truncado };
   }
 
@@ -299,14 +272,27 @@ export function registrarListaConsultavel(
     router.get(sub("/csv"), async (req, res) => {
       try {
         const { linhas, nomes, porNome, tituloDe } = await linhasExportadas(req, LIMITE_CSV);
-        const cabecalho = nomes.map((n) => celulaCsv(tituloDe(n), undefined));
-        const corpo = linhas.map((l) => nomes.map((n) => celulaCsv(l[n], porNome.get(n)?.tipo, porNome.get(n)?.formato)).join(";"));
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="${rotulo.replace(/[^a-z0-9_-]/gi, "_")}_${Date.now()}.csv"`);
-        // BOM + ponto e vírgula + vírgula decimal: abre direto no Excel em português (mesma convenção das outras exportações).
-        res.send(`\uFEFF${[cabecalho.join(";"), ...corpo].join("\r\n")}`);
+        // BOM + ponto e vírgula + vírgula decimal: abre direto no Excel em português (consultas/csv.ts).
+        res.send(montarCsv(nomes, tituloDe, (n) => porNome.get(n), linhas));
       } catch (erro) {
         erroHttp(res, erro, `${rotulo}-csv`);
+      }
+    });
+  }
+
+  // A mesma exportação em .xlsx (consultas/xlsx.ts), com os tipos do Excel e a linha de total das colunas que a lista já soma.
+  if (!jaTemGet(router, sub("/xlsx"))) {
+    router.get(sub("/xlsx"), async (req, res) => {
+      try {
+        const { lista, linhas, nomes, porNome, tituloDe } = await linhasExportadas(req, LIMITE_CSV);
+        const arquivo = await montarXlsx({ nomes, tituloDe, colunaDe: (n) => porNome.get(n), linhas, totais: lista.totais, aba: rotulo });
+        res.setHeader("Content-Type", TIPO_XLSX);
+        res.setHeader("Content-Disposition", `attachment; filename="${rotulo.replace(/[^a-z0-9_-]/gi, "_")}_${Date.now()}.xlsx"`);
+        res.send(arquivo);
+      } catch (erro) {
+        erroHttp(res, erro, `${rotulo}-xlsx`);
       }
     });
   }

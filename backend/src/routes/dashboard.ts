@@ -578,8 +578,8 @@ registrarListaEmMemoria(
         { nome: "contrato", tipo: "texto", obrigatoria: true },
         { nome: "valorHora", tipo: "decimal" },
         { nome: "fixoMensal", tipo: "decimal" },
-        { nome: "minutosAteHoje", tipo: "decimal" },
-        { nome: "deslocamentoMinutos", tipo: "decimal" },
+        { nome: "minutosAteHoje", tipo: "decimal", formato: "horasMinutos" },
+        { nome: "deslocamentoMinutos", tipo: "decimal", formato: "horasMinutos" },
         { nome: "deslocamentoValor", tipo: "decimal" },
         { nome: "realizado", tipo: "decimal" },
         { nome: "projecao", tipo: "decimal" },
@@ -594,7 +594,8 @@ registrarListaEmMemoria(
       pageSizePadrao: 50,
     };
   },
-  "provisionamento"
+  "provisionamento",
+  { exportar: true }
 );
 
 // Card "RDV · Despesas de viagem" da Home (23/09/2026): RDV de RATs Digitada/Fechada no

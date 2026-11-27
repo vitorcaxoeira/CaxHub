@@ -1066,7 +1066,6 @@ export function GestaoPropostas() {
           aoMudarPorPagina={setPorPagina}
           acessorioPorPagina={padroes.estrela("porPagina")}
           exportavel="gestao-propostas"
-          rotuloExportar="Exportar Excel"
           imprimir={{ titulo }}
           pdf={{ titulo, arquivo: "gestao-propostas" }}
         />

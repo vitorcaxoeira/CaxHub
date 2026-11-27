@@ -247,7 +247,6 @@ export function BonificacaoHorasKyria() {
         vazio="Nenhum atendente enquadrado com indicador de ponto apontado nesta competência."
         pageSize={25}
         exportavel="bonificacao-horas-kyria"
-        rotuloExportar="Exportar Excel"
         imprimir={{ titulo: tituloRelatorio }}
         pdf={{ titulo: tituloRelatorio, arquivo: "horas-kyria-x-trabalhadas" }}
         // O relatório segue a tela: os times saem sob os atendentes que estavam abertos ("Expandir todos" ou clique na linha).

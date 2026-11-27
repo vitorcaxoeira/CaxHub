@@ -20,6 +20,8 @@ export interface ColunaMemoria extends ColunaLocal {
   dominio?: { valor: string; rotulo: string }[];
   /** Sem aba "Valores" no funil (ex.: texto longo, único por linha). */
   semValores?: boolean;
+  /** Como o CSV mostra o número: "horasMinutos" = a coluna guarda MINUTOS e sai em horas decimais (a tela mostra HH:MM). */
+  formato?: "horasMinutos";
 }
 
 export type Linha = Record<string, unknown>;
@@ -124,6 +126,11 @@ export function descreverColunasMemoria(colunas: ColunaMemoria[]) {
     semAbaValores: !!c.semValores,
     ...(c.dominio ? { dominio: c.dominio } : {}),
   }));
+}
+
+/** TODAS as linhas que passam nos filtros de coluna, na ordem pedida (sem página): o que a exportação leva. */
+export function linhasDaExportacao(p: Preparada): Linha[] {
+  return ordenarLocal(aplicarFiltrosLocal(p.linhas, p.colunas, p.filtros), p.colunas, p.ordem);
 }
 
 /** Página da lista: filtros, ordem (sem ordem = a ordem em que a rota entregou as linhas), totais e a fatia pedida. */

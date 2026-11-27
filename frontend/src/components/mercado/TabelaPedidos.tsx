@@ -206,7 +206,6 @@ export function TabelaPedidos({
       recarga={recarga}
       defs={semCliente ? COLUNAS_SEM_CLIENTE : COLUNAS}
       exportavel="pedidos"
-      rotuloExportar="Exportar Excel"
       imprimir={{ titulo: tituloImpressao }}
       pdf={{ titulo: tituloImpressao, arquivo: "pedidos" }}
       ctx={navigate}
