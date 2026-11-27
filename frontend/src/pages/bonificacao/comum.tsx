@@ -108,9 +108,10 @@ export function descreverFaixas(faixas: Faixa[], sentido: SentidoIndicador | str
   return faixas.map((f) => (f.limite == null ? `demais → ${fmtPontos(f.pontos)} pt` : `${prefixo} ${fmtValorIndicador(f.limite, unidade)} → ${fmtPontos(f.pontos)} pt`)).join(" · ");
 }
 
-/** Minutos → "144:58" (horas:minutos, como o relatório Horas Disponíveis x Trabalhadas). */
+/** Minutos → "144:58" (horas:minutos, como o relatório Horas Disponíveis x Trabalhadas); negativo vira "-02:53". */
 export function fmtHorasMinutos(minutos: number | null | undefined): string {
   if (minutos == null) return "—";
-  const total = Math.round(minutos);
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  const total = Math.round(Math.abs(minutos));
+  const sinal = minutos < 0 && total > 0 ? "-" : "";
+  return `${sinal}${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }

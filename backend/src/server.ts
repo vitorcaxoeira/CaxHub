@@ -44,6 +44,7 @@ import { scheduleKyriaTicketsSync } from "./kyria/ticketsSync";
 import { scheduleKyriaTicketHoursSync } from "./kyria/ticketHoursSync";
 import { scheduleKyriaCustomerHoursSync } from "./kyria/customerHoursSync";
 import { scheduleKyriaTimeEntriesSync } from "./kyria/timeEntriesSync";
+import { scheduleKyriaTicketLabelsSync } from "./kyria/ticketLabelsSync";
 import { alocacaoRouter } from "./routes/alocacao";
 import { eficienciaRouter } from "./routes/eficiencia";
 import { planoEvolucaoRouter } from "./routes/planoEvolucao";
@@ -361,6 +362,7 @@ async function iniciar() {
     scheduleKyriaTicketHoursSync();
     scheduleKyriaCustomerHoursSync();
     scheduleKyriaTimeEntriesSync();
+    scheduleKyriaTicketLabelsSync();
     scheduleFilaSemanalSync();
     agendarRegistroDeLeituras();
   });

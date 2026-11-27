@@ -13,7 +13,7 @@ export const CRON_EXPR = "5 5 * * *";
 // Sem corte por data: são ~170 projetos, sempre completo (e DatAtu nem sempre é preenchida).
 export const CAMPO_DATA: string | null = null;
 // Só o essencial pra Rentabilidade (17/11/2026): identificação, cliente, CC, situação, vigência e
-// o `USU_Cli0800` (cliente no 0800 antigo). As outras ~120 colunas da E615PRJ são bloqueio
+// o `USU_Cli0800` (código do cliente no sistema de chamados anterior). As outras ~120 colunas da E615PRJ são bloqueio
 // orçamentário, controle físico e contas padrão — fora de escopo.
 export const QUERY = `SELECT CodEmp AS codemp, NumPrj AS numprj, CodFil AS codfil, CodTpj AS codtpj, NomPrj AS nomprj, AbrPrj AS abrprj, CodCli AS codcli, CliFat AS clifat, CodCcu AS codccu, SitPrj AS sitprj, PrjApr AS prjapr, PrjSup AS prjsup, DatIpj AS datipj, DatFpj AS datfpj, USU_Cli0800 AS cli0800 FROM e615prj`;
 

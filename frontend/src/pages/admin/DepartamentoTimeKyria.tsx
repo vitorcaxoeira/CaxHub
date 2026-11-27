@@ -21,7 +21,7 @@ interface RespostaDepartamentos {
 
 // Tela de administração da tabela DepartamentoTimeKyria (100% nativa do CaxHub, nunca sincronizada)
 // — liga cada departamento aos times do Kyria cujo atendimento ele representa. É a "Categoria" do
-// antigo 0800 na rentabilidade: o time do TICKET diz de qual departamento são as horas de suporte.
+// sistema de chamados anterior na rentabilidade: o time do TICKET diz de qual departamento são as horas de suporte.
 // Mesmo molde de Departamento x Grupo Contábil (pages/admin/DepartamentoGrupoContabil.tsx).
 export function DepartamentoTimeKyria() {
   const [departamentos, setDepartamentos] = useState<DepartamentoRow[]>([]);
@@ -91,8 +91,8 @@ export function DepartamentoTimeKyria() {
       </div>
 
       <p className="mb-6 max-w-2xl text-sm text-muted">
-        Define de qual departamento são as horas de suporte de cada time do Kyria (o time do ticket). Substitui a "Categoria" do antigo 0800 na
-        rentabilidade. Um departamento pode ter vários times, e um time pode servir a mais de um departamento — as horas de um time ligado a dois
+        Define de qual departamento são as horas de suporte de cada time do Kyria (o time do ticket). Substitui a "Categoria" do sistema de
+        chamados anterior na rentabilidade. Um departamento pode ter vários times, e um time pode servir a mais de um departamento — as horas de um time ligado a dois
         departamentos entram nos dois. Ao lado de cada time vão as horas apontadas nos últimos 12 meses, pra ajudar a decidir.
       </p>
       <p className="mb-6 max-w-2xl text-sm text-muted">

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { arredondar, media, mesSeguinte, minutosParaHoras, percentualDe, sextasDoMes, type FonteIndicador } from "./bonificacao";
+import { horasDoMes, saldoBancoDoMesSql } from "./bonificacaoHoras";
 
 // Gestão de Bonificação: apuração dos indicadores automáticos (Kyria e ponto HCM). Cada função devolve `valor` (nulo = sem dado: o resultado
 // fica pendente até alguém informar) e `detalhe` (a memória de cálculo, gravada no resultado e mostrada na tela). Competência = dia 1 do mês;
@@ -124,17 +125,25 @@ async function apurarPctPonto(ctx: ContextoApuracao): Promise<Apurado> {
       AND st.conabs = 2 AND sp.removido_em_senior IS NULL
       AND sp.datapu >= ${ini}::date AND sp.datapu < ${fim}::date`;
 
+  const [banco] = await prisma.$queryRaw<{ minutos: number | null }[]>(saldoBancoDoMesSql(vinculo.hcmNumemp, vinculo.hcmTipcol, vinculo.hcmNumcad, ini, fim));
+  // Denominador = total do mês (trabalhadas + saldo POSITIVO do banco de horas): domain/bonificacaoHoras.ts, a mesma regra da tela.
+  const mes = horasDoMes({ trabalhadas: ponto.minutos, saldoBanco: banco.minutos, kyria: kyria.minutos });
+
   const detalhe = {
     minutosKyria: arredondar(kyria.minutos, 2),
     horasKyria: minutosParaHoras(kyria.minutos),
     minutosPonto: ponto.minutos,
     horasPonto: minutosParaHoras(ponto.minutos),
+    saldoBancoMinutos: banco.minutos ?? 0,
+    ...((banco.minutos ?? 0) < 0 ? { bancoDeHoras: "Saldo do mês negativo: não entrou no cálculo" } : {}),
+    minutosExtras: mes.minutosExtras,
+    minutosTotal: mes.minutosTotal,
+    horasTotal: minutosParaHoras(mes.minutosTotal),
     membrosKyria: membros.map((m) => m.name),
     porTime: porTime.map((t) => ({ time: t.time, minutos: arredondar(t.minutos, 2) })),
   };
-  const valor = percentualDe(kyria.minutos, ponto.minutos);
-  if (valor == null) return { valor: null, detalhe: { motivo: "Sem horas trabalhadas no ponto HCM neste mês", ...detalhe } };
-  return { valor, detalhe };
+  if (mes.percentual == null) return { valor: null, detalhe: { motivo: "Sem horas trabalhadas no ponto HCM neste mês", ...detalhe } };
+  return { valor: mes.percentual, detalhe };
 }
 
 /** Apura um indicador automático. Fonte manual não passa por aqui (valor nulo, a pessoa informa). */

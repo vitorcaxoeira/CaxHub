@@ -19,6 +19,7 @@ import {
   runKyriaCustomerHoursSync,
   mesesDoFiltro,
 } from "./customerHoursSync";
+import { JOB_NAME as KYRIA_TICKET_LABELS_JOB, CRON_EXPR as KYRIA_TICKET_LABELS_CRON, runKyriaTicketLabelsSync } from "./ticketLabelsSync";
 import { JOB_NAME as KYRIA_TICKET_HOURS_JOB, CRON_EXPR as KYRIA_TICKET_HOURS_CRON, runKyriaTicketHoursSync } from "./ticketHoursSync";
 import { JOB_NAME as KYRIA_TIME_ENTRIES_JOB, CRON_EXPR as KYRIA_TIME_ENTRIES_CRON, runKyriaTimeEntriesSync } from "./timeEntriesSync";
 
@@ -145,5 +146,19 @@ export const KYRIA_SYNC_JOBS: KyriaSyncJobDescriptor[] = [
     tabelaLocal: "kyria_time_entries",
     run: runKyriaTimeEntriesSync,
     contarRegistros: () => prisma.kyriaTimeEntry.count(),
+  },
+  // Depois do feed de apontamentos (é ele que diz quais chamados reler). Uma chamada por chamado (~20 min para 35 dias). Aceita "Sinc. Filtros"
+  // (meses completos) para a carga inicial.
+  {
+    jobName: KYRIA_TICKET_LABELS_JOB,
+    displayName: "Etiquetas de cada ticket",
+    cronExpr: KYRIA_TICKET_LABELS_CRON,
+    path: "/tickets/{ticketId}/labels",
+    tabelaLocal: "kyria_ticket_labels",
+    run: runKyriaTicketLabelsSync,
+    validarFiltros: (filtros) => {
+      mesesDoFiltro(filtros);
+    },
+    contarRegistros: () => prisma.kyriaTicketLabel.count(),
   },
 ];

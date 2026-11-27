@@ -6,7 +6,7 @@ import { depexeLabel } from "../domain/propostasDominio";
 
 // Administração > Integração Kyria > Departamento x Time Kyria (rentabilidade, ajuste 02 de
 // 17/11/2026). Liga cada departamento aos times do Kyria cujo atendimento ele representa — o
-// equivalente, no Kyria, da "Categoria" do antigo 0800 (ERP / HCM / Acesso e Segurança): o time do
+// equivalente, no Kyria, da "Categoria" do sistema de chamados anterior (ERP / HCM / Acesso e Segurança): o time do
 // TICKET diz de que departamento são as horas de suporte. Config 100% nativa (tabela
 // DepartamentoTimeKyria), mesmo molde de Departamento x Grupo Contábil (routes/contabil.ts).
 //
