@@ -26,6 +26,9 @@ import { totalDoContratoFixo } from "../domain/contratoFixo";
 import { feriasPagasNasCompetencias } from "../domain/feriasNota";
 import { bonificacoesNasCompetencias } from "../domain/bonificacaoNota";
 import { diasUteisLiquidos } from "../domain/calendarioTrabalho";
+import { financeiroDoMes, ganhoDoMes, mesAnteriorDe } from "../domain/financeiroConsultorMes";
+import { ErroEntradaConsulta } from "../consultas/consultaColunas";
+import { registrarListaEmMemoria } from "./listaEmMemoria";
 
 export const dashboardRouter = Router();
 
@@ -388,18 +391,17 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
         // Dia inteiro de férias ou de folga não é dia útil de trabalho: sai da média e do total (13/11/2026).
         const diasUteisPassados = diasUteisLiquidos(combo.de, combo.ateParaMeta, combo.diasAbonados);
         const diasUteisTotais = diasUteisLiquidos(combo.de, combo.ate, combo.diasAbonados);
-        const mediaMinutosPorDiaUtil = diasUteisPassados > 0 ? combo.realizadoAteHoje.totalMinutos / diasUteisPassados : 0;
-        const projecaoMinutos = mediaMinutosPorDiaUtil * diasUteisTotais;
-        // Deslocamento vale metade do valor-hora e NÃO é extrapolado na projeção: viagem é
-        // pontual, então entra só o que já foi lançado (até hoje no ganho; o período inteiro
-        // na projeção, que inclui lançamento com data futura dentro do mês).
-        const valorHoraDeslocamento = valorHora.vlrhor * FATOR_HORA_DESLOCAMENTO;
-        ganhoAteAgora =
-          (ganhoAteAgora ?? 0) +
-          (valorHora.vlrhor * combo.realizadoAteHoje.totalMinutos) / 60 +
-          (valorHoraDeslocamento * combo.deslocamentoAteHojeMinutos) / 60;
-        projecaoGanho =
-          (projecaoGanho ?? 0) + (valorHora.vlrhor * projecaoMinutos) / 60 + (valorHoraDeslocamento * combo.deslocamentoMinutos) / 60;
+        // Conta de ganho e projeção do mês: domain/financeiroConsultorMes.ts, a mesma da aba Provisionamento.
+        const doMes = ganhoDoMes({
+          vlrhor: valorHora.vlrhor,
+          minutosAteHoje: combo.realizadoAteHoje.totalMinutos,
+          diasUteisPassados,
+          diasUteisTotais,
+          deslocamentoAteHojeMinutos: combo.deslocamentoAteHojeMinutos,
+          deslocamentoMinutos: combo.deslocamentoMinutos,
+        });
+        ganhoAteAgora = (ganhoAteAgora ?? 0) + doMes.ganho;
+        projecaoGanho = (projecaoGanho ?? 0) + doMes.projecao;
       }
     }
 
@@ -489,6 +491,111 @@ dashboardRouter.get("/meu-resumo", requireAuth, async (req: AuthenticatedRequest
     handleError(res, error, "meu-resumo");
   }
 });
+
+// ---------------------------------------------------------------- Home › aba Provisionamento (27/11/2026)
+// A nota do mês de TODOS os consultores de contrato Fixo ou Hora, uma linha por consultor, com as mesmas contas do card de valor da Home
+// (domain/financeiroConsultorMes.ts). Só admin e gestor: o admin vê todos; o gestor, o time dos departamentos que gerencia (o mesmo escopo
+// do seletor de consultor da Home, `consultoresFiltraveis`). Consultor comum leva 403. Lista em memória do kit (filtro, ordem, resumo).
+
+const escopoDoProvisionamento = new WeakMap<object, { role: string; contexto: ContextoConsultor }>();
+
+dashboardRouter.use("/provisionamento", requireAuth, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: "Usuário não encontrado" });
+      return;
+    }
+    const contexto = await resolverContextoConsultor(user.email);
+    if (req.user!.role !== "admin" && contexto.departamentosGerenciados.length === 0) {
+      res.status(403).json({ error: "Sem permissão: o provisionamento é do administrador e dos gestores" });
+      return;
+    }
+    escopoDoProvisionamento.set(req, { role: req.user!.role as string, contexto });
+    next();
+  } catch (error) {
+    handleError(res, error, "provisionamento:acesso");
+  }
+});
+
+/** Quantos consultores são calculados ao mesmo tempo (cada um faz várias consultas). */
+const CONSULTORES_EM_PARALELO = 5;
+
+async function emLotes<T, R>(itens: T[], tamanho: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const saida: R[] = [];
+  for (let i = 0; i < itens.length; i += tamanho) saida.push(...(await Promise.all(itens.slice(i, i + tamanho).map(fn))));
+  return saida;
+}
+
+registrarListaEmMemoria(
+  dashboardRouter,
+  "/provisionamento",
+  async (req) => {
+    const escopo = escopoDoProvisionamento.get(req);
+    if (!escopo) throw new ErroEntradaConsulta("Sem acesso ao provisionamento", 403);
+    const bruta = req.query.competencia;
+    const hojeBr = diaBrasilComoData(new Date());
+    const competencia = typeof bruta === "string" && bruta ? bruta : hojeBr.toISOString().slice(0, 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) throw new ErroEntradaConsulta("Competência inválida (use AAAA-MM)");
+    const [ano, mes] = competencia.split("-").map(Number);
+
+    const codfors = (await consultoresFiltraveis(escopo.role, escopo.contexto)).map((c) => c.codfor);
+    const cadastros = await prisma.consultor.findMany({ where: { codfor: { in: codfors }, conhab: 1 } });
+    // O mesmo fornecedor pode ter mais de um cadastro (empresa/usuário): uma linha por empresa+fornecedor.
+    const unicos = [...new Map(cadastros.map((c) => [`${c.codemp}-${c.codfor}`, c])).values()];
+
+    const linhas = await emLotes(unicos, CONSULTORES_EM_PARALELO, async (c) => {
+      const contrato = await valorHoraVigente(c.codemp, c.codfor as number);
+      if (!contrato) return null; // só contrato Fixo ou Hora entra
+      const anterior = mesAnteriorDe(ano, mes);
+      const [financeiro, doMesAnterior] = await Promise.all([
+        financeiroDoMes(c.codemp, c.codfor as number, ano, mes, contrato),
+        financeiroDoMes(c.codemp, c.codfor as number, anterior.ano, anterior.mes, contrato),
+      ]);
+      return {
+        chave: `${c.codemp}-${c.codfor}`,
+        codemp: c.codemp,
+        codfor: c.codfor as number,
+        consultor: c.nomcom ?? c.nomfor ?? `Fornecedor ${c.codfor}`,
+        departamento: depexeLabel(c.depexe),
+        contrato: contrato.fixo ? "Fixo" : "Hora",
+        valorHora: contrato.vlrhor,
+        fixoMensal: contrato.fixo?.valorMensal ?? null,
+        ...financeiro,
+        // "Mês Anterior" (27/11/2026, decisão do Vitor: o valor CALCULADO pelo CaxHub, não o título do ERP): o "A provisionar" do mês anterior ao
+        // filtrado, pela mesma conta. O contrato é o vigente hoje (o espelho não guarda o histórico), como a Home faz ao olhar um mês passado.
+        mesAnterior: doMesAnterior.liquidoProjetado,
+      };
+    });
+
+    return {
+      linhas: linhas
+        .filter((l): l is NonNullable<typeof l> => l != null)
+        .sort((a, b) => a.consultor.localeCompare(b.consultor, "pt-BR")),
+      colunas: [
+        { nome: "consultor", tipo: "texto", obrigatoria: true },
+        { nome: "departamento", tipo: "texto", obrigatoria: true },
+        { nome: "contrato", tipo: "texto", obrigatoria: true },
+        { nome: "valorHora", tipo: "decimal" },
+        { nome: "fixoMensal", tipo: "decimal" },
+        { nome: "minutosAteHoje", tipo: "decimal" },
+        { nome: "deslocamentoMinutos", tipo: "decimal" },
+        { nome: "deslocamentoValor", tipo: "decimal" },
+        { nome: "realizado", tipo: "decimal" },
+        { nome: "projecao", tipo: "decimal" },
+        { nome: "ferias", tipo: "decimal" },
+        { nome: "bonificacao", tipo: "decimal" },
+        { nome: "descontos", tipo: "decimal" },
+        { nome: "liquidoAteAgora", tipo: "decimal" },
+        { nome: "liquidoProjetado", tipo: "decimal" },
+        { nome: "mesAnterior", tipo: "decimal" },
+      ],
+      totais: ["minutosAteHoje", "deslocamentoValor", "realizado", "projecao", "ferias", "bonificacao", "descontos", "liquidoAteAgora", "liquidoProjetado", "mesAnterior"],
+      pageSizePadrao: 50,
+    };
+  },
+  "provisionamento"
+);
 
 // Card "RDV · Despesas de viagem" da Home (23/09/2026): RDV de RATs Digitada/Fechada no
 // período filtrado + títulos a pagar de reembolso em aberto (E501TCP, codtpt='10'), por faixa
