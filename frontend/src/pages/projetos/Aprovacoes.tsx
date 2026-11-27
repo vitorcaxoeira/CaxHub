@@ -2,6 +2,8 @@ import axios from "axios";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "../../components/ui/Toast";
+import { CampoDescricaoApontamento } from "../../components/projetos/CampoDescricaoApontamento";
+import { erroDeDescricao, textoInicialDaDescricao } from "../../lib/descricao-apontamento";
 import { toneBadge } from "../../components/ui/badges";
 import {
   AtividadeDetalhe,
@@ -910,12 +912,13 @@ function ListaApontamentos({
                     className={classeCampo}
                   />
                 </div>
-                <textarea
-                  value={descricao}
-                  onChange={(e) => setDescricao(e.target.value)}
-                  rows={2}
-                  placeholder="Descrição do trabalho — vai pro apontamento e pro Senior"
-                  className={`w-full resize-none ${classeCampo}`}
+                <p className="text-[12px] text-muted">Descrição do trabalho — vai pro apontamento e pro Senior</p>
+                <CampoDescricaoApontamento
+                  rows={3}
+                  valor={descricao}
+                  onChange={setDescricao}
+                  descricaoAtividade={s.descricaoAtividade}
+                  itemDescricao={s.itemDescricao}
                 />
                 <input
                   value={observacao}
@@ -932,8 +935,14 @@ function ListaApontamentos({
                   </button>
                   <button
                     onClick={() => decidir(s, true)}
-                    disabled={enviando || s.bloqueadoApontamentoEfetivo}
-                    title={s.bloqueadoApontamentoEfetivo ? "Apontamento bloqueado nesta atividade/proposta pelo gestor." : undefined}
+                    disabled={
+                      enviando || s.bloqueadoApontamentoEfetivo || erroDeDescricao(descricao, [s.descricaoAtividade, s.itemDescricao]) != null
+                    }
+                    title={
+                      s.bloqueadoApontamentoEfetivo
+                        ? "Apontamento bloqueado nesta atividade/proposta pelo gestor."
+                        : (erroDeDescricao(descricao, [s.descricaoAtividade, s.itemDescricao]) ?? undefined)
+                    }
                     className={classeBotao.primario}
                   >
                     {enviando ? "Salvando..." : "Aprovar"}
@@ -947,7 +956,7 @@ function ListaApontamentos({
                   setData(paraInputData(s.inicioSolicitado));
                   setHoraInicio(paraInputHora(s.inicioSolicitado));
                   setHoraFim(paraInputHora(s.fimSolicitado));
-                  setDescricao(s.descricao);
+                  setDescricao(textoInicialDaDescricao(s.descricao, [s.descricaoAtividade, s.itemDescricao]));
                   setObservacao("");
                 }}
                 className={`mt-2 ${classeBotao.neutro}`}

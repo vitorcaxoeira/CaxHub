@@ -24,6 +24,7 @@ import { itemFaturavel } from "../domain/eficienciaPropostas";
 import { CODCLI_EMPRESA_PROPRIA, forfatLabel } from "../domain/propostasDominio";
 import { podeVerValoresDaProposta } from "../domain/valoresDaProposta";
 import { confirmouExcluirAjuste, decidirExclusaoComAjuste } from "../domain/exclusaoApontamento";
+import { carregarReferencias, erroDeDescricao, referenciasDaAtividade } from "../domain/descricaoApontamento";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
 // rastreou (ver AtividadeSessaoExecucao / PATCH /atividades/:id/mover) e confirma —
@@ -395,6 +396,12 @@ async function confirmarSessao(
     };
   }
 
+  // Descrição obrigatória (27/11/2026): vale a que chegou agora ou, na falta, a já salva na
+  // sessão — nunca a da atividade. Conferida antes de qualquer RAT ser criada.
+  const descricaoFinal = ajustes.descricao?.trim() || sessao.observacao?.trim() || "";
+  const erroDescricao = erroDeDescricao(descricaoFinal, (await referenciasDaAtividade(atividade)).todas);
+  if (erroDescricao) return { status: 400, body: { codigo: "descricao_invalida", error: erroDescricao } };
+
   // A sessão já existe e já entra em `realizado` como "não confirmada", então desconta a
   // duração atual dela — senão a mesma hora contaria duas vezes e o bloqueio dispararia
   // com metade do saldo consumido.
@@ -464,15 +471,7 @@ async function confirmarSessao(
       datati: diaBrasilComoData(inicio),
       horini,
       horfim,
-      // Sem fallback AQUI porque a herança já aconteceu antes: desde 03/08/2026 toda
-      // parada grava a descrição da atividade na sessão quando ninguém digita nada (ver
-      // descricaoPadraoDaAtividade em domain/execucaoAtividade.ts), e é ela que chega neste
-      // campo pela tela de confirmação.
-      //
-      // Consequência assumida: o gate de PATCH /rats/:id/aprovar, que exige observação em
-      // todo item, na prática deixa de barrar — a observação quase nunca fica vazia. Foi
-      // decisão do Vitor, pedindo que a descrição fosse herdada sempre.
-      desati: ajustes.descricao?.trim() || null,
+      desati: descricaoFinal,
       origemCaxHub: true,
     },
   });
@@ -609,6 +608,7 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
     ]);
     const itemPorChave = new Map(itens.map((i) => [`${i.codemp}-${i.codpro}-${i.seqite}`, i]));
     const propostaPorChave = new Map(propostas.map((p) => [`${p.codemp}-${p.codpro}`, p]));
+    const referencias = await carregarReferencias(atividades);
 
     res.json({
       atividades: atividades
@@ -627,6 +627,7 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
             codpro: a.codpro,
             seqite: a.seqite,
             itemDescricao: item.despro ?? null,
+            descricaoAtividade: referencias(a).descricaoAtividade,
             cliente: proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : null,
           };
         })
@@ -786,6 +787,10 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
       }
     }
 
+    // Descrição da atividade (informativa) e quais pendências ainda precisam de descrição —
+    // as mesmas que impedem o consultor de iniciar outra atividade.
+    const referencias = await carregarReferencias(sessoes.map((s) => s.atividade));
+
     res.json({
       mostrarConsultor,
       // Primeira de cada lista = a que a regra automática escolheria (id mais alto, mesma
@@ -841,6 +846,8 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           duracaoMinutos: s.fim ? Math.round((s.fim.getTime() - s.inicio.getTime()) / 60000) : 0,
           origem: s.origem,
           observacao: s.observacao,
+          descricaoAtividade: referencias(s.atividade).descricaoAtividade,
+          semDescricao: erroDeDescricao(s.observacao, referencias(s.atividade).todas) != null,
           codfor: s.atividade.codfor,
           consultorNome: mostrarConsultor ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${s.atividade.codfor}`) : null,
           integracaoErpLabel: integracaoErpLabel(statusErpAlocacao),
@@ -1301,6 +1308,11 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
       res.status(400).json({ error: "Sessão excluída — não é possível editar" });
       return;
     }
+    const erroDescricao = erroDeDescricao(desati, (await referenciasDaAtividade(sessao.atividade)).todas);
+    if (erroDescricao) {
+      res.status(400).json({ codigo: "descricao_invalida", error: erroDescricao });
+      return;
+    }
     // Ainda não confirmada (sem RatItem): grava direto na sessão. É o mesmo campo que
     // confirmarSessao usa como padrão quando o consultor confirma sem editar de novo (ver
     // AtividadeSessaoExecucao.observacao) — sem isso, o texto só existia em memória no
@@ -1365,14 +1377,6 @@ apontamentosRouter.patch("/:id/sessao", requireRole("admin"), async (req: Authen
       res.status(400).json({ error: "Informe a data, a hora inicial e a hora final." });
       return;
     }
-    if (!descricao) {
-      res.status(400).json({ error: "A descrição é obrigatória." });
-      return;
-    }
-    if (descricao.length > 1000) {
-      res.status(400).json({ error: "A descrição pode ter no máximo 1000 caracteres." });
-      return;
-    }
     if (!(fim.getTime() > inicio.getTime())) {
       res.status(400).json({ error: "O fim precisa ser depois do início" });
       return;
@@ -1413,6 +1417,12 @@ apontamentosRouter.patch("/:id/sessao", requireRole("admin"), async (req: Authen
       return;
     }
     const ratItem = sessao.ratItem!;
+
+    const erroDescricao = erroDeDescricao(descricao, (await referenciasDaAtividade(sessao.atividade)).todas);
+    if (erroDescricao) {
+      res.status(400).json({ codigo: "descricao_invalida", error: erroDescricao });
+      return;
+    }
 
     // Antes (para o de/para e para decidir se algo vai ao Senior) e depois.
     const atividade = sessao.atividade;

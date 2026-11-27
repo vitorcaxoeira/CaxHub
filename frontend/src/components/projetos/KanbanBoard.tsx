@@ -71,10 +71,11 @@ export interface AtividadeKanban {
   estruturaAtividadeId: number | null;
   estruturaNome: string | null;
   estruturaPercentual: number | null;
-  // Descricao com que o modal "O que foi feito?" abre preenchido ao parar. Escolhida no
-  // servidor (no da estrutura, senao descricao do item) pra bater com o que a parada
-  // automatica grava sozinha.
-  descricaoPadrao: string | null;
+  // Descricao da atividade (no da estrutura, senao descricao do item): so INFORMACAO nos
+  // modais "O que foi feito?", nunca preenche o campo.
+  descricaoAtividade: string | null;
+  // Nota de progresso que o consultor ja salvou na sessao aberta (e com ela que o campo abre).
+  notaEmAndamento: string | null;
   podeVerCronograma: boolean;
   // Instante em que a sessao aberta precisa parar (teto de horas ou fim do expediente) e
   // o motivo. Nulos quando nao ha sessao aberta ou nada limita ela.
@@ -376,7 +377,7 @@ function DraggableCard({
             Iniciar
           </button>
         )}
-        {emAndamento && (
+        {emAndamento && atividade.souOExecutor && (
           <button
             onClick={(e) => {
               e.stopPropagation();

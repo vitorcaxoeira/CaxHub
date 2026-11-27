@@ -14,6 +14,7 @@ import { criarSessaoManualPendente, recusarSeEstourarTeto } from "./apontamentos
 import { depexeLabel, modproLabel } from "../domain/propostasDominio";
 import { recusarSeForaDaJanela } from "../domain/janelaRetroativa";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
+import { carregarReferencias, erroDeDescricao, referenciasDaAtividade, ReferenciasDaAtividade } from "../domain/descricaoApontamento";
 
 // Apontamento avulso: o consultor trabalhou e esqueceu de mover o card, então pede o tempo
 // aqui, dizendo o motivo e o que foi feito. O gestor aprova (podendo corrigir horário e
@@ -131,13 +132,6 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
       res.status(400).json({ error: "Informe o motivo — é por que este tempo não foi registrado no quadro" });
       return;
     }
-    // A descrição vira RatItem.desati, que a aprovação da RAT exige em todo item (ver
-    // PATCH /rats/:id/aprovar). Deixar entrar vazia aqui só empurra o bloqueio pra frente.
-    if (descricao === "") {
-      res.status(400).json({ error: "Descreva o trabalho realizado" });
-      return;
-    }
-
     const resolvido = await carregarAtividadeComDepexe(atividadeId);
     if (!resolvido) {
       res.status(404).json({ error: "Atividade não encontrada" });
@@ -156,6 +150,14 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
     const meuCodfor = contexto.consultor?.codfor;
     if (meuCodfor == null || meuCodfor <= 0 || meuCodfor !== atividade.codfor) {
       res.status(403).json({ error: "Só quem executa a atividade pode solicitar apontamento nela" });
+      return;
+    }
+
+    // A descrição vira a observação da sessão e depois RatItem.desati — mesma regra de
+    // qualquer apontamento (ver domain/descricaoApontamento.ts).
+    const erroDescricao = erroDeDescricao(descricao, (await referenciasDaAtividade(atividade)).todas);
+    if (erroDescricao) {
+      res.status(400).json({ codigo: "descricao_invalida", error: erroDescricao });
       return;
     }
 
@@ -263,6 +265,7 @@ const INCLUDE_LISTA = {
       codfor: true,
       bloqueiaApontamento: true,
       bloqueiaExcedente: true,
+      estruturaAtividadeId: true,
     },
   },
 } as const;
@@ -275,6 +278,7 @@ function serializar(
   gestorNome: string | null,
   podeDecidir: boolean,
   bloqueadoApontamentoEfetivo: boolean,
+  referencias: ReferenciasDaAtividade,
   propostaInfo?: PropostaInfo,
   consumo?: { teto: number; realizado: number }
 ) {
@@ -286,6 +290,9 @@ function serializar(
     fimSolicitado: s.fimSolicitado,
     motivo: s.motivo,
     descricao: s.descricao,
+    // Só informação (e referência do aviso de texto repetido) quando o gestor ajusta a descrição.
+    descricaoAtividade: referencias.descricaoAtividade,
+    itemDescricao: referencias.itemDescricao,
     inicioAprovado: s.inicioAprovado,
     fimAprovado: s.fimAprovado,
     descricaoAprovada: s.descricaoAprovada,
@@ -357,6 +364,8 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
       [...new Map(pendentes.map((a) => [a.id, a])).values()]
     );
 
+    const referencias = await carregarReferencias(todas.map((s) => s.atividade));
+
     const visiveis = todas
       .map((s) => {
         const depexe = mapaDepexe.get(s.atividadeId) ?? null;
@@ -374,7 +383,7 @@ solicitacoesApontamentoRouter.get("/", async (req: AuthenticatedRequest, res) =>
           s.status === "pendente"
             ? { teto: tetoDaAtividade(s.atividade), realizado: realizadoPorAtividade.get(s.atividadeId) ?? 0 }
             : undefined;
-        return serializar(s, depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo, consumo);
+        return serializar(s, depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, referencias(s.atividade), propostaInfo, consumo);
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -427,9 +436,11 @@ solicitacoesApontamentoRouter.get("/atividade/:atividadeId", async (req: Authent
 
     const bloqueadoApontamentoEfetivo = (await resolverBloqueioApontamento(resolvido.atividade)).bloqueadoApontamento;
 
+    const referencias = await referenciasDaAtividade(resolvido.atividade);
+
     res.json({
       solicitacoes: solicitacoes.map((s) =>
-        serializar(s, resolvido.depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, propostaInfo)
+        serializar(s, resolvido.depexe, gestorNome, gerencia, bloqueadoApontamentoEfetivo, referencias, propostaInfo)
       ),
     });
   } catch (error) {
@@ -483,6 +494,10 @@ async function decidirUma(id: number, opts: OpcoesDecisao, req: AuthenticatedReq
   if (aprovar) {
     if (!inicio || !fim) return { status: 400, body: { error: "inicio e fim inválidos" } };
     if (fim.getTime() <= inicio.getTime()) return { status: 400, body: { error: "O fim precisa ser depois do início" } };
+    // A descrição final (a pedida ou a que o gestor ajustou) segue a mesma regra. Pedido antigo
+    // com texto curto precisa ser ajustado na aprovação individual.
+    const erroDescricao = erroDeDescricao(descricao, (await referenciasDaAtividade(atividade)).todas);
+    if (erroDescricao) return { status: 400, body: { codigo: "descricao_invalida", error: erroDescricao } };
     // Revalidado com os valores FINAIS: sem isto o gestor aprovaria pra dentro de um
     // conflito que o consultor não conseguiu enviar.
     const conflitos = await conflitosDoIntervalo(atividade.codemp, atividade.codfor, inicio, fim, {

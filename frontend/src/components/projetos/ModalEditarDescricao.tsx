@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Modal } from "../ui/Modal";
+import { erroDeDescricao, textoInicialDaDescricao } from "../../lib/descricao-apontamento";
+import { CampoDescricaoApontamento } from "./CampoDescricaoApontamento";
 
 interface ModalEditarDescricaoProps {
   titulo: string;
@@ -10,14 +12,17 @@ interface ModalEditarDescricaoProps {
   // apontamento que não pode mais ser editado (já registrado no Senior, RAT fora de
   // "Digitada", ou de outro consultor) — na tabela ele aparece truncado.
   somenteLeitura?: boolean;
+  /** Só informação, num bloco acima do campo, e referência para recusar texto repetido. */
+  descricaoAtividade?: string | null;
+  itemDescricao?: string | null;
   // Título da janela no modo só leitura — default "Observação". Mesmo componente reaproveitado
   // (28/08/2026) pra mostrar o erro completo de "falha no envio", que não é uma observação.
   tituloSomenteLeitura?: string;
 }
 
 // Janela de edição da Descrição em "Sessões pendentes de confirmação" — o input inline
-// de uma linha ficava apertado demais pro texto que às vezes vem grande (pré-preenchido
-// do modal de observação ao parar a atividade, ver ModalObservacaoAtividade.tsx). Fechar
+// de uma linha ficava apertado demais pro texto que às vezes vem grande (o que o consultor
+// escreveu ao parar a atividade, ver ModalObservacaoAtividade.tsx). Fechar
 // sem clicar "Salvar" (Cancelar/✕) É um cancelar de verdade — não muda o valor já salvo —
 // mas fechar por ACIDENTE (clique fora, Esc) ainda perderia o texto digitado até ali, por
 // isso Esc/backdrop ficam desligados em modo de edição (ver fecharPorFora abaixo).
@@ -28,8 +33,13 @@ export function ModalEditarDescricao({
   onFechar,
   somenteLeitura = false,
   tituloSomenteLeitura = "Observação",
+  descricaoAtividade,
+  itemDescricao,
 }: ModalEditarDescricaoProps) {
-  const [texto, setTexto] = useState(valorInicial);
+  const [texto, setTexto] = useState(() =>
+    somenteLeitura ? valorInicial : textoInicialDaDescricao(valorInicial, [descricaoAtividade, itemDescricao])
+  );
+  const valido = erroDeDescricao(texto, [descricaoAtividade, itemDescricao]) == null;
 
   return (
     // fecharPorFora={!somenteLeitura}: no modo de edição de verdade (textarea livre), sair
@@ -43,20 +53,26 @@ export function ModalEditarDescricao({
       title={somenteLeitura ? tituloSomenteLeitura : "Editar descrição"}
       subtitulo={titulo}
     >
-      <textarea
-        autoFocus
-        readOnly={somenteLeitura}
-        value={texto}
-        onChange={(e) => setTexto(e.target.value)}
-        onKeyDown={(e) => {
-          if (!somenteLeitura && e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSalvar(texto.trim());
-        }}
-        rows={5}
-        placeholder={somenteLeitura ? "Sem observação registrada." : "Descreva o que foi realizado nessa sessão..."}
-        className={`w-full resize-none rounded-md border border-border px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-          somenteLeitura ? "cursor-default bg-surface-2" : "bg-surface"
-        }`}
-      />
+      {somenteLeitura ? (
+        <textarea
+          autoFocus
+          readOnly
+          value={texto}
+          rows={5}
+          placeholder="Sem observação registrada."
+          className="w-full cursor-default resize-none rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+      ) : (
+        <CampoDescricaoApontamento
+          autoFocus
+          rows={5}
+          valor={texto}
+          onChange={setTexto}
+          descricaoAtividade={descricaoAtividade}
+          itemDescricao={itemDescricao}
+          onAtalhoSalvar={() => onSalvar(texto.trim())}
+        />
+      )}
       <div className="mt-4 flex justify-end gap-2">
         <button
           onClick={onFechar}
@@ -67,7 +83,8 @@ export function ModalEditarDescricao({
         {!somenteLeitura && (
           <button
             onClick={() => onSalvar(texto.trim())}
-            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            disabled={!valido}
+            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           >
             Salvar
           </button>
