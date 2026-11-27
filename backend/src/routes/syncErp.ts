@@ -19,7 +19,7 @@ import { validarOrdem } from "../sync/ordemColuna";
 import { validarPedidosResumo } from "../sync/resumoColuna";
 import { validarFiltrosColuna } from "../sync/filtroColunaLocal";
 import { filtroDoJob } from "../sync/filtrosAtivos";
-import { modoConfiguradoDoJob, carregarModosVarreduraAtivos, ModoVarredura, liberarTetoUmaVez, tetoPctDoJob } from "../sync/politicaVarredura";
+import { modoConfiguradoDoJob, motivoParaRecusarModo, carregarModosVarreduraAtivos, ModoVarredura, liberarTetoUmaVez, tetoPctDoJob } from "../sync/politicaVarredura";
 import { tamanhoLoteConfigurado, carregarTamanhosLoteAtivos } from "../sync/politicaLote";
 import { TAMANHO_LOTE_PADRAO, TETO_PARAMS_PROTOCOLO } from "../sync/upsertEmLote";
 import { TETO_PCT_PADRAO } from "../sync/varrerRemovidos";
@@ -435,6 +435,52 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
 
   const MODOS_VARREDURA_VALIDOS: ModoVarredura[] = ["desligada", "simular", "marcar"];
 
+  // POST /varredura-em-massa — o mesmo que o PUT abaixo, para VÁRIAS tabelas de uma vez (27/11/2026, pedido do Vitor: ação da coluna
+  // "Detecção de exclusão"). Corpo `{ modo, jobNames }`. Mesmas regras, tabela por tabela; o que não puder mudar volta em `ignoradas` com o motivo
+  // (a tela só oferece o que pode, então isso é corrida com outra pessoa). Não mexe no teto de cada tabela. Nome fora de "/:jobName/..." de propósito.
+  syncErpRouter.post("/varredura-em-massa", async (req: AuthenticatedRequest, res) => {
+    try {
+      const modo = req.body?.modo as ModoVarredura;
+      const nomes: unknown = req.body?.jobNames;
+      if (!MODOS_VARREDURA_VALIDOS.includes(modo)) {
+        res.status(400).json({ error: `Modo "${req.body?.modo}" inválido — use "desligada", "simular" ou "marcar".` });
+        return;
+      }
+      if (!Array.isArray(nomes) || nomes.length === 0 || !nomes.every((n) => typeof n === "string")) {
+        res.status(400).json({ error: "Informe as tabelas (jobNames)." });
+        return;
+      }
+      const alterar: string[] = [];
+      const ignoradas: { jobName: string; motivo: string }[] = [];
+      for (const jobName of [...new Set(nomes as string[])]) {
+        const job = SYNC_JOBS.find((j) => j.jobName === jobName);
+        if (!job) {
+          ignoradas.push({ jobName, motivo: "Tabela não encontrada neste sistema." });
+          continue;
+        }
+        if (!suportaMarcarRemovido(job) || job.contarRemovidos == null) {
+          ignoradas.push({ jobName, motivo: `"${job.displayName}" ainda não tem a execução da varredura ligada.` });
+          continue;
+        }
+        const recusa = motivoParaRecusarModo(job.displayName, modoConfiguradoDoJob(jobName), modo);
+        if (recusa) ignoradas.push({ jobName, motivo: recusa });
+        else alterar.push(jobName);
+      }
+      if (alterar.length > 0) {
+        const atualizadoPor = req.user?.userId ?? null;
+        await prisma.$transaction(
+          alterar.map((jobName) =>
+            prisma.configuracaoVarredura.upsert({ where: { jobName }, update: { modo, atualizadoPor }, create: { jobName, modo, atualizadoPor } })
+          )
+        );
+        await carregarModosVarreduraAtivos();
+      }
+      res.json({ modo, alteradas: alterar, ignoradas });
+    } catch (error) {
+      handleError(res, error, "varredura:em-massa");
+    }
+  });
+
   // PUT /:jobName/varredura — muda o modo de varredura de removidos DESSA tabela (10/09/2026,
   // porte do CaxHub_Atlas: campo editável na tela em vez de editar politicaVarredura.ts e fazer
   // deploy). Só aceita "marcar" se o modo ATUAL salvo já for "simular" — nenhuma tabela pula
@@ -476,10 +522,9 @@ export function criarRouterSincronizacao(sistema: SistemaSenior): Router {
         return;
       }
 
-      if (modoNovo === "marcar" && modoAtual !== "simular" && modoAtual !== "marcar") {
-        res.status(400).json({
-          error: `"${job.displayName}" está em "${modoAtual}" — passe por "Simular" primeiro e confira os candidatos antes de ligar "Marcar".`,
-        });
+      const recusa = motivoParaRecusarModo(job.displayName, modoAtual, modoNovo);
+      if (recusa) {
+        res.status(400).json({ error: recusa });
         return;
       }
 

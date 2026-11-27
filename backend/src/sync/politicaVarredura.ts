@@ -19,6 +19,17 @@ import { prisma } from "../db/prisma";
 
 export type ModoVarredura = "desligada" | "simular" | "marcar";
 
+/**
+ * Regra da troca de modo pela tela (uma tabela ou várias de uma vez): nenhuma tabela pula direto para "marcar", passa antes por "simular" para
+ * os candidatos serem conferidos. Devolve o motivo da recusa, ou `null` quando a troca pode ser feita.
+ */
+export function motivoParaRecusarModo(nomeDaTabela: string, modoAtual: ModoVarredura, modoNovo: ModoVarredura): string | null {
+  if (modoNovo === "marcar" && modoAtual !== "simular" && modoAtual !== "marcar") {
+    return `"${nomeDaTabela}" está em "${modoAtual}" — passe por "Simular" primeiro e confira os candidatos antes de ligar "Marcar".`;
+  }
+  return null;
+}
+
 let modosAtivos = new Map<string, ModoVarredura>();
 // Teto configurado por tabela (fração, ex.: 0.1 = 10%), mesmo snapshot dos modos. Sem entrada = padrão de varrerRemovidos.ts.
 let tetosAtivos = new Map<string, number>();
