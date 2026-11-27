@@ -10,13 +10,43 @@ import { percentualDe } from "./bonificacao";
 // Lançamento apagado no Senior só fica de fora depois de marcado como removido (detecção de excluídos do job do HCM em "Marcar").
 // Conferido com o relatório "Banco de Horas Analítico" do colaborador 62 em 10/2026: -02:53 (saldo final 02:28 - saldo inicial 05:21).
 
-/** Saldo (em minutos, com sinal) dos lançamentos do mês; nulo quando não há lançamento. Os parâmetros aceitam valor ou coluna (Prisma.sql). */
+// Filtros de cada fonte, usados pelo relatório, pela apuração e pelo modal de comprovação (domain/bonificacaoComprovante.ts): o que é somado
+// na tela e o que o modal lista vêm do mesmo lugar. Os parâmetros aceitam valor ou coluna (Prisma.sql).
+
+/** Linhas do ponto que são horas trabalhadas no mês. Apelidos esperados: `sp` (hcm_situacao_ponto) e `st` (hcm_situacoes). */
+export function filtroPontoTrabalhadoSql(numemp: unknown, tipcol: unknown, numcad: unknown, ini: string, fim: string): Prisma.Sql {
+  return Prisma.sql`sp.numemp = ${numemp} AND sp.tipcol = ${tipcol} AND sp.numcad = ${numcad}
+    AND st.conabs = 2 AND sp.removido_em_senior IS NULL AND sp.datapu >= ${ini}::date AND sp.datapu < ${fim}::date`;
+}
+
+/** Lançamentos do banco de horas datados no mês. Apelido esperado: `bh` (hcm_lancamentos_bh). */
+export function filtroBancoDoMesSql(numemp: unknown, tipcol: unknown, numcad: unknown, ini: string, fim: string): Prisma.Sql {
+  return Prisma.sql`bh.numemp = ${numemp} AND bh.tipcol = ${tipcol} AND bh.numcad = ${numcad} AND bh.removido_em_senior IS NULL
+    AND bh.datlan >= ${ini}::date AND bh.datlan < ${fim}::date`;
+}
+
+/** Apontamentos do Kyria com duração, iniciados no mês (dias de Brasília). Apelido esperado: `en` (kyria_time_entries). */
+export function filtroKyriaNoMesSql(ini: string, fim: string): Prisma.Sql {
+  return Prisma.sql`en.minutes IS NOT NULL
+    AND (en.started_at AT TIME ZONE 'America/Sao_Paulo') >= ${ini}::date AND (en.started_at AT TIME ZONE 'America/Sao_Paulo') < ${fim}::date`;
+}
+
+/** Subconsulta (coluna `area`) com a(s) etiqueta(s) do grupo de chave "area" do chamado; duas viram "A + B" (a hora não conta duas vezes). */
+export function areaDoChamadoSql(ticketId: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+    SELECT string_agg(l.name, ' + ' ORDER BY l.name) AS area
+    FROM kyria_ticket_labels tl
+    JOIN kyria_labels l ON l.id = tl.label_id
+    JOIN kyria_label_groups g ON g.id = l.group_id AND g.key = 'area'
+    WHERE tl.ticket_id = ${ticketId}`;
+}
+
+/** Saldo (em minutos, com sinal) dos lançamentos do mês; nulo quando não há lançamento. */
 export function saldoBancoDoMesSql(numemp: unknown, tipcol: unknown, numcad: unknown, ini: string, fim: string): Prisma.Sql {
   return Prisma.sql`
     SELECT sum(CASE btrim(bh.sinlan) WHEN '+' THEN bh.qtdhor WHEN '-' THEN -bh.qtdhor ELSE 0 END)::float8 AS minutos
     FROM hcm_lancamentos_bh bh
-    WHERE bh.numemp = ${numemp} AND bh.tipcol = ${tipcol} AND bh.numcad = ${numcad} AND bh.removido_em_senior IS NULL
-      AND bh.datlan >= ${ini}::date AND bh.datlan < ${fim}::date`;
+    WHERE ${filtroBancoDoMesSql(numemp, tipcol, numcad, ini, fim)}`;
 }
 
 export interface HorasDoMes {

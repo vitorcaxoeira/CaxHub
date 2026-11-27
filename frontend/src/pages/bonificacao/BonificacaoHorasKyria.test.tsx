@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { COLUNAS, linhasPorTime, type LinhaHoras } from "./BonificacaoHorasKyria";
+import { COLUNAS, linhasPorTime, type AcoesHoras, type LinhaHoras } from "./BonificacaoHorasKyria";
 import { fmtHorasMinutos } from "./comum";
 
 vi.mock("../../auth/AuthContext", () => ({ useAuth: () => ({ user: null }) }));
@@ -8,6 +8,7 @@ vi.mock("../../auth/AuthContext", () => ({ useAuth: () => ({ user: null }) }));
 const LINHA: LinhaHoras = {
   processoId: 1,
   processo: "Atendentes",
+  codemp: 1,
   codfor: 513,
   codusu: 118,
   consultor: "Daniel Hoepers",
@@ -33,7 +34,9 @@ const LINHA: LinhaHoras = {
   ],
 };
 
-const celula = (nome: string, linha: LinhaHoras = LINHA) => renderToStaticMarkup(<>{COLUNAS.find((c) => c.nome === nome)!.render(linha, undefined, false)}</>);
+// Sem ações (ctx ausente) a célula é só o número; com ações, os três números comprováveis viram link.
+const celula = (nome: string, linha: LinhaHoras = LINHA, acoes?: AcoesHoras) => renderToStaticMarkup(<>{COLUNAS.find((c) => c.nome === nome)!.render(linha, acoes as AcoesHoras, false)}</>);
+const ACOES: AcoesHoras = { abrir: () => undefined };
 
 describe("Horas Kyria x Trabalhadas", () => {
   it("HH:MM aceita saldo negativo", () => {
@@ -60,6 +63,23 @@ describe("Horas Kyria x Trabalhadas", () => {
     expect(celula("saldoBanco", { ...LINHA, saldoBanco: 148 })).toBe("02:28");
     expect(celula("saldoBanco", { ...LINHA, saldoBanco: null })).toBe("—");
     expect(celula("minutosOcioso", { ...LINHA, minutosOcioso: null })).toBe("—");
+  });
+
+  it("Horas trabalhadas, Banco de horas e Horas Kyria viram link para o comprovante; as outras colunas, não", () => {
+    for (const [nome, rotulo] of [["minutosPonto", "horas trabalhadas"], ["saldoBanco", "lançamentos do banco de horas"], ["minutosKyria", "apontamentos do Kyria"]]) {
+      const out = celula(nome, LINHA, ACOES);
+      expect(out).toContain("<button");
+      expect(out).toContain(`Ver o comprovante: ${rotulo} de Daniel Hoepers`);
+    }
+    expect(celula("saldoBanco", LINHA, ACOES)).toContain("não entrou no cálculo");
+    for (const nome of ["minutosExtras", "minutosTotal", "minutosOcioso"]) expect(celula(nome, LINHA, ACOES)).not.toContain("<button");
+  });
+
+  it("zero ou sem dado não vira link; banco com saldo zero ainda tem lançamentos para ver", () => {
+    expect(celula("minutosPonto", { ...LINHA, minutosPonto: 0 }, ACOES)).toBe("00:00");
+    expect(celula("minutosKyria", { ...LINHA, minutosKyria: null }, ACOES)).toBe("—");
+    expect(celula("saldoBanco", { ...LINHA, saldoBanco: null }, ACOES)).toBe("—");
+    expect(celula("saldoBanco", { ...LINHA, saldoBanco: 0 }, ACOES)).toContain("<button");
   });
 
   it("detalhe: o time e, logo abaixo, as áreas dele, com horas e % sobre o Kyria do atendente", () => {

@@ -309,6 +309,30 @@ async function main() {
     assert.strictEqual(h.pdiConcluido, "Sim");
     assert.strictEqual(h.motivo, null);
     assert.ok(h.porTime.length >= 1 && Math.abs(h.porTime.reduce((s: number, t: any) => s + t.minutos, 0) - esperadoKyria) < 0.05, "o detalhe por time soma os minutos do Kyria");
+    // Comprovante de cada célula clicável: a soma das linhas é exatamente o número do relatório
+    const rotaProva = (tipo: string) => `/relatorios/horas-kyria/comprovante?tipo=${tipo}&competencia=${COMP}&codemp=${h.codemp}&codfor=${h.codfor}`;
+    const soma = (linhas: any[]) => linhas.reduce((s, l) => s + l.minutos, 0);
+    for (const [tipo, naTela] of [["ponto", h.minutosPonto], ["banco", h.saldoBanco ?? 0], ["kyria", h.minutosKyria]] as const) {
+      const prova = await api("admin", "GET", rotaProva(tipo));
+      ok(prova, 200, `comprovante ${tipo}`);
+      assert.ok(Math.abs(soma(prova.dados.linhas) - naTela) < 0.05, `comprovante ${tipo}: soma ${soma(prova.dados.linhas)} = tela ${naTela}`);
+      assert.ok(prova.dados.linhas.every((l: any) => String(l.data ?? l.inicio).length >= 10), `comprovante ${tipo}: toda linha com data`);
+      if (tipo === "banco") {
+        assert.strictEqual(prova.dados.banco.saldo, naTela, "saldo do comprovante = saldo da tela");
+        assert.strictEqual(prova.dados.banco.creditos - prova.dados.banco.debitos, naTela);
+        assert.strictEqual(prova.dados.banco.extras, h.minutosExtras);
+        if (prova.dados.linhas.length) assert.strictEqual(prova.dados.linhas[prova.dados.linhas.length - 1].acumulado, naTela, "acumulado final = saldo");
+      }
+      if (tipo === "kyria") {
+        const porArea = new Map<string, number>();
+        for (const l of prova.dados.linhas) porArea.set(`${l.time}|${l.area}`, (porArea.get(`${l.time}|${l.area}`) ?? 0) + l.minutos);
+        for (const t of h.porTime) for (const a of t.porArea) assert.ok(Math.abs((porArea.get(`${t.time}|${a.area}`) ?? 0) - a.minutos) < 0.05, `comprovante kyria bate com a área ${t.time} / ${a.area}`);
+      }
+      console.log(`  comprovante ${tipo}: ${prova.dados.linhas.length} linha(s), soma = ${Math.round(soma(prova.dados.linhas) * 100) / 100} min`);
+    }
+    ok(await api("nada", "GET", rotaProva("banco")), 403, "sem acesso não vê comprovante");
+    ok(await api("admin", "GET", rotaProva("outra")), 400, "tipo inválido");
+    ok(await api("admin", "GET", `/relatorios/horas-kyria/comprovante?tipo=ponto&codemp=${h.codemp}&codfor=${h.codfor}`), 400, "sem competência");
     ok(await api("admin", "GET", `/relatorios/horas-kyria/resumo?competencia=${COMP}&processoId=${processoId}`), 200, "resumo da lista");
     r = await api("admin", "GET", `/relatorios/horas-kyria/csv?competencia=${COMP}&processoId=${processoId}`);
     ok(r, 200, "csv da lista");
