@@ -8,6 +8,8 @@ import { textoJanelaRetroativa, useJanelaRetroativa } from "../../hooks/useJanel
 import { HistoricoContextual } from "../auditoria/HistoricoContextual";
 import { IndicadorProgresso } from "../cronograma/IndicadorProgresso";
 import { HierarquiaAtividadeTooltip } from "../cronograma/HierarquiaAtividadeTooltip";
+import { CampoDescricaoApontamento } from "./CampoDescricaoApontamento";
+import { erroDeDescricao } from "../../lib/descricao-apontamento";
 
 interface Comentario {
   id: number;
@@ -51,6 +53,8 @@ export interface SolicitacaoApontamento {
   fimSolicitado: string;
   motivo: string;
   descricao: string;
+  descricaoAtividade: string | null;
+  itemDescricao: string | null;
   inicioAprovado: string | null;
   fimAprovado: string | null;
   descricaoAprovada: string | null;
@@ -262,6 +266,9 @@ export function AtividadeDetalhe({
   const [enviandoApontamento, setEnviandoApontamento] = useState(false);
   const [erroApontamento, setErroApontamento] = useState<string | null>(null);
 
+  // A descrição da atividade (nó do cronograma, senão o item): só informação no pedido.
+  const descricaoDaAtividade = estruturaNome?.trim() || itemDescricao;
+
   async function enviarApontamento() {
     if (!dataApontamento || !horaInicioApontamento || !horaFimApontamento) {
       setErroApontamento("Informe a data, a hora inicial e a hora final.");
@@ -280,8 +287,9 @@ export function AtividadeDetalhe({
       setErroApontamento("Informe o motivo — é por que este tempo não foi registrado no quadro.");
       return;
     }
-    if (descricaoApontamento.trim() === "") {
-      setErroApontamento("Descreva o trabalho realizado.");
+    const erroDescricao = erroDeDescricao(descricaoApontamento, [descricaoDaAtividade, itemDescricao]);
+    if (erroDescricao) {
+      setErroApontamento(erroDescricao);
       return;
     }
     setEnviandoApontamento(true);
@@ -704,12 +712,12 @@ export function AtividadeDetalhe({
                           placeholder="Motivo — por que não foi registrado no quadro"
                           className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         />
-                        <textarea
-                          value={descricaoApontamento}
-                          onChange={(e) => setDescricaoApontamento(e.target.value)}
+                        <CampoDescricaoApontamento
                           rows={3}
-                          placeholder="O que foi realizado neste período"
-                          className="w-full resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-[13px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          valor={descricaoApontamento}
+                          onChange={setDescricaoApontamento}
+                          descricaoAtividade={descricaoDaAtividade}
+                          itemDescricao={itemDescricao}
                         />
                         {erroApontamento && <p className="text-[12px] text-destructive">{erroApontamento}</p>}
                         <div className="flex items-center justify-end gap-2">

@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Modal } from "../ui/Modal";
+import { erroDeDescricao, textoInicialDaDescricao } from "../../lib/descricao-apontamento";
+import { CampoDescricaoApontamento } from "./CampoDescricaoApontamento";
 
 export interface DadosManutencaoSessao {
   /** AAAA-MM-DD */
@@ -22,6 +24,9 @@ interface ModalManutencaoSessaoProps {
   motivoSomenteLeitura?: string | null;
   /** O apontamento já está no Senior: salvar manda a alteração para lá na hora (tipEve A). */
   registradoNoSenior: boolean;
+  /** Só informação, num bloco acima do campo, e referência para recusar texto repetido. */
+  descricaoAtividade?: string | null;
+  itemDescricao?: string | null;
   salvando: boolean;
   erro: string | null;
   onSalvar: (dados: DadosManutencaoSessao) => void;
@@ -45,8 +50,12 @@ export function ModalManutencaoSessao({
   erro,
   onSalvar,
   onFechar,
+  descricaoAtividade,
+  itemDescricao,
 }: ModalManutencaoSessaoProps) {
-  const [dados, setDados] = useState(inicial);
+  const [dados, setDados] = useState(() =>
+    somenteLeitura ? inicial : { ...inicial, descricao: textoInicialDaDescricao(inicial.descricao, [descricaoAtividade, itemDescricao]) }
+  );
   const [erroLocal, setErroLocal] = useState<string | null>(null);
   const atualizar = (parcial: Partial<DadosManutencaoSessao>) => setDados((d) => ({ ...d, ...parcial }));
 
@@ -59,8 +68,9 @@ export function ModalManutencaoSessao({
       setErroLocal("A hora final precisa ser depois da inicial.");
       return;
     }
-    if (!dados.descricao.trim()) {
-      setErroLocal("A descrição é obrigatória.");
+    const erroDescricao = erroDeDescricao(dados.descricao, [descricaoAtividade, itemDescricao]);
+    if (erroDescricao) {
+      setErroLocal(erroDescricao);
       return;
     }
     setErroLocal(null);
@@ -133,20 +143,26 @@ export function ModalManutencaoSessao({
         </div>
 
         <div>
-          <label htmlFor="ms-desc" className="mb-1 block text-[12px] text-muted">
-            Descrição
-          </label>
-          <textarea
-            id="ms-desc"
-            value={dados.descricao}
-            onChange={(e) => atualizar({ descricao: e.target.value })}
-            readOnly={somenteLeitura}
-            disabled={salvando}
-            maxLength={1000}
-            rows={5}
-            placeholder={somenteLeitura ? "Sem descrição registrada." : "Descreva o que foi realizado nessa sessão..."}
-            className={`w-full resize-none ${classeCampo}`}
-          />
+          <p className="mb-1 text-[12px] text-muted">Descrição</p>
+          {somenteLeitura ? (
+            <textarea
+              aria-label="Descrição"
+              value={dados.descricao}
+              readOnly
+              rows={5}
+              placeholder="Sem descrição registrada."
+              className={`w-full resize-none ${classeCampo}`}
+            />
+          ) : (
+            <CampoDescricaoApontamento
+              rows={5}
+              valor={dados.descricao}
+              onChange={(descricao) => atualizar({ descricao })}
+              descricaoAtividade={descricaoAtividade}
+              itemDescricao={itemDescricao}
+              disabled={salvando}
+            />
+          )}
         </div>
 
         {mensagemErro && <p className="text-[12px] text-destructive">{mensagemErro}</p>}

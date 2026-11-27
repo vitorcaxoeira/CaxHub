@@ -514,7 +514,7 @@ export function AtividadesTable({
                                               Iniciar
                                             </button>
                                           )}
-                                          {row.coluna?.nome === RAIA_EM_ANDAMENTO && (
+                                          {row.coluna?.nome === RAIA_EM_ANDAMENTO && row.souOExecutor && (
                                             <button
                                               onClick={() => onEditarNota(row.id)}
                                               disabled={processando.has(row.id)}

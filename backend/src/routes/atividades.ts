@@ -37,14 +37,13 @@ import {
   RAIA_A_FAZER,
   RAIA_EM_ANDAMENTO,
   colunaEfetiva,
-  descricaoPadraoDaAtividade,
   escolherDescricaoPadrao,
   mensagemFimCortado,
   montarOperacoesMovimentacao,
   podeIniciar,
   podeParar,
-  LIMITE_OBSERVACAO,
 } from "../domain/execucaoAtividade";
+import { avaliarDescricaoDaMovimentacao, erroDeDescricao, referenciasDaAtividade } from "../domain/descricaoApontamento";
 
 // Router à parte de `projetosRouter` (que hoje é admin+comercial só, por causa de
 // Propostas) — aqui a tela é aberta a qualquer usuário autenticado; quem pode ver/mover
@@ -378,9 +377,8 @@ async function carregarAtividadesVisiveisImpl(
           where: { atividadeId: { in: atividadeIds }, fim: null },
           // expedienteProrrogadoAte entra aqui porque o limite depende dela: sem a
           // prorrogacao o card continuaria travando o cronometro no fim do expediente
-          // mesmo depois do consultor confirmar que segue trabalhando. `observacao` entra
-          // (28/08/2026) pro "descricaoPadrao" preferir a nota de progresso já salva na
-          // sessão aberta, em vez de sempre cair na descrição genérica da atividade.
+          // mesmo depois do consultor confirmar que segue trabalhando. `observacao` é a nota
+          // de progresso que o consultor já salvou na sessão (`notaEmAndamento`).
           select: { atividadeId: true, inicio: true, expedienteProrrogadoAte: true, observacao: true },
         })
       : Promise.resolve([]),
@@ -449,9 +447,8 @@ async function carregarAtividadesVisiveisImpl(
   // Kanban/Lista (card em "Em Andamento" mostra o timer contando a partir daqui). No
   // máximo 1 por atividade (a regra de start/stop garante isso), então um Map simples.
   const sessaoAbertaPorAtividadeId = new Map(sessoesAbertas.map((s) => [s.atividadeId, s.inicio]));
-  // Nota de progresso já salva na sessão aberta (PATCH /:id/observacao) — prefere isso sobre
-  // a descrição genérica ao montar `descricaoPadrao` mais abaixo, senão o texto salvo
-  // "desaparece" da tela ao reabrir o modal mesmo estando gravado no banco.
+  // Nota de progresso já salva na sessão aberta (PATCH /:id/observacao) — é com ela que o
+  // modal reabre, senão o texto salvo "desaparece" da tela mesmo estando gravado no banco.
   const observacaoAbertaPorAtividadeId = new Map(sessoesAbertas.map((s) => [s.atividadeId, s.observacao]));
 
   // Até quando cada sessão aberta pode contar — é o instante em que o cronômetro do card
@@ -578,16 +575,11 @@ async function carregarAtividadesVisiveisImpl(
         estruturaAtividadeId: a.estruturaAtividadeId,
         estruturaNome: noEstrutura?.nome ?? null,
         estruturaPercentual: noEstrutura?.percentualConcluido ?? null,
-        // Texto com que o modal "O que foi feito?"/"O que está sendo feito?" abre
-        // preenchido. Sai do servidor, e não de um `estruturaNome ?? itemDescricao` no
-        // front, porque é a MESMA escolha que a parada automática grava — em dois lugares
-        // elas divergiriam. Prefere a nota de progresso já salva na sessão aberta (28/08/2026,
-        // ver PATCH /:id/observacao) sobre a descrição genérica — sem isso, reabrir o modal
-        // enquanto ainda em execução sempre mostrava a descrição da atividade, nunca o que
-        // já tinha sido digitado.
-        descricaoPadrao:
-          observacaoAbertaPorAtividadeId.get(a.id)?.trim() ||
-          escolherDescricaoPadrao(noEstrutura?.nome ?? null, item?.despro ?? null),
+        // Os modais "O que foi feito?"/"O que está sendo feito?" (27/11/2026): a descrição da
+        // atividade vai só como INFORMAÇÃO, num bloco acima do campo, e o campo abre com a
+        // nota que o próprio consultor salvou na sessão aberta — ou vazio.
+        descricaoAtividade: escolherDescricaoPadrao(noEstrutura?.nome ?? null, item?.despro ?? null),
+        notaEmAndamento: observacaoAbertaPorAtividadeId.get(a.id)?.trim() || null,
         // Mesma regra de acesso da Alocação (departamentosPermitidos/podeGerenciarProposta
         // em alocacao.ts) — evita mandar um consultor comum pra rota do cronograma, que
         // devolveria 403 por não gerenciar o departamento.
@@ -1182,7 +1174,20 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
     const colunaAnterior = colunaEfetiva(colunaGravada, primeiraColuna);
     const correlationId = req.correlationId!;
 
-    const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null;
+    // Descrição obrigatória e bloqueio por apontamento pendente — mesma decisão do Iniciar e
+    // do Parar (arrastar o card não pode ser a porta dos fundos).
+    const decisao = await avaliarDescricaoDaMovimentacao({
+      atividade,
+      souDono: contexto.consultor?.codfor === atividade.codfor,
+      abreSessao: colunaNova.contaComoExecucao,
+      observacao: req.body?.observacao,
+      observacaoEmAndamento: req.body?.observacaoEmAndamento,
+      sessaoEmAndamentoId: req.body?.sessaoEmAndamentoId,
+    });
+    if (decisao.recusa) {
+      res.status(decisao.recusa.status).json(decisao.recusa.corpo);
+      return;
+    }
 
     const { operacoes, pausadas, fimAjustadoParaLimite } = await montarOperacoesMovimentacao({
       atividade,
@@ -1192,7 +1197,8 @@ atividadesRouter.patch("/:id/mover", async (req: AuthenticatedRequest, res) => {
       origemSessao: "movimentacao_kanban",
       correlationId,
       agora,
-      observacaoFechamento: observacao,
+      observacaoFechamento: decisao.observacaoFechamento,
+      observacaoDaPausada: decisao.observacaoDaPausada,
     });
     await prisma.$transaction(operacoes);
 
@@ -1306,6 +1312,21 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
+    // Não inicia com apontamento pendente sem descrição; com outra atividade em andamento, o
+    // consultor conta o que fez nela antes (ver domain/descricaoApontamento.ts).
+    const decisao = await avaliarDescricaoDaMovimentacao({
+      atividade,
+      souDono: contexto.consultor?.codfor === atividade.codfor,
+      abreSessao: true,
+      observacao: req.body?.observacao,
+      observacaoEmAndamento: req.body?.observacaoEmAndamento,
+      sessaoEmAndamentoId: req.body?.sessaoEmAndamentoId,
+    });
+    if (decisao.recusa) {
+      res.status(decisao.recusa.status).json(decisao.recusa.corpo);
+      return;
+    }
+
     const agora = new Date();
     const correlationId = req.correlationId!;
 
@@ -1320,6 +1341,8 @@ atividadesRouter.post("/:id/start", async (req: AuthenticatedRequest, res) => {
       origemSessao: "manual",
       correlationId,
       agora,
+      observacaoFechamento: decisao.observacaoFechamento,
+      observacaoDaPausada: decisao.observacaoDaPausada,
     });
 
     await prisma.$transaction(operacoes);
@@ -1451,6 +1474,7 @@ atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, r
       },
     });
     const limite = await limiteDaSessaoAberta(sessao, sessao.atividade, jornada);
+    const referencias = await referenciasDaAtividade(sessao.atividade);
 
     res.json({
       sessao: {
@@ -1470,10 +1494,12 @@ atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, r
         iniciouForaDoExpediente:
           limitePorExpediente(sessao.inicio, jornada)?.getTime() === sessao.inicio.getTime(),
         opcoesProrrogacao: OPCOES_PRORROGACAO_MIN,
-        // Pré-preenche o "O que foi feito?" do "Encerrar agora" — mesma origem do modal de
-        // parada no quadro e da herança da parada automática. Prefere a nota de progresso já
-        // salva na sessão (28/08/2026) sobre a descrição genérica, mesma regra de GET /.
-        descricaoPadrao: sessao.observacao?.trim() || (await descricaoPadraoDaAtividade(sessao.atividade)),
+        // "O que foi feito?" do "Encerrar agora": a descrição da atividade é só informação
+        // (com a do item, pro aviso de texto repetido) e o campo abre com a nota que o
+        // consultor já salvou — ou vazio.
+        descricaoAtividade: referencias.descricaoAtividade,
+        itemDescricao: referencias.itemDescricao,
+        nota: sessao.observacao?.trim() || null,
       },
     });
   } catch (error) {
@@ -1622,6 +1648,20 @@ atividadesRouter.post("/:id/encerrar-automatico", async (req: AuthenticatedReque
       return;
     }
 
+    // Só o "Encerrar agora" do PRÓPRIO consultor tem quem descreva (e aí é obrigatório).
+    // Encerramento por silêncio é automático: qualquer texto no corpo é ignorado e a sessão
+    // fica com a nota já salva, ou sem descrição — ele descreve em Meus Apontamentos.
+    let observacaoFechamento: string | null = null;
+    const ctx = imediato ? await contextoDoUsuario(req) : null;
+    if (ctx && ctx.contexto.consultor?.codfor === atividade.codfor) {
+      const decisao = await avaliarDescricaoDaMovimentacao({ atividade, souDono: true, abreSessao: false, observacao: req.body?.observacao });
+      if (decisao.recusa) {
+        res.status(decisao.recusa.status).json(decisao.recusa.corpo);
+        return;
+      }
+      observacaoFechamento = decisao.observacaoFechamento;
+    }
+
     const { operacoes } = await montarOperacoesMovimentacao({
       atividade,
       colunaAnterior: colunaAtual,
@@ -1632,11 +1672,7 @@ atividadesRouter.post("/:id/encerrar-automatico", async (req: AuthenticatedReque
       agora: limite.instante,
       origemEvento: "job",
       motivoParada: limite.motivo,
-      // Só chega preenchido no encerramento PEDIDO ("Encerrar agora" no alerta), onde há
-      // alguém pra descrever o que fez. Encerramento por silêncio e varredura não têm
-      // autor, então vão sem texto — a sessão vira pendência e o consultor descreve na
-      // hora de confirmar, como qualquer outra.
-      observacaoFechamento: typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null,
+      observacaoFechamento,
     });
     await prisma.$transaction(operacoes);
 
@@ -1655,10 +1691,10 @@ atividadesRouter.post("/:id/encerrar-automatico", async (req: AuthenticatedReque
 // PATCH /:id/observacao — "O que está sendo feito?" (28/08/2026): salva um rascunho de
 // observação na sessão aberta SEM parar o cronômetro (diferente de /stop, que sempre fecha
 // a sessão junto). Mesma permissão/estado de /stop — só faz sentido enquanto a atividade
-// está de fato "Em Andamento". Sem evento de auditoria: é um rascunho que muda várias vezes
-// na mesma sessão; o evento ATIVIDADE_PARADA já audita a observação FINAL ao fechar (ver
-// montarOperacoesMovimentacao, que agora também prefere esta observação sobre a descrição
-// genérica quando "Pular" é clicado no fechamento).
+// está de fato "Em Andamento". Só o próprio consultor escreve, e a nota segue a mesma regra da
+// descrição final (27/11/2026), porque é ela que fica se a sessão for parada
+// automaticamente. Sem evento de auditoria: é um rascunho que muda várias vezes na mesma
+// sessão; o evento ATIVIDADE_PARADA já audita a observação FINAL ao fechar.
 atividadesRouter.patch("/:id/observacao", async (req: AuthenticatedRequest, res) => {
   try {
     const id = Number(req.params.id);
@@ -1685,15 +1721,24 @@ atividadesRouter.patch("/:id/observacao", async (req: AuthenticatedRequest, res)
       res.status(403).json({ error: "Sem permissão para editar esta atividade" });
       return;
     }
+    if (contexto.consultor?.codfor !== atividade.codfor) {
+      res.status(403).json({ error: "Só o consultor da atividade pode contar o que está sendo feito nela." });
+      return;
+    }
     if (!podeParar(colunaAtual?.nome)) {
       res.status(409).json({ error: `Atividade não está em "${RAIA_EM_ANDAMENTO}" — nada em execução pra anotar.` });
       return;
     }
 
-    const texto = (typeof req.body?.observacao === "string" ? req.body.observacao.trim() : "").slice(0, LIMITE_OBSERVACAO);
+    const texto = typeof req.body?.observacao === "string" ? req.body.observacao.trim() : "";
+    const erro = erroDeDescricao(texto, (await referenciasDaAtividade(atividade)).todas);
+    if (erro) {
+      res.status(400).json({ codigo: "descricao_invalida", error: erro });
+      return;
+    }
     const resultado = await prisma.atividadeSessaoExecucao.updateMany({
       where: { atividadeId: id, fim: null },
-      data: { observacao: texto || null },
+      data: { observacao: texto },
     });
     if (resultado.count === 0) {
       res.status(409).json({ error: "Atividade não está mais em execução — a sessão foi fechada por outra ação." });
@@ -1746,7 +1791,18 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
 
     const agora = new Date();
     const correlationId = req.correlationId!;
-    const observacao = typeof req.body?.observacao === "string" ? req.body.observacao.trim() || null : null;
+    // Quem para a própria atividade conta o que fez; gestor/admin parando a de outra pessoa
+    // não descreve por ela (a sessão fica pendente de descrição).
+    const decisao = await avaliarDescricaoDaMovimentacao({
+      atividade,
+      souDono: contexto.consultor?.codfor === atividade.codfor,
+      abreSessao: false,
+      observacao: req.body?.observacao,
+    });
+    if (decisao.recusa) {
+      res.status(decisao.recusa.status).json(decisao.recusa.corpo);
+      return;
+    }
     const { operacoes, duracaoSessaoFechadaMin, fimAjustadoParaLimite } = await montarOperacoesMovimentacao({
       atividade,
       colunaAnterior: colunaAtual,
@@ -1755,7 +1811,7 @@ atividadesRouter.post("/:id/stop", async (req: AuthenticatedRequest, res) => {
       origemSessao: "manual",
       correlationId,
       agora,
-      observacaoFechamento: observacao,
+      observacaoFechamento: decisao.observacaoFechamento,
     });
     await prisma.$transaction(operacoes);
 

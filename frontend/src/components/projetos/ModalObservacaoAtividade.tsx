@@ -1,66 +1,71 @@
 import { useState } from "react";
 import { Modal } from "../ui/Modal";
+import { erroDeDescricao, textoInicialDaDescricao } from "../../lib/descricao-apontamento";
+import { CampoDescricaoApontamento } from "./CampoDescricaoApontamento";
 
 interface ModalObservacaoAtividadeProps {
   titulo: string;
-  // Descrição da atividade, vinda do servidor (ver descricaoPadraoDaAtividade). Abre o
-  // campo já preenchido — é o mesmo texto que a parada automática grava sozinha.
-  descricaoPadrao?: string | null;
+  /** Só informação, num bloco acima do campo — o campo NUNCA abre com ela. */
+  descricaoAtividade?: string | null;
+  itemDescricao?: string | null;
+  /** Nota de progresso que o próprio consultor já salvou na sessão; sem ela o campo abre vazio. */
+  nota?: string | null;
   onConfirmar: (observacao: string) => void;
-  onFechar: () => void;
-  // "O que foi feito?" (parar/mover) por padrão; "O que está sendo feito?" (28/08/2026) pra
-  // salvar nota de progresso sem parar — ver Atividades.tsx.
+  /** Desistir NÃO executa nada: não para, não move e não inicia. */
+  onCancelar: () => void;
+  /** "O que foi feito?" (parar/mover/iniciar outra) ou "O que está sendo feito?" (nota de progresso). */
   pergunta?: string;
-  // "Pular" (parar/mover) ainda executa a ação, só sem texto — "Cancelar" (nota de progresso)
-  // não executa nada. O rótulo muda junto pra não confundir os dois comportamentos.
-  rotuloFechar?: string;
+  /** Recado acima do campo (ex.: por que a pergunta apareceu ao iniciar outra atividade). */
+  aviso?: string;
+  rotuloSalvar?: string;
 }
 
-// Abre ao sair de "Em Andamento" (mover o card ou clicar Parar, ver Atividades.tsx) —
-// pré-preenche a Descrição em Meus Apontamentos depois. Fechar NÃO cancela a movimentação,
-// que já aconteceu/foi confirmada pelo usuário antes deste modal abrir — só decide se leva
-// texto junto.
+// Abre ao sair de "Em Andamento" (parar, mover o card, iniciar outra) e pra salvar a nota de progresso. A descrição é obrigatória
+// (27/11/2026): "Salvar" só liga com um texto que o servidor vai aceitar.
 //
-// Sai só pelos botões (ou pelo ✕): clique fora e Esc não fecham, senão um clique torto na
-// tela descartaria o texto que a pessoa acabou de escrever.
-//
-// Vem com a descrição da atividade já escrita: o que a pessoa editar prevalece, e "Pular"
-// deixa a herança acontecer do lado do servidor de qualquer forma.
+// Sai só pelos botões (ou pelo ✕): clique fora e Esc não fecham, senão um clique torto na tela descartaria o texto que a pessoa acabou
+// de escrever.
 export function ModalObservacaoAtividade({
   titulo,
-  descricaoPadrao,
+  descricaoAtividade,
+  itemDescricao,
+  nota,
   onConfirmar,
-  onFechar,
+  onCancelar,
   pergunta = "O que foi feito?",
-  rotuloFechar = "Pular",
+  aviso,
+  rotuloSalvar = "Salvar",
 }: ModalObservacaoAtividadeProps) {
-  const [texto, setTexto] = useState(descricaoPadrao ?? "");
+  const [texto, setTexto] = useState(() => textoInicialDaDescricao(nota, [descricaoAtividade, itemDescricao]));
+  const valido = erroDeDescricao(texto, [descricaoAtividade, itemDescricao]) == null;
+  const confirmar = () => {
+    if (valido) onConfirmar(texto.trim());
+  };
 
   return (
-    <Modal open onClose={onFechar} fecharPorFora={false} title={pergunta} subtitulo={titulo}>
-      <textarea
+    <Modal open onClose={onCancelar} fecharPorFora={false} title={pergunta} subtitulo={titulo}>
+      {aviso && <p className="mb-3 text-[12.5px] leading-snug text-muted">{aviso}</p>}
+      <CampoDescricaoApontamento
         autoFocus
-        value={texto}
-        onChange={(e) => setTexto(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onConfirmar(texto.trim());
-        }}
-        rows={3}
-        placeholder="Descreva rapidamente o que foi realizado (opcional)..."
-        className="w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        valor={texto}
+        onChange={setTexto}
+        descricaoAtividade={descricaoAtividade}
+        itemDescricao={itemDescricao}
+        onAtalhoSalvar={confirmar}
       />
       <div className="mt-4 flex justify-end gap-2">
         <button
-          onClick={onFechar}
+          onClick={onCancelar}
           className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {rotuloFechar}
+          Cancelar
         </button>
         <button
-          onClick={() => onConfirmar(texto.trim())}
-          className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={confirmar}
+          disabled={!valido}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Salvar
+          {rotuloSalvar}
         </button>
       </div>
     </Modal>

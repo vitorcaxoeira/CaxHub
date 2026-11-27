@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "../ui/Modal";
 import { Spinner } from "../ui/Spinner";
 import { useToast } from "../ui/Toast";
+import { erroDeDescricao, textoInicialDaDescricao } from "../../lib/descricao-apontamento";
+import { CampoDescricaoApontamento } from "./CampoDescricaoApontamento";
 
 // Vive dentro do AppShell, então acompanha o consultor em QUALQUER tela — o fim do
 // expediente raramente pega a pessoa justamente no quadro de atividades.
@@ -26,8 +28,10 @@ interface SessaoVigiada {
   /** A sessão nasceu fora do expediente — muda o texto: nada "terminou", ela começou fora. */
   iniciouForaDoExpediente: boolean;
   opcoesProrrogacao: number[];
-  /** Descrição da atividade — abre o "O que foi feito?" já preenchido. */
-  descricaoPadrao: string | null;
+  /** Só informação no "O que foi feito?"; o campo abre com a nota salva, ou vazio. */
+  descricaoAtividade: string | null;
+  itemDescricao: string | null;
+  nota: string | null;
 }
 
 const INTERVALO_CONSULTA_MS = 30_000;
@@ -199,7 +203,8 @@ export function VigiaFimDeJornada() {
         setDescrevendo(false);
         setObservacao("");
         avisarSessaoAlterada();
-      } catch {
+      } catch (err: any) {
+        if (err.response?.data?.codigo === "descricao_invalida") toast.mostrar(err.response.data.error, "destructive");
         // O servidor recalculou e recusou — deixa o vigia tentar de novo no próximo tique.
         encerrando.current = null;
       } finally {
@@ -239,6 +244,8 @@ export function VigiaFimDeJornada() {
 
   if (!sessao || !perguntando) return null;
 
+  const descricaoValida = erroDeDescricao(observacao, [sessao.descricaoAtividade, sessao.itemDescricao]) == null;
+
   // Passo 2 — descrever o que foi feito antes de encerrar, igual ao Parar normal.
   if (descrevendo) {
     return (
@@ -250,13 +257,18 @@ export function VigiaFimDeJornada() {
         subtitulo={`Proposta ${sessao.codpro}`}
       >
         <div className="space-y-4 p-4">
-          <textarea
+          {/* O prazo continua correndo enquanto a pessoa escreve: sem mostrar, o texto sumiria de surpresa. */}
+          <p className="text-[12.5px] text-muted">
+            A execução é encerrada sozinha em{" "}
+            <span className="font-mono font-semibold tabular-nums text-destructive">{formatarContagem(restante)}</span>; aí a descrição
+            fica pendente em Meus Apontamentos.
+          </p>
+          <CampoDescricaoApontamento
             autoFocus
-            value={observacao}
-            onChange={(e) => setObservacao(e.target.value)}
-            rows={3}
-            placeholder="Descreva rapidamente o que foi realizado (opcional)..."
-            className="w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            valor={observacao}
+            onChange={setObservacao}
+            descricaoAtividade={sessao.descricaoAtividade}
+            itemDescricao={sessao.itemDescricao}
           />
           <div className="flex items-center justify-end gap-2">
             <button
@@ -268,7 +280,7 @@ export function VigiaFimDeJornada() {
             </button>
             <button
               onClick={() => encerrar(true, observacao.trim())}
-              disabled={enviando}
+              disabled={enviando || !descricaoValida}
               className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
               {enviando && <Spinner className="h-3.5 w-3.5" />}
@@ -321,8 +333,8 @@ export function VigiaFimDeJornada() {
         <div className="flex items-center justify-end gap-2">
           <button
             onClick={() => {
-              // Abre já com a descrição da atividade, igual ao modal de parar no quadro.
-              setObservacao(sessao.descricaoPadrao ?? "");
+              // Abre com a nota que o consultor já salvou (ou vazio), igual ao modal de parar no quadro.
+              setObservacao(textoInicialDaDescricao(sessao.nota, [sessao.descricaoAtividade, sessao.itemDescricao]));
               setDescrevendo(true);
             }}
             disabled={enviando}

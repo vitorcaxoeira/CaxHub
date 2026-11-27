@@ -1,6 +1,6 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AtividadeKanban, ColunaKanban, DetalheInfo, KanbanBoard } from "../../components/projetos/KanbanBoard";
 import { AtividadesTable, FiltrosAtividades } from "../../components/projetos/AtividadesTable";
 import { AtividadesFiltros } from "../../components/projetos/AtividadesFiltros";
@@ -9,6 +9,7 @@ import { usePadroesTela } from "../../components/ui/padroesFiltros/usePadroesTel
 import { IndicadoresProjetos, IndicadoresProjetosData, KpisAtividades, SituacaoKpi } from "../../components/projetos/IndicadoresProjetos";
 import { AtividadeDetalhe } from "../../components/projetos/AtividadeDetalhe";
 import { ModalObservacaoAtividade } from "../../components/projetos/ModalObservacaoAtividade";
+import { DescricaoDaEmAndamento, ROTA_AJUSTAR_DESCRICOES, useRecusaDeInicio } from "../../components/projetos/useRecusaDeInicio";
 import { CalendarioAtividades } from "../../components/projetos/CalendarioAtividades";
 import { TimelineAtividades } from "../../components/projetos/TimelineAtividades";
 import { WorkloadConsultores } from "../../components/projetos/WorkloadConsultores";
@@ -44,6 +45,9 @@ type AtividadeDetalheRow = Omit<DetalheInfo, "titulo" | "bloqueadoApontamento" |
   bloqueadoExcedenteEfetivo: boolean;
 };
 
+// Gestor/admin parando a atividade de outra pessoa não descreve por ela.
+const AVISO_DESCRICAO_DO_CONSULTOR = "Parada sem descrição nova: quem executou completa em Meus Apontamentos antes de iniciar outra atividade.";
+
 // Pedido de observação ao sair de "Em Andamento" (mover o card ou clicar Parar) — abre
 // o ModalObservacaoAtividade antes de chamar a API de verdade, ver
 // moverAtividade/pararAtividade abaixo.
@@ -53,9 +57,11 @@ interface PedidoObservacao {
   // "nota" (28/08/2026): salva progresso SEM parar — ver editarNotaEmAndamento abaixo.
   tipo: "mover" | "parar" | "nota";
   titulo: string;
-  // Descrição da atividade (ou a nota de progresso já salva, se houver — o servidor decide
-  // qual das duas), pra abrir o campo já preenchido. Vem do servidor na linha.
-  descricaoPadrao: string | null;
+  // A descrição da atividade vai como informação; o campo abre com a nota de progresso que o
+  // consultor já salvou, ou vazio.
+  descricaoAtividade: string | null;
+  itemDescricao: string | null;
+  nota: string | null;
 }
 
 interface FiltrosPatch {
@@ -138,6 +144,8 @@ export function Atividades() {
   const [processando, setProcessando] = useState<Set<number>>(new Set());
   const [pedidoObservacao, setPedidoObservacao] = useState<PedidoObservacao | null>(null);
   const toast = useToast();
+  const navigate = useNavigate();
+  const recusaDeInicio = useRecusaDeInicio(() => navigate(ROTA_AJUSTAR_DESCRICOES));
 
   // ?atividade=:id (link de notificação, ver NotificacoesSino) abre o painel direto, sem
   // depender de a atividade estar na página/filtro atual. Mesma rota e mesmo mapeamento que
@@ -514,7 +522,12 @@ export function Atividades() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [atividades]);
 
-  async function executarMovimentacao(atividadeId: number, novaColunaId: number, observacao: string | null) {
+  async function executarMovimentacao(
+    atividadeId: number,
+    novaColunaId: number,
+    observacao: string | null,
+    daEmAndamento?: DescricaoDaEmAndamento
+  ) {
     const anterior = atividades;
     const alvo = atividades.find((a) => a.id === atividadeId);
     setAtividades((atual) => atual.map((a) => (a.id === atividadeId ? { ...a, colunaId: novaColunaId } : a)));
@@ -522,7 +535,9 @@ export function Atividades() {
       const { data } = await axios.patch(`/api/atividades/${atividadeId}/mover`, {
         colunaId: novaColunaId,
         observacao: observacao || undefined,
+        ...daEmAndamento,
       });
+      if (alvo?.coluna?.nome === RAIA_EM_ANDAMENTO && !alvo.souOExecutor) toast.mostrar(AVISO_DESCRICAO_DO_CONSULTOR, "neutral");
       // Regra de 1 atividade em andamento por consultor: arrastar um card pra "Em Andamento"
       // com outro já lá pausa o outro automaticamente — mesmo aviso que o botão Iniciar já
       // mostra (ver iniciarAtividade), pra não sumir uma atividade sem explicação.
@@ -542,32 +557,41 @@ export function Atividades() {
       carregarIndicadores();
     } catch (err: any) {
       setAtividades(anterior);
+      if (recusaDeInicio.tratarRecusa(err, (extras) => executarMovimentacao(atividadeId, novaColunaId, observacao, extras))) return;
       // Teto estourado volta 409 e é o caso mais provável aqui — o toast dá mais destaque
       // que a faixa de erro do topo, que passa despercebida depois de arrastar um card.
       const mensagem = err.response?.data?.error ?? "Falha ao mover atividade";
-      if (err.response?.status === 409) toast.mostrar(mensagem, "destructive");
+      if (err.response?.status === 409 || err.response?.data?.codigo === "descricao_invalida") toast.mostrar(mensagem, "destructive");
       else setErro(mensagem);
     }
   }
 
-  // Sair de "Em Andamento" (mover pra qualquer outra coluna) pede uma observação rápida
-  // antes de mover de verdade — ver PedidoObservacao/resolverPedidoObservacao.
+  function pedidoDe(atividadeId: number, tipo: PedidoObservacao["tipo"], novaColunaId?: number): PedidoObservacao {
+    const alvo = atividades.find((a) => a.id === atividadeId);
+    return {
+      atividadeId,
+      novaColunaId,
+      tipo,
+      titulo: `Proposta ${alvo?.codpro ?? atividadeId}`,
+      descricaoAtividade: alvo?.descricaoAtividade ?? null,
+      itemDescricao: alvo?.itemDescricao ?? null,
+      nota: alvo?.notaEmAndamento ?? null,
+    };
+  }
+
+  // Sair de "Em Andamento" (mover pra qualquer outra coluna) exige que o consultor diga o que
+  // fez antes de mover de verdade — ver PedidoObservacao/resolverPedidoObservacao. Quem não é
+  // o dono move direto, sem descrever por ele.
   function moverAtividade(atividadeId: number, novaColunaId: number) {
     const alvo = atividades.find((a) => a.id === atividadeId);
-    if (alvo?.coluna?.nome === RAIA_EM_ANDAMENTO && alvo.colunaId !== novaColunaId) {
-      setPedidoObservacao({
-        atividadeId,
-        novaColunaId,
-        tipo: "mover",
-        titulo: `Proposta ${alvo.codpro}`,
-        descricaoPadrao: alvo.descricaoPadrao,
-      });
+    if (alvo?.coluna?.nome === RAIA_EM_ANDAMENTO && alvo.colunaId !== novaColunaId && alvo.souOExecutor) {
+      setPedidoObservacao(pedidoDe(atividadeId, "mover", novaColunaId));
       return;
     }
     executarMovimentacao(atividadeId, novaColunaId, null);
   }
 
-  async function iniciarAtividade(atividadeId: number) {
+  async function iniciarAtividade(atividadeId: number, daEmAndamento?: DescricaoDaEmAndamento) {
     const colunaEmAndamento = colunas.find((c) => c.nome === RAIA_EM_ANDAMENTO) ?? null;
     const alvo = atividades.find((a) => a.id === atividadeId);
     const anterior = atividades;
@@ -585,7 +609,7 @@ export function Atividades() {
       );
     }
     try {
-      const { data } = await axios.post(`/api/atividades/${atividadeId}/start`);
+      const { data } = await axios.post(`/api/atividades/${atividadeId}/start`, daEmAndamento);
       if (data.pausada) {
         toast.mostrar(
           `Atividade ${data.pausada.titulo} foi pausada para iniciar a Proposta ${alvo?.codpro ?? atividadeId}`,
@@ -607,7 +631,9 @@ export function Atividades() {
       carregarIndicadores();
     } catch (err: any) {
       setAtividades(anterior);
-      toast.mostrar(err.response?.data?.error ?? "Falha ao iniciar atividade", "destructive");
+      if (!recusaDeInicio.tratarRecusa(err, (extras) => iniciarAtividade(atividadeId, extras))) {
+        toast.mostrar(err.response?.data?.error ?? "Falha ao iniciar atividade", "destructive");
+      }
     } finally {
       setProcessando((atual) => {
         const proximo = new Set(atual);
@@ -618,6 +644,7 @@ export function Atividades() {
   }
 
   async function executarParada(atividadeId: number, observacao: string | null) {
+    const souOExecutor = atividades.find((a) => a.id === atividadeId)?.souOExecutor ?? true;
     const colunaAFazer = colunas.find((c) => c.nome === RAIA_A_FAZER) ?? null;
     const anterior = atividades;
     setProcessando((atual) => new Set(atual).add(atividadeId));
@@ -633,6 +660,7 @@ export function Atividades() {
       // Parou depois do limite: o servidor cortou o fim no teto/expediente. Avisar é o que
       // impede o consultor de achar que o tempo todo foi registrado.
       if (data?.fimCortado) toast.mostrar(data.fimCortado, "warning");
+      if (!souOExecutor) toast.mostrar(AVISO_DESCRICAO_DO_CONSULTOR, "neutral");
       atualizarLinhas([atividadeId]);
       carregarIndicadores();
     } catch (err: any) {
@@ -647,29 +675,22 @@ export function Atividades() {
     }
   }
 
-  // "Parar" só existe quando a atividade já está em "Em Andamento" (podeParar), então
-  // sempre pede a observação antes de parar de verdade.
+  // "Parar" só existe quando a atividade já está em "Em Andamento" (podeParar). O dono sempre
+  // descreve antes de parar de verdade; gestor/admin para direto.
   function pararAtividade(atividadeId: number) {
     const alvo = atividades.find((a) => a.id === atividadeId);
-    setPedidoObservacao({
-      atividadeId,
-      tipo: "parar",
-      titulo: `Proposta ${alvo?.codpro ?? atividadeId}`,
-      descricaoPadrao: alvo?.descricaoPadrao ?? null,
-    });
+    if (alvo && !alvo.souOExecutor) {
+      executarParada(atividadeId, null);
+      return;
+    }
+    setPedidoObservacao(pedidoDe(atividadeId, "parar"));
   }
 
   // Salva um rascunho do que está sendo feito SEM parar o cronômetro (28/08/2026) — mesmo
   // modal do "Parar", pergunta e rótulo de fechar diferentes (ver resolverPedidoObservacao e
   // o render do modal mais abaixo).
   function editarNotaEmAndamento(atividadeId: number) {
-    const alvo = atividades.find((a) => a.id === atividadeId);
-    setPedidoObservacao({
-      atividadeId,
-      tipo: "nota",
-      titulo: `Proposta ${alvo?.codpro ?? atividadeId}`,
-      descricaoPadrao: alvo?.descricaoPadrao ?? null,
-    });
+    setPedidoObservacao(pedidoDe(atividadeId, "nota"));
   }
 
   async function executarSalvarNota(atividadeId: number, texto: string) {
@@ -690,13 +711,13 @@ export function Atividades() {
     }
   }
 
-  function resolverPedidoObservacao(observacao: string | null) {
+  function resolverPedidoObservacao(observacao: string) {
     if (!pedidoObservacao) return;
     const { atividadeId, novaColunaId, tipo } = pedidoObservacao;
     setPedidoObservacao(null);
     if (tipo === "mover" && novaColunaId != null) executarMovimentacao(atividadeId, novaColunaId, observacao);
     else if (tipo === "parar") executarParada(atividadeId, observacao);
-    else if (tipo === "nota") executarSalvarNota(atividadeId, observacao ?? "");
+    else if (tipo === "nota") executarSalvarNota(atividadeId, observacao);
   }
 
   function abrirDetalhe(atividadeId: number, info: DetalheInfo) {
@@ -857,16 +878,17 @@ export function Atividades() {
       {pedidoObservacao && (
         <ModalObservacaoAtividade
           titulo={pedidoObservacao.titulo}
-          descricaoPadrao={pedidoObservacao.descricaoPadrao}
-          onConfirmar={(texto) => resolverPedidoObservacao(texto || null)}
-          // "nota": fechar é cancelar de verdade, sem salvar nada — diferente de
-          // "parar"/"mover", onde "Pular" ainda executa a ação (só sem texto digitado).
-          onFechar={() => (pedidoObservacao.tipo === "nota" ? setPedidoObservacao(null) : resolverPedidoObservacao(null))}
-          {...(pedidoObservacao.tipo === "nota"
-            ? { pergunta: "O que está sendo feito?", rotuloFechar: "Cancelar" }
-            : {})}
+          descricaoAtividade={pedidoObservacao.descricaoAtividade}
+          itemDescricao={pedidoObservacao.itemDescricao}
+          nota={pedidoObservacao.nota}
+          onConfirmar={resolverPedidoObservacao}
+          // Cancelar não para, não move e não salva nada.
+          onCancelar={() => setPedidoObservacao(null)}
+          {...(pedidoObservacao.tipo === "nota" ? { pergunta: "O que está sendo feito?" } : {})}
         />
       )}
+
+      {recusaDeInicio.modais}
     </div>
   );
 }

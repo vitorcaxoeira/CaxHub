@@ -62,6 +62,7 @@ import { converterHeicSeNecessario, ehHeic } from "../domain/comprovanteHeic";
 import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { extrasDaConsulta } from "../consultas/camposRelacionados";
 import { FONTES_RATS } from "../domain/fontesDeCampos";
+import { carregarReferencias } from "../domain/descricaoApontamento";
 
 // Tela "Meus Apontamentos": RATs agrupam os apontamentos (RatItem) de um consultor numa
 // proposta. Visibilidade: consultor vê só as próprias RATs; gestor do departamento
@@ -760,6 +761,17 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
       }
     }
 
+    // Descrição da atividade de cada item — só informação nas janelas de editar a descrição.
+    const atividadesDosItens =
+      atividadeIds.length > 0
+        ? await prisma.atividadeConsultor.findMany({
+            where: { id: { in: atividadeIds } },
+            select: { id: true, codemp: true, codpro: true, seqite: true, estruturaAtividadeId: true },
+          })
+        : [];
+    const referencias = await carregarReferencias(atividadesDosItens);
+    const descricaoPorAtividadeId = new Map(atividadesDosItens.map((a) => [a.id, referencias(a).descricaoAtividade]));
+
     // Alteração do admin (tipEve A) ainda não equalizada no Senior, por item: "enviando" ou "falha".
     const edicoes =
       atividadeIds.length > 0
@@ -787,6 +799,7 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           atividadeId: item.sessoes[0]?.atividadeId ?? null,
           codser: propostaItem?.codser ?? null,
           itemDescricao: propostaItem?.despro ?? null,
+          descricaoAtividade: descricaoPorAtividadeId.get(item.sessoes[0]?.atividadeId ?? 0) ?? propostaItem?.despro ?? null,
           // Sequência do item na proposta — exibida como prefixo da descrição na tela.
           seqite: item.seqite,
           datati: item.datati,

@@ -5,6 +5,7 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { limiteDaSessaoAberta, MotivoLimite } from "./limiteSessao";
 import { diaSemanaDaSessao } from "./jornadaConsultor";
+import { MAX_DESCRICAO } from "./descricaoApontamento";
 
 // Nomes reais das raias do quadro (ver backend/prisma/seed.ts) — mesma regra de negócio
 // espelhada em frontend/src/lib/atividade-acoes.ts. Duas runtimes diferentes (sem pacote
@@ -33,41 +34,15 @@ export function podeParar(nomeColunaAtual: string | null | undefined): boolean {
 }
 
 // Tamanho de AtividadeSessaoExecucao.observacao e de RatItem.desati — o texto passa pelos
-// dois. `despro` chega a 1.833 caracteres na base (19 itens passam de 1.000), então sem o
-// corte o insert quebraria justamente nos maiores. Exportado (28/08/2026) pro mesmo corte
-// valer na rota de salvar nota de progresso (routes/atividades.ts, PATCH /:id/observacao).
-export const LIMITE_OBSERVACAO = 1000;
+// dois. Exportado (28/08/2026) pro mesmo corte valer na rota de salvar nota de progresso
+// (routes/atividades.ts, PATCH /:id/observacao).
+export const LIMITE_OBSERVACAO = MAX_DESCRICAO;
 
-// Descrição que a atividade "empresta" pra observação de uma parada: a mais específica que
-// existir. O nome do nó no cronograma descreve a atividade em si; o `despro` descreve o
-// item da proposta inteiro, e é o que sobra quando a proposta não usa estrutura — medido em
-// 03/08/2026, só 771 das 2.259 atividades ativas têm nó, então o segundo caminho é o comum.
-//
-// Uma função só porque três lugares dependem da MESMA resposta: o modal que abre
-// pré-preenchido, o vigia de fim de jornada e a herança da parada automática. Se cada um
-// derivasse por conta própria, a tela ofereceria um texto e o servidor gravaria outro.
-export async function descricaoPadraoDaAtividade(
-  atividade: Pick<AtividadeConsultor, "codemp" | "codpro" | "seqite" | "estruturaAtividadeId">
-): Promise<string | null> {
-  if (atividade.estruturaAtividadeId != null) {
-    const no = await prisma.estruturaAtividade.findUnique({
-      where: { id: atividade.estruturaAtividadeId },
-      select: { nome: true },
-    });
-    if (no?.nome?.trim()) return no.nome.trim().slice(0, LIMITE_OBSERVACAO);
-  }
-  const item = await prisma.propostaItem.findUnique({
-    where: {
-      codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite },
-    },
-    select: { despro: true },
-  });
-  const despro = item?.despro?.trim();
-  return despro ? despro.slice(0, LIMITE_OBSERVACAO) : null;
-}
-
-// Mesma escolha, sem ir ao banco — pra quem já tem os dois valores em mãos (a listagem de
-// atividades monta os dois no mesmo `map`).
+// A descrição "da atividade" é a mais específica que existir: o nome do nó no cronograma
+// descreve a atividade em si; o `despro` descreve o item da proposta inteiro, e é o que
+// sobra quando a proposta não usa estrutura. Hoje só serve de INFORMAÇÃO na tela — desde
+// 27/11/2026 ela nunca mais é copiada pra observação de uma sessão (ver
+// descricaoApontamento.ts, que também compara o texto do consultor contra ela).
 export function escolherDescricaoPadrao(estruturaNome: string | null, itemDescricao: string | null): string | null {
   const nome = estruturaNome?.trim();
   if (nome) return nome.slice(0, LIMITE_OBSERVACAO);
@@ -101,14 +76,18 @@ export interface ContextoMovimentacao {
   // Evidência do que disparou a parada (hoje: o `pagehide` da parada por página fechada) —
   // vai pro metadata do evento como `gatilho`, pra dar pra provar depois o que aconteceu.
   gatilhoParada?: Record<string, unknown> | null;
-  // Texto capturado na hora de fechar a sessão (modal "O que foi feito?" ao mover o
-  // card pra fora de "Em Andamento" ou clicar Parar) — pré-preenche a Descrição em
-  // Meus Apontamentos.
+  // Texto que o PRÓPRIO consultor escreveu ao fechar a sessão (modal "O que foi feito?") —
+  // vira a Descrição em Meus Apontamentos.
   //
-  // Vazio ou ausente NÃO deixa a sessão em branco: cai na descrição da atividade (ver
-  // descricaoPadraoDaAtividade). É o que cobre a auto-pausa de POST /:id/start e todas as
-  // paradas automáticas, onde não há ninguém pra digitar.
+  // Vazio ou ausente mantém a nota de progresso que ele já tinha salvo na sessão; sem nota,
+  // a sessão fica SEM descrição (27/11/2026) — é o caso das paradas automáticas e de quando
+  // outra pessoa (gestor/admin) para a atividade dele. Quem obriga o texto são as rotas
+  // (descricaoApontamento.ts); aqui só se grava o que veio.
   observacaoFechamento?: string | null;
+  // O mesmo, para a sessão de OUTRA atividade pausada por esta movimentação. Amarrado ao id
+  // da sessão de propósito: se a que estava em andamento já tiver sido fechada por outro
+  // caminho, o texto não cai numa sessão diferente da que o consultor descreveu.
+  observacaoDaPausada?: { sessaoId: number; texto: string } | null;
 }
 
 export interface AtividadePausada {
@@ -155,7 +134,7 @@ export interface ResultadoMovimentacao {
 // chama decide quando/como executar (um array próprio, ou combinado com outra chamada
 // desta mesma função, ex.: pausar uma atividade pra iniciar outra na mesma transação).
 export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Promise<ResultadoMovimentacao> {
-  const { atividade, colunaAnterior, colunaNova, usuarioId, origemSessao, correlationId, agora, observacaoFechamento, origemEvento, motivoParada, gatilhoParada } = ctx;
+  const { atividade, colunaAnterior, colunaNova, usuarioId, origemSessao, correlationId, agora, observacaoFechamento, origemEvento, motivoParada, gatilhoParada, observacaoDaPausada } = ctx;
 
   const sessaoAbertaAntes = await prisma.atividadeSessaoExecucao.findFirst({
     where: { atividadeId: atividade.id, fim: null },
@@ -199,17 +178,11 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
     ? Math.round((fimEfetivo.getTime() - sessaoAbertaAntes.inicio.getTime()) / 60000)
     : null;
 
-  // Observação vazia herda, nesta ordem: (1) o que já estava salvo na sessão (nota de
-  // progresso gravada em andamento, ver PATCH /:id/observacao — sem isso, clicar "Pular" ao
-  // parar sobrescrevia com a descrição genérica uma nota que o consultor vinha escrevendo
-  // com cuidado, 28/08/2026); (2) a descrição da atividade. Vale pra TODA parada — a
-  // automática (fim de expediente, teto, varredura, auto-pausa ao iniciar outra) não tem
-  // ninguém pra digitar, e era ali que a sessão fechava em branco. Consulta o banco só
-  // quando há sessão aberta pra fechar e não veio texto nem observação prévia.
-  const observacaoDaSessao =
-    observacaoFechamento?.trim() ||
-    sessaoAbertaAntes?.observacao?.trim() ||
-    (sessaoAbertaAntes ? await descricaoPadraoDaAtividade(atividade) : null);
+  // Só texto do próprio consultor: o digitado agora ou, na falta, a nota de progresso já
+  // salva na sessão (PATCH /:id/observacao — não pode ser perdida numa parada automática,
+  // 28/08/2026). Sem nenhum dos dois a sessão fecha sem descrição, e o consultor precisa
+  // descrever em Meus Apontamentos antes de iniciar outra atividade.
+  const observacaoDaSessao = observacaoFechamento?.trim() || sessaoAbertaAntes?.observacao?.trim() || null;
 
   const entidadeId = entidadeIdAtividade(atividade.id);
   const entidadeRotulo = `Atividade — Proposta ${atividade.codpro}`;
@@ -336,9 +309,10 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
           limiteOutra && agora.getTime() > limiteOutra.instante.getTime() ? limiteOutra.instante : agora;
 
         const duracaoOutraMin = Math.round((fimOutra.getTime() - sessaoOutra.inicio.getTime()) / 60000);
-        // Mesma ordem de fallback do fechamento principal acima: nota já salva na sessão
-        // antes de cair pra descrição genérica.
-        const observacaoOutra = sessaoOutra.observacao?.trim() || (await descricaoPadraoDaAtividade(atividadeOutra));
+        // Mesma regra do fechamento principal acima: o que o consultor digitou agora pra
+        // ESTA sessão ou a nota já salva nela; senão fica sem descrição.
+        const textoDaPausada = observacaoDaPausada?.sessaoId === sessaoOutra.id ? observacaoDaPausada.texto.trim() : "";
+        const observacaoOutra = textoDaPausada || sessaoOutra.observacao?.trim() || null;
 
         operacoes.push(
           prisma.atividadeConsultor.update({ where: { id: atividadeOutra.id }, data: { colunaId: colunaAFazer.id } }),

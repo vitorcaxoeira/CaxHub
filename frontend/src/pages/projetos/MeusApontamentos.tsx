@@ -1,6 +1,6 @@
 import axios from "axios";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { formatHoras } from "../../utils/horas";
 import { paraInputData, paraInputHora } from "../../utils/inputsDataHora";
 import { Skeleton } from "../../components/ui/Skeleton";
@@ -9,6 +9,8 @@ import { DropdownMenu } from "../../components/ui/DropdownMenu";
 import { MultiSelectDropdown } from "../../components/ui/MultiSelectDropdown";
 import { SelectBuscavel } from "../../components/ui/SelectBuscavel";
 import { ModalEditarDescricao } from "../../components/projetos/ModalEditarDescricao";
+import { CampoDescricaoApontamento } from "../../components/projetos/CampoDescricaoApontamento";
+import { erroDeDescricao } from "../../lib/descricao-apontamento";
 import { ModalManutencaoSessao, type DadosManutencaoSessao } from "../../components/projetos/ModalManutencaoSessao";
 import { DespesasRatPainel } from "../../components/projetos/DespesasRatPainel";
 import { Tabs } from "../../components/ui/Tabs";
@@ -64,6 +66,10 @@ interface SessaoPendente {
   duracaoMinutos: number;
   origem: string;
   observacao: string | null;
+  // Descrição da atividade (só informação) e se a descrição do apontamento ainda precisa ser feita — as mesmas pendências que impedem o
+  // consultor de iniciar outra atividade (ver backend/src/domain/descricaoApontamento.ts).
+  descricaoAtividade: string | null;
+  semDescricao: boolean;
   codfor: number;
   // Preenchido só quando `mostrarConsultor` (admin, ou gestor vendo o time) — o consultor
   // comum só vê as próprias sessões, então mostrar o nome dele em toda linha seria ruído.
@@ -123,6 +129,7 @@ interface AtividadeResumo {
   codpro: number;
   seqite: number | null;
   itemDescricao: string | null;
+  descricaoAtividade: string | null;
   // Usado no cabeçalho do grupo do seletor — número de proposta sozinho não identifica o
   // projeto pra quem lança pelo time.
   cliente: string | null;
@@ -186,6 +193,7 @@ interface RatItemRow {
   atividadeId: number | null;
   codser: string | null;
   itemDescricao: string | null;
+  descricaoAtividade: string | null;
   // Sequência do item na proposta — vira prefixo da descrição na coluna Item.
   seqite: number | null;
   datati: string | null;
@@ -777,9 +785,26 @@ function OpcoesRatDestino({
   );
 }
 
+function SeloSemDescricao() {
+  return (
+    <span className="mr-1.5 inline-block rounded bg-warning/15 px-1.5 py-0.5 align-middle font-mono text-[10px] font-medium uppercase tracking-wide text-warning">
+      sem descrição
+    </span>
+  );
+}
+
 export function MeusApontamentos() {
   const navigate = useNavigate();
   const toast = useToast();
+  // "?semDescricao=1" é pra onde o bloqueio de início manda: mostra só os apontamentos que a própria pessoa precisa descrever.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const somenteSemDescricao = searchParams.get("semDescricao") === "1";
+  function alternarSemDescricao() {
+    const params = new URLSearchParams(searchParams);
+    if (somenteSemDescricao) params.delete("semDescricao");
+    else params.set("semDescricao", "1");
+    setSearchParams(params, { replace: true });
+  }
   const [sessoes, setSessoes] = useState<SessaoPendente[]>([]);
   // Admin vê as sessões pendentes de todos os consultores; gestor vê as próprias + as do
   // time que gerencia (ver GET /sessoes-pendentes) — é o que liga a coluna Consultor e a
@@ -1152,6 +1177,15 @@ export function MeusApontamentos() {
   // antes em qual delas a sessão entra (ou se gera uma nova); senão confirma direto.
   function confirmar(sessaoId: number) {
     const sessao = sessoes.find((s) => s.id === sessaoId);
+    if (sessao && erroDeDescricao(descricoes[sessaoId] ?? sessao.observacao, [sessao.descricaoAtividade, sessao.itemDescricao])) {
+      if (sessao.souDono) {
+        toast.mostrar("Descreva o que foi realizado antes de confirmar.", "warning");
+        setEditandoDescricaoId(sessaoId);
+      } else {
+        toast.mostrar(`Proposta ${sessao.codpro}: o consultor precisa descrever este apontamento antes da confirmação.`, "warning");
+      }
+      return;
+    }
     const opcoes = sessao ? ratsDestino[chaveGrupoRat(sessao)] : undefined;
     if (sessao && opcoes && opcoes.length > 0) {
       setEscolhaRat({
@@ -1168,9 +1202,8 @@ export function MeusApontamentos() {
 
   async function enviarConfirmacao(sessaoId: number, ratDestino?: { ratId: number } | { nova: true }) {
     setConfirmando(sessaoId);
-    // Cai pra observacao (pré-preenchida ao sair de "Em Andamento", ver Atividades.tsx)
-    // quando o usuário não editou o campo — senão o texto pré-preenchido só aparecia na
-    // tela e nunca era enviado de fato.
+    // Cai pra observacao (o que o consultor escreveu ao sair de "Em Andamento") quando o
+    // usuário não editou o campo nesta tela.
     const sessao = sessoes.find((s) => s.id === sessaoId);
     const descricao = descricoes[sessaoId] ?? sessao?.observacao ?? "";
     try {
@@ -1287,6 +1320,12 @@ export function MeusApontamentos() {
       setErroManual("Preencha atividade, data e os dois horários");
       return;
     }
+    const atividadeEscolhida = atividades.find((a) => a.id === Number(manualAtividadeId));
+    const erroDescricao = erroDeDescricao(manualDescricao, [atividadeEscolhida?.descricaoAtividade, atividadeEscolhida?.itemDescricao]);
+    if (erroDescricao) {
+      setErroManual(erroDescricao);
+      return;
+    }
     setSalvandoManual(true);
     setErroManual(null);
     try {
@@ -1294,7 +1333,7 @@ export function MeusApontamentos() {
         atividadeId: Number(manualAtividadeId),
         inicio: `${manualData}T${manualInicio}:00`,
         fim: `${manualData}T${manualFim}:00`,
-        descricao: manualDescricao || undefined,
+        descricao: manualDescricao.trim(),
       });
       setModalManual(false);
       limparFormularioManual();
@@ -1790,6 +1829,7 @@ export function MeusApontamentos() {
     const inicioFiltro = dataInicioFiltro ? new Date(`${dataInicioFiltro}T00:00:00`).getTime() : null;
     const fimFiltro = dataFimFiltro ? new Date(`${dataFimFiltro}T23:59:59.999`).getTime() : null;
     return sessoes.filter((s) => {
+      if (somenteSemDescricao && !(s.semDescricao && s.souDono)) return false;
       if (codforsFiltroSessoes.length > 0 && !codforsFiltroSessoes.includes(s.codfor)) return false;
       const inicioSessao = new Date(s.inicio).getTime();
       if (inicioFiltro != null && inicioSessao < inicioFiltro) return false;
@@ -1798,7 +1838,9 @@ export function MeusApontamentos() {
       const alvo = `${s.cliente ?? ""} ${s.codpro} ${rotuloItem(s)}`.toLowerCase();
       return alvo.includes(busca);
     });
-  }, [sessoes, codforsFiltroSessoes, buscaSessoesDebounced, dataInicioFiltro, dataFimFiltro]);
+  }, [sessoes, codforsFiltroSessoes, buscaSessoesDebounced, dataInicioFiltro, dataFimFiltro, somenteSemDescricao]);
+
+  const qtdMinhasSemDescricao = useMemo(() => sessoes.filter((s) => s.semDescricao && s.souDono).length, [sessoes]);
 
   // Resumo por Forma de Faturamento: as sessões já filtradas (período, busca, consultores) e ainda o filtro "Propostas" (só desta aba).
   const sessoesResumo = useMemo(() => filtrarPorTipoDeProposta(sessoesFiltradas, tipoPropostaResumo), [sessoesFiltradas, tipoPropostaResumo]);
@@ -1924,6 +1966,7 @@ export function MeusApontamentos() {
                   : "border-dashed border-border text-muted hover:bg-surface-2"
               }`}
             >
+              {s.semDescricao && <SeloSemDescricao />}
               {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
             </button>
           ) : (
@@ -1932,6 +1975,7 @@ export function MeusApontamentos() {
               title={s.observacao ?? undefined}
               className="block w-full max-w-[220px] truncate text-left text-sm text-muted hover:underline"
             >
+              {s.semDescricao && <SeloSemDescricao />}
               {s.observacao ?? "—"}
             </button>
           )}
@@ -1972,6 +2016,9 @@ export function MeusApontamentos() {
                   (solicitacoesAjuste.ts / DELETE /:id) — em sessão de outro consultor o
                   servidor recusaria com 403/404, então a tela nem oferece. Confirmar acima
                   não tem essa restrição (podeExecutarAcao já libera admin). */}
+              {s.souDono && (
+                <DropdownMenu.Item onSelect={() => setEditandoDescricaoId(s.id)}>Editar descrição</DropdownMenu.Item>
+              )}
               {s.souDono && (
                 <>
                   {/* Confirmar não deixa mexer no horário — só manda a sessão como o
@@ -2048,6 +2095,7 @@ export function MeusApontamentos() {
                 descricoes[s.id] ?? s.observacao ? "text-foreground" : "font-medium text-warning"
               }`}
             >
+              {s.semDescricao && <SeloSemDescricao />}
               {descricoes[s.id] ?? s.observacao ?? "Sem descrição — clique para preencher"}
             </button>
           ) : (
@@ -2056,6 +2104,7 @@ export function MeusApontamentos() {
               title={s.observacao ?? undefined}
               className="block w-full truncate text-left text-[12.5px] text-muted hover:underline"
             >
+              {s.semDescricao && <SeloSemDescricao />}
               {s.observacao ?? "—"}
             </button>
           )}
@@ -2210,6 +2259,17 @@ export function MeusApontamentos() {
                   className={selectClass}
                 />
               </div>
+              {(qtdMinhasSemDescricao > 0 || somenteSemDescricao) && (
+                <button
+                  onClick={alternarSemDescricao}
+                  aria-pressed={somenteSemDescricao}
+                  className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
+                    somenteSemDescricao ? "border-warning bg-warning/15 text-warning" : "border-warning/40 text-warning hover:bg-warning/10"
+                  }`}
+                >
+                  Meus sem descrição ({qtdMinhasSemDescricao})
+                </button>
+              )}
               {/* Admin ou gestor com time (mostrarConsultor) — pro consultor comum a lista já é só ele, filtro não ajudaria em nada. */}
               {mostrarConsultor && (
                 <>
@@ -2245,6 +2305,12 @@ export function MeusApontamentos() {
               )}
             </div>
           </div>
+          {abaSessoes === "sessoes" && qtdMinhasSemDescricao > 0 && (
+            <p className="mb-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning">
+              Você tem {qtdMinhasSemDescricao} {qtdMinhasSemDescricao === 1 ? "apontamento sem descrição" : "apontamentos sem descrição"}.
+              Descreva o que foi realizado para poder iniciar outra atividade.
+            </p>
+          )}
           <div className={`overflow-hidden rounded-lg border border-border bg-surface ${abaSessoes === "sessoes" ? "" : "hidden"}`}>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse">
@@ -2402,7 +2468,9 @@ export function MeusApontamentos() {
                   {!loading && sessoesFiltradas.length === 0 && (
                     <tr>
                       <td colSpan={11} className="px-2.5 py-8 text-center text-sm text-muted">
-                        {sessoes.length === 0
+                        {somenteSemDescricao && qtdMinhasSemDescricao === 0
+                          ? "Nenhum apontamento seu sem descrição — você já pode iniciar atividades."
+                          : sessoes.length === 0
                           ? 'Nenhuma sessão pendente — mova um card pra "Em Andamento" pra começar a rastrear tempo.'
                           : "Nenhuma sessão encontrada com os filtros atuais."}
                       </td>
@@ -2526,6 +2594,8 @@ export function MeusApontamentos() {
             <ModalEditarDescricao
               somenteLeitura={!sessao.souDono}
               titulo={`Proposta ${sessao.codpro}`}
+              descricaoAtividade={sessao.descricaoAtividade}
+              itemDescricao={sessao.itemDescricao}
               valorInicial={descricoes[sessao.id] ?? sessao.observacao ?? ""}
               onSalvar={(texto) => salvarDescricaoSessaoPendente(sessao.id, texto)}
               onFechar={() => setEditandoDescricaoId(null)}
@@ -2542,6 +2612,8 @@ export function MeusApontamentos() {
           titulo={`Apontamento de ${
             editandoObservacao.item.datati ? dateFormatter.format(new Date(editandoObservacao.item.datati)) : "—"
           }`}
+          descricaoAtividade={editandoObservacao.item.descricaoAtividade}
+          itemDescricao={editandoObservacao.item.itemDescricao}
           valorInicial={editandoObservacao.item.desati ?? ""}
           onSalvar={(texto) =>
             salvarObservacaoItem(editandoObservacao.item.sessaoId!, editandoObservacao.ratId, texto)
@@ -2568,6 +2640,8 @@ export function MeusApontamentos() {
             fim: mantendoSessao.item.horfim != null ? formatHoraDoDia(mantendoSessao.item.horfim) : "",
             descricao: mantendoSessao.item.desati ?? "",
           }}
+          descricaoAtividade={mantendoSessao.item.descricaoAtividade}
+          itemDescricao={mantendoSessao.item.itemDescricao}
           somenteLeitura={!mantendoSessao.item.podeManterSessao}
           motivoSomenteLeitura={mantendoSessao.item.motivoBloqueioManutencao}
           registradoNoSenior={mantendoSessao.item.confirmadoNoSenior}
@@ -2980,15 +3054,16 @@ export function MeusApontamentos() {
                   <input type="time" value={manualFim} onChange={(e) => setManualFim(e.target.value)} className={selectClass} />
                 </label>
               </div>
-              <label className="flex flex-col gap-1">
+              <div className="flex flex-col gap-1">
                 <span className="text-[11px] text-muted">Descrição</span>
-                <textarea
-                  value={manualDescricao}
-                  onChange={(e) => setManualDescricao(e.target.value)}
-                  rows={2}
-                  className={`${selectClass} resize-none`}
+                <CampoDescricaoApontamento
+                  rows={3}
+                  valor={manualDescricao}
+                  onChange={setManualDescricao}
+                  descricaoAtividade={atividades.find((a) => a.id === Number(manualAtividadeId))?.descricaoAtividade}
+                  itemDescricao={atividades.find((a) => a.id === Number(manualAtividadeId))?.itemDescricao}
                 />
-              </label>
+              </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button

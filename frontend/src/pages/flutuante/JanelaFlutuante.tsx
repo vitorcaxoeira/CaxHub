@@ -2,6 +2,7 @@ import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AtividadeKanban } from "../../components/projetos/KanbanBoard";
 import { ModalObservacaoAtividade } from "../../components/projetos/ModalObservacaoAtividade";
+import { DescricaoDaEmAndamento, ROTA_AJUSTAR_DESCRICOES, useRecusaDeInicio } from "../../components/projetos/useRecusaDeInicio";
 import {
   DetalheVigiaAlerta,
   EVENTO_SESSAO_ALTERADA,
@@ -298,6 +299,8 @@ function LinhaAFazer({
 
 export function JanelaFlutuante() {
   const toast = useToast();
+  // Meus Apontamentos não cabe nesta janela: abre o CaxHub completo já na tela filtrada.
+  const recusaDeInicio = useRecusaDeInicio(() => abrirNoNavegador(`${window.location.origin}${ROTA_AJUSTAR_DESCRICOES}`));
   // Espelham estado pra serem lidos dentro de timers e callbacks de longa vida (sem closure velha).
   const prefsRef = useRef<Preferencias | null>(null);
   // undefined = ainda não carregou; null = carregou e nada estava em execução.
@@ -508,11 +511,11 @@ export function JanelaFlutuante() {
   }, [alertasLigados, setModo]);
 
   // ---------- Iniciar / Parar (mesmos endpoints e mensagens da tela de Atividades) ----------
-  async function iniciar(a: AtividadeKanban) {
+  async function iniciar(a: AtividadeKanban, daEmAndamento?: DescricaoDaEmAndamento) {
     silenciarAteRef.current = Date.now() + SILENCIO_ACAO_LOCAL_MS;
     setProcessando(a.id);
     try {
-      const { data } = await axios.post(`/api/atividades/${a.id}/start`);
+      const { data } = await axios.post(`/api/atividades/${a.id}/start`, daEmAndamento);
       if (data.pausada) {
         toast.mostrar(`Atividade ${data.pausada.titulo} foi pausada para iniciar a Proposta ${a.codpro}`, "warning");
       }
@@ -522,7 +525,9 @@ export function JanelaFlutuante() {
       avisarSessaoAlterada();
       await carregar();
     } catch (err: any) {
-      toast.mostrar(err.response?.data?.error ?? "Falha ao iniciar atividade", "destructive");
+      if (!recusaDeInicio.tratarRecusa(err, (extras) => void iniciar(a, extras))) {
+        toast.mostrar(err.response?.data?.error ?? "Falha ao iniciar atividade", "destructive");
+      }
       await carregar();
     } finally {
       setProcessando(null);
@@ -655,23 +660,27 @@ export function JanelaFlutuante() {
       {pedidoParada && (
         <ModalObservacaoAtividade
           titulo={`Proposta ${pedidoParada.codpro}`}
-          descricaoPadrao={pedidoParada.descricaoPadrao}
+          descricaoAtividade={pedidoParada.descricaoAtividade}
+          itemDescricao={pedidoParada.itemDescricao}
+          nota={pedidoParada.notaEmAndamento}
           onConfirmar={(obs) => void parar(pedidoParada, obs)}
-          onFechar={() => void parar(pedidoParada, "")}
+          onCancelar={() => setPedidoParada(null)}
         />
       )}
 
       {pedidoNota && (
         <ModalObservacaoAtividade
           titulo={`Proposta ${pedidoNota.codpro}`}
-          descricaoPadrao={pedidoNota.descricaoPadrao}
+          descricaoAtividade={pedidoNota.descricaoAtividade}
+          itemDescricao={pedidoNota.itemDescricao}
+          nota={pedidoNota.notaEmAndamento}
           pergunta="O que está sendo feito?"
-          // Cancelar não salva nada nem para o cronômetro (diferente do "Pular" do Parar).
-          rotuloFechar="Cancelar"
           onConfirmar={(texto) => void salvarNota(pedidoNota, texto)}
-          onFechar={() => setPedidoNota(null)}
+          onCancelar={() => setPedidoNota(null)}
         />
       )}
+
+      {recusaDeInicio.modais}
     </div>
   );
 }
