@@ -514,6 +514,40 @@ export async function listAllLabels(options: Omit<ListLabelsOptions, "cursor"> =
 }
 
 // ---------------------------------------------------------------------------
+// GET /tickets/{ticketId}/labels
+// ---------------------------------------------------------------------------
+
+/** Etiqueta aplicada a um chamado. */
+export interface KyriaTicketLabel {
+  labelId: string;
+  groupId: string | null;
+  key: string;
+  name: string;
+  color: string | null;
+  /** Epoch em milissegundos. */
+  appliedAt: number | null;
+}
+
+/** Todas as etiquetas de UM chamado, seguindo `page.nextCursor`. */
+export async function listAllTicketLabels(ticketId: string, o: { leitura?: LeituraKyria | null } = {}): Promise<KyriaTicketLabel[]> {
+  const etiquetas: KyriaTicketLabel[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const pagina: { data: KyriaTicketLabel[]; page: KyriaPage } = await getKyria(
+      `/tickets/${encodeURIComponent(ticketId)}/labels`,
+      { limit: LIMITE_MAXIMO_KYRIA, cursor },
+      { operacao: "listTicketLabels", tentativasMax: TENTATIVAS_RATE_LIMIT, esperaPadraoS: 5, leitura: o.leitura }
+    );
+    etiquetas.push(...pagina.data);
+    if (!pagina.page.hasMore || !pagina.page.nextCursor) break;
+    cursor = pagina.page.nextCursor;
+  }
+
+  return etiquetas;
+}
+
+// ---------------------------------------------------------------------------
 // GET /reports/hours?groupBy=ticket
 // ---------------------------------------------------------------------------
 //

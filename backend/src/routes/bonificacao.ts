@@ -26,6 +26,8 @@ import {
   type SentidoIndicador,
 } from "../domain/bonificacao";
 import { escopoDoUsuario, escopoSql, podeAdministrarBonificacao, podeVerConsultor, type EscopoBonificacao } from "../domain/bonificacaoAcesso";
+import { saldoBancoDoMesSql } from "../domain/bonificacaoHoras";
+import { agruparTimesEAreas, type LinhaTimeArea, type TimeComAreas } from "../domain/bonificacaoTimes";
 import { capturarFilaDoDia } from "../domain/bonificacaoApuracao";
 import { ErroBonificacao, apurarFechamento, auditarBonificacao, dec, faixasDoBanco, informarResultado, isoCompetencia, isoDia } from "../domain/bonificacaoDados";
 import { hojeBrasil } from "../domain/descontosDados";
@@ -1196,10 +1198,11 @@ registrarListaConsultavel(
 );
 
 // ---------------------------------------------------------------- relatório: Horas Disponíveis x Trabalhadas (Kyria)
-// Lista do kit (filtro e ordem por coluna, resumo, CSV): uma linha por atendente enquadrado, com as horas trabalhadas do ponto (HCM), as horas
-// apontadas no Kyria, o % e o PDI do fechamento. O detalhe por time do chamado vem em `porTime` (aberto ao clicar na linha). É calculado na hora
+// Lista do kit (filtro e ordem por coluna, resumo, CSV): uma linha por atendente enquadrado, com as horas trabalhadas do ponto (HCM), o saldo do
+// banco de horas no mês, as extras (saldo positivo), o total do mês, as horas apontadas no Kyria, o tempo ocioso, o % e o PDI do fechamento. O detalhe por time do chamado vem em `porTime` (aberto ao clicar na linha). É calculado na hora
 // (não depende de apurar o fechamento); o PDI só aparece quando o fechamento já foi lançado (quem administra vê o aberto; os demais, o fechado).
-// Mesma regra de domain/bonificacaoApuracao.ts (apurarPctPonto): minutos do Kyria do mês de Brasília ÷ minutos do ponto (ConAbs 2, sem removidos).
+// Mesma regra de domain/bonificacaoApuracao.ts (apurarPctPonto), em domain/bonificacaoHoras.ts: % = minutos do Kyria do mês de Brasília ÷ total do
+// mês (ponto ConAbs 2 + saldo positivo do banco de horas, sem removidos).
 registrarListaConsultavel(
   bonificacaoRouter,
   "/relatorios/horas-kyria",
@@ -1214,27 +1217,37 @@ registrarListaConsultavel(
     const processoId = qInteiro(q.processoId);
     const codfor = qInteiro(q.codfor);
     const NO_MES_KYRIA = Prisma.sql`(en.started_at AT TIME ZONE 'America/Sao_Paulo') >= ${ini}::date AND (en.started_at AT TIME ZONE 'America/Sao_Paulo') < ${fim}::date`;
-    // Minutos apontados no mês por time do TICKET, por usuário (codusu) — usada pelo detalhe da tela e pelo da impressão.
-    const horasPorTime = async (codusus: unknown[]): Promise<Map<number, { time: string; minutos: number }[]>> => {
+    // Minutos apontados no mês por time do TICKET e, dentro dele, por ÁREA do chamado, por usuário (codusu) — usada pelo detalhe da tela e pelo
+    // da impressão. Área = etiqueta(s) do grupo de chave "area"; chamado com duas áreas vira "A + B" (a hora não conta duas vezes).
+    const horasPorTime = async (codusus: unknown[]): Promise<Map<number, TimeComAreas[]>> => {
       const usuarios = [...new Set(codusus.filter((n): n is number => typeof n === "number"))];
-      const mapa = new Map<number, { time: string; minutos: number }[]>();
-      if (usuarios.length === 0) return mapa;
-      const linhas = await prisma.$queryRaw<{ codusu: number; time: string; minutos: number }[]>`
-        SELECT m.codusu, COALESCE(kt.name, '(sem time)') AS time, sum(en.minutes)::float8 AS minutos
+      if (usuarios.length === 0) return new Map();
+      const linhas = await prisma.$queryRaw<LinhaTimeArea[]>`
+        SELECT m.codusu, COALESCE(kt.name, '(sem time)') AS time, COALESCE(ar.area, '(sem área)') AS area, sum(en.minutes)::float8 AS minutos
         FROM kyria_members m
         JOIN kyria_time_entries en ON en.user_id = m.id AND en.minutes IS NOT NULL AND ${NO_MES_KYRIA}
         JOIN kyria_tickets t ON t.id = en.ticket_id
         LEFT JOIN kyria_teams kt ON kt.id = t.team_id
+        LEFT JOIN LATERAL (
+          SELECT string_agg(l.name, ' + ' ORDER BY l.name) AS area
+          FROM kyria_ticket_labels tl
+          JOIN kyria_labels l ON l.id = tl.label_id
+          JOIN kyria_label_groups g ON g.id = l.group_id AND g.key = 'area'
+          WHERE tl.ticket_id = t.id
+        ) ar ON TRUE
         WHERE m.codusu = ANY(${usuarios}::int[])
-        GROUP BY m.codusu, kt.name ORDER BY 3 DESC`;
-      for (const l of linhas) mapa.set(l.codusu, [...(mapa.get(l.codusu) ?? []), { time: l.time, minutos: l.minutos }]);
-      return mapa;
+        GROUP BY m.codusu, kt.name, ar.area`;
+      return agruparTimesEAreas(linhas);
     };
     return {
       interna: Prisma.sql`
         SELECT x.processo_id AS "processoId", x.processo, x.codemp, x.codfor, co.codusu, COALESCE(co.nomcom, co.nomfor, 'Fornecedor ' || x.codfor) AS consultor,
                ky.minutos::float8 AS "minutosKyria", pt.minutos::float8 AS "minutosPonto",
-               CASE WHEN pt.minutos > 0 THEN round(ky.minutos * 100.0 / pt.minutos, 4)::float8 END AS percentual,
+               bh.minutos AS "saldoBanco", GREATEST(COALESCE(bh.minutos, 0), 0)::float8 AS "minutosExtras", tm.minutos AS "minutosTotal",
+               -- Ocioso só quando há o que comparar: total no mês e atendente ligado a um membro do Kyria (sem o vínculo seria "tudo ocioso").
+               CASE WHEN tm.minutos > 0 AND EXISTS (SELECT 1 FROM kyria_members m WHERE m.codusu = co.codusu)
+                    THEN round((tm.minutos - COALESCE(ky.minutos, 0)::float8)::numeric, 2)::float8 END AS "minutosOcioso",
+               CASE WHEN tm.minutos > 0 THEN round((ky.minutos::float8 * 100 / tm.minutos)::numeric, 4)::float8 END AS percentual,
                pdi.horas::float8 AS "pdiHoras",
                CASE WHEN pdi.pontos IS NULL THEN NULL WHEN pdi.pontos > 0 THEN 'Sim' ELSE 'Não' END AS "pdiConcluido",
                CASE WHEN co.codusu IS NULL THEN 'Consultor não encontrado'
@@ -1262,6 +1275,8 @@ registrarListaConsultavel(
           WHERE v.hcm_numcad IS NOT NULL AND sp.numemp = v.hcm_numemp AND sp.tipcol = v.hcm_tipcol AND sp.numcad = v.hcm_numcad
             AND st.conabs = 2 AND sp.removido_em_senior IS NULL AND sp.datapu >= ${ini}::date AND sp.datapu < ${fim}::date
         ) pt ON TRUE
+        LEFT JOIN LATERAL (${saldoBancoDoMesSql(Prisma.sql`v.hcm_numemp`, Prisma.sql`v.hcm_tipcol`, Prisma.sql`v.hcm_numcad`, ini, fim)}) bh ON TRUE
+        CROSS JOIN LATERAL (SELECT (COALESCE(pt.minutos, 0) + GREATEST(COALESCE(bh.minutos, 0), 0))::float8 AS minutos) tm
         LEFT JOIN LATERAL (
           SELECT COALESCE(r.valor_informado, r.valor_apurado) AS horas, r.pontos
           FROM bonificacao_resultados r
@@ -1274,7 +1289,11 @@ registrarListaConsultavel(
         col.texto("consultor", { obrigatoria: true }),
         col.texto("processo"),
         col.decimal("minutosPonto", { formato: "horasMinutos" }),
+        col.decimal("saldoBanco", { formato: "horasMinutos" }),
+        col.decimal("minutosExtras", { formato: "horasMinutos" }),
+        col.decimal("minutosTotal", { formato: "horasMinutos" }),
         col.decimal("minutosKyria", { formato: "horasMinutos" }),
+        col.decimal("minutosOcioso", { formato: "horasMinutos" }),
         col.decimal("percentual"),
         col.decimal("pdiHoras"),
         col.texto("pdiConcluido"),
@@ -1283,13 +1302,14 @@ registrarListaConsultavel(
         col.inteiro("codfor"),
         col.inteiro("codusu"),
       ],
-      totais: ["minutosPonto", "minutosKyria"],
+      totais: ["minutosPonto", "minutosExtras", "minutosTotal", "minutosKyria", "minutosOcioso"],
       ordemPadrao: Prisma.sql`x."processo" ASC, x."consultor" ASC`,
       pageSizePadrao: 25,
-      // Detalhe por time do chamado (time do TICKET, não o do apontamento: o do apontamento vem nulo/divergente em boa parte das linhas).
+      // Detalhe por time do chamado (time do TICKET, não o do apontamento: o do apontamento vem nulo/divergente em boa parte das linhas) e, dentro
+      // do time, por área do chamado.
       decorar: async (linhas) => {
         const porTime = await horasPorTime(linhas.map((l) => l.codusu));
-        return linhas.map((l) => ({ ...l, porTime: (porTime.get(l.codusu as number) ?? []).map((t) => ({ time: t.time, minutos: t.minutos })) }));
+        return linhas.map((l) => ({ ...l, porTime: porTime.get(l.codusu as number) ?? [] }));
       },
       // Relatório impresso/PDF: os times saem sob o atendente quando a tela os tinha abertos (`detalhe` = chaves "processoId-codfor" das linhas abertas).
       detalheImpressao: async (linhas) => {
@@ -1300,11 +1320,12 @@ registrarListaConsultavel(
         return linhas.map((l) => {
           if (!abertas.has(chave(l))) return null;
           const total = typeof l.minutosKyria === "number" ? l.minutosKyria : 0;
-          return (porTime.get(l.codusu as number) ?? []).map((t) => ({
-            consultor: t.time,
-            minutosKyria: t.minutos,
-            percentual: total > 0 ? Math.round((t.minutos * 10000) / total) / 100 : null,
-          }));
+          const parte = (minutos: number) => (total > 0 ? Math.round((minutos * 10000) / total) / 100 : null);
+          // Impressão: o time e, logo abaixo, as áreas dele com um recuo no nome (a célula impressa é texto simples).
+          return (porTime.get(l.codusu as number) ?? []).flatMap((t) => [
+            { consultor: t.time, minutosKyria: t.minutos, percentual: parte(t.minutos) },
+            ...t.porArea.map((a) => ({ consultor: `\u00a0\u00a0\u00a0\u00a0› ${a.area}`, minutosKyria: a.minutos, percentual: parte(a.minutos) })),
+          ]);
         });
       },
     };

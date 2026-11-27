@@ -3,29 +3,47 @@ import { ListaServidor, type LinhaDetalhe } from "../../components/colunas/Lista
 import type { DefColuna } from "../../components/colunas/useColunasConfiguraveis";
 import { classeFiltro, competenciaPadrao, fmtCompetencia, fmtHorasMinutos, fmtNumero, Selo, useConsultores, useProcessos } from "./comum";
 
-// Gestão de Bonificação › Horas Kyria x Trabalhadas: uma linha por atendente, com as horas apontadas no Kyria sobre as horas trabalhadas do ponto
-// (HCM) e o PDI do fechamento; ao abrir a linha, o detalhe por time do chamado. É calculado na hora: não precisa apurar o fechamento. Lista do kit
-// (filtro e ordem por coluna, resumo, CSV); backend: GET /bonificacao/relatorios/horas-kyria (routes/bonificacao.ts).
+// Gestão de Bonificação › Horas Kyria x Trabalhadas: uma linha por atendente, com as horas trabalhadas do ponto (HCM), o saldo do banco de horas
+// no mês, as extras (só o saldo positivo), o total do mês, as horas apontadas no Kyria, o tempo ocioso (total − Kyria), o % (Kyria ÷ total) e o
+// PDI do fechamento; ao abrir a linha, o detalhe por time do chamado e, dentro do time, por área do chamado. É calculado na hora: não precisa
+// apurar o fechamento. Lista do kit (filtro e ordem por coluna, resumo, CSV); backend: GET /bonificacao/relatorios/horas-kyria (routes/bonificacao.ts).
 
-interface LinhaHoras {
+export interface LinhaHoras {
   processoId: number;
   processo: string;
   codfor: number;
   codusu: number | null;
   consultor: string;
   minutosPonto: number | null;
+  saldoBanco: number | null;
+  minutosExtras: number | null;
+  minutosTotal: number | null;
   minutosKyria: number | null;
+  minutosOcioso: number | null;
   percentual: number | null;
   pdiHoras: number | null;
   pdiConcluido: "Sim" | "Não" | null;
   motivo: string | null;
-  porTime: { time: string; minutos: number }[];
+  porTime: { time: string; minutos: number; porArea: { area: string; minutos: number }[] }[];
 }
 
 const pct = (v: number | null | undefined) => (v == null ? "—" : `${fmtNumero(Math.round(v * 100) / 100)}%`);
 const mono = "font-mono text-sm tabular-nums text-foreground";
+const horas = (v: number | null) => (v == null ? "—" : fmtHorasMinutos(v));
 
-const COLUNAS: DefColuna<LinhaHoras>[] = [
+/** Coluna de tempo (minutos na linha, HH:MM na tela) com soma no resumo. */
+const colunaHoras = (nome: "minutosPonto" | "minutosExtras" | "minutosTotal" | "minutosKyria" | "minutosOcioso", titulo: string, largura: number, dica: string): DefColuna<LinhaHoras> => ({
+  nome,
+  titulo,
+  direita: true,
+  largura,
+  dica,
+  classe: mono,
+  formatarResumo: fmtHorasMinutos,
+  render: (l) => horas(l[nome]),
+});
+
+export const COLUNAS: DefColuna<LinhaHoras>[] = [
   {
     nome: "consultor",
     titulo: "Atendente",
@@ -41,9 +59,30 @@ const COLUNAS: DefColuna<LinhaHoras>[] = [
     ),
   },
   { nome: "processo", titulo: "Processo", largura: 200, classe: "text-sm text-muted", texto: (l) => l.processo, render: (l) => l.processo },
-  { nome: "minutosPonto", titulo: "Horas trabalhadas", direita: true, largura: 130, dica: "Horas trabalhadas do ponto (HCM) no mês", classe: mono, formatarResumo: fmtHorasMinutos, render: (l) => (l.minutosPonto == null ? "—" : fmtHorasMinutos(l.minutosPonto)) },
-  { nome: "minutosKyria", titulo: "Horas Kyria", direita: true, largura: 110, dica: "Horas apontadas no Kyria no mês", classe: mono, formatarResumo: fmtHorasMinutos, render: (l) => (l.minutosKyria == null ? "—" : fmtHorasMinutos(l.minutosKyria)) },
-  { nome: "percentual", titulo: "%", direita: true, largura: 80, dica: "Horas Kyria ÷ horas trabalhadas", classe: "font-mono text-sm font-semibold tabular-nums text-primary", render: (l) => pct(l.percentual) },
+  colunaHoras("minutosPonto", "Horas trabalhadas", 130, "Horas trabalhadas do ponto (HCM) no mês"),
+  {
+    nome: "saldoBanco",
+    titulo: "Banco de horas",
+    direita: true,
+    largura: 150,
+    dica: "Saldo dos lançamentos do banco de horas no mês (créditos − débitos), sem o saldo anterior. Só o saldo positivo entra como extra.",
+    classe: mono,
+    formatarResumo: fmtHorasMinutos,
+    render: (l) =>
+      l.saldoBanco != null && l.saldoBanco < 0 ? (
+        <>
+          <span className="text-warning">{fmtHorasMinutos(l.saldoBanco)}</span>
+          <div className="font-sans text-[10.5px] text-warning">não entrou no cálculo</div>
+        </>
+      ) : (
+        horas(l.saldoBanco)
+      ),
+  },
+  colunaHoras("minutosExtras", "Extras", 100, "Horas extras no cálculo: o saldo do banco de horas no mês, quando positivo"),
+  colunaHoras("minutosTotal", "Total do mês", 120, "Horas trabalhadas + extras"),
+  colunaHoras("minutosKyria", "Horas Kyria", 110, "Horas apontadas no Kyria no mês"),
+  colunaHoras("minutosOcioso", "Ocioso", 100, "Total do mês − horas Kyria (negativo: o Kyria passou do total)"),
+  { nome: "percentual", titulo: "%", direita: true, largura: 80, dica: "Horas Kyria ÷ total do mês", classe: "font-mono text-sm font-semibold tabular-nums text-primary", render: (l) => pct(l.percentual) },
   { nome: "pdiHoras", titulo: "PDI realizado", direita: true, largura: 120, dica: "Horas de PDI lançadas no fechamento", classe: mono, render: (l) => (l.pdiHoras == null ? "—" : `${fmtNumero(l.pdiHoras)} h`) },
   {
     nome: "pdiConcluido",
@@ -55,16 +94,27 @@ const COLUNAS: DefColuna<LinhaHoras>[] = [
   { nome: "motivo", titulo: "Observação", largura: 260, ocultaPorPadrao: true, classe: "text-sm text-warning", texto: (l) => l.motivo, render: (l) => l.motivo ?? "" },
 ];
 
-/** Horas por time do chamado: linhas sob o atendente, alinhadas às colunas (time sob "Atendente", horas sob "Horas Kyria", % das horas Kyria sob "%"). */
-function linhasPorTime(l: LinhaHoras): LinhaDetalhe[] {
-  return l.porTime.map((t) => ({
-    chave: t.time,
+/**
+ * Horas por time do chamado e, dentro do time, por área do chamado: linhas sob o atendente, alinhadas às colunas (nome sob "Atendente", horas sob
+ * "Horas Kyria", % das horas Kyria do atendente sob "%").
+ */
+export function linhasPorTime(l: LinhaHoras): LinhaDetalhe[] {
+  const linha = (chave: string, nome: string, minutos: number, recuo: string, texto: string): LinhaDetalhe => ({
+    chave,
     valores: {
-      consultor: <span className="block truncate pl-5">{t.time}</span>,
-      minutosKyria: <span className="font-mono tabular-nums">{fmtHorasMinutos(t.minutos)}</span>,
-      percentual: <span className="font-mono tabular-nums">{pct(l.minutosKyria ? (t.minutos * 100) / l.minutosKyria : null)}</span>,
+      consultor: (
+        <span className={`block truncate ${recuo} ${texto}`} title={nome}>
+          {nome}
+        </span>
+      ),
+      minutosKyria: <span className={`font-mono tabular-nums ${texto}`}>{fmtHorasMinutos(minutos)}</span>,
+      percentual: <span className={`font-mono tabular-nums ${texto}`}>{pct(l.minutosKyria ? (minutos * 100) / l.minutosKyria : null)}</span>,
     },
-  }));
+  });
+  return l.porTime.flatMap((t) => [
+    linha(t.time, t.time, t.minutos, "pl-5", "font-medium"),
+    ...t.porArea.map((a) => linha(`${t.time}|${a.area}`, a.area, a.minutos, "pl-10", "text-[11.5px] text-muted")),
+  ]);
 }
 
 export function BonificacaoHorasKyria() {
@@ -99,7 +149,7 @@ export function BonificacaoHorasKyria() {
       <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-widest text-muted">Gestão de Bonificação</p>
       <div className="mb-4">
         <h1 className="font-display text-2xl font-bold text-foreground">Horas Kyria x Trabalhadas</h1>
-        <p className="mt-1 text-sm text-muted">Horas apontadas no Kyria sobre as horas trabalhadas do ponto, por atendente, com o PDI do fechamento. Clique na linha (ou em "Expandir todos") para ver os times do chamado sob cada atendente.</p>
+        <p className="mt-1 text-sm text-muted">Horas apontadas no Kyria sobre o total do mês (horas trabalhadas do ponto + extras do banco de horas), por atendente, com o tempo ocioso e o PDI do fechamento. Saldo negativo do banco de horas é mostrado, mas não entra no cálculo. Clique na linha (ou em "Expandir todos") para ver os times e as áreas dos chamados sob cada atendente.</p>
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -154,15 +204,18 @@ export function BonificacaoHorasKyria() {
         onAlternarAberta={alternar}
         aoCarregar={(d) => setChaves(d.itens.map((l) => `${l.processoId}-${l.codfor}`))}
         rodape={(d) => {
-          const ponto = d?.totais?.minutosPonto ?? 0;
+          const total = d?.totais?.minutosTotal ?? 0;
           const kyria = d?.totais?.minutosKyria ?? 0;
           return (
             <div className="flex flex-wrap gap-x-8 gap-y-1 border-t border-border bg-surface px-5 py-3">
               {(
                 [
-                  ["Horas trabalhadas (filtro atual)", fmtHorasMinutos(ponto)],
+                  ["Horas trabalhadas (filtro atual)", fmtHorasMinutos(d?.totais?.minutosPonto ?? 0)],
+                  ["Extras", fmtHorasMinutos(d?.totais?.minutosExtras ?? 0)],
+                  ["Total do mês", fmtHorasMinutos(total)],
                   ["Horas Kyria", fmtHorasMinutos(kyria)],
-                  ["%", pct(ponto > 0 ? (kyria * 100) / ponto : null)],
+                  ["Ocioso", fmtHorasMinutos(d?.totais?.minutosOcioso ?? 0)],
+                  ["%", pct(total > 0 ? (kyria * 100) / total : null)],
                 ] as const
               ).map(([rotulo, valor]) => (
                 <div key={rotulo}>

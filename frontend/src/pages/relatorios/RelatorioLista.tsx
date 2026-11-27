@@ -65,10 +65,11 @@ function lerEspecificacao(id: string | undefined): Especificacao | null {
   }
 }
 
-/** Minutos → "144:58". */
+/** Minutos → "144:58"; negativo vira "-02:53". */
 function horasMinutos(minutos: number): string {
-  const total = Math.round(minutos);
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  const total = Math.round(Math.abs(minutos));
+  const sinal = minutos < 0 && total > 0 ? "-" : "";
+  return `${sinal}${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function celula(valor: unknown, tipo: ColunaImpressa["tipo"], formato?: ColunaImpressa["formato"]): string {

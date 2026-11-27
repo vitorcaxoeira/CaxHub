@@ -920,7 +920,7 @@ model DepartamentoGrupoContabil {
 
 // Configuração 100% nativa do CaxHub (NUNCA sincronizada do Senior) — liga cada departamento
 // (depexe) aos times do Kyria (KyriaTeam) cujo atendimento ele representa. É o equivalente, na
-// rentabilidade, da "Categoria" do antigo 0800 (ERP / HCM / Acesso e Segurança): o time do TICKET
+// rentabilidade, da "Categoria" do sistema de chamados anterior (ERP / HCM / Acesso e Segurança): o time do TICKET
 // diz de qual departamento são as horas de suporte. Tabela própria, e não coluna em
 // DepartamentoGestor, porque aquela é espelho do Senior (1 linha por departamento, reescrita pela
 // sync) e aqui a relação é N:N — um departamento atende por vários times e um time (ex.: SUPORTE TI)
@@ -2168,8 +2168,8 @@ model Projeto {
   prjsup           Int?
   datipj           DateTime? @db.Date
   datfpj           DateTime? @db.Date
-  /// Campo de usuário `USU_Cli0800`: código do cliente no 0800 (controle de chamados antigo) —
-  /// ponte pra reconciliar o histórico migrado do 0800 com o Senior.
+  /// Campo de usuário `USU_Cli0800`: código do cliente no sistema de chamados anterior —
+  /// ponte pra reconciliar o histórico migrado daquele sistema com o Senior.
   cli0800          Int?
   // Colunas de controle de exclusão — ver comentário em Pedido.
   vistoEmSync      DateTime? @map("visto_em_sync") @db.Timestamptz(6)
@@ -2853,8 +2853,24 @@ model KyriaTicket {
 
   horas        KyriaTicketHours?
   apontamentos KyriaTimeEntry[]
+  etiquetas    KyriaTicketLabel[]
 
   @@map("kyria_tickets")
+}
+
+// Etiquetas de cada chamado (GET /tickets/{ticketId}/labels), job kyria-ticket-labels-sync: de onde sai a "área do chamado" (grupo de chave
+// "area"). Substituídas por inteiro a cada leitura do chamado. Etiqueta e grupo sem FK (o catálogo pode chegar depois).
+model KyriaTicketLabel {
+  ticketId       String      @map("ticket_id") @db.VarChar(64)
+  ticket         KyriaTicket @relation(fields: [ticketId], references: [id])
+  labelId        String      @map("label_id") @db.VarChar(64)
+  groupId        String?     @map("group_id") @db.VarChar(64)
+  appliedAt      DateTime?   @map("applied_at") @db.Timestamptz(3)
+  sincronizadoEm DateTime    @default(now()) @map("sincronizado_em")
+
+  @@id([ticketId, labelId])
+  @@index([labelId])
+  @@map("kyria_ticket_labels")
 }
 
 // Origem do apontamento de hora no Kyria: `automatic` = cronômetro do próprio ticket (entra e sai

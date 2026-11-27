@@ -208,8 +208,22 @@ async function main() {
         AND sp.datapu >= '2026-10-01'::date AND sp.datapu < '2026-11-01'::date`;
     assert.strictEqual(res(iPct).detalhe.minutosKyria, esperadoKyria, "só os apontamentos de outubro (inclui 31/10 22:30 em Brasília, exclui novembro)");
     assert.strictEqual(res(iPct).detalhe.minutosPonto, ponto.min);
-    if (ponto.min > 0) assert.strictEqual(res(iPct).valorApurado, Math.round(((esperadoKyria * 100) / ponto.min) * 10000) / 10000);
-    console.log(`  % ponto: ${esperadoKyria} min (real ${real.min} + 1011 sintéticos) / ${ponto.min} min = ${res(iPct).valorApurado}%`);
+    // Saldo do banco de horas no mês, conferido por uma consulta própria (créditos − débitos dos lançamentos datados no mês)
+    const [banco] = await prisma.$queryRaw<{ credito: number; debito: number; n: number }[]>`
+      SELECT COALESCE(sum(qtdhor) FILTER (WHERE btrim(sinlan) = '+'), 0)::float8 AS credito,
+             COALESCE(sum(qtdhor) FILTER (WHERE btrim(sinlan) = '-'), 0)::float8 AS debito, count(*)::int AS n
+      FROM hcm_lancamentos_bh
+      WHERE numemp = ${cand.numemp} AND tipcol = ${cand.tipcol} AND numcad = ${cand.numcad} AND removido_em_senior IS NULL
+        AND datlan >= '2026-10-01'::date AND datlan < '2026-11-01'::date`;
+    const saldo = banco.credito - banco.debito;
+    const extras = Math.max(saldo, 0);
+    const totalMes = ponto.min + extras;
+    assert.strictEqual(res(iPct).detalhe.saldoBancoMinutos, saldo, "saldo do banco no mês");
+    assert.strictEqual(res(iPct).detalhe.minutosExtras, extras, "extras = saldo só quando positivo");
+    assert.strictEqual(res(iPct).detalhe.minutosTotal, totalMes, "total = trabalhadas + extras");
+    assert.strictEqual(res(iPct).detalhe.bancoDeHoras != null, saldo < 0, "aviso só com saldo negativo");
+    if (totalMes > 0) assert.strictEqual(res(iPct).valorApurado, Math.round(((esperadoKyria * 100) / totalMes) * 10000) / 10000);
+    console.log(`  % ponto: ${esperadoKyria} min (real ${real.min} + 1011 sintéticos) / total ${totalMes} min (ponto ${ponto.min} + extras ${extras}; saldo BH ${saldo}) = ${res(iPct).valorApurado}%`);
 
     // manuais: pendentes
     assert.strictEqual(res(iRnc).valor, null, "RNC (manual) pendente");
@@ -281,7 +295,16 @@ async function main() {
     const h = r.dados.itens[0];
     assert.strictEqual(h.minutosKyria, esperadoKyria);
     assert.strictEqual(h.minutosPonto, ponto.min);
-    if (ponto.min > 0) assert.strictEqual(h.percentual, Math.round(((esperadoKyria * 100) / ponto.min) * 10000) / 10000);
+    assert.strictEqual(h.saldoBanco ?? 0, saldo);
+    assert.strictEqual(h.minutosExtras, extras);
+    assert.strictEqual(h.minutosTotal, totalMes, "tela e apuração usam o mesmo total");
+    if (totalMes > 0) {
+      assert.strictEqual(h.percentual, res(iPct).valorApurado, "% da tela = % da apuração");
+      assert.strictEqual(h.minutosOcioso, Math.round((totalMes - esperadoKyria) * 100) / 100, "ocioso = total − Kyria");
+    }
+    for (const t of h.porTime) assert.ok(Math.abs(t.porArea.reduce((s: number, a: any) => s + a.minutos, 0) - t.minutos) < 0.05, `as áreas somam o time ${t.time}`);
+    r = await api("admin", "GET", `/relatorios/horas-kyria?competencia=${COMP}&processoId=${processoId}&o=${encodeURIComponent("minutosOcioso:desc")}&pageSize=25`);
+    ok(r, 200, "ordena pelo ocioso");
     assert.strictEqual(h.pdiHoras, 8);
     assert.strictEqual(h.pdiConcluido, "Sim");
     assert.strictEqual(h.motivo, null);
@@ -295,6 +318,10 @@ async function main() {
     assert.ok(String(r.dados).includes((esperadoKyria / 60).toFixed(2).replace(".", ",")), "csv em horas decimais");
     // Impressão: formato HH:MM nas colunas em minutos; times só das linhas que a tela tinha abertas (`detalhe`)
     const colsImp = "consultor,minutosPonto,minutosKyria,percentual";
+    const colsNovas = "consultor,saldoBanco,minutosExtras,minutosTotal,minutosOcioso";
+    r = await api("admin", "GET", `/relatorios/horas-kyria/impressao?competencia=${COMP}&processoId=${processoId}&colunasCsv=${colsNovas}`);
+    ok(r, 200, "impressão das colunas novas");
+    assert.deepStrictEqual(r.dados.colunas.map((c: any) => c.formato ?? null), [null, "horasMinutos", "horasMinutos", "horasMinutos", "horasMinutos"]);
     r = await api("admin", "GET", `/relatorios/horas-kyria/impressao?competencia=${COMP}&processoId=${processoId}&colunasCsv=${colsImp}`);
     ok(r, 200, "impressão sem detalhe");
     assert.deepStrictEqual(r.dados.colunas.map((c: any) => [c.nome, c.formato ?? null]), [["consultor", null], ["minutosPonto", "horasMinutos"], ["minutosKyria", "horasMinutos"], ["percentual", null]]);
@@ -302,7 +329,10 @@ async function main() {
     r = await api("admin", "GET", `/relatorios/horas-kyria/impressao?competencia=${COMP}&processoId=${processoId}&colunasCsv=${colsImp}&detalhe=${processoId}-${cand.codfor}`);
     assert.ok(Array.isArray(r.dados.detalhes?.[0]) && r.dados.detalhes[0].length >= 1, "aberta: com os times");
     const sub = r.dados.detalhes[0];
-    assert.ok(Math.abs(sub.reduce((t: number, x: any) => t + x.minutosKyria, 0) - esperadoKyria) < 0.05, "os times somam as horas Kyria");
+    // Dois níveis na impressão: o time e, logo abaixo, as áreas dele (nome com "›"). Cada nível, sozinho, soma as horas Kyria.
+    const somaDe = (areas: boolean) => sub.filter((x: any) => String(x.consultor).includes("›") === areas).reduce((s: number, x: any) => s + x.minutosKyria, 0);
+    assert.ok(Math.abs(somaDe(false) - esperadoKyria) < 0.05, "os times somam as horas Kyria");
+    assert.ok(Math.abs(somaDe(true) - esperadoKyria) < 0.05, "as áreas somam as horas Kyria");
     assert.ok(sub.every((x: any) => typeof x.consultor === "string" && x.percentual != null), "cada time com nome e %");
     r = await api("admin", "GET", `/relatorios/horas-kyria/impressao?competencia=${COMP}&processoId=${processoId}&colunasCsv=${colsImp}&detalhe=${processoId}-999999`);
     assert.ok(r.dados.detalhes.every((d: unknown) => d == null), "chave que não existe: sem times");
