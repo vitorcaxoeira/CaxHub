@@ -8,6 +8,7 @@ import {
   motivoBloqueioAntesDeAlterarApontamento,
   motivoDivergenciaAposAlterarApontamento,
   motivoSeqAtiDeOutraAlocacao,
+  motivoNaoReviverCriacao,
   type LinhaIatSenior,
 } from "./regrasFilaSenior";
 
@@ -112,4 +113,31 @@ test("editar apontamento: depois do envio — irmã alterada ou removida é dive
   assert.match(motivoDivergenciaAposAlterarApontamento(antes, irmaAlterada, 3, 500, novo)!, /alterou também a linha 500\/1/);
   const irmaSumiu = [linha(3, novo)];
   assert.match(motivoDivergenciaAposAlterarApontamento(antes, irmaSumiu, 3, 500, novo)!, /linha 500\/1/);
+});
+
+const criacaoSemHoras = { tipo: "criar_atividade", status: "invalido", ultimoErro: null };
+const alocacaoComHoras = { seqati: null, qtdhor: 1205, sitreg: "A" };
+
+test("reviver criação: invalidada sem motivo e alocação que ganhou horas pode", () => {
+  assert.equal(motivoNaoReviverCriacao(criacaoSemHoras, alocacaoComHoras), null);
+});
+
+test("reviver criação: continua sem horas, não volta", () => {
+  for (const qtdhor of [null, 0, -1]) {
+    assert.match(motivoNaoReviverCriacao(criacaoSemHoras, { ...alocacaoComHoras, qtdhor })!, /sem horas/);
+  }
+});
+
+test("reviver criação: inválida com motivo (decisão humana) não volta", () => {
+  assert.match(motivoNaoReviverCriacao({ ...criacaoSemHoras, ultimoErro: "duplicada" }, alocacaoComHoras)!, /com motivo/);
+});
+
+test("reviver criação: alocação com seqAti ou inativa não volta", () => {
+  assert.match(motivoNaoReviverCriacao(criacaoSemHoras, { ...alocacaoComHoras, seqati: 10n })!, /já tem seqAti/);
+  assert.match(motivoNaoReviverCriacao(criacaoSemHoras, { ...alocacaoComHoras, sitreg: "I" })!, /inativa/);
+});
+
+test("reviver criação: só criar_atividade em invalido", () => {
+  assert.ok(motivoNaoReviverCriacao({ ...criacaoSemHoras, tipo: "editar_atividade" }, alocacaoComHoras));
+  assert.ok(motivoNaoReviverCriacao({ ...criacaoSemHoras, status: "enviado" }, alocacaoComHoras));
 });
