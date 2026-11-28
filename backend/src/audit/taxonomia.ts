@@ -116,6 +116,8 @@ export const EVENTOS_AUDITORIA = {
   // Manutenção, pelo admin, de uma sessão já confirmada (data, horário, descrição) com a RAT Digitada. O envio
   // ao Senior (tipEve A) é registrado à parte por ATIVIDADE_ENVIADA_SENIOR. Ver PATCH /apontamentos/:id/sessao.
   APONTAMENTO_SESSAO_ALTERADA: "APONTAMENTO_SESSAO_ALTERADA",
+  // Descrição incluída ou alterada por quem NÃO executou o apontamento (gestor/admin), em Meus Apontamentos. Ver PATCH /apontamentos/:id.
+  APONTAMENTO_DESCRICAO_ALTERADA: "APONTAMENTO_DESCRICAO_ALTERADA",
   AJUSTE_SOLICITADO: "AJUSTE_SOLICITADO",
   AJUSTE_APROVADO: "AJUSTE_APROVADO",
   AJUSTE_REPROVADO: "AJUSTE_REPROVADO",

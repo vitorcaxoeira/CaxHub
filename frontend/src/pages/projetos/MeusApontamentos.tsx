@@ -74,11 +74,12 @@ interface SessaoPendente {
   // Preenchido só quando `mostrarConsultor` (admin, ou gestor vendo o time) — o consultor
   // comum só vê as próprias sessões, então mostrar o nome dele em toda linha seria ruído.
   consultorNome: string | null;
-  // Editar descrição, pedir ajuste e excluir são "só o dono" nos respectivos endpoints —
-  // controla quais ações do menu "⋯" a tela oferece (Confirmar não depende disto).
+  // Pedir ajuste e excluir são "só o dono" nos respectivos endpoints — controla quais ações
+  // do menu "⋯" a tela oferece (Confirmar e a descrição não dependem disto: toda sessão desta
+  // lista é do próprio usuário, do time que ele gerencia, ou ele é admin).
   souDono: boolean;
   // Exclusão também libera pro admin sobre sessão de qualquer consultor — diferente de
-  // editar descrição/pedir ajuste, que continuam "só o dono" (ver souDono acima).
+  // pedir ajuste, que continua "só o dono" (ver souDono acima).
   podeExcluir: boolean;
   ajustePendente: AjustePendente | null;
   // Previsão de "vai dar erro ao confirmar" (ver GET /sessoes-pendentes) — as duas causas
@@ -207,6 +208,8 @@ interface RatItemRow {
   // preenchidos como histórico, então não dá pra distinguir isso só por confirmadoNoSenior.
   removidoEmSenior: string | null;
   editavel: boolean;
+  // Descrição: o dono, o gestor ou o admin (o servidor decide). Separado de `editavel`, que também libera o Excluir.
+  podeEditarDescricao: boolean;
   // Motivo da última recusa do Senior. Preenchido = a integração falhou e há o que reenviar.
   envioErro: string | null;
   // Identidade no Senior — preenchida quando o apontamento foi registrado no ERP. É o
@@ -275,11 +278,11 @@ function formatMinutos(minutos: number): string {
 }
 
 // Quando a observação de um item pode ser alterada: as mesmas condições que o backend
-// valida em PATCH /apontamentos/:id (dono, RAT ainda Digitada, item não registrado no
-// Senior) mais a guarda de envio em voo — nesse instante o job já leu o registro pra
+// valida em PATCH /apontamentos/:id (dono, gestor ou admin; RAT ainda Digitada; item não
+// registrado no Senior) mais a guarda de envio em voo — nesse instante o job já leu o registro pra
 // montar o payload, então a edição não chegaria ao ERP.
 function podeEditarObservacao(item: RatItemRow): boolean {
-  return item.editavel && item.sessaoId != null && item.envioStatus !== "enviando";
+  return item.podeEditarDescricao && item.sessaoId != null && item.envioStatus !== "enviando";
 }
 
 // Tabela de RATs com filtro e ordem por coluna, colunas configuráveis, resumo no rodapé e colunas calculadas (04/11/2026): ListaServidor
@@ -1115,6 +1118,7 @@ export function MeusApontamentos() {
                 // Registrado no Senior deixa de ser editável na hora — o backend recusa
                 // tanto editar quanto excluir a partir daí.
                 editavel: dados.status === "registrado" ? false : i.editavel,
+                podeEditarDescricao: dados.status === "registrado" ? false : i.podeEditarDescricao,
               }
         ),
       };
@@ -1178,12 +1182,8 @@ export function MeusApontamentos() {
   function confirmar(sessaoId: number) {
     const sessao = sessoes.find((s) => s.id === sessaoId);
     if (sessao && erroDeDescricao(descricoes[sessaoId] ?? sessao.observacao, [sessao.descricaoAtividade, sessao.itemDescricao])) {
-      if (sessao.souDono) {
-        toast.mostrar("Descreva o que foi realizado antes de confirmar.", "warning");
-        setEditandoDescricaoId(sessaoId);
-      } else {
-        toast.mostrar(`Proposta ${sessao.codpro}: o consultor precisa descrever este apontamento antes da confirmação.`, "warning");
-      }
+      toast.mostrar("Descreva o que foi realizado antes de confirmar.", "warning");
+      setEditandoDescricaoId(sessaoId);
       return;
     }
     const opcoes = sessao ? ratsDestino[chaveGrupoRat(sessao)] : undefined;
@@ -1953,32 +1953,18 @@ export function MeusApontamentos() {
           {formatMinutos(s.duracaoMinutos)}
         </td>
         <td className="hidden px-2.5 py-3.5 lg:table-cell">
-          {/* Editar é "só o dono" no servidor (PATCH /:id) — em sessão de outro consultor o
-              clique abre a MESMA janela em leitura, só pra ler o texto completo sem
-              depender do tooltip truncado (mesmo padrão da observação de item de RAT logo
-              abaixo, ModalEditarDescricao com somenteLeitura). */}
-          {s.souDono ? (
-            <button
-              onClick={() => setEditandoDescricaoId(s.id)}
-              className={`w-full max-w-[220px] truncate rounded-md border px-2.5 py-1.5 text-left text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                descricoes[s.id] ?? s.observacao
-                  ? "border-border text-foreground hover:bg-surface-2"
-                  : "border-dashed border-border text-muted hover:bg-surface-2"
-              }`}
-            >
-              {s.semDescricao && <SeloSemDescricao />}
-              {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
-            </button>
-          ) : (
-            <button
-              onClick={() => setEditandoDescricaoId(s.id)}
-              title={s.observacao ?? undefined}
-              className="block w-full max-w-[220px] truncate text-left text-sm text-muted hover:underline"
-            >
-              {s.semDescricao && <SeloSemDescricao />}
-              {s.observacao ?? "—"}
-            </button>
-          )}
+          <button
+            onClick={() => setEditandoDescricaoId(s.id)}
+            title={(descricoes[s.id] ?? s.observacao) || undefined}
+            className={`w-full max-w-[220px] truncate rounded-md border px-2.5 py-1.5 text-left text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+              descricoes[s.id] ?? s.observacao
+                ? "border-border text-foreground hover:bg-surface-2"
+                : "border-dashed border-border text-muted hover:bg-surface-2"
+            }`}
+          >
+            {s.semDescricao && <SeloSemDescricao />}
+            {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
+          </button>
         </td>
         {/* Previsão de "vai dar erro ao confirmar" — mesmo indicador visual do Cronograma
             (IconeIntegracaoErp/toneBadge), aplicado à alocação por trás da sessão + duração
@@ -2016,9 +2002,7 @@ export function MeusApontamentos() {
                   (solicitacoesAjuste.ts / DELETE /:id) — em sessão de outro consultor o
                   servidor recusaria com 403/404, então a tela nem oferece. Confirmar acima
                   não tem essa restrição (podeExecutarAcao já libera admin). */}
-              {s.souDono && (
-                <DropdownMenu.Item onSelect={() => setEditandoDescricaoId(s.id)}>Editar descrição</DropdownMenu.Item>
-              )}
+              <DropdownMenu.Item onSelect={() => setEditandoDescricaoId(s.id)}>Editar descrição</DropdownMenu.Item>
               {s.souDono && (
                 <>
                   {/* Confirmar não deixa mexer no horário — só manda a sessão como o
@@ -2088,26 +2072,16 @@ export function MeusApontamentos() {
           {formatMinutos(s.duracaoMinutos)}
         </td>
         <td className="max-w-[320px] py-1.5 pr-3">
-          {s.souDono ? (
-            <button
-              onClick={() => setEditandoDescricaoId(s.id)}
-              className={`block w-full truncate text-left text-[12.5px] hover:underline ${
-                descricoes[s.id] ?? s.observacao ? "text-foreground" : "font-medium text-warning"
-              }`}
-            >
-              {s.semDescricao && <SeloSemDescricao />}
-              {descricoes[s.id] ?? s.observacao ?? "Sem descrição — clique para preencher"}
-            </button>
-          ) : (
-            <button
-              onClick={() => setEditandoDescricaoId(s.id)}
-              title={s.observacao ?? undefined}
-              className="block w-full truncate text-left text-[12.5px] text-muted hover:underline"
-            >
-              {s.semDescricao && <SeloSemDescricao />}
-              {s.observacao ?? "—"}
-            </button>
-          )}
+          <button
+            onClick={() => setEditandoDescricaoId(s.id)}
+            title={(descricoes[s.id] ?? s.observacao) || undefined}
+            className={`block w-full truncate text-left text-[12.5px] hover:underline ${
+              descricoes[s.id] ?? s.observacao ? "text-foreground" : "font-medium text-warning"
+            }`}
+          >
+            {s.semDescricao && <SeloSemDescricao />}
+            {descricoes[s.id] ?? s.observacao ?? "Sem descrição — clique para preencher"}
+          </button>
         </td>
         <td className="py-1.5 pr-3 text-center">
           <span
@@ -2592,10 +2566,10 @@ export function MeusApontamentos() {
           if (!sessao) return null;
           return (
             <ModalEditarDescricao
-              somenteLeitura={!sessao.souDono}
-              titulo={`Proposta ${sessao.codpro}`}
+              titulo={`Proposta ${sessao.codpro}${!sessao.souDono && sessao.consultorNome ? ` · ${sessao.consultorNome}` : ""}`}
               descricaoAtividade={sessao.descricaoAtividade}
               itemDescricao={sessao.itemDescricao}
+              placeholder={sessao.souDono ? undefined : "Descreva o que o consultor realizou..."}
               valorInicial={descricoes[sessao.id] ?? sessao.observacao ?? ""}
               onSalvar={(texto) => salvarDescricaoSessaoPendente(sessao.id, texto)}
               onFechar={() => setEditandoDescricaoId(null)}
@@ -2614,6 +2588,8 @@ export function MeusApontamentos() {
           }`}
           descricaoAtividade={editandoObservacao.item.descricaoAtividade}
           itemDescricao={editandoObservacao.item.itemDescricao}
+          // `editavel` é só do dono; sem ele, quem escreve é o gestor ou o admin.
+          placeholder={editandoObservacao.item.editavel ? undefined : "Descreva o que o consultor realizou..."}
           valorInicial={editandoObservacao.item.desati ?? ""}
           onSalvar={(texto) =>
             salvarObservacaoItem(editandoObservacao.item.sessaoId!, editandoObservacao.ratId, texto)

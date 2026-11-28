@@ -1,5 +1,5 @@
 // Verificação de ponta a ponta da descrição obrigatória nos apontamentos (domain/descricaoApontamento.ts): sobe SÓ os routers envolvidos
-// numa porta livre (sem os jobs agendados) e chama as rotas de verdade, com um consultor e um admin de teste.
+// numa porta livre (sem os jobs agendados) e chama as rotas de verdade, com um consultor, um admin, um gestor e um colega de time de teste.
 //
 // Segurança: roda só em banco local; liga a trava SENIOR_SOMENTE_LEITURA no próprio processo; e NUNCA confirma um apontamento com sucesso —
 // só exercita a recusa, em atividade com o teto estourado, de modo que nem uma falha na regra criaria RAT ou item na fila do Senior.
@@ -17,6 +17,7 @@ import { signToken } from "../src/auth/jwt";
 import { atividadesRouter } from "../src/routes/atividades";
 import { apontamentosRouter } from "../src/routes/apontamentos";
 import { solicitacoesApontamentoRouter } from "../src/routes/solicitacoesApontamento";
+import { ratsRouter } from "../src/routes/rats";
 
 const banco = new URL(process.env.DATABASE_URL ?? "postgres://invalido").hostname;
 if (process.env.NODE_ENV === "production" || !["localhost", "127.0.0.1", "::1"].includes(banco)) {
@@ -29,6 +30,11 @@ const CODFOR = 900047;
 const SEQATI_BASE = 900047000n;
 const EMAIL_CONSULTOR = "zz-teste-descricao@caxhub.test";
 const EMAIL_ADMIN = "zz-teste-descricao-admin@caxhub.test";
+const EMAIL_GESTOR = "zz-teste-descricao-gestor@caxhub.test";
+const EMAIL_COLEGA = "zz-teste-descricao-colega@caxhub.test";
+const CODFOR_GESTOR = CODFOR + 1;
+const CODFOR_COLEGA = CODFOR + 2;
+const EMAILS = [EMAIL_CONSULTOR, EMAIL_ADMIN, EMAIL_GESTOR, EMAIL_COLEGA];
 const NOME_ATIVIDADE = "ZZ-TESTE Apoio para consultoria de folha de pagamento";
 
 const TEXTO = (n: number) => `ZZ-TESTE passo ${n}: ajustei a regra de cálculo e validei com o cliente`;
@@ -49,12 +55,16 @@ async function limpar() {
   await prisma.notificacao.deleteMany({ where: { atividade: doTeste } });
   await prisma.solicitacaoApontamento.deleteMany({ where: { atividade: doTeste } });
   await prisma.atividadeSessaoExecucao.deleteMany({ where: { atividade: doTeste } });
+  await prisma.ratItem.deleteMany({ where: doTeste });
+  await prisma.rat.deleteMany({ where: doTeste });
+  await prisma.departamentoGestor.deleteMany({ where: doTeste });
+  await prisma.departamentoTime.deleteMany({ where: doTeste });
   await prisma.atividadeConsultor.deleteMany({ where: doTeste });
   await prisma.propostaItem.deleteMany({ where: doTeste });
   await prisma.proposta.deleteMany({ where: doTeste });
   await prisma.cliente.deleteMany({ where: { codcli: CODEMP } });
   await prisma.faseProposta.deleteMany({ where: { fasid: CODEMP } });
-  await prisma.user.deleteMany({ where: { email: { in: [EMAIL_CONSULTOR, EMAIL_ADMIN] } } });
+  await prisma.user.deleteMany({ where: { email: { in: EMAILS } } });
   await prisma.consultor.deleteMany({ where: doTeste });
 }
 
@@ -63,7 +73,10 @@ async function main() {
     (await prisma.atividadeConsultor.count({ where: { OR: [{ codemp: CODEMP }, { codfor: CODFOR }] } })) +
     (await prisma.consultor.count({ where: { OR: [{ codemp: CODEMP }, { codfor: CODFOR }] } })) +
     (await prisma.proposta.count({ where: { codemp: CODEMP } })) +
-    (await prisma.user.count({ where: { email: { in: [EMAIL_CONSULTOR, EMAIL_ADMIN] } } }));
+    (await prisma.rat.count({ where: { codemp: CODEMP } })) +
+    (await prisma.departamentoGestor.count({ where: { codemp: CODEMP } })) +
+    (await prisma.departamentoTime.count({ where: { codemp: CODEMP } })) +
+    (await prisma.user.count({ where: { email: { in: EMAILS } } }));
   if (jaExiste > 0) throw new Error(`Já há dados na empresa de teste ${CODEMP}; nada foi alterado. Confira antes de rodar de novo.`);
 
   const filaAntes = await prisma.sincronizacaoPendente.count();
@@ -117,6 +130,7 @@ async function main() {
     app.use("/atividades", atividadesRouter);
     app.use("/apontamentos", apontamentosRouter);
     app.use("/solicitacoes-apontamento", solicitacoesApontamentoRouter);
+    app.use("/rats", ratsRouter);
     servidor = app.listen(0, "127.0.0.1");
     await new Promise<void>((ok) => servidor!.once("listening", () => ok()));
     const base = `http://127.0.0.1:${(servidor.address() as AddressInfo).port}`;
@@ -255,6 +269,88 @@ async function main() {
     conferir((await prisma.ratItem.count({ where: { codemp: CODEMP } })) === 0, "nenhum item de RAT criado");
     conferir((await prisma.rat.count({ where: { codemp: CODEMP } })) === 0, "nenhuma RAT criada");
     conferir((await prisma.sincronizacaoPendente.count({ where: { atividadeId: { in: atividades } } })) === 0, `nada na fila de envio (fila geral antes: ${filaAntes})`);
+
+    console.log("\n9. Gestor e admin incluem e alteram a descrição em Meus Apontamentos");
+    await prisma.departamentoGestor.create({ data: { codemp: CODEMP, depexe: 1, usuges: BigInt(CODFOR_GESTOR) } });
+    await prisma.departamentoTime.create({ data: { codemp: CODEMP, depexe: 1, codusu: BigInt(CODFOR_COLEGA), sitreg: "A" } });
+    const criarPessoa = async (codfor: number, email: string, nome: string) => {
+      await prisma.consultor.create({ data: { codemp: CODEMP, codusu: codfor, codfor, nomfor: nome, email } });
+      const u = await prisma.user.create({ data: { email, nome, roleId: papelComum.id } });
+      return { id: u.id, token: signToken({ userId: u.id, role: papelComum.name }, "15m") };
+    };
+    const gestorTeste = await criarPessoa(CODFOR_GESTOR, EMAIL_GESTOR, "ZZ-TESTE Gestor");
+    const colegaTeste = await criarPessoa(CODFOR_COLEGA, EMAIL_COLEGA, "ZZ-TESTE Colega");
+    const gestor = (metodo: string, rota: string, corpo?: unknown) => chamar(gestorTeste.token, metodo, rota, corpo);
+    const colega = (metodo: string, rota: string, corpo?: unknown) => chamar(colegaTeste.token, metodo, rota, corpo);
+    const eventos = () =>
+      prisma.auditEvento.findMany({ where: { codemp: CODEMP, eventoTipo: "APONTAMENTO_DESCRICAO_ALTERADA" }, orderBy: { id: "asc" } });
+
+    const pendente = await prisma.atividadeSessaoExecucao.create({
+      data: {
+        atividadeId: a1, colunaId: colunaEmAndamento.id, origem: "manual",
+        inicio: new Date("2026-01-06T12:00:00Z"), fim: new Date("2026-01-06T13:00:00Z"),
+      },
+    });
+    const doBanco = () => prisma.atividadeSessaoExecucao.findUniqueOrThrow({ where: { id: pendente.id } });
+    r = await colega("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(9) });
+    conferir(r.status === 404 && (await doBanco()).observacao === null, "colega de time não altera: 404", r);
+    r = await gestor("PATCH", `/apontamentos/${pendente.id}`, { desati: "curta" });
+    conferir(r.status === 400 && r.dados.codigo === "descricao_invalida", "gestor também precisa dos 30 caracteres", r);
+    r = await gestor("PATCH", `/apontamentos/${pendente.id}`, { desati: `${NOME_ATIVIDADE} 1` });
+    conferir(r.status === 400 && /não pode repetir/.test(r.dados.error), "gestor não pode repetir a descrição da atividade", r);
+    r = await gestor("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(9) });
+    conferir(r.status === 200 && (await doBanco()).observacao === TEXTO(9), "gestor inclui a descrição", r);
+    let ev = await eventos();
+    conferir(
+      ev.length === 1 && ev[0].usuarioId === gestorTeste.id && (ev[0].alteracoes as any).descricao.de === null,
+      "auditoria da inclusão: quem escreveu e que não havia texto",
+      ev.map((e) => ({ usuarioId: e.usuarioId, alteracoes: e.alteracoes }))
+    );
+    const historico = () =>
+      prisma.atividadeHistoricoMovimentacao.findMany({ where: { atividadeId: a1, tipo: "apontamento_alterado" }, orderBy: { id: "asc" } });
+    conferir(/^incluiu a descrição/.test((await historico()).at(-1)?.descricao ?? ""), "histórico da atividade: incluiu");
+    r = await outro("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(10) });
+    ev = await eventos();
+    conferir(r.status === 200 && ev.length === 2 && (ev[1].alteracoes as any).descricao.de === TEXTO(9), "admin altera; a auditoria guarda o texto anterior", r);
+    conferir(/^alterou a descrição/.test((await historico()).at(-1)?.descricao ?? ""), "histórico da atividade: alterou");
+    r = await outro("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(10) });
+    conferir(r.status === 200 && (await eventos()).length === 2, "salvar o mesmo texto não gera registro");
+    r = await eu("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(11) });
+    conferir(r.status === 200 && (await eventos()).length === 2, "o próprio consultor altera sem registro de terceiro", r);
+    // Até aqui o gestor alcançou pelo departamento do ITEM; a lista dele é a do TIME, então o consultor entra no time agora.
+    await prisma.departamentoTime.create({ data: { codemp: CODEMP, depexe: 1, codusu: BigInt(CODEMP), sitreg: "A" } });
+    r = await gestor("GET", "/apontamentos/sessoes-pendentes");
+    conferir(r.status === 200 && r.dados.sessoes.some((s: any) => s.id === pendente.id && s.souDono === false), "a sessão do time aparece na lista do gestor", r.status);
+
+    await prisma.atividadeSessaoExecucao.update({ where: { id: pendente.id }, data: { fim: null } });
+    r = await gestor("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(12) });
+    conferir(r.status === 400 && /em andamento/.test(r.dados.error), "execução em andamento: só o consultor anota", r);
+    await prisma.atividadeSessaoExecucao.update({ where: { id: pendente.id }, data: { fim: new Date("2026-01-06T13:00:00Z") } });
+
+    console.log("\n10. Item de RAT ainda não registrado no Senior");
+    const rat = await prisma.rat.create({ data: { codemp: CODEMP, codfor: CODFOR, codpro: 1, numprj: 1, sitrat: 9, depexe: 1 } });
+    const ratItem = await prisma.ratItem.create({
+      data: { ratId: rat.id, codemp: CODEMP, codpro: 1, seqite: 1, datati: new Date("2026-01-06T00:00:00Z"), horini: 540, horfim: 600, desati: TEXTO(11) },
+    });
+    await prisma.atividadeSessaoExecucao.update({ where: { id: pendente.id }, data: { confirmada: true, ratItemId: ratItem.id } });
+    const itemNaTela = async (chamada: typeof gestor) => (await chamada("GET", `/rats/${rat.id}/itens`)).dados?.itens?.[0];
+    let tela = await itemNaTela(gestor);
+    conferir(tela?.podeEditarDescricao === true && tela?.editavel === false, "gestor: pode a descrição, mas não ganha o Excluir", tela);
+    tela = await itemNaTela(outro);
+    conferir(tela?.podeEditarDescricao === true && tela?.editavel === false, "admin: pode a descrição, mas não ganha o Excluir", tela);
+    tela = await itemNaTela(eu);
+    conferir(tela?.podeEditarDescricao === true && tela?.editavel === true, "dono: continua como antes", tela);
+    const textoDoItem = async () => (await prisma.ratItem.findUniqueOrThrow({ where: { id: ratItem.id } })).desati;
+    r = await colega("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(13) });
+    conferir(r.status === 404 && (await textoDoItem()) === TEXTO(11), "colega de time não altera o item: 404", r);
+    r = await gestor("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(13) });
+    ev = await eventos();
+    conferir(r.status === 200 && (await textoDoItem()) === TEXTO(13) && (ev.at(-1)?.alteracoes as any)?.descricao.de === TEXTO(11), "gestor altera o item, com auditoria", r);
+    await prisma.ratItem.update({ where: { id: ratItem.id }, data: { numrat: CODEMP, seqrat: 1 } });
+    r = await gestor("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(14) });
+    conferir(r.status === 400 && /Já confirmado no Senior/.test(r.dados.error), "registrado no Senior: gestor não altera por aqui", r);
+    conferir((await itemNaTela(gestor))?.podeEditarDescricao === false, "registrado no Senior: a tela não oferece");
+    conferir((await prisma.sincronizacaoPendente.count({ where: { atividadeId: { in: atividades } } })) === 0, "nada na fila de envio");
   } finally {
     servidor?.close();
     await limpar();
@@ -263,7 +359,10 @@ async function main() {
   const sobrou =
     (await prisma.atividadeConsultor.count({ where: { codemp: CODEMP } })) +
     (await prisma.consultor.count({ where: { codemp: CODEMP } })) +
-    (await prisma.user.count({ where: { email: { in: [EMAIL_CONSULTOR, EMAIL_ADMIN] } } }));
+    (await prisma.rat.count({ where: { codemp: CODEMP } })) +
+    (await prisma.departamentoGestor.count({ where: { codemp: CODEMP } })) +
+    (await prisma.departamentoTime.count({ where: { codemp: CODEMP } })) +
+    (await prisma.user.count({ where: { email: { in: EMAILS } } }));
   conferir(sobrou === 0, "dados de teste apagados");
   console.log(falhas === 0 ? "\nTodos os critérios verificados passaram." : `\n${falhas} critério(s) falharam.`);
 }

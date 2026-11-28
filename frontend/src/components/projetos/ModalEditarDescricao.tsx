@@ -18,6 +18,8 @@ interface ModalEditarDescricaoProps {
   // Título da janela no modo só leitura — default "Observação". Mesmo componente reaproveitado
   // (28/08/2026) pra mostrar o erro completo de "falha no envio", que não é uma observação.
   tituloSomenteLeitura?: string;
+  /** Repassado ao campo — gestor/admin escrevendo no apontamento de um consultor. */
+  placeholder?: string;
 }
 
 // Janela de edição da Descrição em "Sessões pendentes de confirmação" — o input inline
@@ -35,6 +37,7 @@ export function ModalEditarDescricao({
   tituloSomenteLeitura = "Observação",
   descricaoAtividade,
   itemDescricao,
+  placeholder,
 }: ModalEditarDescricaoProps) {
   const [texto, setTexto] = useState(() =>
     somenteLeitura ? valorInicial : textoInicialDaDescricao(valorInicial, [descricaoAtividade, itemDescricao])
@@ -70,6 +73,7 @@ export function ModalEditarDescricao({
           onChange={setTexto}
           descricaoAtividade={descricaoAtividade}
           itemDescricao={itemDescricao}
+          placeholder={placeholder}
           onAtalhoSalvar={() => onSalvar(texto.trim())}
         />
       )}

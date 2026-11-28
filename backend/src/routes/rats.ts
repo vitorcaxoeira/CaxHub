@@ -62,7 +62,7 @@ import { converterHeicSeNecessario, ehHeic } from "../domain/comprovanteHeic";
 import { ErroEntradaConsulta } from "../consultas/consultaColunas";
 import { extrasDaConsulta } from "../consultas/camposRelacionados";
 import { FONTES_RATS } from "../domain/fontesDeCampos";
-import { carregarReferencias } from "../domain/descricaoApontamento";
+import { carregarReferencias, podeDescreverApontamento } from "../domain/descricaoApontamento";
 
 // Tela "Meus Apontamentos": RATs agrupam os apontamentos (RatItem) de um consultor numa
 // proposta. Visibilidade: consultor vê só as próprias RATs; gestor do departamento
@@ -761,6 +761,10 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
       }
     }
 
+    // Gestor e admin também escrevem a descrição (mesma regra do PATCH /apontamentos/:id). `editavel` continua só do dono: é ele que
+    // libera o Excluir do item.
+    const timeDoUsuario = await codforsDoTime(role, contexto);
+
     // Descrição da atividade de cada item — só informação nas janelas de editar a descrição.
     const atividadesDosItens =
       atividadeIds.length > 0
@@ -814,6 +818,11 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           // o registro não existe mais lá".
           removidoEmSenior: item.removidoEmSenior,
           editavel: souDono && item.numrat == null && rat.sitrat === 9,
+          podeEditarDescricao:
+            item.numrat == null &&
+            rat.sitrat === 9 &&
+            rat.codfor != null &&
+            podeDescreverApontamento(role, contexto, { codfor: rat.codfor, depexes: [rat.depexe, propostaItem?.depexe] }, timeDoUsuario),
           // Identidade atribuída pelo Senior — só existe depois do registro.
           numrat: item.numrat,
           seqrat: item.seqrat,
