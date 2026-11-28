@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { cn } from "../../lib/cn";
 
@@ -20,18 +20,29 @@ interface ModalProps {
   corpoFixo?: boolean;
 }
 
+// Abre (e fecha) o <dialog> em que está. Precisa ser o PRIMEIRO filho dele, e não um efeito do próprio Modal: o React aplica o
+// `autoFocus` (chamando `focus()`, sem gerar atributo no HTML) enquanto monta o conteúdo, ANTES de qualquer efeito do pai. Com o
+// dialog ainda fechado o foco se perdia, o showModal() posterior focava o ✕, e o primeiro espaço digitado fechava a janela
+// (27/11/2026). Como os irmãos são processados em ordem, o efeito daqui roda antes do `autoFocus` dos campos que vêm depois.
+// Vale para o conteúdo montado junto com a abertura (ou depois dela); o que já estava montado com a janela fechada não é refocado.
+function AberturaDoDialog({ aberto }: { aberto: boolean }) {
+  const marcador = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const dialog = marcador.current?.closest("dialog");
+    if (!dialog) return;
+    if (aberto && !dialog.open) dialog.showModal();
+    if (!aberto && dialog.open) dialog.close();
+  }, [aberto]);
+
+  return <span ref={marcador} hidden />;
+}
+
 // Dialog nativo — foco preso e Esc de graça, sem precisar de lib. `onClose` cobre Esc
 // (evento `close` do <dialog>) e clique no backdrop (clique cujo alvo é o próprio
 // elemento, não um filho — <dialog> ocupa a tela toda quando aberto via showModal()).
 export function Modal({ open, onClose, title, subtitulo, children, className, fecharPorFora = true, corpoFixo = false }: ModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (open && !el.open) el.showModal();
-    if (!open && el.open) el.close();
-  }, [open]);
 
   return (
     <dialog
@@ -54,6 +65,7 @@ export function Modal({ open, onClose, title, subtitulo, children, className, fe
         className
       )}
     >
+      <AberturaDoDialog aberto={open} />
       <div className="flex flex-none items-start justify-between gap-3 border-b border-border p-4">
         <div className="min-w-0">
           <h2 className="text-base font-semibold text-foreground">{title}</h2>
