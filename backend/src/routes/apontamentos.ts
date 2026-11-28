@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { requireAuth, requireRole, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
 import { resolverContextoConsultor, podeExecutarAcao, consultoresFiltraveis, codforsDoTime } from "../domain/contextoProjeto";
@@ -25,7 +26,7 @@ import { itemFaturavel } from "../domain/eficienciaPropostas";
 import { CODCLI_EMPRESA_PROPRIA, forfatLabel } from "../domain/propostasDominio";
 import { podeVerValoresDaProposta } from "../domain/valoresDaProposta";
 import { confirmouExcluirAjuste, decidirExclusaoComAjuste } from "../domain/exclusaoApontamento";
-import { carregarReferencias, erroDeDescricao, referenciasDaAtividade } from "../domain/descricaoApontamento";
+import { carregarReferencias, erroDeDescricao, podeDescreverApontamento, referenciasDaAtividade } from "../domain/descricaoApontamento";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
 // rastreou (ver AtividadeSessaoExecucao / PATCH /atividades/:id/mover) e confirma —
@@ -651,10 +652,10 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
 //
 // Confirmar já é liberado pro gestor sobre sessão do time (podeExecutarAcao, chamado dentro de
 // confirmarSessao) — o problema que isto resolve é só a LISTAGEM nunca mostrar essa sessão pra
-// ele confirmar. Ações "só o dono" (editar descrição/pedir ajuste) continuam exigindo `codfor`
-// exato nos respectivos endpoints, sem extensão nenhuma — a tela já esconde esses botões via
-// `souDono`, calculado abaixo. Excluir é a exceção: admin também pode, sobre qualquer sessão
-// (ver `podeExcluir` abaixo e DELETE /:id).
+// ele confirmar. Pedir ajuste continua "só o dono" (exige `codfor` exato no endpoint) — a tela
+// esconde o botão via `souDono`, calculado abaixo. Excluir libera também o admin, sobre qualquer
+// sessão (ver `podeExcluir` abaixo e DELETE /:id). Editar a descrição vale para toda sessão desta
+// lista (27/11/2026): quem a enxerga aqui é o dono, o admin ou o gestor do time (PATCH /:id).
 apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, res) => {
   try {
     const ctx = await contextoDoUsuario(req);
@@ -859,14 +860,14 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           integracaoErpTone: integracaoErpTone(statusErpAlocacao),
           integracaoErpErro,
           duracaoInvalida,
-          // Ações além de Confirmar (editar descrição, pedir ajuste, excluir) são "só o
-          // dono" nos respectivos endpoints — a tela usa isto pra não oferecer botão que
+          // Pedir ajuste e excluir são "só o dono" nos respectivos endpoints (editar a
+          // descrição não: ver PATCH /:id) — a tela usa isto pra não oferecer botão que
           // o servidor vai recusar. Consultor comum: sempre true (a lista já é só dele).
           // Gestor/admin: true só na própria sessão, false nas do time.
           souDono: !mostrarConsultor || s.atividade.codfor === meuCodfor,
           // Exclusão também libera pro admin sobre sessão de qualquer consultor (DELETE
-          // /:id abaixo aceita isso) — diferente de editar descrição/pedir ajuste, que
-          // continuam "só o dono" mesmo pro admin.
+          // /:id abaixo aceita isso) — diferente de pedir ajuste, que continua "só o dono"
+          // mesmo pro admin.
           podeExcluir: role === "admin" || !mostrarConsultor || s.atividade.codfor === meuCodfor,
           // Mesma previsão de erro acima, agora pro bloqueio de apontamento — confirmar essa
           // sessão vai recusar 409 (ver confirmarSessao).
@@ -1284,8 +1285,10 @@ apontamentosRouter.post("/envio/:ratItemId/reenviar", async (req: AuthenticatedR
 // (AtividadeSessaoExecucao.observacao, ver Meus Apontamentos > "Sessões pendentes de
 // confirmação") ou de um item já confirmado (RatItem.desati, é como o consultor preenche o
 // que faltou pra RAT poder ser aprovada — ver PATCH /rats/:id/aprovar, que exige observação
-// em todo item). No segundo caso, só o dono, só enquanto a RAT pai ainda está Digitada e o
-// item ainda não foi confirmado no Senior — mesmos guards de DELETE /:id logo abaixo.
+// em todo item). No segundo caso, só enquanto a RAT pai ainda está Digitada e o item ainda
+// não foi confirmado no Senior — mesmos guards de DELETE /:id logo abaixo.
+// Quem pode (27/11/2026): o dono e também o gestor e o admin (podeDescreverApontamento). Escrita
+// por quem não executou fica no histórico da atividade e na auditoria, com o texto anterior.
 apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
   try {
     const sessaoId = Number(req.params.id);
@@ -1295,8 +1298,7 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
       return;
     }
     const ctx = await contextoDoUsuario(req);
-    const codfor = ctx?.contexto.consultor?.codfor;
-    if (!codfor) {
+    if (!ctx) {
       res.status(404).json({ error: "Usuário não encontrado" });
       return;
     }
@@ -1305,14 +1307,64 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
       where: { id: sessaoId },
       include: { atividade: true, ratItem: { include: { rat: true } } },
     });
-    if (!sessao || sessao.atividade.codfor !== codfor) {
+    if (!sessao) {
       res.status(404).json({ error: "Apontamento não encontrado" });
       return;
     }
+    const { atividade } = sessao;
+    const itemProposta = await prisma.propostaItem.findUnique({
+      where: { codemp_codpro_seqite: { codemp: atividade.codemp, codpro: atividade.codpro, seqite: atividade.seqite } },
+      select: { depexe: true },
+    });
+    const podeDescrever = podeDescreverApontamento(
+      ctx.role,
+      ctx.contexto,
+      { codfor: atividade.codfor, depexes: [itemProposta?.depexe, sessao.ratItem?.rat.depexe] },
+      await codforsDoTime(ctx.role, ctx.contexto)
+    );
+    // 404, e não 403: quem não pode também não descobre que o apontamento existe.
+    if (!podeDescrever) {
+      res.status(404).json({ error: "Apontamento não encontrado" });
+      return;
+    }
+    const souDono = ctx.contexto.consultor?.codfor === atividade.codfor;
     if (sessao.excluidaEm != null) {
       res.status(400).json({ error: "Sessão excluída — não é possível editar" });
       return;
     }
+    // Com a execução aberta, a nota é de quem está executando (mesma regra de PATCH /atividades/:id/observacao).
+    if (!souDono && sessao.fim == null) {
+      res.status(400).json({ error: "Sessão ainda em andamento — só o consultor anota enquanto executa" });
+      return;
+    }
+
+    // Grava a descrição e, quando quem escreve não é o consultor, o histórico e a auditoria na mesma transação.
+    const gravarDescricao = (anterior: string | null, gravar: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+      prisma.$transaction(async (tx) => {
+        await gravar(tx);
+        if (souDono || (anterior ?? "").trim() === desati) return;
+        const verbo = anterior?.trim() ? "alterou" : "incluiu";
+        const fato = `${verbo} a descrição do apontamento de ${descreverIntervaloSessao(sessao.inicio, sessao.fim)}`;
+        await tx.atividadeHistoricoMovimentacao.create({
+          data: { atividadeId: sessao.atividadeId, tipo: "apontamento_alterado", descricao: fato.slice(0, 300), userId: ctx.user.id },
+        });
+        await criarEventoAuditoria(
+          {
+            origem: "tela",
+            usuarioId: ctx.user.id,
+            codemp: atividade.codemp,
+            codpro: atividade.codpro,
+            entidadeTipo: ENTIDADES_AUDITORIA.ATIVIDADE,
+            entidadeId: entidadeIdAtividade(sessao.atividadeId),
+            entidadeRotulo: `Atividade — Proposta ${atividade.codpro}`,
+            eventoTipo: EVENTOS_AUDITORIA.APONTAMENTO_DESCRICAO_ALTERADA,
+            alteracoes: { descricao: { de: anterior, para: desati, rotulo: "Descrição" } },
+            metadata: { sessaoId, ratItemId: sessao.ratItem?.id ?? null, codforDoConsultor: atividade.codfor },
+            correlationId: req.correlationId!,
+          },
+          tx
+        );
+      });
     const erroDescricao = erroDeDescricao(desati, (await referenciasDaAtividade(sessao.atividade)).todas);
     if (erroDescricao) {
       res.status(400).json({ codigo: "descricao_invalida", error: erroDescricao });
@@ -1323,7 +1375,9 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
     // AtividadeSessaoExecucao.observacao) — sem isso, o texto só existia em memória no
     // navegador e um F5 antes de confirmar perdia a edição.
     if (!sessao.ratItem) {
-      await prisma.atividadeSessaoExecucao.update({ where: { id: sessaoId }, data: { observacao: desati } });
+      await gravarDescricao(sessao.observacao, (tx) =>
+        tx.atividadeSessaoExecucao.update({ where: { id: sessaoId }, data: { observacao: desati } })
+      );
       res.json({ ok: true });
       return;
     }
@@ -1346,7 +1400,8 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
       return;
     }
 
-    await prisma.ratItem.update({ where: { id: sessao.ratItem.id }, data: { desati } });
+    const ratItemId = sessao.ratItem.id;
+    await gravarDescricao(sessao.ratItem.desati, (tx) => tx.ratItem.update({ where: { id: ratItemId }, data: { desati } }));
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error, "editar-observacao");

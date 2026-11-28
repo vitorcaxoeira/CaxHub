@@ -1,9 +1,13 @@
 import { prisma } from "../db/prisma";
+import { ContextoConsultor, podeExecutarAcao } from "./contextoProjeto";
 
 // Descrição de apontamento (27/11/2026, pedido do gestor Alessandro trazido pelo Vitor): todo apontamento tem uma descrição escrita pelo PRÓPRIO
 // consultor, com contexto. Regra (decisão do Vitor): pelo menos 30 caracteres e DIFERENTE da descrição da atividade, que passa a ser mostrada
 // só como informação (nunca mais é copiada para o apontamento). A regra é uma só para todos os caminhos; o frontend tem o espelho dela
 // (lib/descricaoApontamento.ts) para avisar antes de enviar, mas quem garante é o servidor.
+
+// Quem escreve (mesma data, pedido do Vitor): o consultor e, em Meus Apontamentos, também o gestor e o admin, com a mesma regra de texto. Quando
+// não é o próprio consultor, fica registrado no histórico da atividade e na auditoria quem escreveu e o texto anterior.
 
 export const MIN_DESCRICAO = 30;
 /** Tamanho de AtividadeSessaoExecucao.observacao e de RatItem.desati. */
@@ -25,6 +29,25 @@ export function repeteDescricaoDaAtividade(texto: string, referencias: (string |
   const chave = chaveDeComparacao(texto);
   if (!chave) return false;
   return referencias.some((r) => !!r && (chave === chaveDeComparacao(r) || chave === chaveDeComparacao(r.trim().slice(0, MAX_DESCRICAO))));
+}
+
+/**
+ * Quem pode incluir ou alterar a descrição de um apontamento em Meus Apontamentos: quem já pode CONFIRMÁ-LO (o dono, o admin, o gestor do
+ * departamento do item ou o gestor do time do consultor) e, na RAT, o gestor do departamento dela (quem aprova). Colega de time não.
+ * `codforsDoTime` é o retorno de domain/contextoProjeto.codforsDoTime (`null` = admin).
+ */
+export function podeDescreverApontamento(
+  role: string,
+  contexto: ContextoConsultor,
+  alvo: { codfor: number; depexes: (number | null | undefined)[] },
+  codforsDoTime: Set<number> | null
+): boolean {
+  if (codforsDoTime?.has(alvo.codfor)) return true;
+  const depexes = alvo.depexes.filter((d): d is number => d != null);
+  // Sem departamento conhecido, -1 não casa com nenhum: sobram o dono e o admin.
+  return (depexes.length > 0 ? depexes : [-1]).some((depexe) =>
+    podeExecutarAcao(role, contexto, "lancarApontamento", { depexe, codfor: alvo.codfor })
+  );
 }
 
 /** Por que a descrição não serve; `null` quando serve. `referencias` = nome do nó do cronograma e descrição do item da proposta. */

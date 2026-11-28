@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chaveDeComparacao, erroDeDescricao, repeteDescricaoDaAtividade, respostaDescricaoPendente, textoDaDescricao } from "./descricaoApontamento";
+import { chaveDeComparacao, erroDeDescricao, podeDescreverApontamento, repeteDescricaoDaAtividade, respostaDescricaoPendente, textoDaDescricao } from "./descricaoApontamento";
 
 const ATIVIDADE = "Apoio para consultoria HCM: parametrização de folha";
 const BOA = "Ajustei a regra de cálculo de hora extra noturna do cliente";
@@ -41,4 +41,23 @@ test("máximo de 1000 caracteres; sem referência não há repetição", () => {
 test("mensagem do bloqueio distingue o próprio consultor de quem age por ele", () => {
   assert.match(respostaDescricaoPendente(1, true).error, /^Você tem 1 apontamento sem descrição/);
   assert.match(respostaDescricaoPendente(3, false).error, /^O consultor desta atividade tem 3 apontamentos sem descrição/);
+});
+
+test("quem escreve a descrição: dono, admin e gestor (do item, da RAT ou do time); colega e estranho não", () => {
+  const contexto = (codfor: number | null, gerenciados: number[] = [], time: number[] = []) => ({
+    consultor: codfor == null ? null : ({ codfor } as never),
+    departamentosGerenciados: gerenciados,
+    departamentosTime: time,
+  });
+  const alvo = { codfor: 10, depexes: [8, null] };
+
+  assert.equal(podeDescreverApontamento("consultor", contexto(10), alvo, new Set([10])), true, "dono");
+  assert.equal(podeDescreverApontamento("admin", contexto(null), alvo, null), true, "admin sem cadastro de consultor");
+  assert.equal(podeDescreverApontamento("consultor", contexto(20, [8]), alvo, new Set([20])), true, "gestor do departamento do item");
+  assert.equal(podeDescreverApontamento("consultor", contexto(20, [9]), { codfor: 10, depexes: [8, 9] }, new Set([20])), true, "gestor do departamento da RAT");
+  assert.equal(podeDescreverApontamento("consultor", contexto(20, [9]), alvo, new Set([20, 10])), true, "gestor do time do consultor");
+  assert.equal(podeDescreverApontamento("consultor", contexto(20, [], [8]), alvo, new Set([20])), false, "colega do mesmo departamento");
+  assert.equal(podeDescreverApontamento("consultor", contexto(20, [9]), alvo, new Set([20])), false, "gestor de outro departamento");
+  assert.equal(podeDescreverApontamento("consultor", contexto(null), alvo, new Set()), false, "usuário sem cadastro de consultor");
+  assert.equal(podeDescreverApontamento("consultor", contexto(20, [8]), { codfor: 10, depexes: [] }, new Set([20])), false, "sem departamento conhecido");
 });

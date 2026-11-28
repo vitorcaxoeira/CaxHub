@@ -10,6 +10,8 @@ interface CampoDescricaoApontamentoProps {
   rows?: number;
   autoFocus?: boolean;
   disabled?: boolean;
+  /** Texto de exemplo. O padrão fala com quem executou; troque quando quem escreve é outra pessoa. */
+  placeholder?: string;
   /** Ctrl/⌘ + Enter — só dispara com a descrição válida. */
   onAtalhoSalvar?: () => void;
 }
@@ -24,6 +26,7 @@ export function CampoDescricaoApontamento({
   autoFocus,
   disabled,
   onAtalhoSalvar,
+  placeholder = "Descreva com as suas palavras o que você realizou...",
 }: CampoDescricaoApontamentoProps) {
   const erro = erroDeDescricao(valor, [descricaoAtividade, itemDescricao]);
   const tamanho = textoDaDescricao(valor).length;
@@ -47,7 +50,7 @@ export function CampoDescricaoApontamento({
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !erro) onAtalhoSalvar?.();
         }}
         aria-label="Descrição do que foi realizado"
-        placeholder="Descreva com as suas palavras o que você realizou..."
+        placeholder={placeholder}
         className="w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
       />
       <div className="flex items-start justify-between gap-3 text-[11.5px] leading-snug">
