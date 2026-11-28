@@ -5,10 +5,11 @@ import { CampoDescricaoApontamento } from "./CampoDescricaoApontamento";
 
 interface ModalObservacaoAtividadeProps {
   titulo: string;
-  /** Só informação, num bloco acima do campo — o campo NUNCA abre com ela. */
+  /** Num bloco acima do campo. Em proposta de cliente o campo NUNCA abre com ela; em proposta interna, abre. */
   descricaoAtividade?: string | null;
   itemDescricao?: string | null;
-  /** Nota de progresso que o próprio consultor já salvou na sessão; sem ela o campo abre vazio. */
+  interna?: boolean;
+  /** Nota de progresso que o próprio consultor já salvou na sessão; sem ela o campo abre vazio (interna: com a da atividade). */
   nota?: string | null;
   onConfirmar: (observacao: string) => void;
   /** Desistir NÃO executa nada: não para, não move e não inicia. */
@@ -29,6 +30,7 @@ export function ModalObservacaoAtividade({
   titulo,
   descricaoAtividade,
   itemDescricao,
+  interna = false,
   nota,
   onConfirmar,
   onCancelar,
@@ -36,8 +38,8 @@ export function ModalObservacaoAtividade({
   aviso,
   rotuloSalvar = "Salvar",
 }: ModalObservacaoAtividadeProps) {
-  const [texto, setTexto] = useState(() => textoInicialDaDescricao(nota, [descricaoAtividade, itemDescricao]));
-  const valido = erroDeDescricao(texto, [descricaoAtividade, itemDescricao]) == null;
+  const [texto, setTexto] = useState(() => textoInicialDaDescricao(nota, [descricaoAtividade, itemDescricao], interna));
+  const valido = erroDeDescricao(texto, [descricaoAtividade, itemDescricao], interna) == null;
   const confirmar = () => {
     if (valido) onConfirmar(texto.trim());
   };
@@ -51,6 +53,7 @@ export function ModalObservacaoAtividade({
         onChange={setTexto}
         descricaoAtividade={descricaoAtividade}
         itemDescricao={itemDescricao}
+        interna={interna}
         onAtalhoSalvar={confirmar}
       />
       <div className="mt-4 flex justify-end gap-2">

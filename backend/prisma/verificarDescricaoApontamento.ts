@@ -3,7 +3,8 @@
 //
 // Segurança: roda só em banco local; liga a trava SENIOR_SOMENTE_LEITURA no próprio processo; e NUNCA confirma um apontamento com sucesso —
 // só exercita a recusa, em atividade com o teto estourado, de modo que nem uma falha na regra criaria RAT ou item na fila do Senior.
-// Cria e apaga só o que é dele (empresa de teste CODEMP); se já houver algo nela, para sem tocar em nada.
+// Cria e apaga só o que é dele (empresa de teste CODEMP); se já houver algo nela, para sem tocar em nada. A proposta INTERNA de teste
+// aponta para o cliente 1 (a própria empresa), que já existe na base e NÃO é apagado.
 //
 // Uso: npx ts-node prisma/verificarDescricaoApontamento.ts
 process.env.SENIOR_SOMENTE_LEITURA = "true";
@@ -350,6 +351,87 @@ async function main() {
     r = await gestor("PATCH", `/apontamentos/${pendente.id}`, { desati: TEXTO(14) });
     conferir(r.status === 400 && /Já confirmado no Senior/.test(r.dados.error), "registrado no Senior: gestor não altera por aqui", r);
     conferir((await itemNaTela(gestor))?.podeEditarDescricao === false, "registrado no Senior: a tela não oferece");
+    conferir((await prisma.sincronizacaoPendente.count({ where: { atividadeId: { in: atividades } } })) === 0, "nada na fila de envio");
+
+    console.log("\n11. Proposta INTERNA herda a descrição da atividade");
+    await prisma.proposta.create({
+      data: { codemp: CODEMP, codpro: 2, codcli: 1, numprj: 1, codfpj: 1, idcom: 1, codrep: 1, numped: 2 },
+    });
+    const criarInterna = async (n: number) => {
+      await prisma.propostaItem.create({
+        data: { codemp: CODEMP, codpro: 2, seqite: n, numprj: 1, codser: "ZZ", codfpj: 1, depexe: 1, despro: `${NOME_ATIVIDADE} interna ${n}` },
+      });
+      const a = await prisma.atividadeConsultor.create({
+        data: {
+          codemp: CODEMP, codpro: 2, seqite: n, codfor: CODFOR, qtdhor: 100_000, sitreg: "A", fasid: CODEMP,
+          colunaId: colunaAFazer.id, seqati: SEQATI_BASE + BigInt(10 + n),
+        },
+      });
+      atividades.push(a.id);
+      return a.id;
+    };
+    const i1 = await criarInterna(1);
+    const HERDADA = `${NOME_ATIVIDADE} interna 1`;
+
+    r = await eu("GET", "/apontamentos/minhas-atividades");
+    const marcadas = (r.dados?.atividades ?? []).filter((a: any) => a.id === i1 || a.id === a2);
+    conferir(
+      marcadas.find((a: any) => a.id === i1)?.interna === true && marcadas.find((a: any) => a.id === a2)?.interna === false,
+      "as rotas marcam a atividade como interna ou de cliente",
+      marcadas
+    );
+
+    r = await eu("POST", `/atividades/${i1}/start`);
+    conferir(r.status === 200, "inicia a interna", r);
+    r = await eu("PATCH", `/atividades/${i1}/observacao`, { observacao: "" });
+    conferir(r.status === 200 && (await ultimaSessao(i1)).observacao === HERDADA, "nota em branco grava a descrição da atividade", r);
+    r = await eu("POST", `/atividades/${i1}/stop`, { observacao: "ok" });
+    conferir(r.status === 200 && (await ultimaSessao(i1)).observacao === "ok", "interna aceita texto curto", r);
+
+    await eu("POST", `/atividades/${i1}/start`);
+    r = await eu("POST", `/atividades/${i1}/stop`, {});
+    conferir(r.status === 200 && (await ultimaSessao(i1)).observacao === HERDADA, "parar sem texto herda a descrição da atividade", r);
+
+    await eu("POST", `/atividades/${i1}/start`);
+    r = await eu("POST", `/atividades/${a2}/start`);
+    const internaPausada = await ultimaSessao(i1);
+    conferir(r.status === 200 && internaPausada.fim != null && internaPausada.observacao === HERDADA, "iniciar outra pausa a interna sem perguntar, herdando", { r, obs: internaPausada.observacao });
+
+    r = await eu("POST", `/atividades/${i1}/start`);
+    conferir(r.status === 409 && r.dados.codigo === "descrever_em_andamento", "com a de CLIENTE em andamento, continua perguntando", r);
+    r = await eu("POST", `/atividades/${i1}/start`, { observacaoEmAndamento: TEXTO(15), sessaoEmAndamentoId: r.dados.emAndamento?.sessaoId });
+    conferir(r.status === 200, "descrita a de cliente, inicia a interna", r);
+
+    await recuarInicio(i1);
+    r = await eu("POST", `/atividades/${i1}/encerrar-automatico`, {});
+    const internaAutomatica = await ultimaSessao(i1);
+    conferir(r.status === 200 && r.dados.encerrada === true && internaAutomatica.observacao === HERDADA, "parada automática da interna herda a descrição", { r, obs: internaAutomatica.observacao });
+    await prisma.atividadeConsultor.update({ where: { id: i1 }, data: { qtdhor: 100_000 } });
+
+    // Pendência interna vazia (as antigas): não bloqueia, não leva o selo e a confirmação não é recusada pela descrição.
+    const internaVazia = await prisma.atividadeSessaoExecucao.create({
+      data: {
+        atividadeId: i1, colunaId: colunaEmAndamento.id, origem: "manual",
+        inicio: new Date("2026-01-07T09:00:00Z"), fim: new Date("2026-01-07T17:00:00Z"),
+      },
+    });
+    r = await eu("GET", "/apontamentos/sessoes-pendentes");
+    const naLista = r.dados?.sessoes?.find((s: any) => s.id === internaVazia.id);
+    conferir(naLista?.interna === true && naLista?.semDescricao === false, "pendência interna vazia não leva o selo 'sem descrição'", naLista);
+    r = await eu("POST", `/atividades/${a2}/start`);
+    conferir(r.status === 200, "pendência interna vazia não bloqueia iniciar a de cliente", r);
+    await eu("POST", `/atividades/${a2}/stop`, { observacao: TEXTO(16) });
+    r = await eu("PATCH", `/apontamentos/${internaVazia.id}`, { desati: "curta" });
+    conferir(r.status === 200, "em Meus Apontamentos a interna aceita texto curto", r);
+    await prisma.atividadeSessaoExecucao.update({ where: { id: internaVazia.id }, data: { observacao: null } });
+    // Mesmo truque de segurança do começo: teto estourado, então a confirmação é recusada DEPOIS da descrição e nada é criado.
+    await prisma.atividadeConsultor.update({ where: { id: i1 }, data: { qtdhor: 1 } });
+    r = await eu("POST", "/apontamentos/confirmar", { sessaoId: internaVazia.id });
+    conferir(r.status >= 400 && r.dados.codigo !== "descricao_invalida" && !/descrição/i.test(r.dados.error ?? ""), "confirmar interna vazia passa da descrição (recusada só pelo teto)", r);
+    r = await eu("POST", "/solicitacoes-apontamento", { atividadeId: i1, inicio: "2026-01-05T09:00:00", fim: "2026-01-05T10:00:00", motivo: "ZZ-TESTE" });
+    conferir(r.status >= 400 && r.dados.codigo !== "descricao_invalida", "pedido avulso interno sem descrição passa da descrição (recusado por outra regra)", r);
+
+    conferir((await prisma.rat.count({ where: { codemp: CODEMP } })) === 1 && (await prisma.ratItem.count({ where: { codemp: CODEMP } })) === 1, "só a RAT de teste do passo 10 existe");
     conferir((await prisma.sincronizacaoPendente.count({ where: { atividadeId: { in: atividades } } })) === 0, "nada na fila de envio");
   } finally {
     servidor?.close();

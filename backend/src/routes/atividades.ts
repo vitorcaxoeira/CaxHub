@@ -7,7 +7,7 @@ import net from "net";
 import multer from "multer";
 import { requireAuth, AuthenticatedRequest } from "../auth/middleware";
 import { prisma } from "../db/prisma";
-import {
+import { CODCLI_EMPRESA_PROPRIA,
   depexeLabel,
   modproLabel,
   priproLabel,
@@ -43,7 +43,7 @@ import {
   podeIniciar,
   podeParar,
 } from "../domain/execucaoAtividade";
-import { avaliarDescricaoDaMovimentacao, erroDeDescricao, referenciasDaAtividade } from "../domain/descricaoApontamento";
+import { avaliarDescricaoDaMovimentacao, descricaoEfetiva, erroDaDescricao, referenciasDaAtividade } from "../domain/descricaoApontamento";
 
 // Router à parte de `projetosRouter` (que hoje é admin+comercial só, por causa de
 // Propostas) — aqui a tela é aberta a qualquer usuário autenticado; quem pode ver/mover
@@ -579,6 +579,8 @@ async function carregarAtividadesVisiveisImpl(
         // atividade vai só como INFORMAÇÃO, num bloco acima do campo, e o campo abre com a
         // nota que o próprio consultor salvou na sessão aberta — ou vazio.
         descricaoAtividade: escolherDescricaoPadrao(noEstrutura?.nome ?? null, item?.despro ?? null),
+        // Proposta interna: a descrição da atividade é herdada (domain/descricaoApontamento.ts).
+        interna: proposta.codcli === CODCLI_EMPRESA_PROPRIA,
         notaEmAndamento: observacaoAbertaPorAtividadeId.get(a.id)?.trim() || null,
         // Mesma regra de acesso da Alocação (departamentosPermitidos/podeGerenciarProposta
         // em alocacao.ts) — evita mandar um consultor comum pra rota do cronograma, que
@@ -1499,6 +1501,7 @@ atividadesRouter.get("/minha-sessao-aberta", async (req: AuthenticatedRequest, r
         // consultor já salvou — ou vazio.
         descricaoAtividade: referencias.descricaoAtividade,
         itemDescricao: referencias.itemDescricao,
+        interna: referencias.interna,
         nota: sessao.observacao?.trim() || null,
       },
     });
@@ -1730,8 +1733,9 @@ atividadesRouter.patch("/:id/observacao", async (req: AuthenticatedRequest, res)
       return;
     }
 
-    const texto = typeof req.body?.observacao === "string" ? req.body.observacao.trim() : "";
-    const erro = erroDeDescricao(texto, (await referenciasDaAtividade(atividade)).todas);
+    const referenciasDaNota = await referenciasDaAtividade(atividade);
+    const texto = descricaoEfetiva(typeof req.body?.observacao === "string" ? req.body.observacao : "", referenciasDaNota);
+    const erro = erroDaDescricao(texto, referenciasDaNota);
     if (erro) {
       res.status(400).json({ codigo: "descricao_invalida", error: erro });
       return;

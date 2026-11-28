@@ -662,6 +662,7 @@ export function JanelaFlutuante() {
           titulo={`Proposta ${pedidoParada.codpro}`}
           descricaoAtividade={pedidoParada.descricaoAtividade}
           itemDescricao={pedidoParada.itemDescricao}
+          interna={pedidoParada.interna}
           nota={pedidoParada.notaEmAndamento}
           onConfirmar={(obs) => void parar(pedidoParada, obs)}
           onCancelar={() => setPedidoParada(null)}
@@ -673,6 +674,7 @@ export function JanelaFlutuante() {
           titulo={`Proposta ${pedidoNota.codpro}`}
           descricaoAtividade={pedidoNota.descricaoAtividade}
           itemDescricao={pedidoNota.itemDescricao}
+          interna={pedidoNota.interna}
           nota={pedidoNota.notaEmAndamento}
           pergunta="O que está sendo feito?"
           onConfirmar={(texto) => void salvarNota(pedidoNota, texto)}

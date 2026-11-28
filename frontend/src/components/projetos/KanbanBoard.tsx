@@ -74,6 +74,8 @@ export interface AtividadeKanban {
   // Descricao da atividade (no da estrutura, senao descricao do item): so INFORMACAO nos
   // modais "O que foi feito?", nunca preenche o campo.
   descricaoAtividade: string | null;
+  /** Proposta interna: a descrição da atividade é herdada (sem a regra da descrição obrigatória). */
+  interna: boolean;
   // Nota de progresso que o consultor ja salvou na sessao aberta (e com ela que o campo abre).
   notaEmAndamento: string | null;
   podeVerCronograma: boolean;

@@ -5,7 +5,7 @@ import { ENTIDADES_AUDITORIA, EVENTOS_AUDITORIA } from "../audit/taxonomia";
 import { entidadeIdAtividade } from "../audit/identidadeEntidade";
 import { limiteDaSessaoAberta, MotivoLimite } from "./limiteSessao";
 import { diaSemanaDaSessao } from "./jornadaConsultor";
-import { MAX_DESCRICAO } from "./descricaoApontamento";
+import { MAX_DESCRICAO, descricaoHerdada, referenciasDaAtividade } from "./descricaoApontamento";
 
 // Nomes reais das raias do quadro (ver backend/prisma/seed.ts) — mesma regra de negócio
 // espelhada em frontend/src/lib/atividade-acoes.ts. Duas runtimes diferentes (sem pacote
@@ -40,9 +40,10 @@ export const LIMITE_OBSERVACAO = MAX_DESCRICAO;
 
 // A descrição "da atividade" é a mais específica que existir: o nome do nó no cronograma
 // descreve a atividade em si; o `despro` descreve o item da proposta inteiro, e é o que
-// sobra quando a proposta não usa estrutura. Hoje só serve de INFORMAÇÃO na tela — desde
-// 27/11/2026 ela nunca mais é copiada pra observação de uma sessão (ver
-// descricaoApontamento.ts, que também compara o texto do consultor contra ela).
+// sobra quando a proposta não usa estrutura. Em proposta de cliente só serve de INFORMAÇÃO na
+// tela — desde 27/11/2026 não é copiada pra observação de uma sessão (ver
+// descricaoApontamento.ts, que também compara o texto do consultor contra ela). Em proposta
+// interna ela continua sendo herdada por quem fecha sem texto.
 export function escolherDescricaoPadrao(estruturaNome: string | null, itemDescricao: string | null): string | null {
   const nome = estruturaNome?.trim();
   if (nome) return nome.slice(0, LIMITE_OBSERVACAO);
@@ -81,8 +82,8 @@ export interface ContextoMovimentacao {
   //
   // Vazio ou ausente mantém a nota de progresso que ele já tinha salvo na sessão; sem nota,
   // a sessão fica SEM descrição (27/11/2026) — é o caso das paradas automáticas e de quando
-  // outra pessoa (gestor/admin) para a atividade dele. Quem obriga o texto são as rotas
-  // (descricaoApontamento.ts); aqui só se grava o que veio.
+  // outra pessoa (gestor/admin) para a atividade dele —, exceto em proposta interna, que
+  // herda a descrição da atividade. Quem obriga o texto são as rotas (descricaoApontamento.ts).
   observacaoFechamento?: string | null;
   // O mesmo, para a sessão de OUTRA atividade pausada por esta movimentação. Amarrado ao id
   // da sessão de propósito: se a que estava em andamento já tiver sido fechada por outro
@@ -178,11 +179,15 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
     ? Math.round((fimEfetivo.getTime() - sessaoAbertaAntes.inicio.getTime()) / 60000)
     : null;
 
-  // Só texto do próprio consultor: o digitado agora ou, na falta, a nota de progresso já
-  // salva na sessão (PATCH /:id/observacao — não pode ser perdida numa parada automática,
-  // 28/08/2026). Sem nenhum dos dois a sessão fecha sem descrição, e o consultor precisa
-  // descrever em Meus Apontamentos antes de iniciar outra atividade.
-  const observacaoDaSessao = observacaoFechamento?.trim() || sessaoAbertaAntes?.observacao?.trim() || null;
+  // O digitado agora ou, na falta, a nota de progresso já salva na sessão (PATCH
+  // /:id/observacao — não pode ser perdida numa parada automática, 28/08/2026). Sem nenhum
+  // dos dois: em proposta interna herda a descrição da atividade (consulta o banco só aqui);
+  // em proposta de cliente a sessão fecha sem descrição, e o consultor precisa descrever em
+  // Meus Apontamentos antes de iniciar outra atividade.
+  const observacaoDaSessao =
+    observacaoFechamento?.trim() ||
+    sessaoAbertaAntes?.observacao?.trim() ||
+    (sessaoAbertaAntes ? descricaoHerdada(await referenciasDaAtividade(atividade)) : null);
 
   const entidadeId = entidadeIdAtividade(atividade.id);
   const entidadeRotulo = `Atividade — Proposta ${atividade.codpro}`;
@@ -310,9 +315,10 @@ export async function montarOperacoesMovimentacao(ctx: ContextoMovimentacao): Pr
 
         const duracaoOutraMin = Math.round((fimOutra.getTime() - sessaoOutra.inicio.getTime()) / 60000);
         // Mesma regra do fechamento principal acima: o que o consultor digitou agora pra
-        // ESTA sessão ou a nota já salva nela; senão fica sem descrição.
+        // ESTA sessão ou a nota já salva nela; senão, só a interna herda a da atividade.
         const textoDaPausada = observacaoDaPausada?.sessaoId === sessaoOutra.id ? observacaoDaPausada.texto.trim() : "";
-        const observacaoOutra = textoDaPausada || sessaoOutra.observacao?.trim() || null;
+        const observacaoOutra =
+          textoDaPausada || sessaoOutra.observacao?.trim() || descricaoHerdada(await referenciasDaAtividade(atividadeOutra));
 
         operacoes.push(
           prisma.atividadeConsultor.update({ where: { id: atividadeOutra.id }, data: { colunaId: colunaAFazer.id } }),

@@ -131,6 +131,7 @@ interface AtividadeResumo {
   seqite: number | null;
   itemDescricao: string | null;
   descricaoAtividade: string | null;
+  interna: boolean;
   // Usado no cabeçalho do grupo do seletor — número de proposta sozinho não identifica o
   // projeto pra quem lança pelo time.
   cliente: string | null;
@@ -195,6 +196,7 @@ interface RatItemRow {
   codser: string | null;
   itemDescricao: string | null;
   descricaoAtividade: string | null;
+  interna: boolean;
   // Sequência do item na proposta — vira prefixo da descrição na coluna Item.
   seqite: number | null;
   datati: string | null;
@@ -1181,7 +1183,10 @@ export function MeusApontamentos() {
   // antes em qual delas a sessão entra (ou se gera uma nova); senão confirma direto.
   function confirmar(sessaoId: number) {
     const sessao = sessoes.find((s) => s.id === sessaoId);
-    if (sessao && erroDeDescricao(descricoes[sessaoId] ?? sessao.observacao, [sessao.descricaoAtividade, sessao.itemDescricao])) {
+    if (
+      sessao &&
+      erroDeDescricao(descricoes[sessaoId] ?? sessao.observacao, [sessao.descricaoAtividade, sessao.itemDescricao], sessao.interna === true)
+    ) {
       toast.mostrar("Descreva o que foi realizado antes de confirmar.", "warning");
       setEditandoDescricaoId(sessaoId);
       return;
@@ -1321,7 +1326,11 @@ export function MeusApontamentos() {
       return;
     }
     const atividadeEscolhida = atividades.find((a) => a.id === Number(manualAtividadeId));
-    const erroDescricao = erroDeDescricao(manualDescricao, [atividadeEscolhida?.descricaoAtividade, atividadeEscolhida?.itemDescricao]);
+    const erroDescricao = erroDeDescricao(
+      manualDescricao,
+      [atividadeEscolhida?.descricaoAtividade, atividadeEscolhida?.itemDescricao],
+      atividadeEscolhida?.interna
+    );
     if (erroDescricao) {
       setErroManual(erroDescricao);
       return;
@@ -1963,7 +1972,7 @@ export function MeusApontamentos() {
             }`}
           >
             {s.semDescricao && <SeloSemDescricao />}
-            {descricoes[s.id] ?? s.observacao ?? "+ Adicionar descrição"}
+            {descricoes[s.id] ?? s.observacao ?? (s.interna ? "Usa a descrição da atividade" : "+ Adicionar descrição")}
           </button>
         </td>
         {/* Previsão de "vai dar erro ao confirmar" — mesmo indicador visual do Cronograma
@@ -2076,11 +2085,11 @@ export function MeusApontamentos() {
             onClick={() => setEditandoDescricaoId(s.id)}
             title={(descricoes[s.id] ?? s.observacao) || undefined}
             className={`block w-full truncate text-left text-[12.5px] hover:underline ${
-              descricoes[s.id] ?? s.observacao ? "text-foreground" : "font-medium text-warning"
+              descricoes[s.id] ?? s.observacao ? "text-foreground" : s.interna ? "text-muted" : "font-medium text-warning"
             }`}
           >
             {s.semDescricao && <SeloSemDescricao />}
-            {descricoes[s.id] ?? s.observacao ?? "Sem descrição — clique para preencher"}
+            {descricoes[s.id] ?? s.observacao ?? (s.interna ? "Usa a descrição da atividade" : "Sem descrição — clique para preencher")}
           </button>
         </td>
         <td className="py-1.5 pr-3 text-center">
@@ -2569,6 +2578,7 @@ export function MeusApontamentos() {
               titulo={`Proposta ${sessao.codpro}${!sessao.souDono && sessao.consultorNome ? ` · ${sessao.consultorNome}` : ""}`}
               descricaoAtividade={sessao.descricaoAtividade}
               itemDescricao={sessao.itemDescricao}
+              interna={sessao.interna === true}
               placeholder={sessao.souDono ? undefined : "Descreva o que o consultor realizou..."}
               valorInicial={descricoes[sessao.id] ?? sessao.observacao ?? ""}
               onSalvar={(texto) => salvarDescricaoSessaoPendente(sessao.id, texto)}
@@ -2588,6 +2598,7 @@ export function MeusApontamentos() {
           }`}
           descricaoAtividade={editandoObservacao.item.descricaoAtividade}
           itemDescricao={editandoObservacao.item.itemDescricao}
+          interna={editandoObservacao.item.interna}
           // `editavel` é só do dono; sem ele, quem escreve é o gestor ou o admin.
           placeholder={editandoObservacao.item.editavel ? undefined : "Descreva o que o consultor realizou..."}
           valorInicial={editandoObservacao.item.desati ?? ""}
@@ -2617,6 +2628,7 @@ export function MeusApontamentos() {
             descricao: mantendoSessao.item.desati ?? "",
           }}
           descricaoAtividade={mantendoSessao.item.descricaoAtividade}
+          interna={mantendoSessao.item.interna}
           itemDescricao={mantendoSessao.item.itemDescricao}
           somenteLeitura={!mantendoSessao.item.podeManterSessao}
           motivoSomenteLeitura={mantendoSessao.item.motivoBloqueioManutencao}
@@ -3038,6 +3050,7 @@ export function MeusApontamentos() {
                   onChange={setManualDescricao}
                   descricaoAtividade={atividades.find((a) => a.id === Number(manualAtividadeId))?.descricaoAtividade}
                   itemDescricao={atividades.find((a) => a.id === Number(manualAtividadeId))?.itemDescricao}
+                  interna={atividades.find((a) => a.id === Number(manualAtividadeId))?.interna}
                 />
               </div>
             </div>

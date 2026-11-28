@@ -919,6 +919,7 @@ function ListaApontamentos({
                   onChange={setDescricao}
                   descricaoAtividade={s.descricaoAtividade}
                   itemDescricao={s.itemDescricao}
+                  interna={s.interna}
                 />
                 <input
                   value={observacao}
@@ -936,12 +937,12 @@ function ListaApontamentos({
                   <button
                     onClick={() => decidir(s, true)}
                     disabled={
-                      enviando || s.bloqueadoApontamentoEfetivo || erroDeDescricao(descricao, [s.descricaoAtividade, s.itemDescricao]) != null
+                      enviando || s.bloqueadoApontamentoEfetivo || erroDeDescricao(descricao, [s.descricaoAtividade, s.itemDescricao], s.interna) != null
                     }
                     title={
                       s.bloqueadoApontamentoEfetivo
                         ? "Apontamento bloqueado nesta atividade/proposta pelo gestor."
-                        : (erroDeDescricao(descricao, [s.descricaoAtividade, s.itemDescricao]) ?? undefined)
+                        : (erroDeDescricao(descricao, [s.descricaoAtividade, s.itemDescricao], s.interna) ?? undefined)
                     }
                     className={classeBotao.primario}
                   >
@@ -956,7 +957,7 @@ function ListaApontamentos({
                   setData(paraInputData(s.inicioSolicitado));
                   setHoraInicio(paraInputHora(s.inicioSolicitado));
                   setHoraFim(paraInputHora(s.fimSolicitado));
-                  setDescricao(textoInicialDaDescricao(s.descricao, [s.descricaoAtividade, s.itemDescricao]));
+                  setDescricao(textoInicialDaDescricao(s.descricao, [s.descricaoAtividade, s.itemDescricao], s.interna));
                   setObservacao("");
                 }}
                 className={`mt-2 ${classeBotao.neutro}`}
