@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chaveDeComparacao, erroDeDescricao, podeDescreverApontamento, repeteDescricaoDaAtividade, respostaDescricaoPendente, textoDaDescricao } from "./descricaoApontamento";
+import { chaveDeComparacao, descricaoEfetiva, descricaoHerdada, erroDaDescricao, erroDeDescricao, podeDescreverApontamento, repeteDescricaoDaAtividade, respostaDescricaoPendente, textoDaDescricao } from "./descricaoApontamento";
 
 const ATIVIDADE = "Apoio para consultoria HCM: parametrização de folha";
 const BOA = "Ajustei a regra de cálculo de hora extra noturna do cliente";
@@ -60,4 +60,27 @@ test("quem escreve a descrição: dono, admin e gestor (do item, da RAT ou do ti
   assert.equal(podeDescreverApontamento("consultor", contexto(20, [9]), alvo, new Set([20])), false, "gestor de outro departamento");
   assert.equal(podeDescreverApontamento("consultor", contexto(null), alvo, new Set()), false, "usuário sem cadastro de consultor");
   assert.equal(podeDescreverApontamento("consultor", contexto(20, [8]), { codfor: 10, depexes: [] }, new Set([20])), false, "sem departamento conhecido");
+});
+
+test("proposta interna: herda a descrição da atividade e a regra obrigatória não vale", () => {
+  const interna = { descricaoAtividade: ATIVIDADE, itemDescricao: ATIVIDADE, todas: [ATIVIDADE], interna: true };
+  const deCliente = { ...interna, interna: false };
+
+  for (const t of ["", "   ", null, "ok", ATIVIDADE]) assert.equal(erroDaDescricao(t, interna), null, `interna aceita ${JSON.stringify(t)}`);
+  assert.match(erroDaDescricao("a".repeat(1001), interna)!, /no máximo/);
+  assert.equal(descricaoEfetiva("   ", interna), ATIVIDADE);
+  assert.equal(descricaoEfetiva(" reunião interna ", interna), "reunião interna");
+  assert.equal(descricaoHerdada({ ...interna, descricaoAtividade: "x".repeat(1833) })!.length, 1000, "corta no tamanho da coluna");
+
+  // Sem descrição nenhuma pra herdar, continua pedindo o texto.
+  const semNada = { descricaoAtividade: null, itemDescricao: null, todas: [], interna: true };
+  assert.match(erroDaDescricao("", semNada)!, /obrigatória/);
+  assert.equal(erroDaDescricao("ok", semNada), null);
+
+  // Em proposta de cliente nada muda: não herda e a regra continua.
+  assert.equal(descricaoHerdada(deCliente), null);
+  assert.equal(descricaoEfetiva("", deCliente), "");
+  assert.match(erroDaDescricao("", deCliente)!, /obrigatória/);
+  assert.match(erroDaDescricao(ATIVIDADE, deCliente)!, /não pode repetir/);
+  assert.match(erroDaDescricao("ok", deCliente)!, /pelo menos 30/);
 });

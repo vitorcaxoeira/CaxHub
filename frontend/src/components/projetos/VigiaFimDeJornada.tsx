@@ -28,9 +28,10 @@ interface SessaoVigiada {
   /** A sessão nasceu fora do expediente — muda o texto: nada "terminou", ela começou fora. */
   iniciouForaDoExpediente: boolean;
   opcoesProrrogacao: number[];
-  /** Só informação no "O que foi feito?"; o campo abre com a nota salva, ou vazio. */
+  /** No "O que foi feito?": o campo abre com a nota salva, ou vazio (proposta interna: com a descrição da atividade). */
   descricaoAtividade: string | null;
   itemDescricao: string | null;
+  interna: boolean;
   nota: string | null;
 }
 
@@ -244,7 +245,7 @@ export function VigiaFimDeJornada() {
 
   if (!sessao || !perguntando) return null;
 
-  const descricaoValida = erroDeDescricao(observacao, [sessao.descricaoAtividade, sessao.itemDescricao]) == null;
+  const descricaoValida = erroDeDescricao(observacao, [sessao.descricaoAtividade, sessao.itemDescricao], sessao.interna) == null;
 
   // Passo 2 — descrever o que foi feito antes de encerrar, igual ao Parar normal.
   if (descrevendo) {
@@ -269,6 +270,7 @@ export function VigiaFimDeJornada() {
             onChange={setObservacao}
             descricaoAtividade={sessao.descricaoAtividade}
             itemDescricao={sessao.itemDescricao}
+            interna={sessao.interna}
           />
           <div className="flex items-center justify-end gap-2">
             <button
@@ -333,8 +335,8 @@ export function VigiaFimDeJornada() {
         <div className="flex items-center justify-end gap-2">
           <button
             onClick={() => {
-              // Abre com a nota que o consultor já salvou (ou vazio), igual ao modal de parar no quadro.
-              setObservacao(textoInicialDaDescricao(sessao.nota, [sessao.descricaoAtividade, sessao.itemDescricao]));
+              // Abre igual ao modal de parar no quadro (nota salva; interna sem nota, a descrição da atividade).
+              setObservacao(textoInicialDaDescricao(sessao.nota, [sessao.descricaoAtividade, sessao.itemDescricao], sessao.interna));
               setDescrevendo(true);
             }}
             disabled={enviando}

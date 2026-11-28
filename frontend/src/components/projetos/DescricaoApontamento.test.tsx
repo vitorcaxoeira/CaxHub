@@ -70,3 +70,31 @@ describe("bloqueio por apontamento sem descrição", () => {
     expect(outro).not.toContain("Ajustar em Meus Apontamentos");
   });
 });
+
+describe("proposta interna", () => {
+  const interno = (nota: string | null) =>
+    renderToStaticMarkup(
+      <ModalObservacaoAtividade titulo="Proposta 1" descricaoAtividade={ATIVIDADE} interna nota={nota} onConfirmar={() => {}} onCancelar={() => {}} />
+    );
+
+  it("a regra obrigatória não vale", () => {
+    for (const t of ["", "ok", ATIVIDADE]) expect(erroDeDescricao(t, [ATIVIDADE], true)).toBeNull();
+    expect(erroDeDescricao("a".repeat(1001), [ATIVIDADE], true)).toMatch("no máximo");
+    expect(erroDeDescricao("", [null], true)).toMatch("obrigatória");
+  });
+
+  it("o campo abre com a nota salva ou, sem ela, com a descrição da atividade (cortada em 1000)", () => {
+    expect(textoInicialDaDescricao(null, [ATIVIDADE], true)).toBe(ATIVIDADE);
+    expect(textoInicialDaDescricao("reunião", [ATIVIDADE], true)).toBe("reunião");
+    expect(textoInicialDaDescricao(null, [null, "x".repeat(1833)], true)).toHaveLength(1000);
+    expect(conteudoDoCampo(interno(null))).toBe(ATIVIDADE);
+  });
+
+  it("Salvar já vem ligado, sem o aviso de mínimo nem o contador", () => {
+    const html = interno(null);
+    expect(botao(html, "Salvar")).not.toContain('disabled=""');
+    expect(html).toContain("Proposta interna");
+    expect(html).not.toContain("no mínimo 30");
+    expect(html).not.toMatch(/\d+<!-- -->\/<!-- -->\d+/);
+  });
+});

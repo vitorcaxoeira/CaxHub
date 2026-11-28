@@ -20,16 +20,37 @@ export function repeteDescricaoDaAtividade(texto: string, referencias: (string |
   return referencias.some((r) => !!r && (chave === chaveDeComparacao(r) || chave === chaveDeComparacao(r.trim().slice(0, MAX_DESCRICAO))));
 }
 
+/** Proposta INTERNA: a descrição que a atividade empresta. A primeira referência é a descrição da atividade (ver os chamadores). */
+export function descricaoHerdada(referencias: (string | null | undefined)[]): string {
+  return (referencias.find((r) => r?.trim()) ?? "").trim().slice(0, MAX_DESCRICAO);
+}
+
 /**
- * Com que o campo abre: o texto que o consultor já salvou. Se ele só repete a descrição da atividade (preenchimento automático antigo),
+ * Com que o campo abre. Em proposta INTERNA, como era antes da descrição obrigatória: o texto salvo ou a descrição da atividade.
+ * Em proposta de cliente, o texto que o consultor já salvou. Se ele só repete a descrição da atividade (preenchimento automático antigo),
  * abre vazio — a descrição da atividade nunca é carregada no campo.
  */
-export function textoInicialDaDescricao(texto: string | null | undefined, referencias: (string | null | undefined)[]): string {
+export function textoInicialDaDescricao(
+  texto: string | null | undefined,
+  referencias: (string | null | undefined)[],
+  interna = false
+): string {
+  if (interna) return texto?.trim() ? texto : descricaoHerdada(referencias);
   return texto && !repeteDescricaoDaAtividade(texto, referencias) ? texto : "";
 }
 
 /** Por que a descrição não serve; `null` quando serve. `referencias` = nome da atividade no cronograma e descrição do item. */
-export function erroDeDescricao(texto: string | null | undefined, referencias: (string | null | undefined)[] = []): string | null {
+export function erroDeDescricao(
+  texto: string | null | undefined,
+  referencias: (string | null | undefined)[] = [],
+  interna = false
+): string | null {
+  // Interna: a regra obrigatória não vale. Em branco usa a descrição da atividade; só sobra o tamanho máximo.
+  if (interna) {
+    const efetiva = (texto ?? "").trim() || descricaoHerdada(referencias);
+    if (!efetiva) return "Descreva o que foi realizado: a descrição é obrigatória.";
+    return efetiva.length > MAX_DESCRICAO ? `A descrição pode ter no máximo ${MAX_DESCRICAO} caracteres.` : null;
+  }
   const contado = textoDaDescricao(texto);
   if (!contado) return "Descreva o que foi realizado: a descrição é obrigatória.";
   if (repeteDescricaoDaAtividade(contado, referencias)) return "A descrição não pode repetir a descrição da atividade: conte o que você fez.";

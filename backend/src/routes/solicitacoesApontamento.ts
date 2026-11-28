@@ -14,7 +14,7 @@ import { criarSessaoManualPendente, recusarSeEstourarTeto } from "./apontamentos
 import { depexeLabel, modproLabel } from "../domain/propostasDominio";
 import { recusarSeForaDaJanela } from "../domain/janelaRetroativa";
 import { configBloqueioPropostasEmLote, resolverBloqueioApontamento, resolverBloqueioComConfig } from "../domain/bloqueioApontamento";
-import { carregarReferencias, erroDeDescricao, referenciasDaAtividade, ReferenciasDaAtividade } from "../domain/descricaoApontamento";
+import { carregarReferencias, descricaoEfetiva, erroDaDescricao, referenciasDaAtividade, ReferenciasDaAtividade } from "../domain/descricaoApontamento";
 
 // Apontamento avulso: o consultor trabalhou e esqueceu de mover o card, então pede o tempo
 // aqui, dizendo o motivo e o que foi feito. O gestor aprova (podendo corrigir horário e
@@ -118,7 +118,7 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
     const inicio = lerData(req.body?.inicio);
     const fim = lerData(req.body?.fim);
     const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim() : "";
-    const descricao = typeof req.body?.descricao === "string" ? req.body.descricao.trim() : "";
+    const descricaoInformada = typeof req.body?.descricao === "string" ? req.body.descricao.trim() : "";
 
     if (!Number.isFinite(atividadeId) || !inicio || !fim) {
       res.status(400).json({ error: "atividadeId, inicio e fim são obrigatórios" });
@@ -155,7 +155,9 @@ solicitacoesApontamentoRouter.post("/", async (req: AuthenticatedRequest, res) =
 
     // A descrição vira a observação da sessão e depois RatItem.desati — mesma regra de
     // qualquer apontamento (ver domain/descricaoApontamento.ts).
-    const erroDescricao = erroDeDescricao(descricao, (await referenciasDaAtividade(atividade)).todas);
+    const referenciasDoPedido = await referenciasDaAtividade(atividade);
+    const descricao = descricaoEfetiva(descricaoInformada, referenciasDoPedido);
+    const erroDescricao = erroDaDescricao(descricao, referenciasDoPedido);
     if (erroDescricao) {
       res.status(400).json({ codigo: "descricao_invalida", error: erroDescricao });
       return;
@@ -292,6 +294,7 @@ function serializar(
     descricao: s.descricao,
     // Só informação (e referência do aviso de texto repetido) quando o gestor ajusta a descrição.
     descricaoAtividade: referencias.descricaoAtividade,
+    interna: referencias.interna,
     itemDescricao: referencias.itemDescricao,
     inicioAprovado: s.inicioAprovado,
     fimAprovado: s.fimAprovado,
@@ -488,15 +491,18 @@ async function decidirUma(id: number, opts: OpcoesDecisao, req: AuthenticatedReq
   // POST /decidir-lote usa sempre, já que não tem UI pra editar por item.
   const inicio = opts.inicio !== undefined ? lerData(opts.inicio) : solicitacao.inicioSolicitado;
   const fim = opts.fim !== undefined ? lerData(opts.fim) : solicitacao.fimSolicitado;
-  const descricao =
-    typeof opts.descricao === "string" && opts.descricao.trim() !== "" ? opts.descricao.trim() : solicitacao.descricao;
+  const referenciasDaDecisao = await referenciasDaAtividade(atividade);
+  const descricao = descricaoEfetiva(
+    typeof opts.descricao === "string" && opts.descricao.trim() !== "" ? opts.descricao : solicitacao.descricao,
+    referenciasDaDecisao
+  );
 
   if (aprovar) {
     if (!inicio || !fim) return { status: 400, body: { error: "inicio e fim inválidos" } };
     if (fim.getTime() <= inicio.getTime()) return { status: 400, body: { error: "O fim precisa ser depois do início" } };
     // A descrição final (a pedida ou a que o gestor ajustou) segue a mesma regra. Pedido antigo
     // com texto curto precisa ser ajustado na aprovação individual.
-    const erroDescricao = erroDeDescricao(descricao, (await referenciasDaAtividade(atividade)).todas);
+    const erroDescricao = erroDaDescricao(descricao, referenciasDaDecisao);
     if (erroDescricao) return { status: 400, body: { codigo: "descricao_invalida", error: erroDescricao } };
     // Revalidado com os valores FINAIS: sem isto o gestor aprovaria pra dentro de um
     // conflito que o consultor não conseguiu enviar.

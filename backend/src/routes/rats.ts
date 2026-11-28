@@ -774,7 +774,7 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           })
         : [];
     const referencias = await carregarReferencias(atividadesDosItens);
-    const descricaoPorAtividadeId = new Map(atividadesDosItens.map((a) => [a.id, referencias(a).descricaoAtividade]));
+    const referenciasPorAtividadeId = new Map(atividadesDosItens.map((a) => [a.id, referencias(a)]));
 
     // Alteração do admin (tipEve A) ainda não equalizada no Senior, por item: "enviando" ou "falha".
     const edicoes =
@@ -803,7 +803,9 @@ ratsRouter.get("/:id/itens", async (req: AuthenticatedRequest, res) => {
           atividadeId: item.sessoes[0]?.atividadeId ?? null,
           codser: propostaItem?.codser ?? null,
           itemDescricao: propostaItem?.despro ?? null,
-          descricaoAtividade: descricaoPorAtividadeId.get(item.sessoes[0]?.atividadeId ?? 0) ?? propostaItem?.despro ?? null,
+          descricaoAtividade:
+            referenciasPorAtividadeId.get(item.sessoes[0]?.atividadeId ?? 0)?.descricaoAtividade ?? propostaItem?.despro ?? null,
+          interna: referenciasPorAtividadeId.get(item.sessoes[0]?.atividadeId ?? 0)?.interna ?? false,
           // Sequência do item na proposta — exibida como prefixo da descrição na tela.
           seqite: item.seqite,
           datati: item.datati,

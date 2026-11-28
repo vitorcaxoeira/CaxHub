@@ -26,7 +26,7 @@ import { itemFaturavel } from "../domain/eficienciaPropostas";
 import { CODCLI_EMPRESA_PROPRIA, forfatLabel } from "../domain/propostasDominio";
 import { podeVerValoresDaProposta } from "../domain/valoresDaProposta";
 import { confirmouExcluirAjuste, decidirExclusaoComAjuste } from "../domain/exclusaoApontamento";
-import { carregarReferencias, erroDeDescricao, podeDescreverApontamento, referenciasDaAtividade } from "../domain/descricaoApontamento";
+import { carregarReferencias, descricaoEfetiva, erroDaDescricao, podeDescreverApontamento, referenciasDaAtividade } from "../domain/descricaoApontamento";
 
 // Tela "Meus Apontamentos": o consultor revisa as sessões de execução que o sistema já
 // rastreou (ver AtividadeSessaoExecucao / PATCH /atividades/:id/mover) e confirma —
@@ -399,9 +399,10 @@ async function confirmarSessao(
   }
 
   // Descrição obrigatória (27/11/2026): vale a que chegou agora ou, na falta, a já salva na
-  // sessão — nunca a da atividade. Conferida antes de qualquer RAT ser criada.
-  const descricaoFinal = ajustes.descricao?.trim() || sessao.observacao?.trim() || "";
-  const erroDescricao = erroDeDescricao(descricaoFinal, (await referenciasDaAtividade(atividade)).todas);
+  // sessão. A da atividade só entra em proposta interna. Conferida antes de qualquer RAT.
+  const referenciasDaSessao = await referenciasDaAtividade(atividade);
+  const descricaoFinal = descricaoEfetiva(ajustes.descricao?.trim() || sessao.observacao, referenciasDaSessao);
+  const erroDescricao = erroDaDescricao(descricaoFinal, referenciasDaSessao);
   if (erroDescricao) return { status: 400, body: { codigo: "descricao_invalida", error: erroDescricao } };
 
   // A sessão já existe e já entra em `realizado` como "não confirmada", então desconta a
@@ -630,6 +631,7 @@ apontamentosRouter.get("/minhas-atividades", async (req: AuthenticatedRequest, r
             seqite: a.seqite,
             itemDescricao: item.despro ?? null,
             descricaoAtividade: referencias(a).descricaoAtividade,
+            interna: referencias(a).interna,
             cliente: proposta ? `${proposta.cliente.codcli} - ${proposta.cliente.nomcli}` : null,
           };
         })
@@ -853,7 +855,7 @@ apontamentosRouter.get("/sessoes-pendentes", async (req: AuthenticatedRequest, r
           origem: s.origem,
           observacao: s.observacao,
           descricaoAtividade: referencias(s.atividade).descricaoAtividade,
-          semDescricao: erroDeDescricao(s.observacao, referencias(s.atividade).todas) != null,
+          semDescricao: erroDaDescricao(s.observacao, referencias(s.atividade)) != null,
           codfor: s.atividade.codfor,
           consultorNome: mostrarConsultor ? (consultor?.nomcom ?? consultor?.nomfor ?? `Fornecedor ${s.atividade.codfor}`) : null,
           integracaoErpLabel: integracaoErpLabel(statusErpAlocacao),
@@ -1365,7 +1367,7 @@ apontamentosRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
           tx
         );
       });
-    const erroDescricao = erroDeDescricao(desati, (await referenciasDaAtividade(sessao.atividade)).todas);
+    const erroDescricao = erroDaDescricao(desati, await referenciasDaAtividade(sessao.atividade));
     if (erroDescricao) {
       res.status(400).json({ codigo: "descricao_invalida", error: erroDescricao });
       return;
@@ -1432,7 +1434,7 @@ apontamentosRouter.patch("/:id/sessao", requireRole("admin"), async (req: Authen
 
     const inicio = new Date(String(req.body?.inicio ?? ""));
     const fim = new Date(String(req.body?.fim ?? ""));
-    const descricao = typeof req.body?.descricao === "string" ? req.body.descricao.trim() : "";
+    const descricaoInformada = typeof req.body?.descricao === "string" ? req.body.descricao.trim() : "";
     if (Number.isNaN(inicio.getTime()) || Number.isNaN(fim.getTime())) {
       res.status(400).json({ error: "Informe a data, a hora inicial e a hora final." });
       return;
@@ -1478,7 +1480,9 @@ apontamentosRouter.patch("/:id/sessao", requireRole("admin"), async (req: Authen
     }
     const ratItem = sessao.ratItem!;
 
-    const erroDescricao = erroDeDescricao(descricao, (await referenciasDaAtividade(sessao.atividade)).todas);
+    const referenciasDaManutencao = await referenciasDaAtividade(sessao.atividade);
+    const descricao = descricaoEfetiva(descricaoInformada, referenciasDaManutencao);
+    const erroDescricao = erroDaDescricao(descricao, referenciasDaManutencao);
     if (erroDescricao) {
       res.status(400).json({ codigo: "descricao_invalida", error: erroDescricao });
       return;

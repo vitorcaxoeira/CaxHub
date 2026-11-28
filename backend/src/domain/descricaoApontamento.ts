@@ -1,5 +1,6 @@
 import { prisma } from "../db/prisma";
 import { ContextoConsultor, podeExecutarAcao } from "./contextoProjeto";
+import { CODCLI_EMPRESA_PROPRIA } from "./propostasDominio";
 
 // Descrição de apontamento (27/11/2026, pedido do gestor Alessandro trazido pelo Vitor): todo apontamento tem uma descrição escrita pelo PRÓPRIO
 // consultor, com contexto. Regra (decisão do Vitor): pelo menos 30 caracteres e DIFERENTE da descrição da atividade, que passa a ser mostrada
@@ -8,6 +9,11 @@ import { ContextoConsultor, podeExecutarAcao } from "./contextoProjeto";
 
 // Quem escreve (mesma data, pedido do Vitor): o consultor e, em Meus Apontamentos, também o gestor e o admin, com a mesma regra de texto. Quando
 // não é o próprio consultor, fica registrado no histórico da atividade e na auditoria quem escreveu e o texto anterior.
+//
+// Propostas INTERNAS (mesma data, pedido do Vitor): a regra acima NÃO vale. Interna = o cliente da proposta é a própria empresa, a mesma
+// régua do filtro "Propostas" de Meus Apontamentos, da Eficiência e da Gestão de Propostas. Nelas a descrição da atividade volta a ser
+// herdada: texto vazio grava a da atividade (inclusive nas paradas automáticas), qualquer texto vale e pendência interna não bloqueia
+// o início de outra atividade. Proposta sem cliente segue a regra de cliente.
 
 export const MIN_DESCRICAO = 30;
 /** Tamanho de AtividadeSessaoExecucao.observacao e de RatItem.desati. */
@@ -73,20 +79,42 @@ export interface ReferenciasDaAtividade {
   itemDescricao: string | null;
   /** As duas, para a comparação: a descrição do apontamento não pode repetir nenhuma. */
   todas: string[];
+  /** Proposta interna: a regra da descrição obrigatória não vale e a da atividade é herdada. */
+  interna: boolean;
+}
+
+/** A descrição que a atividade empresta a um apontamento sem texto. Só existe em proposta interna; em proposta de cliente é sempre `null`. */
+export function descricaoHerdada(referencias: ReferenciasDaAtividade): string | null {
+  return referencias.interna ? (referencias.descricaoAtividade?.slice(0, MAX_DESCRICAO) ?? null) : null;
+}
+
+/** O texto que vale para gravar: o informado ou, sem ele, o herdado (interna). Vazio quando não há nenhum dos dois. */
+export function descricaoEfetiva(texto: string | null | undefined, referencias: ReferenciasDaAtividade): string {
+  return texto?.trim() || descricaoHerdada(referencias) || "";
+}
+
+/** Por que a descrição não serve PARA ESTA ATIVIDADE; `null` quando serve. É a conferência que as rotas usam. */
+export function erroDaDescricao(texto: string | null | undefined, referencias: ReferenciasDaAtividade): string | null {
+  if (!referencias.interna) return erroDeDescricao(texto, referencias.todas);
+  const efetiva = descricaoEfetiva(texto, referencias);
+  if (!efetiva) return "Descreva o que foi realizado: a descrição é obrigatória.";
+  return efetiva.length > MAX_DESCRICAO ? `A descrição pode ter no máximo ${MAX_DESCRICAO} caracteres.` : null;
 }
 
 const chaveItem = (a: { codemp: number; codpro: number; seqite: number }) => `${a.codemp}-${a.codpro}-${a.seqite}`;
 
-function montarReferencias(nomeDoNo: string | null | undefined, despro: string | null | undefined): ReferenciasDaAtividade {
+const chaveProposta = (a: { codemp: number; codpro: number }) => `${a.codemp}-${a.codpro}`;
+
+function montarReferencias(nomeDoNo: string | null | undefined, despro: string | null | undefined, interna: boolean): ReferenciasDaAtividade {
   const no = nomeDoNo?.trim() || null;
   const item = despro?.trim() || null;
-  return { descricaoAtividade: no ?? item, itemDescricao: item, todas: [no, item].filter((x): x is string => !!x) };
+  return { descricaoAtividade: no ?? item, itemDescricao: item, todas: [no, item].filter((x): x is string => !!x), interna };
 }
 
 /** Referências de várias atividades de uma vez (uma consulta por tabela). Devolve uma função de busca por atividade. */
 export async function carregarReferencias(atividades: AtividadeComDescricao[]): Promise<(a: AtividadeComDescricao) => ReferenciasDaAtividade> {
   const nos = [...new Set(atividades.map((a) => a.estruturaAtividadeId).filter((x): x is number => x != null))];
-  const [estruturas, itens] = await Promise.all([
+  const [estruturas, itens, propostas] = await Promise.all([
     nos.length ? prisma.estruturaAtividade.findMany({ where: { id: { in: nos } }, select: { id: true, nome: true } }) : [],
     atividades.length
       ? prisma.propostaItem.findMany({
@@ -94,10 +122,22 @@ export async function carregarReferencias(atividades: AtividadeComDescricao[]): 
           select: { codemp: true, codpro: true, seqite: true, despro: true },
         })
       : [],
+    atividades.length
+      ? prisma.proposta.findMany({
+          where: { codemp: { in: [...new Set(atividades.map((a) => a.codemp))] }, codpro: { in: [...new Set(atividades.map((a) => a.codpro))] } },
+          select: { codemp: true, codpro: true, codcli: true },
+        })
+      : [],
   ]);
+  const internas = new Set(propostas.filter((p) => p.codcli === CODCLI_EMPRESA_PROPRIA).map(chaveProposta));
   const nomePorNo = new Map(estruturas.map((e) => [e.id, e.nome]));
   const desproPorItem = new Map(itens.map((i) => [chaveItem(i), i.despro]));
-  return (a) => montarReferencias(a.estruturaAtividadeId != null ? nomePorNo.get(a.estruturaAtividadeId) : null, desproPorItem.get(chaveItem(a)));
+  return (a) =>
+    montarReferencias(
+      a.estruturaAtividadeId != null ? nomePorNo.get(a.estruturaAtividadeId) : null,
+      desproPorItem.get(chaveItem(a)),
+      internas.has(chaveProposta(a))
+    );
 }
 
 export async function referenciasDaAtividade(atividade: AtividadeComDescricao): Promise<ReferenciasDaAtividade> {
@@ -107,7 +147,7 @@ export async function referenciasDaAtividade(atividade: AtividadeComDescricao): 
 /**
  * Apontamentos do consultor que ainda precisam de descrição: sessões PENDENTES (encerradas, não excluídas, ainda não confirmadas em RAT) de
  * atividades ATIVAS dele, com a descrição vazia, curta ou igual à da atividade. As antigas preenchidas automaticamente contam. Enquanto houver
- * alguma, ele não inicia outra atividade.
+ * alguma, ele não inicia outra atividade. Sessão de proposta interna não conta (a confirmação herda a descrição da atividade).
  */
 export async function sessoesSemDescricao(codfor: number): Promise<{ id: number; atividadeId: number; codpro: number }[]> {
   const sessoes = await prisma.atividadeSessaoExecucao.findMany({
@@ -118,7 +158,7 @@ export async function sessoesSemDescricao(codfor: number): Promise<{ id: number;
   if (sessoes.length === 0) return [];
   const referencias = await carregarReferencias(sessoes.map((s) => s.atividade));
   return sessoes
-    .filter((s) => erroDeDescricao(s.observacao, referencias(s.atividade).todas) != null)
+    .filter((s) => erroDaDescricao(s.observacao, referencias(s.atividade)) != null)
     .map((s) => ({ id: s.id, atividadeId: s.atividadeId, codpro: s.atividade.codpro }));
 }
 
@@ -147,6 +187,7 @@ const recusarDescricao = (erro: string) => ({ recusa: { status: 400, corpo: { co
  * O que Iniciar, Parar e arrastar o card exigem de descrição antes de acontecer. Quem NÃO é o dono (gestor, admin) movimenta sem
  * descrever nada e o texto que mandar é ignorado: a sessão fica com a nota que o consultor já tinha salvo, ou vazia, e é ele quem descreve
  * (decisão do Vitor, 27/11/2026). O bloqueio por apontamento pendente vale para o consultor da atividade, seja quem for que inicie.
+ * Em proposta interna nada é exigido: nem ao fechar, nem a pergunta sobre a que está em andamento (a sessão herda a descrição).
  */
 export async function avaliarDescricaoDaMovimentacao(pedido: PedidoDeMovimentacao): Promise<DecisaoDeMovimentacao> {
   const { atividade, souDono, abreSessao } = pedido;
@@ -157,7 +198,7 @@ export async function avaliarDescricaoDaMovimentacao(pedido: PedidoDeMovimentaca
   const sessaoAberta = await prisma.atividadeSessaoExecucao.findFirst({ where: { atividadeId: atividade.id, fim: null } });
   if (sessaoAberta && souDono) {
     const digitado = textoDigitado(pedido.observacao);
-    const erro = erroDeDescricao(digitado || sessaoAberta.observacao, (await referenciasDaAtividade(atividade)).todas);
+    const erro = erroDaDescricao(digitado || sessaoAberta.observacao, await referenciasDaAtividade(atividade));
     if (erro) return recusarDescricao(erro);
     observacaoFechamento = digitado || null;
   }
@@ -175,8 +216,9 @@ export async function avaliarDescricaoDaMovimentacao(pedido: PedidoDeMovimentaca
       include: { atividade: true },
       orderBy: { inicio: "desc" },
     });
-    if (outra) {
-      const referencias = await referenciasDaAtividade(outra.atividade);
+    const referencias = outra ? await referenciasDaAtividade(outra.atividade) : null;
+    // Interna em andamento é pausada sem pergunta.
+    if (outra && referencias && !referencias.interna) {
       const digitado = textoDigitado(pedido.observacaoEmAndamento);
       // O texto só vale para a sessão que o consultor viu: se a que está em andamento mudou, pergunta de novo.
       if (!digitado || Number(pedido.sessaoEmAndamentoId) !== outra.id) {
@@ -198,7 +240,7 @@ export async function avaliarDescricaoDaMovimentacao(pedido: PedidoDeMovimentaca
           },
         };
       }
-      const erro = erroDeDescricao(digitado, referencias.todas);
+      const erro = erroDaDescricao(digitado, referencias);
       if (erro) return recusarDescricao(erro);
       observacaoDaPausada = { sessaoId: outra.id, texto: digitado };
     }

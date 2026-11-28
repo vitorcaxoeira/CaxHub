@@ -61,6 +61,7 @@ interface PedidoObservacao {
   // consultor já salvou, ou vazio.
   descricaoAtividade: string | null;
   itemDescricao: string | null;
+  interna: boolean;
   nota: string | null;
 }
 
@@ -575,6 +576,7 @@ export function Atividades() {
       titulo: `Proposta ${alvo?.codpro ?? atividadeId}`,
       descricaoAtividade: alvo?.descricaoAtividade ?? null,
       itemDescricao: alvo?.itemDescricao ?? null,
+      interna: alvo?.interna ?? false,
       nota: alvo?.notaEmAndamento ?? null,
     };
   }
@@ -880,6 +882,7 @@ export function Atividades() {
           titulo={pedidoObservacao.titulo}
           descricaoAtividade={pedidoObservacao.descricaoAtividade}
           itemDescricao={pedidoObservacao.itemDescricao}
+          interna={pedidoObservacao.interna}
           nota={pedidoObservacao.nota}
           onConfirmar={resolverPedidoObservacao}
           // Cancelar não para, não move e não salva nada.

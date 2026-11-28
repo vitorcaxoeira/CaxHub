@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Modal } from "../ui/Modal";
-import { erroDeDescricao, textoInicialDaDescricao } from "../../lib/descricao-apontamento";
+import { descricaoHerdada, erroDeDescricao, textoInicialDaDescricao } from "../../lib/descricao-apontamento";
 import { CampoDescricaoApontamento } from "./CampoDescricaoApontamento";
 
 interface ModalEditarDescricaoProps {
@@ -15,6 +15,8 @@ interface ModalEditarDescricaoProps {
   /** Só informação, num bloco acima do campo, e referência para recusar texto repetido. */
   descricaoAtividade?: string | null;
   itemDescricao?: string | null;
+  /** Proposta interna: o campo abre com a descrição da atividade e a regra obrigatória não vale. */
+  interna?: boolean;
   // Título da janela no modo só leitura — default "Observação". Mesmo componente reaproveitado
   // (28/08/2026) pra mostrar o erro completo de "falha no envio", que não é uma observação.
   tituloSomenteLeitura?: string;
@@ -37,12 +39,15 @@ export function ModalEditarDescricao({
   tituloSomenteLeitura = "Observação",
   descricaoAtividade,
   itemDescricao,
+  interna = false,
   placeholder,
 }: ModalEditarDescricaoProps) {
   const [texto, setTexto] = useState(() =>
-    somenteLeitura ? valorInicial : textoInicialDaDescricao(valorInicial, [descricaoAtividade, itemDescricao])
+    somenteLeitura ? valorInicial : textoInicialDaDescricao(valorInicial, [descricaoAtividade, itemDescricao], interna)
   );
-  const valido = erroDeDescricao(texto, [descricaoAtividade, itemDescricao]) == null;
+  const valido = erroDeDescricao(texto, [descricaoAtividade, itemDescricao], interna) == null;
+  // Interna salva em branco: vai a descrição da atividade (o PATCH exige texto).
+  const textoParaSalvar = () => texto.trim() || (interna ? descricaoHerdada([descricaoAtividade, itemDescricao]) : "");
 
   return (
     // fecharPorFora={!somenteLeitura}: no modo de edição de verdade (textarea livre), sair
@@ -73,8 +78,9 @@ export function ModalEditarDescricao({
           onChange={setTexto}
           descricaoAtividade={descricaoAtividade}
           itemDescricao={itemDescricao}
+          interna={interna}
           placeholder={placeholder}
-          onAtalhoSalvar={() => onSalvar(texto.trim())}
+          onAtalhoSalvar={() => onSalvar(textoParaSalvar())}
         />
       )}
       <div className="mt-4 flex justify-end gap-2">
@@ -86,7 +92,7 @@ export function ModalEditarDescricao({
         </button>
         {!somenteLeitura && (
           <button
-            onClick={() => onSalvar(texto.trim())}
+            onClick={() => onSalvar(textoParaSalvar())}
             disabled={!valido}
             className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           >

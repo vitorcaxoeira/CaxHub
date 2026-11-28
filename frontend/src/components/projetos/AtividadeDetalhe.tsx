@@ -55,6 +55,7 @@ export interface SolicitacaoApontamento {
   descricao: string;
   descricaoAtividade: string | null;
   itemDescricao: string | null;
+  interna: boolean;
   inicioAprovado: string | null;
   fimAprovado: string | null;
   descricaoAprovada: string | null;
@@ -266,8 +267,10 @@ export function AtividadeDetalhe({
   const [enviandoApontamento, setEnviandoApontamento] = useState(false);
   const [erroApontamento, setErroApontamento] = useState<string | null>(null);
 
-  // A descrição da atividade (nó do cronograma, senão o item): só informação no pedido.
+  // A descrição da atividade (nó do cronograma, senão o item): no pedido, só informação — em proposta interna, vale se o campo ficar em branco.
   const descricaoDaAtividade = estruturaNome?.trim() || itemDescricao;
+  // Vem do /:id/detalhe, relido em `carregar` (os três pais deste painel não precisam repassar).
+  const [interna, setInterna] = useState(false);
 
   async function enviarApontamento() {
     if (!dataApontamento || !horaInicioApontamento || !horaFimApontamento) {
@@ -287,7 +290,7 @@ export function AtividadeDetalhe({
       setErroApontamento("Informe o motivo — é por que este tempo não foi registrado no quadro.");
       return;
     }
-    const erroDescricao = erroDeDescricao(descricaoApontamento, [descricaoDaAtividade, itemDescricao]);
+    const erroDescricao = erroDeDescricao(descricaoApontamento, [descricaoDaAtividade, itemDescricao], interna);
     if (erroDescricao) {
       setErroApontamento(erroDescricao);
       return;
@@ -402,6 +405,7 @@ export function AtividadeDetalhe({
           itemRealizado: d.data.atividade.itemRealizado,
           horasRealizadas: d.data.atividade.horasRealizadas,
         });
+        setInterna(d.data.atividade.interna === true);
         setErro(null);
       })
       .catch((err) => setErro(err.response?.data?.error ?? "Falha ao carregar"))
@@ -718,6 +722,7 @@ export function AtividadeDetalhe({
                           onChange={setDescricaoApontamento}
                           descricaoAtividade={descricaoDaAtividade}
                           itemDescricao={itemDescricao}
+                          interna={interna}
                         />
                         {erroApontamento && <p className="text-[12px] text-destructive">{erroApontamento}</p>}
                         <div className="flex items-center justify-end gap-2">

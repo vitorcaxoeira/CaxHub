@@ -26,6 +26,7 @@ interface ModalManutencaoSessaoProps {
   registradoNoSenior: boolean;
   /** Só informação, num bloco acima do campo, e referência para recusar texto repetido. */
   descricaoAtividade?: string | null;
+  interna?: boolean;
   itemDescricao?: string | null;
   salvando: boolean;
   erro: string | null;
@@ -52,9 +53,12 @@ export function ModalManutencaoSessao({
   onFechar,
   descricaoAtividade,
   itemDescricao,
+  interna = false,
 }: ModalManutencaoSessaoProps) {
   const [dados, setDados] = useState(() =>
-    somenteLeitura ? inicial : { ...inicial, descricao: textoInicialDaDescricao(inicial.descricao, [descricaoAtividade, itemDescricao]) }
+    somenteLeitura
+      ? inicial
+      : { ...inicial, descricao: textoInicialDaDescricao(inicial.descricao, [descricaoAtividade, itemDescricao], interna) }
   );
   const [erroLocal, setErroLocal] = useState<string | null>(null);
   const atualizar = (parcial: Partial<DadosManutencaoSessao>) => setDados((d) => ({ ...d, ...parcial }));
@@ -68,7 +72,7 @@ export function ModalManutencaoSessao({
       setErroLocal("A hora final precisa ser depois da inicial.");
       return;
     }
-    const erroDescricao = erroDeDescricao(dados.descricao, [descricaoAtividade, itemDescricao]);
+    const erroDescricao = erroDeDescricao(dados.descricao, [descricaoAtividade, itemDescricao], interna);
     if (erroDescricao) {
       setErroLocal(erroDescricao);
       return;
@@ -160,6 +164,7 @@ export function ModalManutencaoSessao({
               onChange={(descricao) => atualizar({ descricao })}
               descricaoAtividade={descricaoAtividade}
               itemDescricao={itemDescricao}
+              interna={interna}
               disabled={salvando}
             />
           )}

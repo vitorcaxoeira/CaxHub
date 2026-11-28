@@ -3,10 +3,12 @@ import { MAX_DESCRICAO, MIN_DESCRICAO, erroDeDescricao, textoDaDescricao } from 
 interface CampoDescricaoApontamentoProps {
   valor: string;
   onChange: (texto: string) => void;
-  /** Descrição da atividade: mostrada só como INFORMAÇÃO, no bloco acima do campo. Nunca preenche o campo. */
+  /** Descrição da atividade: mostrada no bloco acima do campo. Só preenche o campo em proposta interna (quem abre decide o valor inicial). */
   descricaoAtividade?: string | null;
   /** Descrição do item da proposta: não é mostrada, mas o texto também não pode repeti-la. */
   itemDescricao?: string | null;
+  /** Proposta interna: sem mínimo de caracteres, e pode repetir a descrição da atividade. */
+  interna?: boolean;
   rows?: number;
   autoFocus?: boolean;
   disabled?: boolean;
@@ -26,9 +28,10 @@ export function CampoDescricaoApontamento({
   autoFocus,
   disabled,
   onAtalhoSalvar,
-  placeholder = "Descreva com as suas palavras o que você realizou...",
+  interna = false,
+  placeholder,
 }: CampoDescricaoApontamentoProps) {
-  const erro = erroDeDescricao(valor, [descricaoAtividade, itemDescricao]);
+  const erro = erroDeDescricao(valor, [descricaoAtividade, itemDescricao], interna);
   const tamanho = textoDaDescricao(valor).length;
   const vazio = tamanho === 0;
   return (
@@ -50,17 +53,25 @@ export function CampoDescricaoApontamento({
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !erro) onAtalhoSalvar?.();
         }}
         aria-label="Descrição do que foi realizado"
-        placeholder={placeholder}
+        placeholder={
+          placeholder ?? (interna ? "Em branco, vale a descrição da atividade." : "Descreva com as suas palavras o que você realizou...")
+        }
         className="w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
       />
-      <div className="flex items-start justify-between gap-3 text-[11.5px] leading-snug">
-        <p className={vazio || !erro ? "text-muted" : "text-destructive"} aria-live="polite">
-          {vazio ? `Obrigatório: no mínimo ${MIN_DESCRICAO} caracteres, diferente da descrição da atividade.` : (erro ?? "")}
+      {interna ? (
+        <p className={`text-[11.5px] leading-snug ${erro && !vazio ? "text-destructive" : "text-muted"}`} aria-live="polite">
+          {erro && !vazio ? erro : "Proposta interna: pode manter a descrição da atividade ou detalhar. Em branco, vale a da atividade."}
         </p>
-        <span className={`flex-none font-mono tabular-nums ${erro ? "text-muted" : "text-success"}`}>
-          {tamanho}/{tamanho < MIN_DESCRICAO ? MIN_DESCRICAO : MAX_DESCRICAO}
-        </span>
-      </div>
+      ) : (
+        <div className="flex items-start justify-between gap-3 text-[11.5px] leading-snug">
+          <p className={vazio || !erro ? "text-muted" : "text-destructive"} aria-live="polite">
+            {vazio ? `Obrigatório: no mínimo ${MIN_DESCRICAO} caracteres, diferente da descrição da atividade.` : (erro ?? "")}
+          </p>
+          <span className={`flex-none font-mono tabular-nums ${erro ? "text-muted" : "text-success"}`}>
+            {tamanho}/{tamanho < MIN_DESCRICAO ? MIN_DESCRICAO : MAX_DESCRICAO}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
